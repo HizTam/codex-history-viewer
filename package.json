@@ -29,12 +29,9 @@
   "main": "./dist/extension.js",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hiztam/codex-history-viewer.git"
+    "url": "https://github.com/hiztam/codex-history-viewer"
   },
-  "bugs": {
-    "url": "https://github.com/hiztam/codex-history-viewer/issues"
-  },
-  "homepage": "https://github.com/hiztam/codex-history-viewer/blob/main/README.md",
+  "homepage": "https://github.com/hiztam/codex-history-viewer",
   "activationEvents": [
     "onView:codexHistoryViewer.pinnedView",
     "onView:codexHistoryViewer.historyView",
