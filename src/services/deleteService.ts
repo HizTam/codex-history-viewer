@@ -19,7 +19,7 @@ export async function deleteSessionsWithConfirmation(params: {
 }): Promise<void> {
   const { element, selection, historyIndex, config, globalStorageUri } = params;
 
-  // 日本語: TreeView のコマンド実行では、element が渡されないケースがあるため selection を優先する。
+  // In TreeView command execution, element may be undefined, so prefer selection when available.
   const targets = selection && selection.length >= 1 ? selection : element ? [element] : [];
   const sessions = collectSessionsFromTargets(historyIndex, targets);
   if (sessions.length === 0) return;

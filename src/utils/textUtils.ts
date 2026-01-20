@@ -106,8 +106,8 @@ export function extractUserRequestText(text: string): string | null {
 }
 
 function isWideCodePoint(codePoint: number): boolean {
-  // 日本語: 「全角っぽい」文字をざっくり判定して、表示幅の近似に使う。
-  // 厳密な East Asian Width の実装ではないが、ツリー表示の省略には十分。
+  // Roughly detect "wide" characters to approximate display width.
+  // Not a strict East Asian Width implementation, but sufficient for truncating tree labels.
   if (codePoint >= 0x1100 && codePoint <= 0x115f) return true; // Hangul Jamo
   if (codePoint >= 0x2e80 && codePoint <= 0xa4cf) return true; // CJK / Yi / etc
   if (codePoint >= 0xac00 && codePoint <= 0xd7a3) return true; // Hangul Syllables
@@ -122,7 +122,7 @@ function isWideCodePoint(codePoint: number): boolean {
 }
 
 export function truncateByDisplayWidth(text: string, maxHalfWidthUnits: number, suffix = "..."): string {
-  // 日本語: 文字列を「表示幅（半角=1/全角=2）」の近似で省略し、末尾に "..." を付ける。
+  // Truncate a string by approximate display width (half-width=1, full-width=2) and append a suffix (default: "...").
   const s = String(text ?? "");
   const max = Number.isFinite(maxHalfWidthUnits) ? Math.floor(maxHalfWidthUnits) : 0;
   if (max <= 0) return "";

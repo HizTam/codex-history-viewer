@@ -23,7 +23,7 @@
 
   // Initial button labels (overwritten after receiving sessionData).
   btnMarkdown.textContent = "Markdown";
-  // 日本語: 再読み込みはアイコンのみ表示（ツールチップは i18n で設定）。
+  // Reload is icon-only (tooltip is set via i18n).
   btnReload.innerHTML = RELOAD_ICON_SVG;
   btnToggleDetails.textContent = "Details";
 
@@ -35,7 +35,7 @@
   });
 
   btnReload.addEventListener("click", () => {
-    // 日本語: 再読み込みは表示位置（スクロール）を維持するため、現在の位置を拡張へ渡す。
+    // Send current position to the extension so reload can preserve scroll/selection.
     vscode.postMessage({
       type: "reload",
       scrollY: window.scrollY,
@@ -70,7 +70,7 @@
           ? msg.revealMessageIndex
           : null;
 
-      // 日本語: 再読み込み時は現在のUI状態（詳細表示）を維持し、通常表示時は従来どおり自動判定する。
+      // On reload, preserve the current UI state (details visibility); on normal render, auto-determine as before.
       showDetails = isRestore ? prevShowDetails : shouldAutoShowDetails(model, selectedMessageIndex);
       updateToolbar();
       render();
@@ -132,7 +132,7 @@
 
   function renderItem(item) {
     if (item.type === "message") return renderMessage(item);
-    // 日本語: 「詳細」の表示/非表示で、ツール表示もまとめて切り替える。
+    // Toggling "Details" also toggles tool/note rendering.
     if (item.type === "tool") return showDetails ? renderTool(item) : null;
     return showDetails ? renderNote(item) : null;
   }
@@ -285,7 +285,7 @@
     const label = el("span", {});
     label.textContent = lang ? String(lang) : "";
     header.appendChild(label);
-    // 日本語: ツール詳細（Arguments/Output）はコピーをアイコンで表示できるようにする。
+    // Allow the tool details (Arguments/Output) copy button to be icon-only.
     const useIcon = !!(options && options.copyIcon);
     const btn = el("button", { type: "button", className: useIcon ? "codeCopyBtn iconBtn" : "codeCopyBtn" });
     const copyLabel = i18n.copy || "Copy";
@@ -349,7 +349,7 @@
   }
 
   function restoreHighlight(messageIndex) {
-    // 日本語: 再描画後に、選択中の吹き出しのハイライトを復元する（スクロールは別処理）。
+    // After re-render, restore the highlight for the selected bubble (scroll is restored separately).
     clearHighlights();
     const elTarget = document.getElementById(`msg-${messageIndex}`);
     if (!elTarget) return;
@@ -357,7 +357,7 @@
   }
 
   function restoreScroll(scrollY) {
-    // 日本語: DOM反映後にスクロールを戻す（2フレーム待ってレイアウト確定後に適用）。
+    // Restore scroll after DOM updates (wait 2 frames so layout is settled).
     const y = Math.max(0, Math.floor(Number(scrollY) || 0));
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {

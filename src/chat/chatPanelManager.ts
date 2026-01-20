@@ -173,7 +173,7 @@ export class ChatPanelManager {
         return;
       }
       case "reload": {
-        // 日本語: 再読み込みはセッションファイルを読み直し、表示位置（スクロール）を維持する。
+        // Reload rereads the session file and preserves view position (scroll).
         const restoreScrollY = typeof msg?.scrollY === "number" && Number.isFinite(msg.scrollY) ? Math.max(0, msg.scrollY) : undefined;
         const restoreSelectedMessageIndex =
           typeof msg?.selectedMessageIndex === "number" && Number.isFinite(msg.selectedMessageIndex)

@@ -18,7 +18,7 @@ export class PinStore {
   }
 
   private normalizeFsPaths(fsPaths: readonly string[]): Array<{ fsPath: string; cacheKey: string }> {
-    // 日本語: 入力を検証し、重複を除外して正規化する（順序は維持）。
+    // Validate input, normalize and deduplicate while preserving order.
     const out: Array<{ fsPath: string; cacheKey: string }> = [];
     const seen = new Set<string>();
 
@@ -58,7 +58,7 @@ export class PinStore {
   }
 
   public async pinMany(fsPaths: readonly string[]): Promise<{ pinned: number; skipped: number }> {
-    // 日本語: まとめてピン留めする（Memento更新は1回にまとめる）。
+    // Pin in bulk (batch the Memento update into a single write).
     const normalized = this.normalizeFsPaths(fsPaths);
     if (normalized.length === 0) return { pinned: 0, skipped: 0 };
 
@@ -85,7 +85,7 @@ export class PinStore {
   }
 
   public async unpinMany(fsPaths: readonly string[]): Promise<{ unpinned: number; skipped: number }> {
-    // 日本語: まとめてピン留め解除する（Memento更新は1回にまとめる）。
+    // Unpin in bulk (batch the Memento update into a single write).
     const normalized = this.normalizeFsPaths(fsPaths);
     if (normalized.length === 0) return { unpinned: 0, skipped: 0 };
 

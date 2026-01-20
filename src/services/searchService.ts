@@ -49,7 +49,7 @@ export async function runSearchFlow(
 
   if (!results) return null;
 
-  // 日本語: 検索結果のスコープ表示（検索ビューのルート説明）に、日付/プロジェクト絞り込みを反映する。
+  // Reflect date/project filters in the scope label (search view root description).
   const scopeParts: string[] = [];
   const datePart = effectiveScope.kind === "all" ? t("search.filter.all") : getDateScopeValue(effectiveScope);
   if (datePart) scopeParts.push(datePart);

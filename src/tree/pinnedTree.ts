@@ -28,15 +28,15 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 
   public getTreeItem(element: TreeNode): vscode.TreeItem {
     if (element instanceof SessionNode) {
-      // 日本語: ツリーのタイトルは「全角20文字程度」で省略表示する（以降は "..."）。
+      // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
       const shortTitle = truncateByDisplayWidth(element.session.snippet, 40, "...");
       const item = new vscode.TreeItem(`${element.session.localDate} ${element.session.timeLabel} ${shortTitle}`);
       item.description = element.session.cwdShort;
       item.contextValue = toTreeItemContextValue(element);
-      // 日本語: ピン留めビューは常にピン留め状態なので、時刻の左にピンアイコンを表示する。
+      // This view is always pinned, so always show the pin icon left of the time label.
       item.iconPath = this.pinIconPath;
 
-      // 日本語: タイトルクリックはビューワ表示（選択時プレビュー or openSession）にし、ピン留め解除は右クリックメニューで行う。
+      // Clicking the title opens the viewer (preview on selection or openSession); unpin is done via the context menu.
       const previewOnSelection = getConfig().previewOpenOnSelection;
       if (!previewOnSelection) {
         item.command = { command: "codexHistoryViewer.openSession", title: "", arguments: [element] };

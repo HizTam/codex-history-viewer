@@ -55,7 +55,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const MAX_DND_ITEMS = 500;
 
   const dedupeFsPaths = (fsPaths: readonly string[]): string[] => {
-    // 日本語: パスの重複を除外する（Windowsの大小文字差も吸収）。
+    // Deduplicate paths (normalize Windows case differences).
     const byKey = new Map<string, string>();
     for (const p of fsPaths) {
       const fsPath = typeof p === "string" ? p.trim() : "";
@@ -84,7 +84,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const buildUriList = (fsPaths: readonly string[]): string => {
-    // 日本語: text/uri-list は CRLF 区切りが推奨。
+    // CRLF is recommended as the separator for text/uri-list.
     return fsPaths.map((p) => vscode.Uri.file(p).toString()).join("\r\n");
   };
 
@@ -114,7 +114,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (!uri.fsPath) continue;
         fsPaths.push(uri.fsPath);
       } catch {
-        // 日本語: 解析できない行は無視する。
+        // Ignore lines we cannot parse.
       }
     }
     return dedupeFsPaths(fsPaths);
@@ -124,7 +124,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     dragMimeTypes: [URI_LIST_MIME],
     dropMimeTypes: [],
     handleDrag: (source, dataTransfer) => {
-      // 日本語: 複数選択中にドラッグした場合も source に入る想定。
+      // Assume source contains all selected items when dragging with multi-selection.
       const fsPaths = collectSessionFsPaths(source);
       if (fsPaths.length === 0) return;
       dataTransfer.set(URI_LIST_MIME, new vscode.DataTransferItem(buildUriList(fsPaths)));
@@ -148,7 +148,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const fsPaths = await parseUriListToFsPaths(dataTransfer);
       if (fsPaths.length === 0) return;
 
-      // 日本語: 履歴インデックスに存在するセッションだけピン留め対象にする（外部D&Dの混入対策）。
+      // Only allow pinning sessions present in the history index (prevents mixing in external drag-and-drop items).
       const candidates = fsPaths
         .map((p) => historyService.findByFsPath(p)?.fsPath)
         .filter((p): p is string => typeof p === "string" && p.length > 0);
@@ -190,8 +190,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(pinnedView, historyView, searchView);
 
   const ensureAlwaysShowHeaderActions = async (): Promise<void> => {
-    // 日本語: ビュー右上のアイコン（ヘッダーアクション）を常時表示するため、VS Code 設定を有効化する。
-    // 拡張の設定で無効化できるようにし、失敗しても拡張の動作自体は継続する。
+    // Enable VS Code setting to always show header actions (top-right view icons).
+    // Allow disabling via extension settings, and keep the extension running even if updating the setting fails.
     const extCfg = vscode.workspace.getConfiguration("codexHistoryViewer");
     const enabled = extCfg.get<boolean>("ui.alwaysShowHeaderActions") ?? true;
     if (!enabled) return;
@@ -203,7 +203,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     try {
       await wbCfg.update("workbench.view.alwaysShowHeaderActions", true, vscode.ConfigurationTarget.Global);
     } catch {
-      // 日本語: 設定更新に失敗しても無視する（権限/環境差など）。
+      // Ignore failures when updating settings (permissions/environment differences).
     }
   };
 
@@ -291,7 +291,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await chatPanels.openSession(element.session, { preview: true, revealMessageIndex: reveal });
   };
 
-  // 日本語: 複数ビューが同時に表示されるため、最後に操作したビューを追跡する。
+  // Track the last interacted view, since multiple views can be visible at the same time.
   let lastSelectionSource: "pinned" | "history" | "search" | null = null;
   context.subscriptions.push(
     pinnedView.onDidChangeSelection((e) => {
@@ -313,12 +313,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   const resolveActiveSelection = (): readonly unknown[] => {
-    // 日本語: 最後に操作したビューの選択を優先して扱う（誤ったビューの選択で一括処理しないため）。
+    // Prefer selection from the last interacted view to avoid bulk actions on the wrong view.
     if (lastSelectionSource === "pinned" && pinnedView.selection.length > 0) return pinnedView.selection;
     if (lastSelectionSource === "history" && historyView.selection.length > 0) return historyView.selection;
     if (lastSelectionSource === "search" && searchView.selection.length > 0) return searchView.selection;
 
-    // 日本語: フォールバック（最後の操作が取れない場合）。
+    // Fallback when last interaction cannot be determined.
     if (pinnedView.selection.length > 0) return pinnedView.selection;
     if (historyView.selection.length > 0) return historyView.selection;
     if (searchView.selection.length > 0) return searchView.selection;
@@ -326,7 +326,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const resolveSelectionForElement = (element: unknown): readonly unknown[] | null => {
-    // 日本語: コンテキストメニュー/インラインアクションの誤爆防止のため、要素が属するビューの選択を優先する。
+    // To avoid accidental actions from context menus/inline actions, prefer selection from the view the element belongs to.
     if (pinnedView.selection.includes(element as never)) return pinnedView.selection;
     if (historyView.selection.includes(element as never)) return historyView.selection;
     if (searchView.selection.includes(element as never)) return searchView.selection;
@@ -334,15 +334,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const resolveTargets = (element?: unknown): readonly unknown[] => {
-    // 日本語: コンテキストメニューからの実行では element が渡される。
-    // 複数選択がある場合は、選択全体に対して同じ処理を適用する。
+    // When invoked from a context menu, element is provided.
+    // If there is multi-selection, apply the same operation to the whole selection.
     const selection = element === undefined ? resolveActiveSelection() : resolveSelectionForElement(element) ?? resolveActiveSelection();
     if (element === undefined) return selection;
     return selection.length > 1 ? selection : [element];
   };
 
   const collectOpenTargets = (targets: readonly unknown[]): Array<{ session: SessionSummary; revealMessageIndex?: number }> => {
-    // 日本語: 「開く」はセッション単位で重複排除し、SearchHit の場合は最初のヒット位置を採用する。
+    // Deduplicate "Open" targets by session, and for SearchHit use the first hit location.
     const byKey = new Map<string, { session: SessionSummary; revealMessageIndex?: number }>();
     for (const t of targets) {
       if (!isSessionNode(t)) continue;
@@ -387,7 +387,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.openSession", async (element?: unknown) => {
-      // 日本語: 複数選択時は、選択したセッションをまとめて開く（上限あり）。
+      // When multiple items are selected, open the selected sessions in bulk (with a limit).
       const targets = resolveTargets(element);
       const openTargets = collectOpenTargets(targets);
       if (openTargets.length > 1) {
@@ -406,7 +406,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      // 日本語: 単体の場合は従来どおり（要素 or アクティブなMarkdownから）開く。
+      // For a single item, keep the legacy behavior (from element or active Markdown).
       if (openTargets.length === 1) {
         const it = openTargets[0]!;
         await chatPanels.openSession(it.session, { preview: false, revealMessageIndex: it.revealMessageIndex });
@@ -422,7 +422,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.openSessionMarkdown", async (elementOrArgs?: unknown) => {
-      // 日本語: chat webview からの切り替えは引数（fsPath）で渡されるため、選択の一括処理を優先しない。
+      // Switching from the chat webview passes args (fsPath), so do not prefer bulk-selection handling.
       const hasDirectFsPath =
         !!elementOrArgs &&
         typeof elementOrArgs === "object" &&
@@ -436,7 +436,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      // 日本語: 複数選択時は、選択したセッションをまとめて開く（上限あり）。
+      // When multiple items are selected, open the selected sessions in bulk (with a limit).
       const targets = resolveTargets(elementOrArgs);
       const openTargets = collectOpenTargets(targets);
       if (openTargets.length > 1) {
@@ -510,7 +510,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.promoteSession", async (element?: unknown) => {
-      // 日本語: 複数選択時は、選択したセッションをまとめて「今日として最新化（コピー）」する。
+      // When multiple items are selected, bulk "promote" (copy) the selected sessions to today.
       const targets = resolveTargets(element);
       const byKey = new Map<string, SessionSummary>();
       for (const t of targets) {
@@ -556,13 +556,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           await promoteSessionCopyToToday(s, historyService, latestConfig);
           succeeded += 1;
         } catch {
-          // 日本語: 1件失敗しても残りは継続する。
+          // Continue even if one item fails.
           failed += 1;
         }
       }
       void vscode.window.showInformationMessage(t("app.promoteDoneMulti", succeeded, failed));
 
-      // 日本語: 表示更新はまとめて行う（複数コピー後の位置復元はビューワ側で行う）。
+      // Refresh views in bulk (viewer restores position after multiple copies).
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
         async () => historyService.refresh({ forceRebuildCache: false }),
@@ -575,7 +575,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.pinSession", async (element?: unknown) => {
-      // 日本語: 複数選択時は選択全体を一括でピン留めする。
+      // When multiple items are selected, pin the whole selection in one operation.
       const targets = resolveTargets(element);
       const fsPaths = collectSessionFsPaths(targets);
       if (fsPaths.length === 0) return;
@@ -595,7 +595,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.unpinSession", async (element?: unknown) => {
-      // 日本語: 複数選択時は選択全体を一括でピン留め解除する（欠損ピンも含む）。
+      // When multiple items are selected, unpin the whole selection in one operation (including missing pins).
       const targets = resolveTargets(element);
       const fsPaths = collectUnpinFsPaths(targets);
       if (fsPaths.length === 0) return;
@@ -615,7 +615,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.deleteSessions", async (element?: unknown) => {
-      // 日本語: 対象要素がある場合は、その要素が属するビューの選択を優先する（誤ったビューの選択で一括削除しないため）。
+      // When an element is provided, prefer selection from the view it belongs to (avoid bulk-deleting from the wrong view).
       const viewSelection =
         element === undefined
           ? resolveActiveSelection()
@@ -688,7 +688,7 @@ async function promptHistoryFilter(
     }
   }
 
-  // 日本語: セッションの CWD（プロジェクト）を新しい順で列挙する（大量になり得るので上限を設ける）。
+  // List session CWDs (projects) in descending recency (cap the list size since it can grow large).
   const MAX_PROJECTS = 250;
   const projectCwds: string[] = [];
   const seenProjects = new Set<string>();
@@ -732,7 +732,7 @@ async function promptHistoryFilter(
     qp.placeholder = t("history.filter.placeholder");
     qp.items = baseItems;
 
-    // 日本語: 既定は「年月まで」のリスト表示にし、入力時のみ「年月日（YYYY-MM-DD）」の候補を追加する。
+    // Default to year-month options; only while typing add year-month-day (YYYY-MM-DD) suggestions.
     const updateItems = (raw: string): void => {
       const v = String(raw ?? "").trim();
       if (!v || v.length < 7 || !v.includes("-")) {
@@ -780,7 +780,7 @@ async function promptHistoryFilter(
     });
     qp.onDidHide(() => finish(null));
 
-    // 日本語: 現在の絞り込み内容に応じて、初期のフォーカス（選択候補）を合わせる。
+    // Set initial focus based on the current filters.
     const currentProjectKey = current.projectCwd ? normalizeCacheKey(current.projectCwd) : null;
     const activeDateItem = dateItemsBase.find((it) => it.pickKind === "date" && it.date && isSameDateScope(it.date, current.date));
     const activeProjectItem = currentProjectKey

@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -11,9 +11,30 @@
     "vscode": "^1.90.0"
   },
   "categories": [
+    "AI",
+		"Chat",
     "Other"
   ],
+  "keywords": [
+		"OpenAI",
+		"Codex",
+		"AI Prompts",
+		"AI Prompt",
+		"History",
+		"Viewer",
+		"GPT",
+    "ChatGPT",
+		"Chat"
+  ],
   "main": "./dist/extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hiztam/codex-history-viewer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hiztam/codex-history-viewer/issues"
+  },
+  "homepage": "https://github.com/hiztam/codex-history-viewer/blob/main/README.md",
   "activationEvents": [
     "onView:codexHistoryViewer.pinnedView",
     "onView:codexHistoryViewer.historyView",
@@ -314,9 +335,5 @@
     "@types/node": "^20.11.30",
     "@types/vscode": "^1.90.0",
     "typescript": "^5.5.4"
-  },
-	"repository": {
-		"type": "git",
-		"url": ""
-	}
+  }
 }

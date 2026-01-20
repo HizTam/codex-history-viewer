@@ -53,7 +53,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   public setFilters(filter: DateScope, projectCwd: string | null): void {
-    // 日本語: フィルタはまとめて更新し、表示更新（refresh）は呼び出し側で行う。
+    // Update filters in bulk; the caller triggers refresh.
     this.setFilter(filter);
     this.setProjectFilter(projectCwd);
   }
@@ -91,17 +91,17 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   private sessionToTreeItem(session: SessionSummary, pinned: boolean): vscode.TreeItem {
-    // 日本語: ツリーのタイトルは「全角20文字程度」で省略表示する（以降は "..."）。
+    // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
     const shortTitle = truncateByDisplayWidth(session.snippet, 40, "...");
     const label = `${session.timeLabel} ${shortTitle}`;
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
     item.description = session.cwdShort;
     const node = new SessionNode(session, pinned);
     item.contextValue = toTreeItemContextValue(node);
-    // 日本語: ピン留め状態は「時刻の左」のアイコンで表現する（未ピン留めは見えないアイコン）。
+    // Represent pinned state with an icon left of the time label (use an invisible icon when unpinned).
     item.iconPath = pinned ? this.pinIconPath : this.blankIconPath;
 
-    // 日本語: タイトルクリックはビューワ表示（選択時プレビュー or openSession）にし、ピン留め/解除は右クリックメニューで行う。
+    // Clicking the title opens the viewer (preview on selection or openSession); pin/unpin is done via the context menu.
     const previewOnSelection = getConfig().previewOpenOnSelection;
     if (!previewOnSelection) {
       item.command = { command: "codexHistoryViewer.openSession", title: "", arguments: [node] };
@@ -127,10 +127,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       const filter = this.filter;
       switch (filter.kind) {
         case "all": {
-          const years = Array.from(idx.byY.keys()).sort((a, b) => (a < b ? 1 : -1));
+         const years = Array.from(idx.byY.keys()).sort((a, b) => (a < b ? 1 : -1));
           if (!this.projectCwd) return years.map((y) => new YearNode(y));
 
-          // 日本語: プロジェクト絞り込み時は、該当セッションが存在する年だけ表示する。
+          // When project filtering is active, show only years that contain matching sessions.
           const out: YearNode[] = [];
           for (const y of years) {
             const months = idx.byY.get(y);
@@ -152,15 +152,15 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
         case "year": {
           const months = idx.byY.get(filter.yyyy);
           if (!months) return [];
-          const keys = Array.from(months.keys()).sort((a, b) => (a < b ? 1 : -1));
-          if (!this.projectCwd) return keys.map((m) => new MonthNode(filter.yyyy, m));
+           const keys = Array.from(months.keys()).sort((a, b) => (a < b ? 1 : -1));
+           if (!this.projectCwd) return keys.map((m) => new MonthNode(filter.yyyy, m));
 
-          // 日本語: プロジェクト絞り込み時は、該当セッションが存在する月だけ表示する。
-          const out: MonthNode[] = [];
-          for (const m of keys) {
-            const days = months.get(m);
-            if (!days) continue;
-            let has = false;
+           // When project filtering is active, show only months that contain matching sessions.
+           const out: MonthNode[] = [];
+           for (const m of keys) {
+             const days = months.get(m);
+             if (!days) continue;
+             let has = false;
             for (const [, list] of days) {
               if (list.some((s) => this.matchesProject(s))) {
                 has = true;
@@ -179,7 +179,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
           const keys = Array.from(days.keys()).sort((a, b) => (a < b ? 1 : -1));
           if (!this.projectCwd) return keys.map((d) => new DayNode(yyyy, mm, d));
 
-          // 日本語: プロジェクト絞り込み時は、該当セッションが存在する日だけ表示する。
+          // When project filtering is active, show only days that contain matching sessions.
           const out: DayNode[] = [];
           for (const d of keys) {
             const sessions = days.get(d) ?? [];

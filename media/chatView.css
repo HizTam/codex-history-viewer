@@ -47,7 +47,7 @@ body {
 }
 
 #toolbar .toolbarIconBtn {
-  /* 日本語: ツールバー用のアイコンボタン（文字ではなくアイコン表示） */
+  /* Icon-only toolbar button. */
   padding: 4px 8px;
   line-height: 0;
 }
@@ -279,7 +279,7 @@ body {
 }
 
 .codeHeader .codeCopyBtn.iconBtn {
-  /* 日本語: ツール詳細のコピーはアイコン表示に最適化する。 */
+  /* Optimize the icon-only copy button in tool details. */
   padding: 2px 6px;
   line-height: 0;
 }

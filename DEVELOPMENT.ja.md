@@ -1,7 +1,5 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-このファイルは開発者向けです。VSIX の配布物には含めません（`.vscodeignore` で除外）。
-
 ## 1. 概要
 
 - 目的: Codex CLI のローカル履歴（既定: `~/.codex/sessions`）を VS Code 上で閲覧・検索・整理する

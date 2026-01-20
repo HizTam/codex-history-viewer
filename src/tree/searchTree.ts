@@ -61,7 +61,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     }
     if (element instanceof SearchSessionNode) {
       const pinned = this.pinStore.isPinned(element.session.fsPath);
-      // 日本語: ツリーのタイトルは「全角20文字程度」で省略表示する（以降は "..."）。
+      // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
       const shortTitle = truncateByDisplayWidth(element.session.snippet, 40, "...");
       const item = new vscode.TreeItem(
         `${element.session.localDate} ${element.session.timeLabel} ${shortTitle} (${element.hits.length})`,
@@ -70,10 +70,10 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       item.description = element.session.cwdShort;
       const node = new SessionNode(element.session, pinned);
       item.contextValue = toTreeItemContextValue(node);
-      // 日本語: ピン留め状態は「時刻の左」のアイコンで表現する（未ピン留めは見えないアイコン）。
+      // Represent pinned state with an icon left of the time label (use an invisible icon when unpinned).
       item.iconPath = pinned ? this.pinIconPath : this.blankIconPath;
 
-      // 日本語: タイトルクリックはビューワ表示（選択時プレビュー or openSession）にし、ピン留め/解除は右クリックメニューで行う。
+      // Clicking the title opens the viewer (preview on selection or openSession); pin/unpin is done via the context menu.
       const previewOnSelection = getConfig().previewOpenOnSelection;
       if (!previewOnSelection) {
         item.command = { command: "codexHistoryViewer.openSession", title: "", arguments: [node] };
@@ -119,7 +119,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 }
 
 function formatScopeLabel(root: SearchRootNode): string {
-  // 日本語: scopeValue があれば優先し、なければ従来どおりの表示にフォールバックする。
+  // Prefer scopeValue when present; otherwise fall back to the legacy display.
   if (typeof root.scopeValue === "string" && root.scopeValue.trim().length > 0) return root.scopeValue;
   if (root.scopeKind === "all") return t("search.filter.all");
   return "";
