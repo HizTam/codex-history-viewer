@@ -1,0 +1,19 @@
+**/.vscode/**
+**/.vscode-test/**
+**/node_modules/**
+**/out/**
+**/*.map
+**/*.ts
+**/tsconfig.json
+**/.gitignore
+**/.vscodeignore
+**/*.vsix
+
+# 開発者向けドキュメント（VSIX には同梱しない）
+DEVELOPMENT.ja.md
+
+# Chat ビューの Markdown レンダリングで markdown-it を使用するため、必要最小限のみ同梱する
+!node_modules/markdown-it/
+!node_modules/markdown-it/dist/
+!node_modules/markdown-it/dist/markdown-it.min.js
+!node_modules/markdown-it/LICENSE

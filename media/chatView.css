@@ -1,0 +1,312 @@
+/*
+  Styles for the Codex History Viewer chat-like webview.
+  Uses VS Code theme variables whenever possible.
+*/
+
+:root {
+  --chv-bg: var(--vscode-editor-background);
+  --chv-fg: var(--vscode-editor-foreground);
+  --chv-muted: var(--vscode-descriptionForeground);
+  --chv-border: var(--vscode-editorWidget-border);
+  --chv-user-bg: var(--vscode-inputValidation-infoBackground, rgba(0, 122, 204, 0.12));
+  --chv-assistant-bg: var(--vscode-editorWidget-background);
+  --chv-tool-bg: var(--vscode-notifications-background, rgba(128, 128, 128, 0.08));
+  --chv-code-bg: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
+  --chv-accent: var(--vscode-focusBorder);
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  background: var(--chv-bg);
+  color: var(--chv-fg);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+#toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--chv-border);
+  position: sticky;
+  top: 0;
+  background: var(--chv-bg);
+  z-index: 2;
+}
+
+#toolbar button {
+  background: transparent;
+  color: var(--chv-fg);
+  border: 1px solid var(--chv-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+#toolbar .toolbarIconBtn {
+  /* 日本語: ツールバー用のアイコンボタン（文字ではなくアイコン表示） */
+  padding: 4px 8px;
+  line-height: 0;
+}
+
+#toolbar .toolbarIconBtn svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+#toolbar button:hover {
+  border-color: var(--chv-accent);
+}
+
+#toolbarSpacer {
+  flex: 1;
+}
+
+#meta {
+  padding: 10px 12px 0 12px;
+  color: var(--chv-muted);
+  font-size: 12px;
+}
+
+#timeline {
+  padding: 10px 12px 18px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.row {
+  display: flex;
+  width: 100%;
+}
+
+.row.user {
+  justify-content: flex-end;
+}
+
+.row.assistant,
+.row.developer {
+  justify-content: flex-start;
+}
+
+.row.tool {
+  justify-content: center;
+}
+
+.bubble {
+  max-width: min(900px, 92%);
+  border: 1px solid var(--chv-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  line-height: 1.45;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.bubble.user {
+  background: var(--chv-user-bg);
+}
+
+.bubble.assistant {
+  background: var(--chv-assistant-bg);
+}
+
+.bubble.developer {
+  background: var(--chv-assistant-bg);
+  opacity: 0.9;
+}
+
+.bubble.tool {
+  background: var(--chv-tool-bg);
+}
+
+.metaLine {
+  font-size: 11px;
+  color: var(--chv-muted);
+  margin-bottom: 6px;
+}
+
+.tag {
+  display: inline-block;
+  font-size: 11px;
+  border: 1px solid var(--chv-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-right: 6px;
+}
+
+.tag.context {
+  opacity: 0.8;
+}
+
+.textBlock {
+  white-space: pre-wrap;
+}
+
+.bubbleActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.iconBtn {
+  background: transparent;
+  border: 1px solid var(--chv-border);
+  color: var(--chv-fg);
+  border-radius: 6px;
+  padding: 2px 6px;
+  cursor: pointer;
+  line-height: 0;
+}
+
+.iconBtn:hover {
+  border-color: var(--chv-accent);
+}
+
+.iconBtn svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.markdown {
+  white-space: normal;
+}
+
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p {
+  margin: 0 0 8px 0;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0 0 8px 20px;
+  padding: 0;
+}
+
+.markdown li {
+  margin: 2px 0;
+}
+
+.markdown blockquote {
+  margin: 0 0 8px 0;
+  padding: 0 0 0 12px;
+  border-left: 3px solid var(--chv-border);
+  color: var(--chv-muted);
+}
+
+.markdown code {
+  background: var(--chv-code-bg);
+  padding: 0 4px;
+  border-radius: 4px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.95em;
+}
+
+.markdown pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+.markdown a {
+  color: var(--vscode-textLink-foreground);
+}
+
+.markdown a:hover {
+  color: var(--vscode-textLink-activeForeground);
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3 {
+  margin: 12px 0 8px 0;
+  line-height: 1.25;
+}
+
+.markdown h1 {
+  font-size: 1.5em;
+}
+
+.markdown h2 {
+  font-size: 1.25em;
+}
+
+.markdown h3 {
+  font-size: 1.1em;
+}
+
+.codeBlock {
+  margin-top: 8px;
+  border: 1px solid var(--chv-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.codeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  background: rgba(128, 128, 128, 0.08);
+  border-bottom: 1px solid var(--chv-border);
+  font-size: 12px;
+  color: var(--chv-muted);
+}
+
+.codeHeader button {
+  background: transparent;
+  border: 1px solid var(--chv-border);
+  color: var(--chv-fg);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.codeHeader button:hover {
+  border-color: var(--chv-accent);
+}
+
+.codeHeader .codeCopyBtn.iconBtn {
+  /* 日本語: ツール詳細のコピーはアイコン表示に最適化する。 */
+  padding: 2px 6px;
+  line-height: 0;
+}
+
+pre {
+  margin: 0;
+  padding: 10px 10px;
+  background: var(--chv-code-bg);
+  overflow: auto;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  line-height: 1.4;
+}
+
+details {
+  border: 1px solid var(--chv-border);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+details > summary {
+  cursor: pointer;
+  color: var(--chv-fg);
+  font-weight: 600;
+}
+
+.highlight {
+  outline: 2px solid var(--chv-accent);
+  outline-offset: 2px;
+}

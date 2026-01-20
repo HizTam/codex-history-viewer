@@ -1,0 +1,322 @@
+{
+  "name": "codex-history-viewer",
+  "displayName": "%ext.displayName%",
+  "description": "%ext.description%",
+  "icon": "resources/extension-icon.png",
+  "version": "0.1.0",
+  "publisher": "hiztam",
+  "author": "HizTam",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onView:codexHistoryViewer.pinnedView",
+    "onView:codexHistoryViewer.historyView",
+    "onView:codexHistoryViewer.searchView",
+    "onCommand:codexHistoryViewer.refresh",
+    "onCommand:codexHistoryViewer.search",
+    "onCommand:codexHistoryViewer.openSession",
+    "onCommand:codexHistoryViewer.openSessionMarkdown",
+    "onCommand:codexHistoryViewer.openSettings",
+    "onCommand:codexHistoryViewer.promoteSession",
+    "onCommand:codexHistoryViewer.pinSession",
+    "onCommand:codexHistoryViewer.unpinSession",
+    "onCommand:codexHistoryViewer.deleteSessions",
+    "onCommand:codexHistoryViewer.rebuildCache",
+    "onCommand:codexHistoryViewer.filterHistory",
+    "onCommand:codexHistoryViewer.clearHistoryFilter",
+    "onCommand:codexHistoryViewer.debugInfo"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codexHistoryViewer",
+          "title": "%viewContainer.title%",
+          "icon": "resources/codex-history-viewer.svg"
+        }
+      ]
+    },
+    "views": {
+      "codexHistoryViewer": [
+        {
+          "id": "codexHistoryViewer.pinnedView",
+          "name": "%view.pinned%"
+        },
+        {
+          "id": "codexHistoryViewer.historyView",
+          "name": "%view.history%"
+        },
+        {
+          "id": "codexHistoryViewer.searchView",
+          "name": "%view.search%"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "codexHistoryViewer.refresh",
+        "title": "%cmd.refresh%",
+        "category": "%cmd.category%",
+        "icon": {
+          "light": "resources/icons/light/refresh.svg",
+          "dark": "resources/icons/dark/refresh.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.search",
+        "title": "%cmd.search%",
+        "category": "%cmd.category%",
+        "icon": {
+          "light": "resources/icons/light/search.svg",
+          "dark": "resources/icons/dark/search.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.filterHistory",
+        "title": "%cmd.filterHistory%",
+        "category": "%cmd.category%",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "codexHistoryViewer.clearHistoryFilter",
+        "title": "%cmd.clearHistoryFilter%",
+        "category": "%cmd.category%",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "codexHistoryViewer.openSession",
+        "title": "%cmd.openSession%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.openSessionMarkdown",
+        "title": "%cmd.openSessionMarkdown%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.openSettings",
+        "title": "%cmd.openSettings%",
+        "category": "%cmd.category%",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "codexHistoryViewer.promoteSession",
+        "title": "%cmd.promoteSession%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.pinSession",
+        "title": "%cmd.pinSession%",
+        "category": "%cmd.category%",
+        "icon": {
+          "light": "resources/icons/light/pin.svg",
+          "dark": "resources/icons/dark/pin.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.unpinSession",
+        "title": "%cmd.unpinSession%",
+        "category": "%cmd.category%",
+        "icon": {
+          "light": "resources/icons/light/unpin.svg",
+          "dark": "resources/icons/dark/unpin.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.deleteSessions",
+        "title": "%cmd.deleteSessions%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.rebuildCache",
+        "title": "%cmd.rebuildCache%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.debugInfo",
+        "title": "%cmd.debugInfo%",
+        "category": "%cmd.category%"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "codexHistoryViewer.refresh",
+          "when": "view == codexHistoryViewer.pinnedView",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.openSettings",
+          "when": "view == codexHistoryViewer.pinnedView",
+          "group": "navigation@100"
+        },
+        {
+          "command": "codexHistoryViewer.refresh",
+          "when": "view == codexHistoryViewer.historyView",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.filterHistory",
+          "when": "view == codexHistoryViewer.historyView",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.clearHistoryFilter",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyFiltered",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.refresh",
+          "when": "view == codexHistoryViewer.searchView",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.search",
+          "when": "view == codexHistoryViewer.searchView",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.search",
+          "when": "view == codexHistoryViewer.historyView",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.search",
+          "when": "view == codexHistoryViewer.pinnedView",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "codexHistoryViewer.openSession",
+          "when": "viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.openSessionMarkdown",
+          "when": "viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.promoteSession",
+          "when": "viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit",
+          "group": "1_actions"
+        },
+        {
+          "command": "codexHistoryViewer.pinSession",
+          "when": "viewItem == codexHistoryViewer.session",
+          "group": "1_actions"
+        },
+        {
+          "command": "codexHistoryViewer.unpinSession",
+          "when": "viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.sessionMissing",
+          "group": "1_actions"
+        },
+        {
+          "command": "codexHistoryViewer.pinSession",
+          "when": "viewItem == codexHistoryViewer.session",
+          "group": "inline"
+        },
+        {
+          "command": "codexHistoryViewer.unpinSession",
+          "when": "viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.sessionMissing",
+          "group": "inline"
+        },
+        {
+          "command": "codexHistoryViewer.deleteSessions",
+          "when": "viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit",
+          "group": "2_actions"
+        },
+        {
+          "command": "codexHistoryViewer.deleteSessions",
+          "when": "viewItem == codexHistoryViewer.day || viewItem == codexHistoryViewer.month || viewItem == codexHistoryViewer.year",
+          "group": "2_actions"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "%cfg.title%",
+      "properties": {
+        "codexHistoryViewer.sessionsRoot": {
+          "type": "string",
+          "default": "",
+          "description": "%cfg.sessionsRoot%",
+          "scope": "application"
+        },
+        "codexHistoryViewer.preview.openOnSelection": {
+          "type": "boolean",
+          "default": true,
+          "description": "%cfg.previewOpenOnSelection%",
+          "scope": "application"
+        },
+        "codexHistoryViewer.preview.maxMessages": {
+          "type": "number",
+          "default": 6,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "%cfg.previewMaxMessages%",
+          "scope": "application"
+        },
+        "codexHistoryViewer.search.maxResults": {
+          "type": "number",
+          "default": 500,
+          "minimum": 1,
+          "maximum": 10000,
+          "description": "%cfg.searchMaxResults%",
+          "scope": "application"
+        },
+        "codexHistoryViewer.search.caseSensitive": {
+          "type": "boolean",
+          "default": false,
+          "description": "%cfg.searchCaseSensitive%",
+          "scope": "application"
+        },
+        "codexHistoryViewer.delete.useTrash": {
+          "type": "boolean",
+          "default": true,
+          "description": "%cfg.deleteUseTrash%",
+          "scope": "application"
+        },
+        "codexHistoryViewer.ui.language": {
+          "type": "string",
+          "default": "auto",
+          "enum": ["auto", "ja", "en"],
+          "description": "%cfg.uiLanguage%",
+          "scope": "application"
+        },
+        "codexHistoryViewer.ui.alwaysShowHeaderActions": {
+          "type": "boolean",
+          "default": true,
+          "description": "%cfg.uiAlwaysShowHeaderActions%",
+          "scope": "application"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p .",
+    "watch": "tsc -watch -p .",
+    "package": "vsce package --allow-missing-repository",
+    "lint": "echo \"(lint not configured)\""
+  },
+  "dependencies": {
+    "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.7.1",
+    "@types/node": "^20.11.30",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.4"
+  },
+	"repository": {
+		"type": "git",
+		"url": ""
+	}
+}

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
+  <!-- 拡張機能一覧/詳細用: 透明背景の白黒2重線アイコン（どのテーマでも視認性を確保） -->
+  <g stroke="#FFFFFF" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+    <!-- 日本語: 右上1/4を欠けさせた円弧（右→上の90度を欠け） -->
+    <path d="M108 64 A44 44 0 1 1 64 20" />
+    <line x1="44" y1="50" x2="84" y2="50" />
+    <line x1="44" y1="64" x2="84" y2="64" />
+    <line x1="44" y1="78" x2="74" y2="78" />
+  </g>
+  <g stroke="#000000" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M108 64 A44 44 0 1 1 64 20" />
+    <line x1="44" y1="50" x2="84" y2="50" />
+    <line x1="44" y1="64" x2="84" y2="64" />
+    <line x1="44" y1="78" x2="74" y2="78" />
+  </g>
+</svg>
