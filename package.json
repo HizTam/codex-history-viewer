@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -160,9 +160,87 @@
         "command": "codexHistoryViewer.debugInfo",
         "title": "%cmd.debugInfo%",
         "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.openSession",
+        "title": "セッションを開く（チャット）"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.openSession",
+        "title": "Open Session (Chat)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.openSessionMarkdown",
+        "title": "セッションを開く（Markdown）"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.openSessionMarkdown",
+        "title": "Open Session (Markdown)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.promoteSession",
+        "title": "今日として最新化（コピー）"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.promoteSession",
+        "title": "Promote to Today (Copy)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.pinSession",
+        "title": "ピン留め",
+        "icon": {
+          "light": "resources/icons/light/pin.svg",
+          "dark": "resources/icons/dark/pin.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.pinSession",
+        "title": "Pin",
+        "icon": {
+          "light": "resources/icons/light/pin.svg",
+          "dark": "resources/icons/dark/pin.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.unpinSession",
+        "title": "ピン留め解除",
+        "icon": {
+          "light": "resources/icons/light/unpin.svg",
+          "dark": "resources/icons/dark/unpin.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.unpinSession",
+        "title": "Unpin",
+        "icon": {
+          "light": "resources/icons/light/unpin.svg",
+          "dark": "resources/icons/dark/unpin.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.deleteSessions",
+        "title": "削除"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.deleteSessions",
+        "title": "Delete"
       }
     ],
     "menus": {
+      "commandPalette": [
+        { "command": "codexHistoryViewer.ui.ja.openSession", "when": "false" },
+        { "command": "codexHistoryViewer.ui.en.openSession", "when": "false" },
+        { "command": "codexHistoryViewer.ui.ja.openSessionMarkdown", "when": "false" },
+        { "command": "codexHistoryViewer.ui.en.openSessionMarkdown", "when": "false" },
+        { "command": "codexHistoryViewer.ui.ja.promoteSession", "when": "false" },
+        { "command": "codexHistoryViewer.ui.en.promoteSession", "when": "false" },
+        { "command": "codexHistoryViewer.ui.ja.pinSession", "when": "false" },
+        { "command": "codexHistoryViewer.ui.en.pinSession", "when": "false" },
+        { "command": "codexHistoryViewer.ui.ja.unpinSession", "when": "false" },
+        { "command": "codexHistoryViewer.ui.en.unpinSession", "when": "false" },
+        { "command": "codexHistoryViewer.ui.ja.deleteSessions", "when": "false" },
+        { "command": "codexHistoryViewer.ui.en.deleteSessions", "when": "false" }
+      ],
       "view/title": [
         {
           "command": "codexHistoryViewer.refresh",
@@ -212,48 +290,93 @@
       ],
       "view/item/context": [
         {
-          "command": "codexHistoryViewer.openSession",
-          "when": "viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit",
+          "command": "codexHistoryViewer.ui.ja.openSession",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation"
         },
         {
-          "command": "codexHistoryViewer.openSessionMarkdown",
-          "when": "viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit",
+          "command": "codexHistoryViewer.ui.en.openSession",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation"
         },
         {
-          "command": "codexHistoryViewer.promoteSession",
-          "when": "viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit",
+          "command": "codexHistoryViewer.ui.ja.openSessionMarkdown",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.openSessionMarkdown",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.promoteSession",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang == 'ja'",
           "group": "1_actions"
         },
         {
-          "command": "codexHistoryViewer.pinSession",
-          "when": "viewItem == codexHistoryViewer.session",
+          "command": "codexHistoryViewer.ui.en.promoteSession",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang != 'ja'",
           "group": "1_actions"
         },
         {
-          "command": "codexHistoryViewer.unpinSession",
-          "when": "viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.sessionMissing",
+          "command": "codexHistoryViewer.ui.ja.pinSession",
+          "when": "viewItem == codexHistoryViewer.session && codexHistoryViewer.uiLang == 'ja'",
           "group": "1_actions"
         },
         {
-          "command": "codexHistoryViewer.pinSession",
-          "when": "viewItem == codexHistoryViewer.session",
+          "command": "codexHistoryViewer.ui.en.pinSession",
+          "when": "viewItem == codexHistoryViewer.session && codexHistoryViewer.uiLang != 'ja'",
+          "group": "1_actions"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.unpinSession",
+          "when": "(viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang == 'ja'",
+          "group": "1_actions"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.unpinSession",
+          "when": "(viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang != 'ja'",
+          "group": "1_actions"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinSession",
+          "when": "viewItem == codexHistoryViewer.session && codexHistoryViewer.uiLang == 'ja'",
           "group": "inline"
         },
         {
-          "command": "codexHistoryViewer.unpinSession",
-          "when": "viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.sessionMissing",
+          "command": "codexHistoryViewer.ui.en.pinSession",
+          "when": "viewItem == codexHistoryViewer.session && codexHistoryViewer.uiLang != 'ja'",
           "group": "inline"
         },
         {
-          "command": "codexHistoryViewer.deleteSessions",
-          "when": "viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit",
+          "command": "codexHistoryViewer.ui.ja.unpinSession",
+          "when": "(viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang == 'ja'",
+          "group": "inline"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.unpinSession",
+          "when": "(viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang != 'ja'",
+          "group": "inline"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.deleteSessions",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang == 'ja'",
           "group": "2_actions"
         },
         {
-          "command": "codexHistoryViewer.deleteSessions",
-          "when": "viewItem == codexHistoryViewer.day || viewItem == codexHistoryViewer.month || viewItem == codexHistoryViewer.year",
+          "command": "codexHistoryViewer.ui.en.deleteSessions",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang != 'ja'",
+          "group": "2_actions"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.deleteSessions",
+          "when": "(viewItem == codexHistoryViewer.day || viewItem == codexHistoryViewer.month || viewItem == codexHistoryViewer.year) && codexHistoryViewer.uiLang == 'ja'",
+          "group": "2_actions"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.deleteSessions",
+          "when": "(viewItem == codexHistoryViewer.day || viewItem == codexHistoryViewer.month || viewItem == codexHistoryViewer.year) && codexHistoryViewer.uiLang != 'ja'",
           "group": "2_actions"
         }
       ]

@@ -4,6 +4,7 @@ import type { SessionSummary } from "../sessions/sessionTypes";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { buildChatSessionModel } from "./chatModelBuilder";
 import { t } from "../i18n";
+import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 
 // Manages chat-like WebviewPanels opened in the editor area.
 export class ChatPanelManager {
@@ -22,13 +23,27 @@ export class ChatPanelManager {
 
   public refreshI18n(): void {
     const i18n = this.buildI18n();
+    const dateTime = this.buildDateTime();
     const send = (panel: vscode.WebviewPanel): void => {
       if (!this.readyByPanel.get(panel)) return;
-      void panel.webview.postMessage({ type: "i18n", i18n });
+      void panel.webview.postMessage({ type: "i18n", i18n, dateTime });
     };
 
     if (this.previewPanel) send(this.previewPanel);
     for (const panel of this.panelsByKey.values()) send(panel);
+  }
+
+  public refreshTitles(): void {
+    const update = (panel: vscode.WebviewPanel): void => {
+      const state = this.stateByPanel.get(panel);
+      if (!state) return;
+      const session = this.historyService.findByFsPath(state.fsPath);
+      if (!session) return;
+      panel.title = `${session.localDate} ${session.timeLabel} ${session.snippet}`;
+    };
+
+    if (this.previewPanel) update(this.previewPanel);
+    for (const panel of this.panelsByKey.values()) update(panel);
   }
 
   public async openSession(
@@ -194,6 +209,7 @@ export class ChatPanelManager {
     const state = this.stateByPanel.get(panel);
     if (!state) return;
     const model = await buildChatSessionModel(state.fsPath);
+    const dateTime = this.buildDateTime();
     void panel.webview.postMessage({
       type: "sessionData",
       model,
@@ -201,6 +217,7 @@ export class ChatPanelManager {
       restoreScrollY: options?.restoreScrollY,
       restoreSelectedMessageIndex: options?.restoreSelectedMessageIndex,
       i18n: this.buildI18n(),
+      dateTime,
     });
   }
 
@@ -216,6 +233,12 @@ export class ChatPanelManager {
       output: t("chat.label.output"),
       copy: t("chat.button.copy"),
     };
+  }
+
+  private buildDateTime(): { timeZone: string } {
+    // 日時表示のタイムゾーンは、UI言語設定に合わせて決定する（ja=JST、auto/en=システム）。
+    const { timeZone } = resolveDateTimeSettings();
+    return { timeZone };
   }
 }
 

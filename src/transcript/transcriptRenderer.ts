@@ -2,11 +2,16 @@ import * as fs from "node:fs";
 import * as readline from "node:readline";
 import { normalizeWhitespace } from "../utils/textUtils";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
+import { formatYmdHmInTimeZone, formatYmdHmsInTimeZone } from "../utils/dateUtils";
 
 // Reads JSONL (rollout-*.jsonl) and renders the conversation as Markdown.
-export async function renderTranscript(fsPath: string): Promise<{ content: string; messageLineMap: Map<number, number> }> {
+export async function renderTranscript(
+  fsPath: string,
+  options: { timeZone: string },
+): Promise<{ content: string; messageLineMap: Map<number, number> }> {
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const timeZone = options.timeZone;
 
   const lines: string[] = [];
   const messageLineMap = new Map<number, number>();
@@ -16,7 +21,7 @@ export async function renderTranscript(fsPath: string): Promise<{ content: strin
   lines.push(``);
   lines.push(`- File: \`${fsPath}\``);
   const meta = await tryReadSessionMeta(fsPath);
-  if (meta?.timestampIso) lines.push(`- Start (UTC): \`${meta.timestampIso}\``);
+  if (meta?.timestampIso) lines.push(`- Start: \`${formatIsoToLocal(meta.timestampIso, timeZone, { withSeconds: false })}\``);
   if (meta?.cwd) lines.push(`- CWD: \`${meta.cwd}\``);
   if (meta?.originator) lines.push(`- Originator: \`${meta.originator}\``);
   if (meta?.cliVersion) lines.push(`- CLI: \`${meta.cliVersion}\``);
@@ -59,7 +64,7 @@ export async function renderTranscript(fsPath: string): Promise<{ content: strin
         } else {
           lines.push(`## ${capitalize(role)}${ctx}`);
         }
-        if (ts) lines.push(`- Timestamp: \`${ts}\``);
+        if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``);
         lines.push(``);
         lines.push(text);
         lines.push(``);
@@ -77,7 +82,7 @@ export async function renderTranscript(fsPath: string): Promise<{ content: strin
 
         lines.push(`## [tool] ${name}`);
         if (callId) lines.push(`- Call ID: \`${callId}\``);
-        if (ts) lines.push(`- Timestamp: \`${ts}\``);
+        if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``);
         lines.push(``);
         if (args) {
           lines.push(`### Arguments`);
@@ -102,7 +107,7 @@ export async function renderTranscript(fsPath: string): Promise<{ content: strin
         } else {
           lines.push(`## [tool output]`);
           if (callId) lines.push(`- Call ID: \`${callId}\``);
-          if (ts) lines.push(`- Timestamp: \`${ts}\``);
+          if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``);
           lines.push(``);
           lines.push(`### Output`);
         }
@@ -162,4 +167,12 @@ function formatJsonIfPossible(text: string): string | null {
   } catch {
     return null;
   }
+}
+
+function formatIsoToLocal(iso: string, timeZone: string, options: { withSeconds: boolean }): string {
+  // ISO(UTC) を指定タイムゾーンの表示に変換する。失敗時は元文字列を返す。
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return iso;
+  const d = new Date(ms);
+  return options.withSeconds ? formatYmdHmsInTimeZone(d, timeZone) : formatYmdHmInTimeZone(d, timeZone);
 }

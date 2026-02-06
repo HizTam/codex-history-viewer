@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as readline from "node:readline";
 import * as path from "node:path";
 import { normalizeCacheKey, readFirstLineUtf8, statSafe } from "../utils/fsUtils";
-import { formatTimeHmLocal, toYmdLocal, ymdToString } from "../utils/dateUtils";
+import { formatTimeHmInTimeZone, toYmdInTimeZone, ymdToString } from "../utils/dateUtils";
 import { extractUserRequestText, normalizeWhitespace, safeDisplayPath, singleLineSnippet } from "../utils/textUtils";
 import type { PreviewMessage, SessionMetaInfo, SessionSummary } from "./sessionTypes";
 
@@ -110,8 +110,9 @@ export async function buildSessionSummary(params: {
   sessionsRoot: string;
   fsPath: string;
   previewMaxMessages: number;
+  timeZone: string;
 }): Promise<SessionSummary | null> {
-  const { sessionsRoot, fsPath, previewMaxMessages } = params;
+  const { sessionsRoot, fsPath, previewMaxMessages, timeZone } = params;
   const stat = await statSafe(fsPath);
   if (!stat) return null;
 
@@ -120,17 +121,17 @@ export async function buildSessionSummary(params: {
 
   const inferred = inferYmdFromPath(sessionsRoot, fsPath) ?? undefined;
   const start = meta.timestampIso ? new Date(meta.timestampIso) : null;
-  const startLocal = start && !Number.isNaN(start.getTime()) ? start : null;
+  const startValid = start && !Number.isNaN(start.getTime()) ? start : null;
 
   const ymd =
-    inferred ??
-    (startLocal
-      ? toYmdLocal(startLocal)
-      : // If the start date is unknown, fall back to mtime for rough grouping.
-        toYmdLocal(new Date(stat.mtimeMs)));
+    startValid
+      ? toYmdInTimeZone(startValid, timeZone)
+      : inferred ??
+        // If the start date is unknown, fall back to mtime for rough grouping.
+        toYmdInTimeZone(new Date(stat.mtimeMs), timeZone);
   const localDate = ymdToString(ymd);
 
-  const timeLabel = startLocal ? formatTimeHmLocal(startLocal) : "--:--";
+  const timeLabel = startValid ? formatTimeHmInTimeZone(startValid, timeZone) : "--:--";
 
   const previewMessages = await readPreviewMessages(fsPath, previewMaxMessages);
   const snippetSource = pickSessionSnippetSource(previewMessages);

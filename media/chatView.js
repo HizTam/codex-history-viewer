@@ -18,6 +18,8 @@
   let model = null;
   /** @type {any} */
   let i18n = {};
+  /** @type {{ timeZone?: string }} */
+  let dateTime = {};
   let showDetails = false;
   let selectedMessageIndex = null;
 
@@ -62,6 +64,7 @@
 
       model = msg.model || null;
       i18n = msg.i18n || {};
+      dateTime = msg.dateTime || {};
       selectedMessageIndex = isRestore
         ? typeof restoreSelectedMessageIndex === "number"
           ? restoreSelectedMessageIndex
@@ -85,6 +88,7 @@
     }
     if (msg.type === "i18n") {
       i18n = msg.i18n || {};
+      dateTime = msg.dateTime || dateTime || {};
       updateToolbar();
       render();
       return;
@@ -114,7 +118,7 @@
 
     // Render session metadata at the top.
     const metaLines = [];
-    if (model.meta && model.meta.timestampIso) metaLines.push(`Start(UTC): ${model.meta.timestampIso}`);
+    if (model.meta && model.meta.timestampIso) metaLines.push(`Start: ${formatIsoYmdHm(model.meta.timestampIso)}`);
     if (model.meta && model.meta.cwd) metaLines.push(`CWD: ${model.meta.cwd}`);
     if (model.meta && model.meta.originator) metaLines.push(`Originator: ${model.meta.originator}`);
     if (model.meta && model.meta.cliVersion) metaLines.push(`CLI: ${model.meta.cliVersion}`);
@@ -176,7 +180,8 @@
     }
     if (typeof item.timestampIso === "string") {
       const ts = el("span", { className: "tag" });
-      ts.textContent = item.timestampIso;
+      ts.textContent = formatIsoYmdHms(item.timestampIso);
+      ts.title = item.timestampIso;
       metaLine.appendChild(ts);
     }
     bubble.appendChild(metaLine);
@@ -235,7 +240,8 @@
     }
     if (typeof item.timestampIso === "string") {
       const ts = el("span", { className: "tag" });
-      ts.textContent = item.timestampIso;
+      ts.textContent = formatIsoYmdHms(item.timestampIso);
+      ts.title = item.timestampIso;
       metaLine.appendChild(ts);
     }
     bubble.appendChild(metaLine);
@@ -277,6 +283,103 @@
     }
     row.appendChild(bubble);
     return row;
+  }
+
+  function formatIsoYmdHm(iso) {
+    return formatIsoWithKind(iso, "ymdhm");
+  }
+
+  function formatIsoYmdHms(iso) {
+    return formatIsoWithKind(iso, "ymdhms");
+  }
+
+  const dtfCache = new Map();
+
+  function getTimeZone() {
+    const tz = dateTime && typeof dateTime.timeZone === "string" ? dateTime.timeZone.trim() : "";
+    return tz.length > 0 ? tz : null;
+  }
+
+  function getDtf(kind, timeZone) {
+    const key = `${kind}|${timeZone}`;
+    if (dtfCache.has(key)) return dtfCache.get(key);
+    try {
+      const opts =
+        kind === "ymdhms"
+          ? {
+              timeZone,
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+              hourCycle: "h23",
+            }
+          : {
+              timeZone,
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+              hourCycle: "h23",
+            };
+      // 数字のみを安定して得るため、latn 数字を明示する（ロケールによる数字体系差を回避）。
+      const dtf = new Intl.DateTimeFormat("en-US-u-nu-latn", opts);
+      dtfCache.set(key, dtf);
+      return dtf;
+    } catch {
+      return null;
+    }
+  }
+
+  function formatIsoWithKind(iso, kind) {
+    if (typeof iso !== "string") return "";
+    const s = iso.trim();
+    if (!s) return "";
+    const ms = Date.parse(s);
+    if (!Number.isFinite(ms)) return s;
+    const tz = getTimeZone();
+    if (!tz) return s;
+
+    const dtf = getDtf(kind, tz);
+    if (!dtf) return s;
+    let parts;
+    try {
+      parts = dtf.formatToParts(new Date(ms));
+    } catch {
+      return s;
+    }
+
+    const out = {};
+    for (const p of parts) {
+      if (
+        p.type === "year" ||
+        p.type === "month" ||
+        p.type === "day" ||
+        p.type === "hour" ||
+        p.type === "minute" ||
+        p.type === "second"
+      ) {
+        out[p.type] = p.value;
+      }
+    }
+
+    const year = out.year;
+    const month = out.month;
+    const day = out.day;
+    const hour = out.hour;
+    const minute = out.minute;
+    const second = out.second;
+
+    if (typeof year !== "string" || typeof month !== "string" || typeof day !== "string") return s;
+    if (typeof hour !== "string" || typeof minute !== "string") return s;
+    if (kind === "ymdhms" && typeof second !== "string") return s;
+
+    return kind === "ymdhms"
+      ? `${year}-${month}-${day} ${hour}:${minute}:${second}`
+      : `${year}-${month}-${day} ${hour}:${minute}`;
   }
 
   function renderCodeBlock(lang, code, options) {

@@ -3,6 +3,7 @@ import type { HistoryService } from "../services/historyService";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { renderTranscript } from "./transcriptRenderer";
 import { t } from "../i18n";
+import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 
 // TextDocumentContentProvider that exposes a JSONL session as a Markdown transcript.
 export class TranscriptContentProvider implements vscode.TextDocumentContentProvider {
@@ -29,7 +30,8 @@ export class TranscriptContentProvider implements vscode.TextDocumentContentProv
   ): Promise<void> {
     try {
       const uri = this.buildUri(session.fsPath);
-      const { content, messageLineMap } = await renderTranscript(session.fsPath);
+      const { timeZone } = resolveDateTimeSettings();
+      const { content, messageLineMap } = await renderTranscript(session.fsPath, { timeZone });
       this.cache.set(uri.toString(), { content, messageLineMap });
       this.onDidChangeEmitter.fire(uri);
 

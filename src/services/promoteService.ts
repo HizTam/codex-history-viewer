@@ -6,9 +6,10 @@ import * as readline from "node:readline";
 import * as vscode from "vscode";
 import type { HistoryService } from "./historyService";
 import type { SessionSummary } from "../sessions/sessionTypes";
-import { pad2, toYmdLocal, ymdToString } from "../utils/dateUtils";
+import { formatTimeHmsInTimeZone, pad2, toYmdInTimeZone } from "../utils/dateUtils";
 import { buildSessionSummary, tryReadSessionMeta } from "../sessions/sessionSummary";
 import type { CodexHistoryViewerConfig } from "../settings";
+import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 
 // Copies a past session into "today" (promote). The source file is never modified.
 
@@ -18,8 +19,9 @@ export async function promoteSessionCopyToToday(
   config: CodexHistoryViewerConfig,
 ): Promise<SessionSummary> {
   const sessionsRoot = historyService.getIndex().sessionsRoot;
+  const dateTime = resolveDateTimeSettings();
   const now = new Date();
-  const ymd = toYmdLocal(now);
+  const ymd = toYmdInTimeZone(now, dateTime.timeZone);
   const yyyy = String(ymd.year);
   const mm = pad2(ymd.month);
   const dd = pad2(ymd.day);
@@ -28,10 +30,13 @@ export async function promoteSessionCopyToToday(
   await vscode.workspace.fs.createDirectory(vscode.Uri.file(destDir));
 
   const newId = crypto.randomUUID();
-  const fileName = `rollout-${yyyy}-${mm}-${dd}T${pad2(now.getHours())}-${pad2(now.getMinutes())}-${pad2(
-    now.getSeconds(),
-  )}-${newId}.jsonl`;
-  const destPath = path.join(destDir, fileName);
+  const hms = formatTimeHmsInTimeZone(now, dateTime.timeZone);
+  const [hh, mi, ss] = hms.split(":");
+  const fileNameSafe =
+    typeof hh === "string" && typeof mi === "string" && typeof ss === "string" && hh.length === 2 && mi.length === 2 && ss.length === 2
+      ? `rollout-${yyyy}-${mm}-${dd}T${hh}-${mi}-${ss}-${newId}.jsonl`
+      : `rollout-${yyyy}-${mm}-${dd}T${pad2(now.getHours())}-${pad2(now.getMinutes())}-${pad2(now.getSeconds())}-${newId}.jsonl`;
+  const destPath = path.join(destDir, fileNameSafe);
   const tempPath = `${destPath}.tmp`;
 
   // Compute the delta (ms) to shift the timeline to "now".
@@ -56,6 +61,7 @@ export async function promoteSessionCopyToToday(
       sessionsRoot,
       fsPath: destPath,
       previewMaxMessages: config.previewMaxMessages,
+      timeZone: dateTime.timeZone,
     })) ?? session;
 
   return summary;

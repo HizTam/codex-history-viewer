@@ -24,6 +24,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const HISTORY_FILTER_KEY = "codexHistoryViewer.historyFilter.v1";
   const HISTORY_PROJECT_FILTER_KEY = "codexHistoryViewer.historyProjectFilter.v1";
 
+  const updateUiLanguageContext = (): void => {
+    // 拡張の表示言語（設定）に合わせて、メニュー表示切替用のコンテキストを更新する。
+    // ※ package.json の when 句から参照するため、値は "ja"/"en" に固定する。
+    const lang = resolveUiLanguage();
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.uiLang", lang);
+  };
+  updateUiLanguageContext();
+
   // Ensure the global storage directory exists (cache / temp files).
   await vscode.workspace.fs.createDirectory(context.globalStorageUri);
 
@@ -266,19 +274,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
+      const uiLanguageChanged = e.affectsConfiguration("codexHistoryViewer.ui.language");
+      const headerActionsChanged = e.affectsConfiguration("codexHistoryViewer.ui.alwaysShowHeaderActions");
       if (
-        !e.affectsConfiguration("codexHistoryViewer.ui.language") &&
-        !e.affectsConfiguration("codexHistoryViewer.ui.alwaysShowHeaderActions")
+        !uiLanguageChanged &&
+        !headerActionsChanged
       ) {
         return;
       }
+      if (uiLanguageChanged) updateUiLanguageContext();
       updateViewTitles();
       updateHistoryViewDescription();
-      pinnedProvider.refresh();
-      historyProvider.refresh();
-      searchProvider.refresh();
       chatPanels.refreshI18n();
       void ensureAlwaysShowHeaderActions();
+
+      // UI言語変更時は、日時(タイムゾーン)表示も変わるため、履歴インデックスを再構築してツリー/タブを揃える。
+      if (!uiLanguageChanged) {
+        pinnedProvider.refresh();
+        historyProvider.refresh();
+        searchProvider.refresh();
+        return;
+      }
+
+      void vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") }, async () => {
+        historyService.updateConfig(getConfig());
+        await historyService.refresh({ forceRebuildCache: false });
+        pinnedProvider.refresh();
+        historyProvider.refresh();
+        searchProvider.clear();
+        chatPanels.refreshTitles();
+      });
     }),
   );
 
@@ -642,6 +667,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       searchProvider.clear();
     }),
   );
+
+  // UI 言語（拡張設定）に応じてメニューの表示名を切り替えるため、UI用の別名コマンドを用意する。
+  // これにより、VS Code の表示言語とは独立して右クリックメニュー等の文言を切り替えられる。
+  const registerUiCommandAlias = (aliasId: string, targetId: string): void => {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(aliasId, async (...args: unknown[]) => {
+        await vscode.commands.executeCommand(targetId, ...(args as any[]));
+      }),
+    );
+  };
+
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.openSession", "codexHistoryViewer.openSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.openSession", "codexHistoryViewer.openSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.openSessionMarkdown", "codexHistoryViewer.openSessionMarkdown");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.openSessionMarkdown", "codexHistoryViewer.openSessionMarkdown");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.promoteSession", "codexHistoryViewer.promoteSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.promoteSession", "codexHistoryViewer.promoteSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.pinSession", "codexHistoryViewer.pinSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.pinSession", "codexHistoryViewer.pinSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.unpinSession", "codexHistoryViewer.unpinSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.unpinSession", "codexHistoryViewer.unpinSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.deleteSessions", "codexHistoryViewer.deleteSessions");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.deleteSessions", "codexHistoryViewer.deleteSessions");
 
   // Initial load on activation.
   await vscode.window.withProgress(

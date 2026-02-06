@@ -23,8 +23,8 @@ export interface SessionSummary {
   cacheKey: string;
   meta: SessionMetaInfo;
   inferredYmd?: Ymd; // Set only if inferred from the path
-  localDate: string; // YYYY-MM-DD (local date)
-  timeLabel: string; // HH:MM (local time)
+  localDate: string; // YYYY-MM-DD (display time zone date)
+  timeLabel: string; // HH:MM (display time zone time)
   snippet: string; // Short text for list display
   cwdShort: string;
   previewMessages: PreviewMessage[];

@@ -5,8 +5,8 @@ import { findSessionFiles } from "../sessions/sessionDiscovery";
 import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
 import { buildSessionSummary } from "../sessions/sessionSummary";
 import { normalizeCacheKey, pathExists } from "../utils/fsUtils";
-import { toYmdLocal, ymdToString } from "../utils/dateUtils";
 import { readJson, writeJson } from "../storage/jsonStorage";
+import { getDateTimeSettingsKey, resolveDateTimeSettings } from "../utils/dateTimeSettings";
 
 // Builds the session index and manages its cache.
 
@@ -16,13 +16,14 @@ interface CacheEntryV1 {
   summary: SessionSummary;
 }
 
-const SUMMARY_CACHE_ALGO_VERSION = 2;
+const SUMMARY_CACHE_ALGO_VERSION = 3;
 
 interface CacheFileV4 {
   version: 4;
   summaryAlgoVersion: number;
   sessionsRoot: string;
   previewMaxMessages: number;
+  dateTimeSettingsKey: string;
   entries: Record<string, CacheEntryV1>;
 }
 
@@ -68,6 +69,9 @@ export class HistoryService {
       return;
     }
 
+    const dateTime = resolveDateTimeSettings();
+    const dateTimeSettingsKey = getDateTimeSettingsKey(dateTime);
+
     const cacheUri = vscode.Uri.joinPath(this.globalStorageUri, "cache.v4.json");
     const cache = options.forceRebuildCache ? null : await readJson<CacheFileV4>(cacheUri);
 
@@ -76,7 +80,8 @@ export class HistoryService {
       cache.version === 4 &&
       cache.summaryAlgoVersion === SUMMARY_CACHE_ALGO_VERSION &&
       cache.sessionsRoot === sessionsRoot &&
-      cache.previewMaxMessages === this.config.previewMaxMessages
+      cache.previewMaxMessages === this.config.previewMaxMessages &&
+      cache.dateTimeSettingsKey === dateTimeSettingsKey
         ? cache.entries
         : {};
 
@@ -106,6 +111,7 @@ export class HistoryService {
         sessionsRoot,
         fsPath,
         previewMaxMessages: this.config.previewMaxMessages,
+        timeZone: dateTime.timeZone,
       });
       if (!summary) continue;
       nextEntries[key] = { mtimeMs: st.mtimeMs, size: st.size, summary };
@@ -124,6 +130,7 @@ export class HistoryService {
       summaryAlgoVersion: SUMMARY_CACHE_ALGO_VERSION,
       sessionsRoot,
       previewMaxMessages: this.config.previewMaxMessages,
+      dateTimeSettingsKey,
       entries: nextEntries,
     };
     await writeJson(cacheUri, nextCache);

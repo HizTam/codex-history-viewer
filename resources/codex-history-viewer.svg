@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
   <!-- For VS Code Activity Bar: no fill, stroke icon using currentColor -->
-  <g stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
-    <!-- Arc with the top-right quarter missing (remove the 90° segment from right to up). -->
+  <!-- キャンバスサイズはそのままに、デザインだけを中心基準で 1.1 倍拡大 -->
+  <g transform="translate(64 64) scale(1.1) translate(-64 -64)" stroke="currentColor" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Arc with the top-right quarter missing (remove the 90-degree segment from right to up). -->
     <path d="M108 64 A44 44 0 1 1 64 20" />
     <line x1="44" y1="50" x2="84" y2="50" />
     <line x1="44" y1="64" x2="84" y2="64" />
