@@ -7,6 +7,7 @@ import { PinnedTreeDataProvider } from "./tree/pinnedTree";
 import { HistoryTreeDataProvider } from "./tree/historyTree";
 import { SearchTreeDataProvider } from "./tree/searchTree";
 import { TranscriptContentProvider } from "./transcript/transcriptProvider";
+import { renderResumeContext } from "./transcript/resumeRenderer";
 import { promoteSessionCopyToToday } from "./services/promoteService";
 import { deleteSessionsWithConfirmation } from "./services/deleteService";
 import { PinStore } from "./services/pinStore";
@@ -15,6 +16,7 @@ import type { TreeNode } from "./tree/treeNodes";
 import { MissingPinnedNode, SearchHitNode, isSessionNode } from "./tree/treeNodes";
 import { ChatPanelManager } from "./chat/chatPanelManager";
 import { getDateScopeValue, sanitizeDateScope, type DateScope } from "./types/dateScope";
+import { resolveDateTimeSettings } from "./utils/dateTimeSettings";
 import { safeDisplayPath } from "./utils/textUtils";
 import { normalizeCacheKey } from "./utils/fsUtils";
 
@@ -25,8 +27,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const HISTORY_PROJECT_FILTER_KEY = "codexHistoryViewer.historyProjectFilter.v1";
 
   const updateUiLanguageContext = (): void => {
-    // 拡張の表示言語（設定）に合わせて、メニュー表示切替用のコンテキストを更新する。
-    // ※ package.json の when 句から参照するため、値は "ja"/"en" に固定する。
+    // Keep the UI language context up to date for menu visibility switching.
+    // The value is fixed to "ja"/"en" because package.json `when` clauses depend on it.
     const lang = resolveUiLanguage();
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.uiLang", lang);
   };
@@ -61,6 +63,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const URI_LIST_MIME = "text/uri-list";
   const OPEN_MULTI_LIMIT = 10;
   const MAX_DND_ITEMS = 500;
+  const RESUME_MAX_MESSAGES = 20;
+  const RESUME_MAX_CHARS = 25_000;
 
   const dedupeFsPaths = (fsPaths: readonly string[]): string[] => {
     // Deduplicate paths (normalize Windows case differences).
@@ -288,7 +292,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       chatPanels.refreshI18n();
       void ensureAlwaysShowHeaderActions();
 
-      // UI言語変更時は、日時(タイムゾーン)表示も変わるため、履歴インデックスを再構築してツリー/タブを揃える。
+      // When UI language changes, rebuild history-dependent displays because date/time formatting can also change.
       if (!uiLanguageChanged) {
         pinnedProvider.refresh();
         historyProvider.refresh();
@@ -495,6 +499,46 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.copyResumePrompt", async (elementOrArgs?: unknown) => {
+      // Resolve exactly one target session from tree selection or webview args, then copy its prompt excerpt.
+      const hasDirectFsPath =
+        !!elementOrArgs &&
+        typeof elementOrArgs === "object" &&
+        !isSessionNode(elementOrArgs) &&
+        typeof (elementOrArgs as any).fsPath === "string";
+
+      let session: SessionSummary | undefined;
+      if (hasDirectFsPath) {
+        session = resolveSessionFromElementOrFsPath(historyService, elementOrArgs);
+      } else {
+        const targets = resolveTargets(elementOrArgs);
+        const openTargets = collectOpenTargets(targets);
+        if (openTargets.length > 0) session = openTargets[0]!.session;
+      }
+      if (!session) {
+        session = resolveSessionFromElementOrActive(historyService, transcriptProvider.scheme, elementOrArgs);
+      }
+      if (!session) return false;
+
+      try {
+        const { timeZone } = resolveDateTimeSettings();
+        const excerpt = await renderResumeContext(session.fsPath, {
+          timeZone,
+          maxMessages: RESUME_MAX_MESSAGES,
+          maxChars: RESUME_MAX_CHARS,
+          includeContext: false,
+        });
+        await vscode.env.clipboard.writeText(excerpt);
+        void vscode.window.showInformationMessage(t("app.copyResumePromptDone"));
+        return true;
+      } catch {
+        void vscode.window.showErrorMessage(t("app.copyResumePromptFailed"));
+        return false;
+      }
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.openSettings", async () => {
       // Open the VS Code Settings UI filtered to this extension.
       const extId = context.extension.id;
@@ -668,8 +712,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // UI 言語（拡張設定）に応じてメニューの表示名を切り替えるため、UI用の別名コマンドを用意する。
-  // これにより、VS Code の表示言語とは独立して右クリックメニュー等の文言を切り替えられる。
+  // Register UI command aliases so menu labels can switch by extension language setting.
+  // This keeps context menu text independent from VS Code display language.
   const registerUiCommandAlias = (aliasId: string, targetId: string): void => {
     context.subscriptions.push(
       vscode.commands.registerCommand(aliasId, async (...args: unknown[]) => {
@@ -682,6 +726,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.openSession", "codexHistoryViewer.openSession");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.openSessionMarkdown", "codexHistoryViewer.openSessionMarkdown");
   registerUiCommandAlias("codexHistoryViewer.ui.en.openSessionMarkdown", "codexHistoryViewer.openSessionMarkdown");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.copyResumePrompt", "codexHistoryViewer.copyResumePrompt");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.copyResumePrompt", "codexHistoryViewer.copyResumePrompt");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.promoteSession", "codexHistoryViewer.promoteSession");
   registerUiCommandAlias("codexHistoryViewer.ui.en.promoteSession", "codexHistoryViewer.promoteSession");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.pinSession", "codexHistoryViewer.pinSession");
@@ -690,6 +736,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.unpinSession", "codexHistoryViewer.unpinSession");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.deleteSessions", "codexHistoryViewer.deleteSessions");
   registerUiCommandAlias("codexHistoryViewer.ui.en.deleteSessions", "codexHistoryViewer.deleteSessions");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.refresh", "codexHistoryViewer.refresh");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.refresh", "codexHistoryViewer.refresh");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.search", "codexHistoryViewer.search");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.search", "codexHistoryViewer.search");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.filterHistory", "codexHistoryViewer.filterHistory");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.filterHistory", "codexHistoryViewer.filterHistory");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.clearHistoryFilter", "codexHistoryViewer.clearHistoryFilter");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.clearHistoryFilter", "codexHistoryViewer.clearHistoryFilter");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.openSettings", "codexHistoryViewer.openSettings");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.openSettings", "codexHistoryViewer.openSettings");
 
   // Initial load on activation.
   await vscode.window.withProgress(

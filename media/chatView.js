@@ -5,6 +5,7 @@
   const metaEl = document.getElementById("meta");
   const timelineEl = document.getElementById("timeline");
   const btnMarkdown = document.getElementById("btnMarkdown");
+  const btnCopyResume = document.getElementById("btnCopyResume");
   const btnReload = document.getElementById("btnReload");
   const btnToggleDetails = document.getElementById("btnToggleDetails");
 
@@ -13,6 +14,10 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 1.5H6A1.5 1.5 0 0 0 4.5 3H3.75A1.75 1.75 0 0 0 2 4.75v8.5C2 14.216 2.784 15 3.75 15h8.5c.966 0 1.75-.784 1.75-1.75v-8.5C14 3.784 13.216 3 12.25 3H11.5A1.5 1.5 0 0 0 10 1.5Zm-4 1H10a.5.5 0 0 1 .5.5V3H5.5V3a.5.5 0 0 1 .5-.5ZM3.75 4h8.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-8.5a.75.75 0 0 1-.75-.75v-8.5A.75.75 0 0 1 3.75 4Z"/></svg>';
   const RELOAD_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.25a5.75 5.75 0 1 0 5.75 5.75.75.75 0 0 0-1.5 0A4.25 4.25 0 1 1 8 3.75h2.06l-.8.8a.75.75 0 0 0 1.06 1.06l2.08-2.08a.75.75 0 0 0 0-1.06L10.32.39A.75.75 0 0 0 9.26 1.45l.8.8H8Z"/></svg>';
+  const NAV_UP_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.2a.75.75 0 0 1 .53.22l4.1 4.1a.75.75 0 1 1-1.06 1.06L8 4.99 4.43 8.58a.75.75 0 1 1-1.06-1.06l4.1-4.1A.75.75 0 0 1 8 3.2Z"/></svg>';
+  const NAV_DOWN_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 12.8a.75.75 0 0 1-.53-.22l-4.1-4.1a.75.75 0 0 1 1.06-1.06L8 11.01l3.57-3.59a.75.75 0 0 1 1.06 1.06l-4.1 4.1A.75.75 0 0 1 8 12.8Z"/></svg>';
 
   /** @type {any} */
   let model = null;
@@ -22,9 +27,11 @@
   let dateTime = {};
   let showDetails = false;
   let selectedMessageIndex = null;
+  let messageNavMap = new Map();
 
   // Initial button labels (overwritten after receiving sessionData).
   btnMarkdown.textContent = "Markdown";
+  btnCopyResume.textContent = "Copy prompt";
   // Reload is icon-only (tooltip is set via i18n).
   btnReload.innerHTML = RELOAD_ICON_SVG;
   btnToggleDetails.textContent = "Details";
@@ -34,6 +41,9 @@
       type: "openMarkdown",
       revealMessageIndex: typeof selectedMessageIndex === "number" ? selectedMessageIndex : undefined,
     });
+  });
+  btnCopyResume.addEventListener("click", () => {
+    vscode.postMessage({ type: "copyResumePrompt" });
   });
 
   btnReload.addEventListener("click", () => {
@@ -102,13 +112,30 @@
   vscode.postMessage({ type: "ready" });
 
   function updateToolbar() {
-    btnMarkdown.textContent = i18n.markdown || "Markdown";
+    const markdownLabel = i18n.markdown || "Markdown";
+    const markdownTooltip = i18n.markdownTooltip || markdownLabel;
+    btnMarkdown.textContent = markdownLabel;
+    btnMarkdown.title = markdownTooltip;
+    btnMarkdown.setAttribute("aria-label", markdownTooltip);
+    const copyResumeLabel = i18n.copyResume || "Copy prompt";
+    // Show a descriptive tooltip so the button intent is clear.
+    const copyResumeTooltip = i18n.copyResumeTooltip || copyResumeLabel;
+    btnCopyResume.textContent = copyResumeLabel;
+    btnCopyResume.title = copyResumeTooltip;
+    btnCopyResume.setAttribute("aria-label", copyResumeTooltip);
     const reloadLabel = i18n.reload || "Reload";
-    btnReload.title = reloadLabel;
-    btnReload.setAttribute("aria-label", reloadLabel);
-    btnToggleDetails.textContent = showDetails
+    const reloadTooltip = i18n.reloadTooltip || reloadLabel;
+    btnReload.title = reloadTooltip;
+    btnReload.setAttribute("aria-label", reloadTooltip);
+    const detailsLabel = showDetails
       ? i18n.detailsOn || "Hide details"
       : i18n.detailsOff || "Show details";
+    const detailsTooltip = showDetails
+      ? i18n.detailsOnTooltip || detailsLabel
+      : i18n.detailsOffTooltip || detailsLabel;
+    btnToggleDetails.textContent = detailsLabel;
+    btnToggleDetails.title = detailsTooltip;
+    btnToggleDetails.setAttribute("aria-label", detailsTooltip);
   }
 
   function render() {
@@ -127,6 +154,8 @@
     if (metaLines.length > 0) metaEl.textContent = metaLines.join(" | ");
 
     const items = Array.isArray(model.items) ? model.items : [];
+    // Build navigation metadata between messages before rendering.
+    messageNavMap = buildMessageNavMap(items);
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
       const rendered = renderItem(item);
@@ -145,15 +174,8 @@
     const role = item.role === "user" || item.role === "assistant" || item.role === "developer" ? item.role : "assistant";
     if (role !== "assistant" && !showDetails && item.isContext) return null;
 
-    let textToRender = item.text || "";
-    if (role === "user" && !showDetails) {
-      if (typeof item.requestText === "string" && item.requestText.trim()) {
-        textToRender = item.requestText;
-      } else {
-        textToRender = item.text || "";
-      }
-      if (!textToRender.trim()) return null;
-    }
+    const textToRender = getMessageTextToRender(item, role);
+    if (role === "user" && !showDetails && !textToRender.trim()) return null;
     if (role === "developer" && !showDetails) return null;
 
     const row = el("div", { className: `row ${role}` });
@@ -170,19 +192,31 @@
     }
 
     const metaLine = el("div", { className: "metaLine" });
+    const metaTags = el("div", { className: "metaTags" });
     const roleTag = el("span", { className: "tag" });
     roleTag.textContent = role;
-    metaLine.appendChild(roleTag);
+    metaTags.appendChild(roleTag);
     if (item.isContext) {
       const ctxTag = el("span", { className: "tag context" });
       ctxTag.textContent = "context";
-      metaLine.appendChild(ctxTag);
+      metaTags.appendChild(ctxTag);
     }
     if (typeof item.timestampIso === "string") {
       const ts = el("span", { className: "tag" });
       ts.textContent = formatIsoYmdHms(item.timestampIso);
       ts.title = item.timestampIso;
-      metaLine.appendChild(ts);
+      metaTags.appendChild(ts);
+    }
+    metaLine.appendChild(metaTags);
+
+    if ((role === "user" || role === "assistant") && typeof item.messageIndex === "number") {
+      const nav = messageNavMap.get(item.messageIndex);
+      if (nav && nav.showNav) {
+        const navActions = el("div", { className: "messageNav" });
+        navActions.appendChild(createMessageNavButton("prev", nav.role, nav.prevIndex));
+        navActions.appendChild(createMessageNavButton("next", nav.role, nav.nextIndex));
+        metaLine.appendChild(navActions);
+      }
     }
     bubble.appendChild(metaLine);
 
@@ -206,8 +240,9 @@
     if (role === "user" || role === "assistant") {
       const actions = el("div", { className: "bubbleActions" });
       const btn = el("button", { type: "button", className: "iconBtn" });
-      btn.title = i18n.copy || "Copy";
-      btn.setAttribute("aria-label", i18n.copy || "Copy");
+      const copyMessageLabel = i18n.copyMessageTooltip || i18n.copy || "Copy";
+      btn.title = copyMessageLabel;
+      btn.setAttribute("aria-label", copyMessageLabel);
       btn.innerHTML = COPY_ICON_SVG;
       btn.addEventListener("click", (e) => {
         e.preventDefault();
@@ -325,7 +360,7 @@
               minute: "2-digit",
               hourCycle: "h23",
             };
-      // 数字のみを安定して得るため、latn 数字を明示する（ロケールによる数字体系差を回避）。
+      // Force Latin digits so parsed numbers stay stable across locale numeral systems.
       const dtf = new Intl.DateTimeFormat("en-US-u-nu-latn", opts);
       dtfCache.set(key, dtf);
       return dtf;
@@ -392,10 +427,11 @@
     const useIcon = !!(options && options.copyIcon);
     const btn = el("button", { type: "button", className: useIcon ? "codeCopyBtn iconBtn" : "codeCopyBtn" });
     const copyLabel = i18n.copy || "Copy";
+    const copyCodeLabel = i18n.copyCodeTooltip || copyLabel;
     if (useIcon) btn.innerHTML = COPY_ICON_SVG;
     else btn.textContent = copyLabel;
-    btn.title = copyLabel;
-    btn.setAttribute("aria-label", copyLabel);
+    btn.title = copyCodeLabel;
+    btn.setAttribute("aria-label", copyCodeLabel);
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -438,6 +474,98 @@
       i = end + 3;
     }
     return out;
+  }
+
+  function getMessageTextToRender(item, role) {
+    if (role === "user" && !showDetails) {
+      if (typeof item.requestText === "string" && item.requestText.trim()) return item.requestText;
+      return item.text || "";
+    }
+    return item.text || "";
+  }
+
+  function getMessageRole(item) {
+    const role = item && typeof item.role === "string" ? item.role : "";
+    if (role === "user" || role === "assistant" || role === "developer") return role;
+    return "assistant";
+  }
+
+  function canRenderMessage(item) {
+    if (!item || item.type !== "message") return false;
+    const role = getMessageRole(item);
+    if (role !== "assistant" && !showDetails && item.isContext) return false;
+    if (role === "developer" && !showDetails) return false;
+    if (role === "user" && !showDetails) {
+      const text = getMessageTextToRender(item, role);
+      if (!text.trim()) return false;
+    }
+    return true;
+  }
+
+  function buildMessageNavMap(items) {
+    const navMap = new Map();
+    const indexesByRole = { user: [], assistant: [] };
+    for (const item of items) {
+      if (!canRenderMessage(item)) continue;
+      const role = getMessageRole(item);
+      if (role !== "user" && role !== "assistant") continue;
+      if (typeof item.messageIndex !== "number") continue;
+      indexesByRole[role].push(item.messageIndex);
+      navMap.set(item.messageIndex, { showNav: true, role, prevIndex: null, nextIndex: null });
+    }
+
+    // Keep per-message navigation available even when same-role messages are consecutive.
+    for (const role of ["user", "assistant"]) {
+      const indexes = indexesByRole[role];
+      for (let i = 0; i < indexes.length; i += 1) {
+        const messageIndex = indexes[i];
+        navMap.set(messageIndex, {
+          showNav: true,
+          role,
+          prevIndex: i > 0 ? indexes[i - 1] : null,
+          nextIndex: i + 1 < indexes.length ? indexes[i + 1] : null,
+        });
+      }
+    }
+    return navMap;
+  }
+
+  function createMessageNavButton(direction, role, targetIndex) {
+    const btn = el("button", { type: "button", className: "iconBtn navBtn" });
+    const label = getMessageNavLabel(direction, role);
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.innerHTML = direction === "prev" ? NAV_UP_ICON_SVG : NAV_DOWN_ICON_SVG;
+    if (typeof targetIndex !== "number") {
+      btn.disabled = true;
+      return btn;
+    }
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      jumpToMessage(targetIndex);
+    });
+    return btn;
+  }
+
+  function getMessageNavLabel(direction, role) {
+    if (role === "user") {
+      return direction === "prev"
+        ? i18n.jumpPrevUser || "Jump to previous user prompt"
+        : i18n.jumpNextUser || "Jump to next user prompt";
+    }
+    return direction === "prev"
+      ? i18n.jumpPrevAssistant || "Jump to previous assistant response"
+      : i18n.jumpNextAssistant || "Jump to next assistant response";
+  }
+
+  function jumpToMessage(messageIndex) {
+    selectedMessageIndex = messageIndex;
+    clearHighlights();
+    const elTarget = document.getElementById(`msg-${messageIndex}`);
+    if (!elTarget) return;
+    elTarget.classList.add("highlight");
+    elTarget.scrollIntoView({ block: "center" });
   }
 
   function revealMessage(messageIndex) {
@@ -540,7 +668,11 @@
       label.textContent = lang ? String(lang) : "";
       header.appendChild(label);
       const btn = el("button", { type: "button" });
-      btn.textContent = i18n.copy || "Copy";
+      const copyLabel = i18n.copy || "Copy";
+      const copyCodeLabel = i18n.copyCodeTooltip || copyLabel;
+      btn.textContent = copyLabel;
+      btn.title = copyCodeLabel;
+      btn.setAttribute("aria-label", copyCodeLabel);
       btn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();

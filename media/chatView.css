@@ -125,9 +125,20 @@ body {
 }
 
 .metaLine {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 11px;
   color: var(--chv-muted);
   margin-bottom: 6px;
+}
+
+.metaTags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .tag {
@@ -139,8 +150,29 @@ body {
   margin-right: 6px;
 }
 
+.metaTags .tag {
+  margin-right: 0;
+}
+
 .tag.context {
   opacity: 0.8;
+}
+
+/* Arrow buttons used for message-to-message navigation. */
+.messageNav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.messageNav .navBtn {
+  padding: 2px 5px;
+}
+
+.messageNav .navBtn svg {
+  width: 12px;
+  height: 12px;
 }
 
 .textBlock {
@@ -165,6 +197,13 @@ body {
 
 .iconBtn:hover {
   border-color: var(--chv-accent);
+}
+
+.iconBtn:disabled,
+.iconBtn:disabled:hover {
+  opacity: 0.55;
+  cursor: default;
+  border-color: var(--chv-border);
 }
 
 .iconBtn svg {

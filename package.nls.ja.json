@@ -27,5 +27,6 @@
   "cfg.searchCaseSensitive": "検索を大文字/小文字を区別して行うかどうか。",
   "cfg.deleteUseTrash": "削除時に OS のゴミ箱へ移動します（推奨）。",
   "cfg.uiLanguage": "この拡張の表示言語。auto は VS Code の表示言語に従います。",
-  "cfg.uiAlwaysShowHeaderActions": "各ビューのヘッダーアクション（右上のアイコン）を常に表示します（VS Code の設定 workbench.view.alwaysShowHeaderActions を有効化します）。"
+  "cfg.uiAlwaysShowHeaderActions": "各ビューのヘッダーアクション（右上のアイコン）を常に表示します（VS Code の設定 workbench.view.alwaysShowHeaderActions を有効化します）。",
+  "cmd.copyResumePrompt": "プロンプト抜粋をコピー"
 }

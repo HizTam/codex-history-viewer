@@ -23,7 +23,7 @@ function getDtfYmdHms(timeZone: string): Intl.DateTimeFormat | null {
   if (!tz) return null;
   if (dtfYmdHmsCache.has(tz)) return dtfYmdHmsCache.get(tz)!;
   try {
-    // 数字のみを安定して得るため、latn 数字を明示する（ロケールによる数字体系差を回避）。
+    // Force Latin digits so numeric parsing is stable across locale-specific numeral systems.
     const dtf = new Intl.DateTimeFormat("en-US-u-nu-latn", {
       timeZone: tz,
       year: "numeric",
@@ -72,7 +72,7 @@ function getYmdHmsInTimeZone(d: Date, timeZone: string): YmdHmsParts {
     const parts = partsFromDtf(dtf, d);
     if (parts) return parts;
   }
-  // フォールバック: システムローカル（timeZone 未対応環境でも安全に動作させる）。
+  // Fallback to system local time when the requested time zone cannot be applied.
   return {
     year: d.getFullYear(),
     month: d.getMonth() + 1,

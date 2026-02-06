@@ -19,11 +19,9 @@
   "app.unpinDone": "Unpinned.",
   "app.unpinDoneMulti": "Unpinned {0} session(s) ({1} were not pinned).",
   "app.unpinDoneNoop": "All selected sessions are not pinned.",
-
   "view.pinned": "Pinned",
   "view.history": "History",
   "view.search": "Search",
-
   "history.filter.all": "All history",
   "history.filter.placeholder": "Filter history by date/project…",
   "history.filter.active": "Filtered: {0}",
@@ -32,13 +30,11 @@
   "history.filter.project": "Project",
   "history.filter.projectLabel": "Project: {0}",
   "history.project.clear": "Clear project filter",
-
   "search.filter.all": "All history",
   "search.filter.year": "Year…",
   "search.filter.month": "Month…",
   "search.filter.day": "Day…",
   "search.filter.range": "Range…",
-
   "search.input.year": "Enter year (YYYY)",
   "search.input.month": "Enter month (YYYY-MM)",
   "search.input.day": "Enter day (YYYY-MM-DD)",
@@ -48,9 +44,16 @@
   "search.help.start": "Click to search…",
   "search.help.tooltip": "Click to start searching. To narrow by date/project, set a filter in the History view and run Search.",
   "search.invalidFormat": "Please enter a search term.",
-
   "tree.pinned.missing": "Missing (deleted or moved?)",
-
+  "tree.tooltip.year": "Expand to view months in {0}.",
+  "tree.tooltip.month": "Expand to view days in {0}.",
+  "tree.tooltip.day": "Expand to view sessions on {0}.",
+  "tree.tooltip.sessionActions": "Click to open this session. Right-click for actions such as pin/promote/delete.",
+  "tree.tooltip.missingPinned": "Pinned entry points to a missing file:\n{0}",
+  "tree.tooltip.searchRoot": "Query: {0}\nScope: {1}\nTotal hits: {2}",
+  "tree.tooltip.searchSession": "This session contains {0} hit(s). Expand to view matched messages.",
+  "tree.tooltip.searchSessionMore": "... and {0} more hit(s).",
+  "tree.tooltip.searchHitAction": "Click to open this hit in the chat viewer.",
   "chat.button.markdown": "Open Markdown transcript",
   "chat.button.reload": "Reload",
   "chat.button.toolsOn": "Hide tools",
@@ -58,8 +61,22 @@
   "chat.button.detailsOn": "Hide details",
   "chat.button.detailsOff": "Show details",
   "chat.button.copy": "Copy",
+  "chat.tooltip.markdown": "Open this session as a searchable Markdown transcript.",
+  "chat.tooltip.reload": "Reload the session and preserve the current scroll position.",
+  "chat.tooltip.detailsOn": "Hide tool calls, notes, and context/developer messages.",
+  "chat.tooltip.detailsOff": "Show tool calls, notes, and context/developer messages.",
+  "chat.tooltip.copyResume": "Copy a resume-ready prompt excerpt (task + recent messages) to the clipboard.",
+  "chat.tooltip.copyMessage": "Copy this message text to the clipboard.",
+  "chat.tooltip.copyCode": "Copy this code block to the clipboard.",
   "chat.toast.copied": "Copied.",
   "chat.label.tool": "Tool",
   "chat.label.arguments": "Arguments",
-  "chat.label.output": "Output"
+  "chat.label.output": "Output",
+  "app.copyResumePromptDone": "Prompt excerpt copied to clipboard.",
+  "app.copyResumePromptFailed": "Failed to copy prompt excerpt.",
+  "chat.button.copyResume": "Copy prompt excerpt",
+  "chat.nav.prevUser": "Jump to previous user prompt",
+  "chat.nav.nextUser": "Jump to next user prompt",
+  "chat.nav.prevAssistant": "Jump to previous assistant response",
+  "chat.nav.nextAssistant": "Jump to next assistant response"
 }

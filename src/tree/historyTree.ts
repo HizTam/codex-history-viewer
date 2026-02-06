@@ -7,6 +7,7 @@ import type { DateScope } from "../types/dateScope";
 import { getConfig } from "../settings";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { truncateByDisplayWidth } from "../utils/textUtils";
+import { t } from "../i18n";
 
 // Provides the history tree (year → month → day → session).
 export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
@@ -70,17 +71,20 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     if (element instanceof YearNode) {
       const item = new vscode.TreeItem(element.year, vscode.TreeItemCollapsibleState.Collapsed);
       item.contextValue = toTreeItemContextValue(element);
+      item.tooltip = t("tree.tooltip.year", element.year);
       return item;
     }
     if (element instanceof MonthNode) {
       const item = new vscode.TreeItem(element.month, vscode.TreeItemCollapsibleState.Collapsed);
       item.contextValue = toTreeItemContextValue(element);
+      item.tooltip = t("tree.tooltip.month", `${element.year}-${element.month}`);
       return item;
     }
     if (element instanceof DayNode) {
       const item = new vscode.TreeItem(element.day, vscode.TreeItemCollapsibleState.Collapsed);
       item.description = element.ymd;
       item.contextValue = toTreeItemContextValue(element);
+      item.tooltip = t("tree.tooltip.day", element.ymd);
       return item;
     }
     if (element instanceof SessionNode) {
@@ -111,12 +115,13 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const md = new vscode.MarkdownString(undefined, true);
     md.isTrusted = false;
     md.appendMarkdown(`**${session.localDate} ${session.timeLabel}**  \n`);
-    if (session.cwdShort) md.appendMarkdown(`${session.cwdShort}  \n`);
+    if (session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(session.cwdShort)}  \n`);
     md.appendMarkdown(`\n---\n`);
     for (const msg of session.previewMessages) {
       md.appendMarkdown(`**${msg.role}**  \n`);
       md.appendMarkdown(`${escapeForMarkdown(msg.text)}\n\n`);
     }
+    md.appendMarkdown(`---\n${escapeForMarkdown(t("tree.tooltip.sessionActions"))}\n`);
     item.tooltip = md;
     return item;
   }

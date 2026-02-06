@@ -55,8 +55,10 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         `${element.query} (${element.totalHits})`,
         vscode.TreeItemCollapsibleState.Expanded,
       );
-      item.description = formatScopeLabel(element);
+      const scopeLabel = formatScopeLabel(element);
+      item.description = scopeLabel;
       item.contextValue = toTreeItemContextValue(element);
+      item.tooltip = t("tree.tooltip.searchRoot", element.query, scopeLabel || t("search.filter.all"), element.totalHits);
       return item;
     }
     if (element instanceof SearchSessionNode) {
@@ -78,6 +80,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       if (!previewOnSelection) {
         item.command = { command: "codexHistoryViewer.openSession", title: "", arguments: [node] };
       }
+      item.tooltip = buildSearchSessionTooltip(element);
       return item;
     }
     if (element instanceof SearchHitNode) {
@@ -95,6 +98,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       if (!previewOnSelection) {
         item.command = { command: "codexHistoryViewer.openSession", title: "", arguments: [element] };
       }
+      item.tooltip = buildSearchHitTooltip(element);
       return item;
     }
     if (element instanceof SearchHelpNode) {
@@ -123,4 +127,36 @@ function formatScopeLabel(root: SearchRootNode): string {
   if (typeof root.scopeValue === "string" && root.scopeValue.trim().length > 0) return root.scopeValue;
   if (root.scopeKind === "all") return t("search.filter.all");
   return "";
+}
+
+function buildSearchSessionTooltip(node: SearchSessionNode): vscode.MarkdownString {
+  const md = new vscode.MarkdownString(undefined, true);
+  md.isTrusted = false;
+  md.appendMarkdown(`**${node.session.localDate} ${node.session.timeLabel}**  \n`);
+  if (node.session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(node.session.cwdShort)}  \n`);
+  md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.searchSession", node.hits.length))}\n`);
+  md.appendMarkdown(`\n---\n`);
+  const max = 5;
+  for (const h of node.hits.slice(0, max)) {
+    md.appendMarkdown(`- [#${h.messageIndex}] **${h.role}** ${escapeForMarkdown(h.snippet)}\n`);
+  }
+  if (node.hits.length > max) {
+    md.appendMarkdown(`\n${escapeForMarkdown(t("tree.tooltip.searchSessionMore", node.hits.length - max))}\n`);
+  }
+  md.appendMarkdown(`\n---\n${escapeForMarkdown(t("tree.tooltip.sessionActions"))}\n`);
+  return md;
+}
+
+function buildSearchHitTooltip(node: SearchHitNode): vscode.MarkdownString {
+  const md = new vscode.MarkdownString(undefined, true);
+  md.isTrusted = false;
+  md.appendMarkdown(`**[#${node.hit.messageIndex}] ${node.hit.role}**  \n`);
+  md.appendMarkdown(`${escapeForMarkdown(node.hit.snippet)}\n`);
+  md.appendMarkdown(`\n---\n${escapeForMarkdown(t("tree.tooltip.searchHitAction"))}\n`);
+  return md;
+}
+
+function escapeForMarkdown(s: string): string {
+  // Minimal escaping for embedding user content into MarkdownString.
+  return s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\*/g, "\\*").replace(/_/g, "\\_");
 }

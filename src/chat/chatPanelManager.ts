@@ -5,6 +5,7 @@ import { normalizeCacheKey } from "../utils/fsUtils";
 import { buildChatSessionModel } from "./chatModelBuilder";
 import { t } from "../i18n";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
+import { truncateByDisplayWidth } from "../utils/textUtils";
 
 // Manages chat-like WebviewPanels opened in the editor area.
 export class ChatPanelManager {
@@ -39,7 +40,7 @@ export class ChatPanelManager {
       if (!state) return;
       const session = this.historyService.findByFsPath(state.fsPath);
       if (!session) return;
-      panel.title = `${session.localDate} ${session.timeLabel} ${session.snippet}`;
+      panel.title = buildPanelTitle(session);
     };
 
     if (this.previewPanel) update(this.previewPanel);
@@ -54,7 +55,7 @@ export class ChatPanelManager {
     const panel = options.preview ? this.getOrCreatePreviewPanel() : this.getOrCreatePanelForKey(key);
 
     this.stateByPanel.set(panel, { fsPath: session.fsPath, revealMessageIndex: options.revealMessageIndex });
-    panel.title = `${session.localDate} ${session.timeLabel} ${session.snippet}`;
+    panel.title = buildPanelTitle(session);
     panel.reveal(panel.viewColumn, options.preview);
 
     // If the webview is already ready, update immediately on selection changes.
@@ -150,6 +151,7 @@ export class ChatPanelManager {
   <div id="toolbar">
     <button id="btnMarkdown" type="button"></button>
     <div id="toolbarSpacer"></div>
+    <button id="btnCopyResume" type="button"></button>
     <button id="btnToggleDetails" type="button"></button>
     <button id="btnReload" type="button" class="toolbarIconBtn"></button>
   </div>
@@ -185,6 +187,13 @@ export class ChatPanelManager {
         if (!text) return;
         await vscode.env.clipboard.writeText(text);
         panel.webview.postMessage({ type: "copied" });
+        return;
+      }
+      case "copyResumePrompt": {
+        const copied = await vscode.commands.executeCommand<boolean>("codexHistoryViewer.copyResumePrompt", {
+          fsPath: state.fsPath,
+        });
+        if (copied) panel.webview.postMessage({ type: "copied" });
         return;
       }
       case "reload": {
@@ -224,19 +233,32 @@ export class ChatPanelManager {
   private buildI18n(): Record<string, string> {
     return {
       markdown: t("chat.button.markdown"),
+      markdownTooltip: t("chat.tooltip.markdown"),
+      copyResume: t("chat.button.copyResume"),
+      // Tooltip explains the purpose of the "Copy Prompt Excerpt" action.
+      copyResumeTooltip: t("chat.tooltip.copyResume"),
       reload: t("chat.button.reload"),
+      reloadTooltip: t("chat.tooltip.reload"),
       detailsOn: t("chat.button.detailsOn"),
       detailsOff: t("chat.button.detailsOff"),
+      detailsOnTooltip: t("chat.tooltip.detailsOn"),
+      detailsOffTooltip: t("chat.tooltip.detailsOff"),
       copied: t("chat.toast.copied"),
       tool: t("chat.label.tool"),
       arguments: t("chat.label.arguments"),
       output: t("chat.label.output"),
       copy: t("chat.button.copy"),
+      copyMessageTooltip: t("chat.tooltip.copyMessage"),
+      copyCodeTooltip: t("chat.tooltip.copyCode"),
+      jumpPrevUser: t("chat.nav.prevUser"),
+      jumpNextUser: t("chat.nav.nextUser"),
+      jumpPrevAssistant: t("chat.nav.prevAssistant"),
+      jumpNextAssistant: t("chat.nav.nextAssistant"),
     };
   }
 
   private buildDateTime(): { timeZone: string } {
-    // 日時表示のタイムゾーンは、UI言語設定に合わせて決定する（ja=JST、auto/en=システム）。
+    // Resolve the display time zone from UI language settings (ja=JST, auto/en=system).
     const { timeZone } = resolveDateTimeSettings();
     return { timeZone };
   }
@@ -248,4 +270,10 @@ function randomNonce(): string {
   let out = "";
   for (let i = 0; i < 32; i += 1) out += chars[Math.floor(Math.random() * chars.length)]!;
   return out;
+}
+
+function buildPanelTitle(session: SessionSummary): string {
+  // Keep panel titles compact by truncating only the snippet segment.
+  const shortSnippet = truncateByDisplayWidth(session.snippet, 28, "...");
+  return `${session.localDate} ${session.timeLabel} ${shortSnippet}`;
 }

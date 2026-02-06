@@ -170,7 +170,7 @@ function formatJsonIfPossible(text: string): string | null {
 }
 
 function formatIsoToLocal(iso: string, timeZone: string, options: { withSeconds: boolean }): string {
-  // ISO(UTC) を指定タイムゾーンの表示に変換する。失敗時は元文字列を返す。
+  // Convert ISO UTC timestamp to the configured display time zone; return original on parse failure.
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return iso;
   const d = new Date(ms);

@@ -4,6 +4,7 @@ import type { PinStore } from "../services/pinStore";
 import { MissingPinnedNode, SessionNode, TreeNode, missingPinnedLabel, toTreeItemContextValue } from "./treeNodes";
 import { getConfig } from "../settings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
+import { t } from "../i18n";
 
 // Provides the pinned sessions view.
 export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
@@ -46,12 +47,13 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       const md = new vscode.MarkdownString(undefined, true);
       md.isTrusted = false;
       md.appendMarkdown(`**${element.session.localDate} ${element.session.timeLabel}**  \n`);
-      if (element.session.cwdShort) md.appendMarkdown(`${element.session.cwdShort}  \n`);
+      if (element.session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(element.session.cwdShort)}  \n`);
       md.appendMarkdown(`\n---\n`);
       for (const msg of element.session.previewMessages) {
         md.appendMarkdown(`**${msg.role}**  \n`);
         md.appendMarkdown(`${escapeForMarkdown(msg.text)}\n\n`);
       }
+      md.appendMarkdown(`---\n${escapeForMarkdown(t("tree.tooltip.sessionActions"))}\n`);
       item.tooltip = md;
       return item;
     }
@@ -60,6 +62,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       item.description = element.fsPath;
       item.contextValue = toTreeItemContextValue(element);
       item.iconPath = new vscode.ThemeIcon("warning");
+      item.tooltip = t("tree.tooltip.missingPinned", element.fsPath);
       return item;
     }
     return new vscode.TreeItem("?");

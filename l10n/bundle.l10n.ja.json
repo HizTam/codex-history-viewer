@@ -19,11 +19,9 @@
   "app.unpinDone": "ピン留めを解除しました。",
   "app.unpinDoneMulti": "{0} 件のピン留めを解除しました（{1} 件は既にピン留めされていません）。",
   "app.unpinDoneNoop": "すべて既にピン留めされていません。",
-
   "view.pinned": "ピン留め",
   "view.history": "履歴",
   "view.search": "検索",
-
   "history.filter.all": "全期間",
   "history.filter.placeholder": "日付/プロジェクトで絞り込む…",
   "history.filter.active": "絞り込み: {0}",
@@ -32,13 +30,11 @@
   "history.filter.project": "プロジェクト",
   "history.filter.projectLabel": "プロジェクト: {0}",
   "history.project.clear": "プロジェクト絞り込みを解除",
-
   "search.filter.all": "全期間",
   "search.filter.year": "年…",
   "search.filter.month": "月…",
   "search.filter.day": "日…",
   "search.filter.range": "期間…",
-
   "search.input.year": "年（YYYY）を入力",
   "search.input.month": "月（YYYY-MM）を入力",
   "search.input.day": "日（YYYY-MM-DD）を入力",
@@ -48,9 +44,16 @@
   "search.help.start": "クリックして検索…",
   "search.help.tooltip": "クリックして検索を開始します。日付/プロジェクトで絞り込みたい場合は、履歴ビューでフィルタを設定してから検索してください。",
   "search.invalidFormat": "検索語を入力してください。",
-
   "tree.pinned.missing": "見つかりません（削除済み/移動済み？）",
-
+  "tree.tooltip.year": "{0} 年の月を表示します。",
+  "tree.tooltip.month": "{0} の日を表示します。",
+  "tree.tooltip.day": "{0} のセッションを表示します。",
+  "tree.tooltip.sessionActions": "クリックでセッションを開きます。右クリックでピン留め/コピー昇格/削除などの操作ができます。",
+  "tree.tooltip.missingPinned": "ピン留め先のファイルが見つかりません:\n{0}",
+  "tree.tooltip.searchRoot": "検索語: {0}\n範囲: {1}\nヒット件数: {2}",
+  "tree.tooltip.searchSession": "このセッションには {0} 件のヒットがあります。展開して一致メッセージを確認できます。",
+  "tree.tooltip.searchSessionMore": "…ほか {0} 件のヒットがあります。",
+  "tree.tooltip.searchHitAction": "クリックすると、このヒット位置をチャットビューで開きます。",
   "chat.button.markdown": "Markdownで開く",
   "chat.button.reload": "再読み込み",
   "chat.button.toolsOn": "ツールを非表示",
@@ -58,8 +61,22 @@
   "chat.button.detailsOn": "詳細を非表示",
   "chat.button.detailsOff": "詳細を表示",
   "chat.button.copy": "コピー",
+  "chat.tooltip.markdown": "このセッションを検索しやすい Markdown 形式で開きます。",
+  "chat.tooltip.reload": "現在のスクロール位置を維持したまま、セッションを再読み込みします。",
+  "chat.tooltip.detailsOn": "ツール呼び出し・メモ・context/developer メッセージを非表示にします。",
+  "chat.tooltip.detailsOff": "ツール呼び出し・メモ・context/developer メッセージを表示します。",
+  "chat.tooltip.copyResume": "このセッションの再開用プロンプト抜粋（Task + Recent messages）をクリップボードにコピーします。",
+  "chat.tooltip.copyMessage": "このメッセージ本文をクリップボードにコピーします。",
+  "chat.tooltip.copyCode": "このコードブロックをクリップボードにコピーします。",
   "chat.toast.copied": "コピーしました。",
   "chat.label.tool": "ツール",
   "chat.label.arguments": "引数",
-  "chat.label.output": "出力"
+  "chat.label.output": "出力",
+  "app.copyResumePromptDone": "プロンプト抜粋をクリップボードにコピーしました。",
+  "app.copyResumePromptFailed": "プロンプト抜粋のコピーに失敗しました。",
+  "chat.button.copyResume": "プロンプト抜粋をコピー",
+  "chat.nav.prevUser": "前の user プロンプトへ移動",
+  "chat.nav.nextUser": "次の user プロンプトへ移動",
+  "chat.nav.prevAssistant": "前の assistant 応答へ移動",
+  "chat.nav.nextAssistant": "次の assistant 応答へ移動"
 }

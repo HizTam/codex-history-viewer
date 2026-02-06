@@ -27,5 +27,6 @@
   "cfg.searchCaseSensitive": "Whether search is case-sensitive.",
   "cfg.deleteUseTrash": "When deleting, move files to the OS trash/recycle bin (recommended).",
   "cfg.uiLanguage": "UI language for this extension. Use 'auto' to follow VS Code's display language.",
-  "cfg.uiAlwaysShowHeaderActions": "Always show view header action icons (sets VS Code setting 'workbench.view.alwaysShowHeaderActions')."
+  "cfg.uiAlwaysShowHeaderActions": "Always show view header action icons (sets VS Code setting 'workbench.view.alwaysShowHeaderActions').",
+  "cmd.copyResumePrompt": "Copy Prompt Excerpt"
 }
