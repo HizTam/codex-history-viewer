@@ -1,12 +1,13 @@
 # Codex History Viewer
 
 A VS Code extension to browse, search, pin, promote (copy to today), and delete local Codex CLI session history stored under `~/.codex/sessions` (or a custom root).
-Latest release: **0.1.2** (2026-02-06).
+Latest release: **0.1.3** (2026-02-09).
 
 ## Features
 
 - Three views: **Pinned**, **History**, and **Search**
 - History tree view (year/month/day) with optional filters (date scope and project/CWD)
+- One-click "Filter by Current Project" action in the History view header (toggle on/off)
 - Chat-like viewer (Webview) with Markdown rendering, copy actions, and "Open as Markdown"
 - Time zone-aware timestamps (chat view and transcripts)
 - Language-aware command labels (Japanese/English) based on `codexHistoryViewer.ui.language`
@@ -22,7 +23,7 @@ Latest release: **0.1.2** (2026-02-06).
 ## Quick start
 
 1. Open the Activity Bar and select **Codex History**.
-2. Browse sessions under **History** (optionally use **Filter History...**).
+2. Browse sessions under **History** (optionally use **Filter History...** or **Filter by Current Project**).
 3. Select a session to open a preview, or run **Open Session (Chat)** to open it normally.
 4. Use the view toolbar or context menu to pin/unpin, promote, delete, open as Markdown, or copy a prompt excerpt.
 5. Run **Search...** to search across sessions; results appear under **Search**.
@@ -32,6 +33,7 @@ Latest release: **0.1.2** (2026-02-06).
 - `Codex History Viewer: Refresh`
 - `Codex History Viewer: Search...`
 - `Codex History Viewer: Filter History...`
+- `Codex History Viewer: Filter by Current Project`
 - `Codex History Viewer: Clear History Filters`
 - `Codex History Viewer: Open Session (Chat)`
 - `Codex History Viewer: Open Session (Markdown)`
@@ -54,13 +56,11 @@ Latest release: **0.1.2** (2026-02-06).
 - `codexHistoryViewer.ui.language`: UI language for this extension (`auto` / `en` / `ja`). This setting also affects timestamps: `ja` uses `Asia/Tokyo` (JST), while `auto`/`en` use your system time zone (falls back to `UTC` if unavailable).
 - `codexHistoryViewer.ui.alwaysShowHeaderActions`: Always show view header action icons (enables VS Code setting `workbench.view.alwaysShowHeaderActions`)
 
-## What's New in 0.1.2
+## What's New in 0.1.3
 
-- Added language-specific (JA/EN) session management command labels in menus.
-- Improved time zone handling for chat titles, session summaries, and transcript timestamps.
-- Added in-chat message navigation buttons to jump to previous/next user prompts and assistant responses.
-- Added **Copy Prompt Excerpt** for continuing work in OpenAI Codex by pasting a compact session excerpt.
-- Updated SVG icons.
+- Added **Filter by Current Project** to quickly narrow History to the active workspace.
+- Improved current-project matching to prefer workspace descendants and the nearest ancestor when needed.
+- Added a user-facing message when this filter is invoked without an open folder/workspace.
 
 ## Changelog
 

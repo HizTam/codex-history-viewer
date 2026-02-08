@@ -10,6 +10,7 @@
   "cmd.search": "Search…",
   "cmd.filterHistory": "Filter History…",
   "cmd.clearHistoryFilter": "Clear History Filters",
+  "cmd.filterHistoryCurrentProject": "Filter by Current Project",
   "cmd.openSession": "Open Session (Chat)",
   "cmd.openSessionMarkdown": "Open Session (Markdown)",
   "cmd.openSettings": "Open Settings",

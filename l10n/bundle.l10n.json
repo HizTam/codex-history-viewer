@@ -78,5 +78,6 @@
   "chat.nav.prevUser": "Jump to previous user prompt",
   "chat.nav.nextUser": "Jump to next user prompt",
   "chat.nav.prevAssistant": "Jump to previous assistant response",
-  "chat.nav.nextAssistant": "Jump to next assistant response"
+  "chat.nav.nextAssistant": "Jump to next assistant response",
+  "history.project.current.noWorkspace": "Open a folder/workspace first to filter by current project."
 }

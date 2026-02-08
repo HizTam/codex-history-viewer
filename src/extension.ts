@@ -578,6 +578,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.filterHistoryCurrentProject", async () => {
+      const workspaceFolder = resolveCurrentWorkspaceFolder();
+      if (!workspaceFolder) {
+        void vscode.window.showInformationMessage(t("history.project.current.noWorkspace"));
+        return;
+      }
+
+      const idx = historyService.getIndex();
+      const targetProjectCwd = resolveCurrentProjectFilterCwd(idx, workspaceFolder.uri.fsPath);
+      const sameProject =
+        !!historyProjectCwd && normalizeCacheKey(historyProjectCwd) === normalizeCacheKey(targetProjectCwd);
+
+      await applyHistoryFilters(
+        {
+          date: historyFilter,
+          // 同じプロジェクトが既に有効なら、もう一度押したときに解除できるようにする。
+          projectCwd: sameProject ? null : targetProjectCwd,
+        },
+        { persist: true },
+      );
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.promoteSession", async (element?: unknown) => {
       // When multiple items are selected, bulk "promote" (copy) the selected sessions to today.
       const targets = resolveTargets(element);
@@ -742,6 +766,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.search", "codexHistoryViewer.search");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.filterHistory", "codexHistoryViewer.filterHistory");
   registerUiCommandAlias("codexHistoryViewer.ui.en.filterHistory", "codexHistoryViewer.filterHistory");
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.ja.filterHistoryCurrentProject",
+    "codexHistoryViewer.filterHistoryCurrentProject",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.en.filterHistoryCurrentProject",
+    "codexHistoryViewer.filterHistoryCurrentProject",
+  );
   registerUiCommandAlias("codexHistoryViewer.ui.ja.clearHistoryFilter", "codexHistoryViewer.clearHistoryFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.en.clearHistoryFilter", "codexHistoryViewer.clearHistoryFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.openSettings", "codexHistoryViewer.openSettings");
@@ -935,4 +967,58 @@ function resolveSessionFromElementOrActive(
   const fsPath = params.get("fsPath");
   if (!fsPath) return undefined;
   return historyService.findByFsPath(fsPath);
+}
+
+function resolveCurrentWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
+  // まずアクティブエディタの所属ワークスペースを優先し、なければ先頭のワークスペースを使う。
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  if (activeUri?.scheme === "file") {
+    const folder = vscode.workspace.getWorkspaceFolder(activeUri);
+    if (folder) return folder;
+  }
+  const folders = vscode.workspace.workspaceFolders;
+  return folders && folders.length > 0 ? folders[0] : undefined;
+}
+
+function resolveCurrentProjectFilterCwd(
+  idx: import("./sessions/sessionTypes").HistoryIndex,
+  workspaceFsPath: string,
+): string {
+  const workspacePath = workspaceFsPath.trim();
+  const workspaceKey = normalizePathForPrefixMatch(workspacePath);
+  if (!workspaceKey) return workspacePath;
+
+  let nearestAncestor: { cwd: string; key: string } | null = null;
+  for (const session of idx.sessions) {
+    const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
+    if (!cwd) continue;
+    const cwdKey = normalizePathForPrefixMatch(cwd);
+    if (!cwdKey) continue;
+
+    if (cwdKey === workspaceKey) return cwd;
+    // ワークスペース配下で実行された履歴があれば最優先で採用する。
+    if (isSameOrDescendantPath(cwdKey, workspaceKey)) return cwd;
+
+    // 直下が見つからない場合だけ、最も近い祖先パスを候補にする。
+    if (isSameOrDescendantPath(workspaceKey, cwdKey)) {
+      if (!nearestAncestor || cwdKey.length > nearestAncestor.key.length) {
+        nearestAncestor = { cwd, key: cwdKey };
+      }
+    }
+  }
+
+  return nearestAncestor?.cwd ?? workspacePath;
+}
+
+function normalizePathForPrefixMatch(fsPath: string): string {
+  const normalized = normalizeCacheKey(fsPath).replace(/\\/g, "/");
+  if (normalized === "/") return normalized;
+  if (/^[a-z]:\/$/i.test(normalized)) return normalized;
+  return normalized.replace(/\/+$/g, "");
+}
+
+function isSameOrDescendantPath(candidatePath: string, basePath: string): boolean {
+  if (candidatePath === basePath) return true;
+  const base = basePath.endsWith("/") ? basePath : `${basePath}/`;
+  return candidatePath.startsWith(base);
 }

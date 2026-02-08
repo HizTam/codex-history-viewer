@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-02-09
+
+### Added
+
+- New `Filter by Current Project` command in the History view toolbar.
+- New localized message shown when filtering by current project without an open folder/workspace.
+
+### Changed
+
+- Current-project filtering now resolves the active workspace first, then falls back to the first workspace folder.
+- Matching logic now prefers session CWDs under the workspace and otherwise selects the nearest ancestor path.
+- Running the same current-project filter command again now toggles the project filter off.
+
 ## [0.1.2] - 2026-02-06
 
 ### Added

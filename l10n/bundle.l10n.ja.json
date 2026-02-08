@@ -78,5 +78,6 @@
   "chat.nav.prevUser": "前の user プロンプトへ移動",
   "chat.nav.nextUser": "次の user プロンプトへ移動",
   "chat.nav.prevAssistant": "前の assistant 応答へ移動",
-  "chat.nav.nextAssistant": "次の assistant 応答へ移動"
+  "chat.nav.nextAssistant": "次の assistant 応答へ移動",
+  "history.project.current.noWorkspace": "現在のプロジェクトで絞り込むには、先にフォルダーまたはワークスペースを開いてください。"
 }
