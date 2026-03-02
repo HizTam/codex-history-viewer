@@ -1,9 +1,10 @@
 import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
+import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { buildChatSessionModel } from "./chatModelBuilder";
-import { t } from "../i18n";
+import { resolveUiLanguage, t } from "../i18n";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 
@@ -11,15 +12,17 @@ import { truncateByDisplayWidth } from "../utils/textUtils";
 export class ChatPanelManager {
   private readonly extensionUri: vscode.Uri;
   private readonly historyService: HistoryService;
+  private readonly annotationStore: SessionAnnotationStore;
 
   private previewPanel: vscode.WebviewPanel | null = null;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
   private readonly stateByPanel = new WeakMap<vscode.WebviewPanel, { fsPath: string; revealMessageIndex?: number }>();
   private readonly readyByPanel = new WeakMap<vscode.WebviewPanel, boolean>();
 
-  constructor(extensionUri: vscode.Uri, historyService: HistoryService) {
+  constructor(extensionUri: vscode.Uri, historyService: HistoryService, annotationStore: SessionAnnotationStore) {
     this.extensionUri = extensionUri;
     this.historyService = historyService;
+    this.annotationStore = annotationStore;
   }
 
   public refreshI18n(): void {
@@ -155,6 +158,7 @@ export class ChatPanelManager {
     <button id="btnToggleDetails" type="button"></button>
     <button id="btnReload" type="button" class="toolbarIconBtn"></button>
   </div>
+  <div id="annotation"></div>
   <div id="meta"></div>
   <div id="timeline"></div>
   <script nonce="${nonce}" src="${markdownItUri}"></script>
@@ -206,6 +210,24 @@ export class ChatPanelManager {
         await this.sendSessionData(panel, { restoreScrollY, restoreSelectedMessageIndex });
         return;
       }
+      case "filterByTag": {
+        const tag = typeof msg?.tag === "string" ? msg.tag.trim() : "";
+        if (!tag) return;
+        await vscode.commands.executeCommand("codexHistoryViewer.filterHistoryByTag", tag);
+        return;
+      }
+      case "editAnnotation": {
+        await vscode.commands.executeCommand("codexHistoryViewer.editSessionAnnotation", { fsPath: state.fsPath });
+        await this.sendSessionData(panel);
+        return;
+      }
+      case "removeTag": {
+        const tag = typeof msg?.tag === "string" ? msg.tag.trim() : "";
+        if (!tag) return;
+        await vscode.commands.executeCommand("codexHistoryViewer.removeSessionTag", { fsPath: state.fsPath, tag });
+        await this.sendSessionData(panel);
+        return;
+      }
       default:
         return;
     }
@@ -218,10 +240,17 @@ export class ChatPanelManager {
     const state = this.stateByPanel.get(panel);
     if (!state) return;
     const model = await buildChatSessionModel(state.fsPath);
+    const annotation = this.annotationStore.get(state.fsPath);
     const dateTime = this.buildDateTime();
     void panel.webview.postMessage({
       type: "sessionData",
-      model,
+      model: {
+        ...model,
+        annotation: {
+          tags: annotation?.tags ? [...annotation.tags] : [],
+          note: annotation?.note ?? "",
+        },
+      },
       revealMessageIndex: state.revealMessageIndex,
       restoreScrollY: options?.restoreScrollY,
       restoreSelectedMessageIndex: options?.restoreSelectedMessageIndex,
@@ -231,6 +260,7 @@ export class ChatPanelManager {
   }
 
   private buildI18n(): Record<string, string> {
+    const uiText = (ja: string, en: string): string => (resolveUiLanguage() === "ja" ? ja : en);
     return {
       markdown: t("chat.button.markdown"),
       markdownTooltip: t("chat.tooltip.markdown"),
@@ -254,6 +284,14 @@ export class ChatPanelManager {
       jumpNextUser: t("chat.nav.nextUser"),
       jumpPrevAssistant: t("chat.nav.prevAssistant"),
       jumpNextAssistant: t("chat.nav.nextAssistant"),
+      annotationTags: uiText("タグ", "Tags"),
+      annotationNote: uiText("メモ", "Note"),
+      annotationNone: uiText("なし", "None"),
+      annotationEdit: uiText("編集", "Edit"),
+      annotationFilterTag: uiText("このタグで履歴を絞り込む", "Filter history by this tag"),
+      annotationRemoveTag: uiText("このタグを削除", "Remove this tag"),
+      annotationShowMore: uiText("もっと見る", "Show more"),
+      annotationShowLess: uiText("閉じる", "Show less"),
     };
   }
 

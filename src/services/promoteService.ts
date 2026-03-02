@@ -55,6 +55,8 @@ export async function promoteSessionCopyToToday(
 
   await fsp.rename(tempPath, destPath);
   await fsp.utimes(destPath, now, now);
+  await touchPathQuiet(destDir);
+  await touchPathQuiet(sessionsRoot);
 
   const summary =
     (await buildSessionSummary({
@@ -65,6 +67,15 @@ export async function promoteSessionCopyToToday(
     })) ?? session;
 
   return summary;
+}
+
+async function touchPathQuiet(targetPath: string): Promise<void> {
+  try {
+    const now = new Date();
+    await fsp.utimes(targetPath, now, now);
+  } catch {
+    // Even if timestamp update fails, keep using the copied session as-is.
+  }
 }
 
 async function copyAndShiftJsonl(params: {

@@ -7,8 +7,17 @@ import { normalizeCacheKey } from "../utils/fsUtils";
 import { DayNode, MonthNode, SearchHitNode, SearchSessionNode, SessionNode, YearNode } from "../tree/treeNodes";
 import type { PinStore } from "./pinStore";
 
-// Handles deletion (single / multi-select / bulk). Defaults to moving files to the OS trash.
+export interface DeletedSessionUndoItem {
+  originalFsPath: string;
+  backupFsPath: string | null;
+}
 
+export interface DeleteSessionsResult {
+  deleted: number;
+  undoItems: DeletedSessionUndoItem[];
+}
+
+// Handles deletion (single / multi-select / bulk). Returns undo metadata when possible.
 export async function deleteSessionsWithConfirmation(params: {
   element?: unknown;
   selection?: readonly unknown[];
@@ -16,57 +25,78 @@ export async function deleteSessionsWithConfirmation(params: {
   config: CodexHistoryViewerConfig;
   pinStore: PinStore;
   globalStorageUri: vscode.Uri;
-}): Promise<void> {
+}): Promise<DeleteSessionsResult | null> {
   const { element, selection, historyIndex, config, globalStorageUri } = params;
 
-  // In TreeView command execution, element may be undefined, so prefer selection when available.
   const targets = selection && selection.length >= 1 ? selection : element ? [element] : [];
   const sessions = collectSessionsFromTargets(historyIndex, targets);
-  if (sessions.length === 0) return;
+  if (sessions.length === 0) return null;
 
   const count = sessions.length;
   const confirmMsg = count === 1 ? t("app.deleteConfirmSingle") : t("app.deleteConfirmMulti", count);
   const choice = await vscode.window.showWarningMessage(confirmMsg, { modal: true }, "OK");
-  if (choice !== "OK") return;
+  if (choice !== "OK") return null;
 
   const useTrash = config.deleteUseTrash;
   const quarantineDir = vscode.Uri.joinPath(globalStorageUri, "deleted");
+  const undoDir = vscode.Uri.joinPath(globalStorageUri, "undo-delete");
   await vscode.workspace.fs.createDirectory(quarantineDir);
+  await vscode.workspace.fs.createDirectory(undoDir);
 
   let deleted = 0;
+  const undoItems: DeletedSessionUndoItem[] = [];
   for (const s of sessions) {
+    const backupFsPath = await backupForUndo(undoDir, s.fsPath);
+
+    let removed = false;
     try {
       await vscode.workspace.fs.delete(vscode.Uri.file(s.fsPath), { recursive: false, useTrash });
-      deleted += 1;
+      removed = true;
     } catch {
-      // If moving to trash fails, move into the extension's quarantine folder (safer default).
+      // If moving to trash fails, move into quarantine as a safe fallback.
       try {
         const base = path.basename(s.fsPath);
         const safeName = `${Date.now()}-${base}`;
         const dest = vscode.Uri.joinPath(quarantineDir, safeName);
         await vscode.workspace.fs.rename(vscode.Uri.file(s.fsPath), dest, { overwrite: false });
-        deleted += 1;
+        removed = true;
       } catch {
-        // rename may fail across volumes, so fall back to copy → delete.
         try {
           const base = path.basename(s.fsPath);
           const safeName = `${Date.now()}-${base}`;
           const dest = vscode.Uri.joinPath(quarantineDir, safeName);
           await vscode.workspace.fs.copy(vscode.Uri.file(s.fsPath), dest, { overwrite: false });
           await vscode.workspace.fs.delete(vscode.Uri.file(s.fsPath), { recursive: false, useTrash: false });
-          deleted += 1;
+          removed = true;
         } catch {
-          // Do not force permanent deletion here to avoid data loss.
+          // Keep the original file when all fallback paths fail.
         }
       }
+    }
+
+    if (removed) {
+      deleted += 1;
+      undoItems.push({ originalFsPath: s.fsPath, backupFsPath });
     }
   }
 
   void vscode.window.showInformationMessage(t("app.deleteDone", deleted));
+  return { deleted, undoItems };
+}
+
+async function backupForUndo(undoDir: vscode.Uri, originalFsPath: string): Promise<string | null> {
+  const base = path.basename(originalFsPath);
+  const stamp = `${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+  const backupFsPath = path.join(undoDir.fsPath, `${stamp}-${base}`);
+  try {
+    await vscode.workspace.fs.copy(vscode.Uri.file(originalFsPath), vscode.Uri.file(backupFsPath), { overwrite: false });
+    return backupFsPath;
+  } catch {
+    return null;
+  }
 }
 
 function collectSessionsFromTargets(index: HistoryIndex, targets: readonly unknown[]): SessionSummary[] {
-  // Collect sessions and deduplicate by cache key.
   const byKey = new Map<string, SessionSummary>();
 
   for (const target of targets) {

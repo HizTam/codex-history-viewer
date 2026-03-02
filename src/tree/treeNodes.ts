@@ -13,7 +13,8 @@ export type TreeNode =
   | SearchSessionNode
   | SearchHitNode
   | SearchHelpNode
-  | MissingPinnedNode;
+  | MissingPinnedNode
+  | PinnedDropHintNode;
 
 export class YearNode {
   public readonly kind = "year";
@@ -72,9 +73,14 @@ export class MissingPinnedNode {
   }
 }
 
+export class PinnedDropHintNode {
+  public readonly kind = "pinnedDropHint";
+}
+
 export interface SearchHit {
   messageIndex: number; // 1-based (display order for user/assistant)
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "developer" | "tool";
+  source?: "message" | "toolArguments" | "toolOutput" | "annotationTag" | "annotationNote";
   snippet: string;
 }
 
@@ -140,6 +146,8 @@ export function toTreeItemContextValue(node: TreeNode): string {
       return node.pinned ? "codexHistoryViewer.sessionPinned" : "codexHistoryViewer.session";
     case "missingPinned":
       return "codexHistoryViewer.sessionMissing";
+    case "pinnedDropHint":
+      return "codexHistoryViewer.pinnedDropHint";
     case "searchRoot":
       return "codexHistoryViewer.searchRoot";
     case "searchSession":

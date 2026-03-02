@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
+import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { renderTranscript } from "./transcriptRenderer";
 import { t } from "../i18n";
@@ -10,13 +11,15 @@ export class TranscriptContentProvider implements vscode.TextDocumentContentProv
   public readonly scheme = "codex-history-viewer";
 
   private readonly historyService: HistoryService;
+  private readonly annotationStore: SessionAnnotationStore;
   private readonly onDidChangeEmitter = new vscode.EventEmitter<vscode.Uri>();
   public readonly onDidChange = this.onDidChangeEmitter.event;
 
   private readonly cache = new Map<string, { content: string; messageLineMap: Map<number, number> }>();
 
-  constructor(historyService: HistoryService) {
+  constructor(historyService: HistoryService, annotationStore: SessionAnnotationStore) {
     this.historyService = historyService;
+    this.annotationStore = annotationStore;
   }
 
   public provideTextDocumentContent(uri: vscode.Uri): string {
@@ -31,7 +34,14 @@ export class TranscriptContentProvider implements vscode.TextDocumentContentProv
     try {
       const uri = this.buildUri(session.fsPath);
       const { timeZone } = resolveDateTimeSettings();
-      const { content, messageLineMap } = await renderTranscript(session.fsPath, { timeZone });
+      const ann = this.annotationStore.get(session.fsPath);
+      const { content, messageLineMap } = await renderTranscript(session.fsPath, {
+        timeZone,
+        annotation: {
+          tags: ann?.tags ?? [],
+          note: ann?.note ?? "",
+        },
+      });
       this.cache.set(uri.toString(), { content, messageLineMap });
       this.onDidChangeEmitter.fire(uri);
 

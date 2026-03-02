@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-03-02
+
+### Added
+
+- New **Control** and **Status** views for operational actions and runtime metrics.
+- Tag-aware workflows across views:
+  - History/Pinned/Search tag filters.
+  - Search hits for annotation tags/notes (`tag` / `note` sources).
+  - Bulk tag operations (`Bulk Rename Tag...`, `Bulk Delete Tags...`) with Undo support.
+- Import/Export workflow enhancements:
+  - Session import with duplicate ID policy selection (skip or overwrite).
+  - Session export as raw JSONL or sanitized Markdown transcripts.
+- Search usability actions:
+  - `Rerun Search` and `Initialize Search Pane`.
+  - Configurable default search roles.
+- Maintenance and state visibility enhancements:
+  - `Cleanup Missing Pins` action in Control.
+  - Status metrics for current project/search roles/search tag filters/total tag count.
+
+### Changed
+
+- View/header action organization and pane-specific refresh behavior were refined across Control/Pinned/History/Search/Status.
+- Search and status displays now reflect current role/tag filtering context more clearly.
+- Command and UI localization coverage was expanded for Japanese/English labels.
+- Import/export handling was aligned to operational workflows:
+  - Recursive `.jsonl` import from a selected folder.
+  - Timestamped export root with preserved date hierarchy for multi-selection exports.
+
+### Fixed
+
+- Search preset execution reveal flow by ensuring parent resolution for search tree items.
+- Multiple localization inconsistencies in command palette labels and toast messages.
+- Post-operation guidance now reminds users to reload Codex CLI history when file changes are made while Codex is running.
+
 ## [0.1.3] - 2026-02-09
 
 ### Added

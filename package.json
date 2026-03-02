@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -33,11 +33,21 @@
   },
   "homepage": "https://github.com/hiztam/codex-history-viewer",
   "activationEvents": [
+    "onView:codexHistoryViewer.controlView",
     "onView:codexHistoryViewer.pinnedView",
     "onView:codexHistoryViewer.historyView",
     "onView:codexHistoryViewer.searchView",
+    "onView:codexHistoryViewer.statusView",
     "onCommand:codexHistoryViewer.refresh",
+    "onCommand:codexHistoryViewer.refreshPinned",
+    "onCommand:codexHistoryViewer.refreshHistoryPane",
+    "onCommand:codexHistoryViewer.refreshStatusPane",
     "onCommand:codexHistoryViewer.search",
+    "onCommand:codexHistoryViewer.searchConfigureDefaultRoles",
+    "onCommand:codexHistoryViewer.searchRerun",
+    "onCommand:codexHistoryViewer.searchClearResults",
+    "onCommand:codexHistoryViewer.searchFilterByTag",
+    "onCommand:codexHistoryViewer.clearSearchTagFilter",
     "onCommand:codexHistoryViewer.openSession",
     "onCommand:codexHistoryViewer.openSessionMarkdown",
     "onCommand:codexHistoryViewer.copyResumePrompt",
@@ -48,9 +58,24 @@
     "onCommand:codexHistoryViewer.deleteSessions",
     "onCommand:codexHistoryViewer.rebuildCache",
     "onCommand:codexHistoryViewer.filterHistory",
+    "onCommand:codexHistoryViewer.filterHistoryByTag",
     "onCommand:codexHistoryViewer.filterHistoryCurrentProject",
     "onCommand:codexHistoryViewer.clearHistoryFilter",
-    "onCommand:codexHistoryViewer.debugInfo"
+    "onCommand:codexHistoryViewer.clearHistoryTagFilter",
+    "onCommand:codexHistoryViewer.filterPinnedByTag",
+    "onCommand:codexHistoryViewer.clearPinnedTagFilter",
+    "onCommand:codexHistoryViewer.debugInfo",
+    "onCommand:codexHistoryViewer.exportSessions",
+    "onCommand:codexHistoryViewer.importSessions",
+    "onCommand:codexHistoryViewer.searchRunPreset",
+    "onCommand:codexHistoryViewer.searchSavePreset",
+    "onCommand:codexHistoryViewer.searchDeletePreset",
+    "onCommand:codexHistoryViewer.cleanupMissingPins",
+    "onCommand:codexHistoryViewer.searchRunPresetById",
+    "onCommand:codexHistoryViewer.editSessionAnnotation",
+    "onCommand:codexHistoryViewer.renameTagGlobally",
+    "onCommand:codexHistoryViewer.deleteTagsGlobally",
+    "onCommand:codexHistoryViewer.undoLastAction"
   ],
   "contributes": {
     "viewsContainers": {
@@ -65,8 +90,14 @@
     "views": {
       "codexHistoryViewer": [
         {
+          "id": "codexHistoryViewer.controlView",
+          "name": "%view.control%",
+          "visibility": "collapsed"
+        },
+        {
           "id": "codexHistoryViewer.pinnedView",
-          "name": "%view.pinned%"
+          "name": "%view.pinned%",
+          "visibility": "collapsed"
         },
         {
           "id": "codexHistoryViewer.historyView",
@@ -75,6 +106,11 @@
         {
           "id": "codexHistoryViewer.searchView",
           "name": "%view.search%"
+        },
+        {
+          "id": "codexHistoryViewer.statusView",
+          "name": "%view.status%",
+          "visibility": "collapsed"
         }
       ]
     },
@@ -82,6 +118,30 @@
       {
         "command": "codexHistoryViewer.refresh",
         "title": "%cmd.refresh%",
+        "category": "%cmd.category%",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "codexHistoryViewer.refreshPinned",
+        "title": "%cmd.refreshPinned%",
+        "category": "%cmd.category%",
+        "icon": {
+          "light": "resources/icons/light/refresh.svg",
+          "dark": "resources/icons/dark/refresh.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.refreshHistoryPane",
+        "title": "%cmd.refreshHistoryPane%",
+        "category": "%cmd.category%",
+        "icon": {
+          "light": "resources/icons/light/refresh.svg",
+          "dark": "resources/icons/dark/refresh.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.refreshStatusPane",
+        "title": "%cmd.refreshStatusPane%",
         "category": "%cmd.category%",
         "icon": {
           "light": "resources/icons/light/refresh.svg",
@@ -98,16 +158,73 @@
         }
       },
       {
+        "command": "codexHistoryViewer.searchConfigureDefaultRoles",
+        "title": "%cmd.searchConfigureDefaultRoles%",
+        "category": "%cmd.category%",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "codexHistoryViewer.searchRerun",
+        "title": "%cmd.searchRerun%",
+        "category": "%cmd.category%",
+        "icon": "$(redo)"
+      },
+      {
+        "command": "codexHistoryViewer.searchFilterByTag",
+        "title": "%cmd.searchFilterByTag%",
+        "category": "%cmd.category%",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "codexHistoryViewer.clearSearchTagFilter",
+        "title": "%cmd.clearSearchTagFilter%",
+        "category": "%cmd.category%",
+        "icon": {
+          "light": "resources/icons/light/tag-clear.svg",
+          "dark": "resources/icons/dark/tag-clear.svg"
+        }
+      },
+      {
         "command": "codexHistoryViewer.filterHistory",
         "title": "%cmd.filterHistory%",
         "category": "%cmd.category%",
         "icon": "$(filter)"
       },
       {
+        "command": "codexHistoryViewer.filterHistoryByTag",
+        "title": "%cmd.filterHistoryByTag%",
+        "category": "%cmd.category%",
+        "icon": "$(tag)"
+      },
+      {
         "command": "codexHistoryViewer.clearHistoryFilter",
         "title": "%cmd.clearHistoryFilter%",
         "category": "%cmd.category%",
         "icon": "$(clear-all)"
+      },
+      {
+        "command": "codexHistoryViewer.clearHistoryTagFilter",
+        "title": "%cmd.clearHistoryTagFilter%",
+        "category": "%cmd.category%",
+        "icon": {
+          "light": "resources/icons/light/tag-clear.svg",
+          "dark": "resources/icons/dark/tag-clear.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.filterPinnedByTag",
+        "title": "%cmd.filterPinnedByTag%",
+        "category": "%cmd.category%",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "codexHistoryViewer.clearPinnedTagFilter",
+        "title": "%cmd.clearPinnedTagFilter%",
+        "category": "%cmd.category%",
+        "icon": {
+          "light": "resources/icons/light/tag-clear.svg",
+          "dark": "resources/icons/dark/tag-clear.svg"
+        }
       },
       {
         "command": "codexHistoryViewer.filterHistoryCurrentProject",
@@ -168,6 +285,12 @@
         "command": "codexHistoryViewer.rebuildCache",
         "title": "%cmd.rebuildCache%",
         "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.cleanupMissingPins",
+        "title": "%cmd.cleanupMissingPins%",
+        "category": "%cmd.category%",
+        "icon": "$(trash)"
       },
       {
         "command": "codexHistoryViewer.debugInfo",
@@ -248,6 +371,16 @@
       },
       {
         "command": "codexHistoryViewer.ui.ja.refresh",
+        "title": "全体を再読み込み",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.refresh",
+        "title": "Refresh All",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.refreshPinned",
         "title": "再読み込み",
         "icon": {
           "light": "resources/icons/light/refresh.svg",
@@ -255,7 +388,39 @@
         }
       },
       {
-        "command": "codexHistoryViewer.ui.en.refresh",
+        "command": "codexHistoryViewer.ui.en.refreshPinned",
+        "title": "Refresh",
+        "icon": {
+          "light": "resources/icons/light/refresh.svg",
+          "dark": "resources/icons/dark/refresh.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.refreshHistoryPane",
+        "title": "再読み込み",
+        "icon": {
+          "light": "resources/icons/light/refresh.svg",
+          "dark": "resources/icons/dark/refresh.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.refreshHistoryPane",
+        "title": "Refresh",
+        "icon": {
+          "light": "resources/icons/light/refresh.svg",
+          "dark": "resources/icons/dark/refresh.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.refreshStatusPane",
+        "title": "再読み込み",
+        "icon": {
+          "light": "resources/icons/light/refresh.svg",
+          "dark": "resources/icons/dark/refresh.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.refreshStatusPane",
         "title": "Refresh",
         "icon": {
           "light": "resources/icons/light/refresh.svg",
@@ -268,6 +433,68 @@
         "icon": {
           "light": "resources/icons/light/search.svg",
           "dark": "resources/icons/dark/search.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.searchRerun",
+        "title": "現在条件で再検索",
+        "icon": "$(redo)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.searchRerun",
+        "title": "Rerun Search",
+        "icon": "$(redo)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.searchFilterByTag",
+        "title": "タグで検索対象を絞り込む…",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.searchFilterByTag",
+        "title": "Filter Search by Tags…",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.clearSearchTagFilter",
+        "title": "検索タグ絞り込みを解除",
+        "icon": {
+          "light": "resources/icons/light/tag-clear.svg",
+          "dark": "resources/icons/dark/tag-clear.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.clearSearchTagFilter",
+        "title": "Clear Search Tag Filter",
+        "icon": {
+          "light": "resources/icons/light/tag-clear.svg",
+          "dark": "resources/icons/dark/tag-clear.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.filterPinnedByTag",
+        "title": "タグでピン留めを絞り込む…",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.filterPinnedByTag",
+        "title": "Filter Pinned by Tags…",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.clearPinnedTagFilter",
+        "title": "ピン留めタグ絞り込みを解除",
+        "icon": {
+          "light": "resources/icons/light/tag-clear.svg",
+          "dark": "resources/icons/dark/tag-clear.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.clearPinnedTagFilter",
+        "title": "Clear Pinned Tag Filter",
+        "icon": {
+          "light": "resources/icons/light/tag-clear.svg",
+          "dark": "resources/icons/dark/tag-clear.svg"
         }
       },
       {
@@ -289,8 +516,18 @@
         "icon": "$(filter)"
       },
       {
+        "command": "codexHistoryViewer.ui.ja.filterHistoryByTag",
+        "title": "タグで履歴を絞り込む…",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.filterHistoryByTag",
+        "title": "Filter History by Tags…",
+        "icon": "$(tag)"
+      },
+      {
         "command": "codexHistoryViewer.ui.ja.filterHistoryCurrentProject",
-        "title": "\u73fe\u5728\u306e\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u3067\u7d5e\u308a\u8fbc\u3080",
+        "title": "現在のプロジェクトで絞り込む",
         "icon": "$(folder-opened)"
       },
       {
@@ -309,6 +546,22 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "codexHistoryViewer.ui.ja.clearHistoryTagFilter",
+        "title": "履歴タグ絞り込みを解除",
+        "icon": {
+          "light": "resources/icons/light/tag-clear.svg",
+          "dark": "resources/icons/dark/tag-clear.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.clearHistoryTagFilter",
+        "title": "Clear History Tag Filter",
+        "icon": {
+          "light": "resources/icons/light/tag-clear.svg",
+          "dark": "resources/icons/dark/tag-clear.svg"
+        }
+      },
+      {
         "command": "codexHistoryViewer.ui.ja.openSettings",
         "title": "設定を開く",
         "icon": "$(gear)"
@@ -317,6 +570,186 @@
         "command": "codexHistoryViewer.ui.en.openSettings",
         "title": "Open Settings",
         "icon": "$(gear)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.rebuildCache",
+        "title": "キャッシュ再作成",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.rebuildCache",
+        "title": "Rebuild Cache",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.cleanupMissingPins",
+        "title": "見つからないピンを掃除",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.cleanupMissingPins",
+        "title": "Cleanup Missing Pins",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codexHistoryViewer.exportSessions",
+        "title": "%cmd.exportSessions%",
+        "category": "%cmd.category%",
+        "icon": "$(export)"
+      },
+      {
+        "command": "codexHistoryViewer.importSessions",
+        "title": "%cmd.importSessions%",
+        "category": "%cmd.category%",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "codexHistoryViewer.searchRunPreset",
+        "title": "%cmd.searchRunPreset%",
+        "category": "%cmd.category%",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "codexHistoryViewer.searchClearResults",
+        "title": "%cmd.searchClearResults%",
+        "category": "%cmd.category%",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "codexHistoryViewer.searchSavePreset",
+        "title": "%cmd.searchSavePreset%",
+        "category": "%cmd.category%",
+        "icon": "$(save)"
+      },
+      {
+        "command": "codexHistoryViewer.searchDeletePreset",
+        "title": "%cmd.searchDeletePreset%",
+        "category": "%cmd.category%",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codexHistoryViewer.editSessionAnnotation",
+        "title": "%cmd.editSessionAnnotation%",
+        "category": "%cmd.category%",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "codexHistoryViewer.renameTagGlobally",
+        "title": "%cmd.renameTagGlobally%",
+        "category": "%cmd.category%",
+        "icon": "$(replace-all)"
+      },
+      {
+        "command": "codexHistoryViewer.deleteTagsGlobally",
+        "title": "%cmd.deleteTagsGlobally%",
+        "category": "%cmd.category%",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codexHistoryViewer.undoLastAction",
+        "title": "%cmd.undoLastAction%",
+        "category": "%cmd.category%",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.exportSessions",
+        "title": "セッションをエクスポート…",
+        "icon": "$(export)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.exportSessions",
+        "title": "Export Sessions…",
+        "icon": "$(export)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.importSessions",
+        "title": "セッションをインポート…",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.importSessions",
+        "title": "Import Sessions…",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.searchRunPreset",
+        "title": "保存済み検索を実行…",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.searchRunPreset",
+        "title": "Run Saved Search…",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.searchClearResults",
+        "title": "検索ペインを初期化",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.searchClearResults",
+        "title": "Initialize Search Pane",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.searchSavePreset",
+        "title": "現在の検索を保存…",
+        "icon": "$(save)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.searchSavePreset",
+        "title": "Save Current Search…",
+        "icon": "$(save)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.searchDeletePreset",
+        "title": "保存済み検索を削除…",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.searchDeletePreset",
+        "title": "Delete Saved Search…",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.editSessionAnnotation",
+        "title": "セッションのタグ/メモを編集…",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.editSessionAnnotation",
+        "title": "Edit Session Tags/Note…",
+        "icon": "$(tag)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.renameTagGlobally",
+        "title": "タグ名を一括変更…",
+        "icon": "$(replace-all)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.renameTagGlobally",
+        "title": "Bulk Rename Tag…",
+        "icon": "$(replace-all)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.deleteTagsGlobally",
+        "title": "タグを一括削除…",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.deleteTagsGlobally",
+        "title": "Bulk Delete Tags…",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.undoLastAction",
+        "title": "直前の操作を取り消し",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.undoLastAction",
+        "title": "Undo Last Action",
+        "icon": "$(discard)"
       }
     ],
     "menus": {
@@ -386,11 +819,99 @@
           "when": "false"
         },
         {
-          "command": "codexHistoryViewer.ui.ja.search",
+          "command": "codexHistoryViewer.ui.ja.refreshPinned",
           "when": "false"
         },
         {
+          "command": "codexHistoryViewer.ui.en.refreshPinned",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.refreshHistoryPane",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.refreshHistoryPane",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.refreshStatusPane",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.refreshStatusPane",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.search",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
           "command": "codexHistoryViewer.ui.en.search",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.searchRerun",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.searchRerun",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.searchClearResults",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.searchClearResults",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.searchFilterByTag",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.searchFilterByTag",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.clearSearchTagFilter",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearSearchTagFilter",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.filterPinnedByTag",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.filterPinnedByTag",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.clearPinnedTagFilter",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearPinnedTagFilter",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.searchRerun",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.refreshPinned",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.refreshHistoryPane",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.refreshStatusPane",
           "when": "false"
         },
         {
@@ -418,43 +939,253 @@
           "when": "false"
         },
         {
+          "command": "codexHistoryViewer.ui.ja.filterHistoryByTag",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.filterHistoryByTag",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.clearHistoryTagFilter",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearHistoryTagFilter",
+          "when": "false"
+        },
+        {
           "command": "codexHistoryViewer.ui.ja.openSettings",
           "when": "false"
         },
         {
           "command": "codexHistoryViewer.ui.en.openSettings",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.rebuildCache",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.rebuildCache",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.cleanupMissingPins",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.cleanupMissingPins",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.exportSessions",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.exportSessions",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.importSessions",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.importSessions",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.searchRunPreset",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.searchRunPreset",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.searchSavePreset",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.searchSavePreset",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.searchDeletePreset",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.searchDeletePreset",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.renameTagGlobally",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.renameTagGlobally",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.deleteTagsGlobally",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.deleteTagsGlobally",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.editSessionAnnotation",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.editSessionAnnotation",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.undoLastAction",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.undoLastAction",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.search",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.searchClearResults",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.searchRunPreset",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.searchSavePreset",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.searchDeletePreset",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.renameTagGlobally",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.deleteTagsGlobally",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.searchFilterByTag",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.clearSearchTagFilter",
           "when": "false"
         }
       ],
       "view/title": [
         {
           "command": "codexHistoryViewer.ui.ja.refresh",
-          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation"
+          "when": "view == codexHistoryViewer.controlView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation",
+          "arguments": [
+            {
+              "view": "all"
+            }
+          ]
         },
         {
           "command": "codexHistoryViewer.ui.en.refresh",
-          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang != 'ja'",
-          "group": "navigation"
+          "when": "view == codexHistoryViewer.controlView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation",
+          "arguments": [
+            {
+              "view": "all"
+            }
+          ]
         },
         {
           "command": "codexHistoryViewer.ui.ja.openSettings",
-          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang == 'ja'",
+          "when": "view == codexHistoryViewer.controlView && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@100"
         },
         {
           "command": "codexHistoryViewer.ui.en.openSettings",
-          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang != 'ja'",
+          "when": "view == codexHistoryViewer.controlView && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@100"
         },
         {
-          "command": "codexHistoryViewer.ui.ja.refresh",
+          "command": "codexHistoryViewer.ui.ja.importSessions",
+          "when": "view == codexHistoryViewer.controlView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@41"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.importSessions",
+          "when": "view == codexHistoryViewer.controlView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@41"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.undoLastAction",
+          "when": "view == codexHistoryViewer.controlView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@90"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.undoLastAction",
+          "when": "view == codexHistoryViewer.controlView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@90"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.refreshPinned",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.refreshPinned",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.filterPinnedByTag",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@12"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.filterPinnedByTag",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@12"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.clearPinnedTagFilter",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedTagFiltered && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@13"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearPinnedTagFilter",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedTagFiltered && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@13"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.refreshHistoryPane",
           "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation"
         },
         {
-          "command": "codexHistoryViewer.ui.en.refresh",
+          "command": "codexHistoryViewer.ui.en.refreshHistoryPane",
           "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.refreshStatusPane",
+          "when": "view == codexHistoryViewer.statusView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.refreshStatusPane",
+          "when": "view == codexHistoryViewer.statusView && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation"
         },
         {
@@ -466,6 +1197,16 @@
           "command": "codexHistoryViewer.ui.en.filterHistory",
           "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.filterHistoryByTag",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@12"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.filterHistoryByTag",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@12"
         },
         {
           "command": "codexHistoryViewer.ui.ja.filterHistoryCurrentProject",
@@ -488,12 +1229,22 @@
           "group": "navigation"
         },
         {
-          "command": "codexHistoryViewer.ui.ja.refresh",
+          "command": "codexHistoryViewer.ui.ja.clearHistoryTagFilter",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyTagFiltered && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@13"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearHistoryTagFilter",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyTagFiltered && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@13"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.searchRerun",
           "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation"
         },
         {
-          "command": "codexHistoryViewer.ui.en.refresh",
+          "command": "codexHistoryViewer.ui.en.searchRerun",
           "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation"
         },
@@ -508,24 +1259,124 @@
           "group": "navigation"
         },
         {
-          "command": "codexHistoryViewer.ui.ja.search",
-          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation"
+          "command": "codexHistoryViewer.ui.ja.searchClearResults",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@11"
         },
         {
-          "command": "codexHistoryViewer.ui.en.search",
-          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja'",
-          "group": "navigation"
+          "command": "codexHistoryViewer.ui.en.searchClearResults",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@11"
         },
         {
-          "command": "codexHistoryViewer.ui.ja.search",
+          "command": "codexHistoryViewer.ui.ja.searchFilterByTag",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@12"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.searchFilterByTag",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@12"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.clearSearchTagFilter",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.searchTagFiltered && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@13"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearSearchTagFilter",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.searchTagFiltered && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@13"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.undoLastAction",
           "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation"
+          "group": "navigation@90"
         },
         {
-          "command": "codexHistoryViewer.ui.en.search",
+          "command": "codexHistoryViewer.ui.en.undoLastAction",
           "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang != 'ja'",
-          "group": "navigation"
+          "group": "navigation@90"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.undoLastAction",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@90"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.undoLastAction",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@90"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.undoLastAction",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@90"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.undoLastAction",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@90"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.exportSessions",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@40"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.exportSessions",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@40"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.exportSessions",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@40"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.exportSessions",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@40"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.exportSessions",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@40"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.exportSessions",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@40"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.searchRunPreset",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@15"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.searchRunPreset",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@15"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.searchSavePreset",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.hasSearchResults && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@16"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.searchSavePreset",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.hasSearchResults && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@16"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.searchDeletePreset",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@17"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.searchDeletePreset",
+          "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@17"
         }
       ],
       "view/item/context": [
@@ -628,6 +1479,36 @@
           "command": "codexHistoryViewer.ui.en.deleteSessions",
           "when": "(viewItem == codexHistoryViewer.day || viewItem == codexHistoryViewer.month || viewItem == codexHistoryViewer.year) && codexHistoryViewer.uiLang != 'ja'",
           "group": "2_actions"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.exportSessions",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit || viewItem == codexHistoryViewer.day || viewItem == codexHistoryViewer.month || viewItem == codexHistoryViewer.year) && codexHistoryViewer.uiLang == 'ja'",
+          "group": "1_actions"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.exportSessions",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit || viewItem == codexHistoryViewer.day || viewItem == codexHistoryViewer.month || viewItem == codexHistoryViewer.year) && codexHistoryViewer.uiLang != 'ja'",
+          "group": "1_actions"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.editSessionAnnotation",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang == 'ja'",
+          "group": "1_actions"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.editSessionAnnotation",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang != 'ja'",
+          "group": "1_actions"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.searchSavePreset",
+          "when": "viewItem == codexHistoryViewer.searchRoot && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.searchSavePreset",
+          "when": "viewItem == codexHistoryViewer.searchRoot && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation"
         }
       ]
     },
@@ -668,6 +1549,26 @@
           "description": "%cfg.searchCaseSensitive%",
           "scope": "application"
         },
+        "codexHistoryViewer.search.defaultRoles": {
+          "type": "array",
+          "default": [
+            "user",
+            "assistant"
+          ],
+          "items": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "developer",
+              "tool"
+            ]
+          },
+          "uniqueItems": true,
+          "minItems": 1,
+          "description": "%cfg.searchDefaultRoles%",
+          "scope": "application"
+        },
         "codexHistoryViewer.delete.useTrash": {
           "type": "boolean",
           "default": true,
@@ -699,7 +1600,8 @@
     "compile": "tsc -p .",
     "watch": "tsc -watch -p .",
     "package": "vsce package --allow-missing-repository",
-    "lint": "echo \"(lint not configured)\""
+    "lint": "echo \"(lint not configured)\"",
+    "check:l10n": "node scripts/check-l10n-garbled.js"
   },
   "dependencies": {
     "markdown-it": "^14.1.0"

@@ -3,6 +3,7 @@
   const vscode = acquireVsCodeApi();
 
   const metaEl = document.getElementById("meta");
+  const annotationEl = document.getElementById("annotation");
   const timelineEl = document.getElementById("timeline");
   const btnMarkdown = document.getElementById("btnMarkdown");
   const btnCopyResume = document.getElementById("btnCopyResume");
@@ -26,6 +27,7 @@
   /** @type {{ timeZone?: string }} */
   let dateTime = {};
   let showDetails = false;
+  let expandedNote = false;
   let selectedMessageIndex = null;
   let messageNavMap = new Map();
 
@@ -75,6 +77,7 @@
       model = msg.model || null;
       i18n = msg.i18n || {};
       dateTime = msg.dateTime || {};
+      expandedNote = false;
       selectedMessageIndex = isRestore
         ? typeof restoreSelectedMessageIndex === "number"
           ? restoreSelectedMessageIndex
@@ -139,9 +142,12 @@
   }
 
   function render() {
+    if (annotationEl) annotationEl.textContent = "";
     metaEl.textContent = "";
     timelineEl.textContent = "";
     if (!model) return;
+
+    renderAnnotationHeader(model.annotation);
 
     // Render session metadata at the top.
     const metaLines = [];
@@ -161,6 +167,102 @@
       const rendered = renderItem(item);
       if (rendered) timelineEl.appendChild(rendered);
     }
+  }
+
+  function renderAnnotationHeader(annotation) {
+    if (!annotationEl) return;
+    const tags = Array.isArray(annotation && annotation.tags)
+      ? annotation.tags.map((x) => String(x || "").trim()).filter((x) => x.length > 0)
+      : [];
+    const note = typeof (annotation && annotation.note) === "string" ? annotation.note.trim() : "";
+
+    const wrap = el("div", { className: "sessionHeader" });
+
+    const tagsRow = el("div", { className: "sessionHeaderRow" });
+    const tagsLabel = el("span", { className: "sessionHeaderLabel" });
+    tagsLabel.textContent = `${i18n.annotationTags || "Tags"}:`;
+    tagsRow.appendChild(tagsLabel);
+
+    const tagsBody = el("div", { className: "sessionTagList" });
+    if (tags.length === 0) {
+      const none = el("span", { className: "sessionHeaderNone" });
+      none.textContent = i18n.annotationNone || "None";
+      tagsBody.appendChild(none);
+    } else {
+      for (const tag of tags) {
+        const chip = el("span", { className: "sessionTagChipGroup" });
+
+        const filterBtn = el("button", { type: "button", className: "sessionTagChip" });
+        filterBtn.textContent = `#${tag}`;
+        const filterLabel = i18n.annotationFilterTag || "Filter history by this tag";
+        filterBtn.title = filterLabel;
+        filterBtn.setAttribute("aria-label", `${filterLabel}: ${tag}`);
+        filterBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          vscode.postMessage({ type: "filterByTag", tag });
+        });
+        chip.appendChild(filterBtn);
+
+        const removeBtn = el("button", { type: "button", className: "sessionTagRemove" });
+        removeBtn.textContent = "×";
+        const removeLabel = i18n.annotationRemoveTag || "Remove this tag";
+        removeBtn.title = removeLabel;
+        removeBtn.setAttribute("aria-label", `${removeLabel}: ${tag}`);
+        removeBtn.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          vscode.postMessage({ type: "removeTag", tag });
+        });
+        chip.appendChild(removeBtn);
+
+        tagsBody.appendChild(chip);
+      }
+    }
+    tagsRow.appendChild(tagsBody);
+
+    const editBtn = el("button", { type: "button", className: "sessionHeaderEditBtn" });
+    const editLabel = i18n.annotationEdit || "Edit";
+    editBtn.textContent = editLabel;
+    editBtn.title = editLabel;
+    editBtn.setAttribute("aria-label", editLabel);
+    editBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      vscode.postMessage({ type: "editAnnotation" });
+    });
+    tagsRow.appendChild(editBtn);
+    wrap.appendChild(tagsRow);
+
+    const noteRow = el("div", { className: "sessionHeaderRow" });
+    const noteLabel = el("span", { className: "sessionHeaderLabel" });
+    noteLabel.textContent = `${i18n.annotationNote || "Note"}:`;
+    noteRow.appendChild(noteLabel);
+    const noteBody = el("div", { className: "sessionNoteWrap" });
+    const noteText = el("div", { className: "sessionNoteText" });
+    noteText.textContent = note || i18n.annotationNone || "None";
+    noteBody.appendChild(noteText);
+
+    if (note.length > 220) {
+      noteText.classList.toggle("clamped", !expandedNote);
+      const toggleBtn = el("button", { type: "button", className: "sessionNoteToggleBtn" });
+      const applyToggleLabel = () => {
+        toggleBtn.textContent = expandedNote ? (i18n.annotationShowLess || "Show less") : (i18n.annotationShowMore || "Show more");
+      };
+      applyToggleLabel();
+      toggleBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        expandedNote = !expandedNote;
+        noteText.classList.toggle("clamped", !expandedNote);
+        applyToggleLabel();
+      });
+      noteBody.appendChild(toggleBtn);
+    }
+
+    noteRow.appendChild(noteBody);
+    wrap.appendChild(noteRow);
+    annotationEl.appendChild(wrap);
   }
 
   function renderItem(item) {

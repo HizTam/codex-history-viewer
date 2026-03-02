@@ -12,6 +12,11 @@ export interface ChatSessionMeta {
   source?: string;
 }
 
+export interface ChatSessionAnnotation {
+  tags: string[];
+  note: string;
+}
+
 export type ChatTimelineItem = ChatMessageItem | ChatToolItem | ChatNoteItem;
 
 export interface ChatMessageItem {
@@ -46,4 +51,5 @@ export interface ChatSessionModel {
   fsPath: string;
   meta: ChatSessionMeta;
   items: ChatTimelineItem[];
+  annotation?: ChatSessionAnnotation;
 }

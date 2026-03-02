@@ -7,7 +7,7 @@ import { formatYmdHmInTimeZone, formatYmdHmsInTimeZone } from "../utils/dateUtil
 // Reads JSONL (rollout-*.jsonl) and renders the conversation as Markdown.
 export async function renderTranscript(
   fsPath: string,
-  options: { timeZone: string },
+  options: { timeZone: string; annotation?: { tags?: readonly string[]; note?: string } },
 ): Promise<{ content: string; messageLineMap: Map<number, number> }> {
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -27,6 +27,12 @@ export async function renderTranscript(
   if (meta?.cliVersion) lines.push(`- CLI: \`${meta.cliVersion}\``);
   if (meta?.modelProvider) lines.push(`- Model Provider: \`${meta.modelProvider}\``);
   if (meta?.source) lines.push(`- Source: \`${meta.source}\``);
+  const tags = Array.isArray(options.annotation?.tags)
+    ? options.annotation!.tags.map((tag) => String(tag ?? "").trim()).filter((tag) => tag.length > 0)
+    : [];
+  const note = typeof options.annotation?.note === "string" ? options.annotation.note.trim() : "";
+  if (tags.length > 0) lines.push(`- Tags: ${tags.map((tag) => `\`#${tag}\``).join(", ")}`);
+  if (note) lines.push(`- Note: ${note}`);
   lines.push(``);
   lines.push(`---`);
   lines.push(``);

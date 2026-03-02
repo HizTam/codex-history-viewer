@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
+import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import { SessionNode, DayNode, MonthNode, TreeNode, YearNode, toTreeItemContextValue } from "./treeNodes";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import type { DateScope } from "../types/dateScope";
@@ -13,8 +14,10 @@ import { t } from "../i18n";
 export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly historyService: HistoryService;
   private readonly pinStore: PinStore;
+  private readonly annotationStore: SessionAnnotationStore;
   private filter: DateScope;
   private projectCwd: string | null;
+  private tagFilter: string[];
   private readonly pinIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly blankIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
@@ -23,14 +26,18 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   constructor(
     historyService: HistoryService,
     pinStore: PinStore,
+    annotationStore: SessionAnnotationStore,
     filter: DateScope,
     projectCwd: string | null,
+    tagFilter: readonly string[],
     extensionUri: vscode.Uri,
   ) {
     this.historyService = historyService;
     this.pinStore = pinStore;
+    this.annotationStore = annotationStore;
     this.filter = filter;
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
+    this.tagFilter = normalizeTagFilter(tagFilter);
     this.pinIconPath = {
       light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "pin.svg"),
       dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "pin.svg"),
@@ -53,10 +60,15 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
   }
 
-  public setFilters(filter: DateScope, projectCwd: string | null): void {
+  public setTagFilter(tags: readonly string[]): void {
+    this.tagFilter = normalizeTagFilter(tags);
+  }
+
+  public setFilters(filter: DateScope, projectCwd: string | null, tagFilter: readonly string[]): void {
     // Update filters in bulk; the caller triggers refresh.
     this.setFilter(filter);
     this.setProjectFilter(projectCwd);
+    this.setTagFilter(tagFilter);
   }
 
   private matchesProject(session: SessionSummary): boolean {
@@ -65,6 +77,18 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const cwd = session.meta?.cwd;
     if (typeof cwd !== "string" || cwd.trim().length === 0) return false;
     return normalizeCacheKey(cwd) === normalizeCacheKey(projectCwd);
+  }
+
+  private matchesTags(session: SessionSummary): boolean {
+    if (this.tagFilter.length === 0) return true;
+    const ann = this.annotationStore.get(session.fsPath);
+    if (!ann || ann.tags.length === 0) return false;
+    const tagKeys = new Set(ann.tags.map((tag) => normalizeTagKey(tag)));
+    return this.tagFilter.some((tag) => tagKeys.has(normalizeTagKey(tag)));
+  }
+
+  private matchesSession(session: SessionSummary): boolean {
+    return this.matchesProject(session) && this.matchesTags(session);
   }
 
   public getTreeItem(element: TreeNode): vscode.TreeItem {
@@ -99,7 +123,8 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const shortTitle = truncateByDisplayWidth(session.snippet, 40, "...");
     const label = `${session.timeLabel} ${shortTitle}`;
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
-    item.description = session.cwdShort;
+    const annotation = this.annotationStore.get(session.fsPath);
+    item.description = buildSessionDescription(session.cwdShort, annotation?.tags ?? []);
     const node = new SessionNode(session, pinned);
     item.contextValue = toTreeItemContextValue(node);
     // Represent pinned state with an icon left of the time label (use an invisible icon when unpinned).
@@ -116,6 +141,12 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     md.isTrusted = false;
     md.appendMarkdown(`**${session.localDate} ${session.timeLabel}**  \n`);
     if (session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(session.cwdShort)}  \n`);
+    if (annotation && annotation.tags.length > 0) {
+      md.appendMarkdown(`Tags: ${escapeForMarkdown(annotation.tags.join(", "))}  \n`);
+    }
+    if (annotation && annotation.note.length > 0) {
+      md.appendMarkdown(`Note: ${escapeForMarkdown(annotation.note)}  \n`);
+    }
     md.appendMarkdown(`\n---\n`);
     for (const msg of session.previewMessages) {
       md.appendMarkdown(`**${msg.role}**  \n`);
@@ -128,12 +159,13 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
     const idx = this.historyService.getIndex();
+    const shouldFilterSessions = !!this.projectCwd || this.tagFilter.length > 0;
     if (!element) {
       const filter = this.filter;
       switch (filter.kind) {
         case "all": {
-         const years = Array.from(idx.byY.keys()).sort((a, b) => (a < b ? 1 : -1));
-          if (!this.projectCwd) return years.map((y) => new YearNode(y));
+          const years = Array.from(idx.byY.keys()).sort((a, b) => (a < b ? 1 : -1));
+          if (!shouldFilterSessions) return years.map((y) => new YearNode(y));
 
           // When project filtering is active, show only years that contain matching sessions.
           const out: YearNode[] = [];
@@ -143,7 +175,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
             let has = false;
             for (const [, days] of months) {
               for (const [, list] of days) {
-                if (list.some((s) => this.matchesProject(s))) {
+                if (list.some((s) => this.matchesSession(s))) {
                   has = true;
                   break;
                 }
@@ -157,17 +189,17 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
         case "year": {
           const months = idx.byY.get(filter.yyyy);
           if (!months) return [];
-           const keys = Array.from(months.keys()).sort((a, b) => (a < b ? 1 : -1));
-           if (!this.projectCwd) return keys.map((m) => new MonthNode(filter.yyyy, m));
+          const keys = Array.from(months.keys()).sort((a, b) => (a < b ? 1 : -1));
+          if (!shouldFilterSessions) return keys.map((m) => new MonthNode(filter.yyyy, m));
 
-           // When project filtering is active, show only months that contain matching sessions.
-           const out: MonthNode[] = [];
-           for (const m of keys) {
-             const days = months.get(m);
-             if (!days) continue;
-             let has = false;
+          // When filtering is active, show only months that contain matching sessions.
+          const out: MonthNode[] = [];
+          for (const m of keys) {
+            const days = months.get(m);
+            if (!days) continue;
+            let has = false;
             for (const [, list] of days) {
-              if (list.some((s) => this.matchesProject(s))) {
+              if (list.some((s) => this.matchesSession(s))) {
                 has = true;
                 break;
               }
@@ -182,13 +214,13 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
           const days = idx.byY.get(yyyy)?.get(mm);
           if (!days) return [];
           const keys = Array.from(days.keys()).sort((a, b) => (a < b ? 1 : -1));
-          if (!this.projectCwd) return keys.map((d) => new DayNode(yyyy, mm, d));
+          if (!shouldFilterSessions) return keys.map((d) => new DayNode(yyyy, mm, d));
 
-          // When project filtering is active, show only days that contain matching sessions.
+          // When filtering is active, show only days that contain matching sessions.
           const out: DayNode[] = [];
           for (const d of keys) {
             const sessions = days.get(d) ?? [];
-            if (sessions.some((s) => this.matchesProject(s))) out.push(new DayNode(yyyy, mm, d));
+            if (sessions.some((s) => this.matchesSession(s))) out.push(new DayNode(yyyy, mm, d));
           }
           return out;
         }
@@ -196,7 +228,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
           const [yyyy, mm, dd] = filter.ymd.split("-");
           if (!yyyy || !mm || !dd) return [];
           const sessions = idx.byY.get(yyyy)?.get(mm)?.get(dd) ?? [];
-          const filtered = this.projectCwd ? sessions.filter((s) => this.matchesProject(s)) : sessions;
+          const filtered = sessions.filter((s) => this.matchesSession(s));
           return filtered.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
         }
         default:
@@ -207,7 +239,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       const months = idx.byY.get(element.year);
       if (!months) return [];
       const keys = Array.from(months.keys()).sort((a, b) => (a < b ? 1 : -1));
-      if (!this.projectCwd) return keys.map((m) => new MonthNode(element.year, m));
+      if (!shouldFilterSessions) return keys.map((m) => new MonthNode(element.year, m));
 
       const out: MonthNode[] = [];
       for (const m of keys) {
@@ -215,7 +247,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
         if (!days) continue;
         let has = false;
         for (const [, list] of days) {
-          if (list.some((s) => this.matchesProject(s))) {
+          if (list.some((s) => this.matchesSession(s))) {
             has = true;
             break;
           }
@@ -228,18 +260,18 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       const days = idx.byY.get(element.year)?.get(element.month);
       if (!days) return [];
       const keys = Array.from(days.keys()).sort((a, b) => (a < b ? 1 : -1));
-      if (!this.projectCwd) return keys.map((d) => new DayNode(element.year, element.month, d));
+      if (!shouldFilterSessions) return keys.map((d) => new DayNode(element.year, element.month, d));
 
       const out: DayNode[] = [];
       for (const d of keys) {
         const sessions = days.get(d) ?? [];
-        if (sessions.some((s) => this.matchesProject(s))) out.push(new DayNode(element.year, element.month, d));
+        if (sessions.some((s) => this.matchesSession(s))) out.push(new DayNode(element.year, element.month, d));
       }
       return out;
     }
     if (element instanceof DayNode) {
       const sessions = idx.byY.get(element.year)?.get(element.month)?.get(element.day) ?? [];
-      const filtered = this.projectCwd ? sessions.filter((s) => this.matchesProject(s)) : sessions;
+      const filtered = sessions.filter((s) => this.matchesSession(s));
       return filtered.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
     }
     return [];
@@ -249,4 +281,29 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 function escapeForMarkdown(s: string): string {
   // Minimal escaping for embedding user content into MarkdownString (part of XSS mitigation).
   return s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\*/g, "\\*").replace(/_/g, "\\_");
+}
+
+function buildSessionDescription(cwdShort: string, tags: readonly string[]): string {
+  const parts: string[] = [];
+  if (cwdShort) parts.push(cwdShort);
+  if (tags.length > 0) parts.push(`#${tags.join(" #")}`);
+  return parts.join("  ");
+}
+
+function normalizeTagFilter(values: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const tag = String(value ?? "").trim();
+    if (!tag) continue;
+    const key = normalizeTagKey(tag);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+  }
+  return out;
+}
+
+function normalizeTagKey(value: string): string {
+  return String(value ?? "").trim().toLowerCase();
 }

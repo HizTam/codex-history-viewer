@@ -1,7 +1,8 @@
 import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
-import { MissingPinnedNode, SessionNode, TreeNode, missingPinnedLabel, toTreeItemContextValue } from "./treeNodes";
+import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
+import { MissingPinnedNode, PinnedDropHintNode, SessionNode, TreeNode, missingPinnedLabel, toTreeItemContextValue } from "./treeNodes";
 import { getConfig } from "../settings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
@@ -10,13 +11,23 @@ import { t } from "../i18n";
 export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly historyService: HistoryService;
   private readonly pinStore: PinStore;
+  private readonly annotationStore: SessionAnnotationStore;
+  private tagFilter: string[];
   private readonly pinIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   public readonly onDidChangeTreeData = this.emitter.event;
 
-  constructor(historyService: HistoryService, pinStore: PinStore, extensionUri: vscode.Uri) {
+  constructor(
+    historyService: HistoryService,
+    pinStore: PinStore,
+    annotationStore: SessionAnnotationStore,
+    tagFilter: readonly string[],
+    extensionUri: vscode.Uri,
+  ) {
     this.historyService = historyService;
     this.pinStore = pinStore;
+    this.annotationStore = annotationStore;
+    this.tagFilter = normalizeTagFilter(tagFilter);
     this.pinIconPath = {
       light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "pin.svg"),
       dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "pin.svg"),
@@ -27,12 +38,25 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     this.emitter.fire();
   }
 
+  public setTagFilter(tags: readonly string[]): void {
+    this.tagFilter = normalizeTagFilter(tags);
+  }
+
+  private matchesTags(fsPath: string): boolean {
+    if (this.tagFilter.length === 0) return true;
+    const ann = this.annotationStore.get(fsPath);
+    if (!ann || ann.tags.length === 0) return false;
+    const tagKeys = new Set(ann.tags.map((tag) => normalizeTagKey(tag)));
+    return this.tagFilter.some((tag) => tagKeys.has(normalizeTagKey(tag)));
+  }
+
   public getTreeItem(element: TreeNode): vscode.TreeItem {
     if (element instanceof SessionNode) {
       // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
       const shortTitle = truncateByDisplayWidth(element.session.snippet, 40, "...");
+      const annotation = this.annotationStore.get(element.session.fsPath);
       const item = new vscode.TreeItem(`${element.session.localDate} ${element.session.timeLabel} ${shortTitle}`);
-      item.description = element.session.cwdShort;
+      item.description = buildSessionDescription(element.session.cwdShort, annotation?.tags ?? []);
       item.contextValue = toTreeItemContextValue(element);
       // This view is always pinned, so always show the pin icon left of the time label.
       item.iconPath = this.pinIconPath;
@@ -48,6 +72,12 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       md.isTrusted = false;
       md.appendMarkdown(`**${element.session.localDate} ${element.session.timeLabel}**  \n`);
       if (element.session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(element.session.cwdShort)}  \n`);
+      if (annotation && annotation.tags.length > 0) {
+        md.appendMarkdown(`Tags: ${escapeForMarkdown(annotation.tags.join(", "))}  \n`);
+      }
+      if (annotation && annotation.note.length > 0) {
+        md.appendMarkdown(`Note: ${escapeForMarkdown(annotation.note)}  \n`);
+      }
       md.appendMarkdown(`\n---\n`);
       for (const msg of element.session.previewMessages) {
         md.appendMarkdown(`**${msg.role}**  \n`);
@@ -65,6 +95,14 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       item.tooltip = t("tree.tooltip.missingPinned", element.fsPath);
       return item;
     }
+    if (element instanceof PinnedDropHintNode) {
+      const item = new vscode.TreeItem(t("tree.pinned.dropHint"), vscode.TreeItemCollapsibleState.None);
+      item.description = t("tree.pinned.dropHintDescription");
+      item.contextValue = toTreeItemContextValue(element);
+      item.iconPath = new vscode.ThemeIcon("pinned");
+      item.tooltip = t("tree.pinned.dropHintTooltip");
+      return item;
+    }
     return new vscode.TreeItem("?");
   }
 
@@ -74,9 +112,15 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     const nodes: TreeNode[] = [];
     for (const p of pins) {
       const s = this.historyService.findByFsPath(p.fsPath);
-      if (s) nodes.push(new SessionNode(s, true));
-      else nodes.push(new MissingPinnedNode(p.fsPath));
+      if (s) {
+        if (!this.matchesTags(s.fsPath)) continue;
+        nodes.push(new SessionNode(s, true));
+      } else {
+        nodes.push(new MissingPinnedNode(p.fsPath));
+      }
     }
+    // Show a drop target even in the initial empty state to avoid DnD no-op right after reload.
+    if (nodes.length === 0) return [new PinnedDropHintNode()];
     return nodes;
   }
 }
@@ -84,4 +128,29 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 function escapeForMarkdown(s: string): string {
   // Minimal escaping for embedding user content into MarkdownString.
   return s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\*/g, "\\*").replace(/_/g, "\\_");
+}
+
+function buildSessionDescription(cwdShort: string, tags: readonly string[]): string {
+  const parts: string[] = [];
+  if (cwdShort) parts.push(cwdShort);
+  if (tags.length > 0) parts.push(`#${tags.join(" #")}`);
+  return parts.join("  ");
+}
+
+function normalizeTagFilter(values: readonly string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of values) {
+    const tag = String(raw ?? "").trim();
+    if (!tag) continue;
+    const key = normalizeTagKey(tag);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+  }
+  return out;
+}
+
+function normalizeTagKey(value: string): string {
+  return String(value ?? "").trim().toLowerCase();
 }
