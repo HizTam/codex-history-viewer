@@ -10,6 +10,7 @@ export interface CodexHistoryViewerConfig {
   searchMaxResults: number;
   searchCaseSensitive: boolean;
   deleteUseTrash: boolean;
+  resumeOpenTarget: "sidebar" | "panel";
 }
 
 function getDefaultSessionsRoot(): string {
@@ -20,6 +21,8 @@ function getDefaultSessionsRoot(): string {
 export function getConfig(): CodexHistoryViewerConfig {
   const cfg = vscode.workspace.getConfiguration("codexHistoryViewer");
   const sessionsRootRaw = (cfg.get<string>("sessionsRoot") ?? "").trim();
+  const resumeOpenTargetRaw = (cfg.get<string>("resume.openTarget") ?? "sidebar").trim().toLowerCase();
+  const resumeOpenTarget: "sidebar" | "panel" = resumeOpenTargetRaw === "panel" ? "panel" : "sidebar";
 
   return {
     sessionsRoot: sessionsRootRaw.length > 0 ? sessionsRootRaw : getDefaultSessionsRoot(),
@@ -28,5 +31,6 @@ export function getConfig(): CodexHistoryViewerConfig {
     searchMaxResults: cfg.get<number>("search.maxResults") ?? 500,
     searchCaseSensitive: cfg.get<boolean>("search.caseSensitive") ?? false,
     deleteUseTrash: cfg.get<boolean>("delete.useTrash") ?? true,
+    resumeOpenTarget,
   };
 }

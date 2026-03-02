@@ -158,6 +158,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const MAX_DND_ITEMS = 500;
   const RESUME_MAX_MESSAGES = 20;
   const RESUME_MAX_CHARS = 25_000;
+  const OPENAI_CODEX_EXTENSION_ID = "openai.chatgpt";
+  const OPENAI_CODEX_CUSTOM_EDITOR_VIEW_TYPE = "chatgpt.conversationEditor";
+  const OPENAI_CODEX_URI_SCHEME = "openai-codex";
+  const OPENAI_CODEX_URI_AUTHORITY = "route";
 
   const dedupeFsPaths = (fsPaths: readonly string[]): string[] => {
     // Deduplicate paths (normalize Windows case differences).
@@ -605,6 +609,90 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return Array.from(byKey.values());
   };
 
+  const resolveSingleSessionTarget = (elementOrArgs?: unknown): SessionSummary | undefined => {
+    // Prefer an explicit fsPath argument from the webview; otherwise use the selected session.
+    const hasDirectFsPath =
+      !!elementOrArgs &&
+      typeof elementOrArgs === "object" &&
+      !isSessionNode(elementOrArgs) &&
+      typeof (elementOrArgs as { fsPath?: unknown }).fsPath === "string";
+    if (hasDirectFsPath) {
+      return resolveSessionFromElementOrFsPath(historyService, elementOrArgs);
+    }
+
+    const targets = resolveTargets(elementOrArgs);
+    const openTargets = collectOpenTargets(targets);
+    if (openTargets.length > 0) return openTargets[0]!.session;
+
+    return resolveSessionFromElementOrActive(historyService, transcriptProvider.scheme, elementOrArgs);
+  };
+
+  const resolveCodexConversationId = (session: SessionSummary): string | null => {
+    // Reject IDs with unsafe characters because the ID is embedded into URI paths.
+    const id = typeof session.meta.id === "string" ? session.meta.id.trim() : "";
+    if (!id) return null;
+    return /^[A-Za-z0-9._:-]+$/.test(id) ? id : null;
+  };
+
+  const buildCodexConversationUri = (conversationId: string): vscode.Uri =>
+    // URI format accepted by OpenAI Codex custom editor.
+    vscode.Uri.from({
+      scheme: OPENAI_CODEX_URI_SCHEME,
+      authority: OPENAI_CODEX_URI_AUTHORITY,
+      path: `/local/${conversationId}`,
+    });
+
+  const openSessionInOpenAiCodex = async (session: SessionSummary): Promise<boolean> => {
+    const conversationId = resolveCodexConversationId(session);
+    if (!conversationId) {
+      void vscode.window.showErrorMessage(t("app.resumeSessionInCodexNoSessionId"));
+      return false;
+    }
+
+    // Show a clear message when the target extension is not installed.
+    const codexExtension = vscode.extensions.getExtension(OPENAI_CODEX_EXTENSION_ID);
+    if (!codexExtension) {
+      void vscode.window.showErrorMessage(t("app.resumeSessionInCodexMissingExtension"));
+      return false;
+    }
+
+    try {
+      await codexExtension.activate();
+    } catch {
+      void vscode.window.showErrorMessage(t("app.resumeSessionInCodexFailed"));
+      return false;
+    }
+
+    const resumeTarget = getConfig().resumeOpenTarget;
+    if (resumeTarget === "panel") {
+      const conversationUri = buildCodexConversationUri(conversationId);
+      try {
+        await vscode.commands.executeCommand(
+          "vscode.openWith",
+          conversationUri,
+          OPENAI_CODEX_CUSTOM_EDITOR_VIEW_TYPE,
+          { preview: false, preserveFocus: false },
+        );
+        return true;
+      } catch {
+        void vscode.window.showErrorMessage(t("app.resumeSessionInCodexFailed"));
+        return false;
+      }
+    }
+
+    // Default behavior: resume in the sidebar via onUri deep link.
+    try {
+      const deepLink = vscode.Uri.parse(`${vscode.env.uriScheme}://${OPENAI_CODEX_EXTENSION_ID}/local/${conversationId}`);
+      const opened = await vscode.env.openExternal(deepLink);
+      if (opened) return true;
+    } catch {
+      // Failures are reported by the common error path below.
+    }
+
+    void vscode.window.showErrorMessage(t("app.resumeSessionInCodexFailed"));
+    return false;
+  };
+
   const normalizeTags = (values: readonly string[]): string[] => {
     const out: string[] = [];
     const seen = new Set<string>();
@@ -909,23 +997,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.copyResumePrompt", async (elementOrArgs?: unknown) => {
       // Resolve exactly one target session from tree selection or webview args, then copy its prompt excerpt.
-      const hasDirectFsPath =
-        !!elementOrArgs &&
-        typeof elementOrArgs === "object" &&
-        !isSessionNode(elementOrArgs) &&
-        typeof (elementOrArgs as { fsPath?: unknown }).fsPath === "string";
-
-      let session: SessionSummary | undefined;
-      if (hasDirectFsPath) {
-        session = resolveSessionFromElementOrFsPath(historyService, elementOrArgs);
-      } else {
-        const targets = resolveTargets(elementOrArgs);
-        const openTargets = collectOpenTargets(targets);
-        if (openTargets.length > 0) session = openTargets[0]!.session;
-      }
-      if (!session) {
-        session = resolveSessionFromElementOrActive(historyService, transcriptProvider.scheme, elementOrArgs);
-      }
+      const session = resolveSingleSessionTarget(elementOrArgs);
       if (!session) return false;
 
       try {
@@ -943,6 +1015,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showErrorMessage(t("app.copyResumePromptFailed"));
         return false;
       }
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.resumeSessionInCodex", async (elementOrArgs?: unknown) => {
+      const session = resolveSingleSessionTarget(elementOrArgs);
+      if (!session) return false;
+
+      const opened = await openSessionInOpenAiCodex(session);
+      if (!opened) return false;
+
+      void vscode.window.showInformationMessage(t("app.resumeSessionInCodexDone"));
+      return true;
     }),
   );
 
@@ -1961,6 +2046,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.openSessionMarkdown", "codexHistoryViewer.openSessionMarkdown");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.copyResumePrompt", "codexHistoryViewer.copyResumePrompt");
   registerUiCommandAlias("codexHistoryViewer.ui.en.copyResumePrompt", "codexHistoryViewer.copyResumePrompt");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.resumeSessionInCodex", "codexHistoryViewer.resumeSessionInCodex");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.resumeSessionInCodex", "codexHistoryViewer.resumeSessionInCodex");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.promoteSession", "codexHistoryViewer.promoteSession");
   registerUiCommandAlias("codexHistoryViewer.ui.en.promoteSession", "codexHistoryViewer.promoteSession");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.pinSession", "codexHistoryViewer.pinSession");

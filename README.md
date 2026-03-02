@@ -1,7 +1,7 @@
 # Codex History Viewer
 
 A VS Code extension to browse, search, pin, promote (copy to today), and delete local Codex CLI session history stored under `~/.codex/sessions` (or a custom root).
-Latest release: **0.1.4** (2026-03-02).
+Latest release: **1.0.0** (2026-03-02).
 
 ## Features
 
@@ -16,6 +16,7 @@ Latest release: **0.1.4** (2026-03-02).
 - Language-aware command labels (Japanese/English) based on `codexHistoryViewer.ui.language`
 - Open any session as a Markdown transcript (easy to search, share, and export)
 - Copy Prompt Excerpt: copy a compact excerpt to the clipboard for handoff to OpenAI Codex
+- Resume directly in the official OpenAI Codex VS Code extension (`Resume in OpenAI Codex (VS Code Extension)`)
 - Full-text search across sessions (cancellable, configurable max results, optional case sensitivity)
 - Incremental local search index for faster repeated searches (tracks file updates/deletions)
 - Search roles filter (default: `user`/`assistant`, optional `developer`/`tool`) with configurable defaults
@@ -91,8 +92,17 @@ Latest release: **0.1.4** (2026-03-02).
 - `codexHistoryViewer.search.caseSensitive`: Whether search is case-sensitive
 - `codexHistoryViewer.search.defaultRoles`: Default roles used when running Search
 - `codexHistoryViewer.delete.useTrash`: When deleting, move files to the OS trash/recycle bin (recommended)
+- `codexHistoryViewer.resume.openTarget`: Where `Resume in OpenAI Codex (VS Code Extension)` opens the conversation (`sidebar` by default, or `panel`)
 - `codexHistoryViewer.ui.language`: UI language for this extension (`auto` / `en` / `ja`). This setting also affects timestamps: `ja` uses `Asia/Tokyo` (JST), while `auto`/`en` use your system time zone (falls back to `UTC` if unavailable).
 - `codexHistoryViewer.ui.alwaysShowHeaderActions`: Always show view header action icons (enables VS Code setting `workbench.view.alwaysShowHeaderActions`)
+
+## OpenAI Codex Integration Notes
+
+- When you run `Resume in OpenAI Codex (VS Code Extension)` for the first time, VS Code may show a security prompt asking whether the target extension can open the URI.
+- This is expected VS Code behavior for extension URI handlers (`vscode://...`).
+- If you click **Cancel**, resume will not proceed. Click **Open** to allow the handoff.
+- If you check "Do not ask me again for this extension", future resumes will not show the same prompt.
+- You can manage previously authorized extension URIs from Command Palette: `Extensions: Manage Authorized Extension URIs...`
 
 ## Import/Export behavior
 
@@ -103,12 +113,14 @@ Latest release: **0.1.4** (2026-03-02).
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 - After successful import or promote (copy-to-today), a hint is shown to reload Codex CLI history if Codex is running.
 
-## What's New in 0.1.4
+## What's New in 1.0.0
 
-- Added **Control** and **Status** views for day-to-day operations and runtime visibility.
-- Added tag-centric workflows: filters in History/Pinned/Search, annotation hits in search results, and bulk tag operations.
-- Added import/export workflow improvements (duplicate ID handling and sanitized transcript export).
-- Expanded Undo coverage and command localization consistency.
+- Promoted to **1.0.0** as the first stable release.
+- Added configurable resume target for OpenAI Codex integration:
+  - Default: open in Codex sidebar
+  - Optional: open in Codex panel tab via `codexHistoryViewer.resume.openTarget`
+- Improved localization coverage for settings labels and descriptions.
+- Continued stability and usability refinements across Control/History/Search/Status workflows.
 
 ## Changelog
 

@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "0.1.4",
+  "version": "1.0.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -51,6 +51,7 @@
     "onCommand:codexHistoryViewer.openSession",
     "onCommand:codexHistoryViewer.openSessionMarkdown",
     "onCommand:codexHistoryViewer.copyResumePrompt",
+    "onCommand:codexHistoryViewer.resumeSessionInCodex",
     "onCommand:codexHistoryViewer.openSettings",
     "onCommand:codexHistoryViewer.promoteSession",
     "onCommand:codexHistoryViewer.pinSession",
@@ -248,6 +249,11 @@
         "category": "%cmd.category%"
       },
       {
+        "command": "codexHistoryViewer.resumeSessionInCodex",
+        "title": "%cmd.resumeSessionInCodex%",
+        "category": "%cmd.category%"
+      },
+      {
         "command": "codexHistoryViewer.openSettings",
         "title": "%cmd.openSettings%",
         "category": "%cmd.category%",
@@ -320,6 +326,14 @@
       {
         "command": "codexHistoryViewer.ui.en.copyResumePrompt",
         "title": "Copy Prompt Excerpt"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.resumeSessionInCodex",
+        "title": "OpenAI Codex で再開"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.resumeSessionInCodex",
+        "title": "Resume in OpenAI Codex"
       },
       {
         "command": "codexHistoryViewer.ui.ja.promoteSession",
@@ -776,6 +790,14 @@
         },
         {
           "command": "codexHistoryViewer.ui.en.copyResumePrompt",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.resumeSessionInCodex",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.resumeSessionInCodex",
           "when": "false"
         },
         {
@@ -1383,32 +1405,42 @@
         {
           "command": "codexHistoryViewer.ui.ja.openSession",
           "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation"
+          "group": "0_navigation"
         },
         {
           "command": "codexHistoryViewer.ui.en.openSession",
           "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang != 'ja'",
-          "group": "navigation"
+          "group": "0_navigation"
         },
         {
           "command": "codexHistoryViewer.ui.ja.openSessionMarkdown",
           "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation"
+          "group": "0_navigation"
         },
         {
           "command": "codexHistoryViewer.ui.en.openSessionMarkdown",
           "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang != 'ja'",
-          "group": "navigation"
+          "group": "0_navigation"
         },
         {
           "command": "codexHistoryViewer.ui.ja.copyResumePrompt",
           "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation"
+          "group": "0_navigation"
         },
         {
           "command": "codexHistoryViewer.ui.en.copyResumePrompt",
           "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang != 'ja'",
-          "group": "navigation"
+          "group": "0_navigation"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.resumeSessionInCodex",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@0"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.resumeSessionInCodex",
+          "when": "(viewItem == codexHistoryViewer.session || viewItem == codexHistoryViewer.sessionPinned || viewItem == codexHistoryViewer.searchSession || viewItem == codexHistoryViewer.searchHit) && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@0"
         },
         {
           "command": "codexHistoryViewer.ui.ja.promoteSession",
@@ -1573,6 +1605,24 @@
           "type": "boolean",
           "default": true,
           "description": "%cfg.deleteUseTrash%",
+          "scope": "application"
+        },
+        "codexHistoryViewer.resume.openTarget": {
+          "type": "string",
+          "default": "sidebar",
+          "enum": [
+            "sidebar",
+            "panel"
+          ],
+          "enumItemLabels": [
+            "%cfg.resumeOpenTarget.labelSidebar%",
+            "%cfg.resumeOpenTarget.labelPanel%"
+          ],
+          "enumDescriptions": [
+            "%cfg.resumeOpenTarget.enumSidebar%",
+            "%cfg.resumeOpenTarget.enumPanel%"
+          ],
+          "description": "%cfg.resumeOpenTarget%",
           "scope": "application"
         },
         "codexHistoryViewer.ui.language": {

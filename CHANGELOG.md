@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.0] - 2026-03-02
+
+### Added
+
+- New `codexHistoryViewer.resume.openTarget` setting to control where `Resume in OpenAI Codex (VS Code Extension)` opens:
+  - `sidebar` (default)
+  - `panel`
+
+### Changed
+
+- Promoted the extension version to **1.0.0** as the first stable release.
+- Default resume behavior now explicitly targets the OpenAI Codex sidebar.
+- Updated README and configuration docs to match the 1.0.0 behavior and defaults.
+
+### Fixed
+
+- Completed localization for resume target setting labels/descriptions (including sidebar/panel choices).
+- Replaced remaining Japanese source-code comments with English comments for consistency.
+
 ## [0.1.4] - 2026-03-02
 
 ### Added
