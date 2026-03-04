@@ -60,7 +60,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const historyService = new HistoryService(context.globalStorageUri, config);
   const searchIndexService = new SearchIndexService(context.globalStorageUri);
   const transcriptProvider = new TranscriptContentProvider(historyService, annotationStore);
-  const chatPanels = new ChatPanelManager(context.extensionUri, historyService, annotationStore);
+  const chatPanels = new ChatPanelManager(context.extensionUri, historyService, annotationStore, pinStore);
   let lastSearchRequest: SearchRequest | null = sanitizeSearchRequest(context.workspaceState.get(LAST_SEARCH_REQUEST_KEY));
   const getConfiguredDefaultSearchRoles = (): IndexedSearchRole[] => {
     const raw = vscode.workspace.getConfiguration("codexHistoryViewer").get<unknown>(SEARCH_DEFAULT_ROLES_CONFIG);
@@ -1918,8 +1918,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.pinSession", async (element?: unknown) => {
       // When multiple items are selected, pin the whole selection in one operation.
-      const targets = resolveTargets(element);
-      const fsPaths = collectSessionFsPaths(targets);
+      const hasDirectFsPath =
+        !!element &&
+        typeof element === "object" &&
+        !isSessionNode(element) &&
+        typeof (element as { fsPath?: unknown }).fsPath === "string";
+      let fsPaths: string[] = [];
+      if (hasDirectFsPath) {
+        const session = resolveSessionFromElementOrFsPath(historyService, element);
+        fsPaths = session ? [session.fsPath] : [];
+      } else {
+        const targets = resolveTargets(element);
+        fsPaths = collectSessionFsPaths(targets);
+      }
       if (fsPaths.length === 0) return;
       const pinnedBefore = new Set(fsPaths.filter((p) => pinStore.isPinned(p)).map((p) => normalizeCacheKey(p)));
       const { pinned, skipped } = await pinStore.pinMany(fsPaths);
@@ -1944,8 +1955,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.unpinSession", async (element?: unknown) => {
       // When multiple items are selected, unpin the whole selection in one operation (including missing pins).
-      const targets = resolveTargets(element);
-      const fsPaths = collectUnpinFsPaths(targets);
+      const hasDirectFsPath =
+        !!element &&
+        typeof element === "object" &&
+        !isSessionNode(element) &&
+        typeof (element as { fsPath?: unknown }).fsPath === "string";
+      let fsPaths: string[] = [];
+      if (hasDirectFsPath) {
+        const fsPath = String((element as { fsPath: string }).fsPath ?? "").trim();
+        fsPaths = fsPath ? [fsPath] : [];
+      } else {
+        const targets = resolveTargets(element);
+        fsPaths = collectUnpinFsPaths(targets);
+      }
       if (fsPaths.length === 0) return;
       const pinnedNow = fsPaths.filter((p) => pinStore.isPinned(p));
       const { unpinned, skipped } = await pinStore.unpinMany(fsPaths);

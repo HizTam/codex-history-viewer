@@ -5,6 +5,8 @@
   const metaEl = document.getElementById("meta");
   const annotationEl = document.getElementById("annotation");
   const timelineEl = document.getElementById("timeline");
+  const btnResumeInCodex = document.getElementById("btnResumeInCodex");
+  const btnPinToggle = document.getElementById("btnPinToggle");
   const btnMarkdown = document.getElementById("btnMarkdown");
   const btnCopyResume = document.getElementById("btnCopyResume");
   const btnReload = document.getElementById("btnReload");
@@ -30,13 +32,23 @@
   let expandedNote = false;
   let selectedMessageIndex = null;
   let messageNavMap = new Map();
+  let isPinned = false;
 
   // Initial button labels (overwritten after receiving sessionData).
+  btnResumeInCodex.textContent = "Open in Codex";
+  btnPinToggle.textContent = "Pin";
   btnMarkdown.textContent = "Markdown";
   btnCopyResume.textContent = "Copy prompt";
   // Reload is icon-only (tooltip is set via i18n).
   btnReload.innerHTML = RELOAD_ICON_SVG;
   btnToggleDetails.textContent = "Details";
+
+  btnResumeInCodex.addEventListener("click", () => {
+    vscode.postMessage({ type: "resumeInCodex" });
+  });
+  btnPinToggle.addEventListener("click", () => {
+    vscode.postMessage({ type: "togglePin" });
+  });
 
   btnMarkdown.addEventListener("click", () => {
     vscode.postMessage({
@@ -63,6 +75,26 @@
     render();
   });
 
+  document.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const anchor = target.closest("a");
+    if (!anchor) return;
+
+    const href = String(anchor.getAttribute("href") || "").trim();
+    const localTarget = tryParseLocalFileLink(href);
+    if (!localTarget) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    vscode.postMessage({
+      type: "openLocalFile",
+      fsPath: localTarget.fsPath,
+      line: localTarget.line,
+      column: localTarget.column,
+    });
+  });
+
   window.addEventListener("message", (event) => {
     const msg = event.data || {};
     if (msg.type === "sessionData") {
@@ -77,6 +109,7 @@
       model = msg.model || null;
       i18n = msg.i18n || {};
       dateTime = msg.dateTime || {};
+      isPinned = !!msg.isPinned;
       expandedNote = false;
       selectedMessageIndex = isRestore
         ? typeof restoreSelectedMessageIndex === "number"
@@ -115,6 +148,20 @@
   vscode.postMessage({ type: "ready" });
 
   function updateToolbar() {
+    const resumeInCodexLabel = i18n.resumeInCodex || "Open in Codex";
+    const resumeInCodexTooltip = i18n.resumeInCodexTooltip || resumeInCodexLabel;
+    btnResumeInCodex.textContent = resumeInCodexLabel;
+    btnResumeInCodex.title = resumeInCodexTooltip;
+    btnResumeInCodex.setAttribute("aria-label", resumeInCodexTooltip);
+
+    const pinLabel = isPinned ? i18n.unpin || "Unpin" : i18n.pin || "Pin";
+    const pinTooltip = isPinned
+      ? i18n.unpinTooltip || pinLabel
+      : i18n.pinTooltip || pinLabel;
+    btnPinToggle.textContent = pinLabel;
+    btnPinToggle.title = pinTooltip;
+    btnPinToggle.setAttribute("aria-label", pinTooltip);
+
     const markdownLabel = i18n.markdown || "Markdown";
     const markdownTooltip = i18n.markdownTooltip || markdownLabel;
     btnMarkdown.textContent = markdownLabel;
@@ -831,5 +878,90 @@
     };
 
     return mdi;
+  }
+
+  function tryParseLocalFileLink(rawHref) {
+    const href = String(rawHref || "").trim();
+    if (!href || href.startsWith("command:")) return null;
+
+    const fromVscodeCdn = parseFromVscodeResourceCdn(href);
+    if (fromVscodeCdn) return fromVscodeCdn;
+
+    const fromFileUri = parseFromFileUri(href);
+    if (fromFileUri) return fromFileUri;
+
+    const decoded = safeDecodeURIComponent(href);
+    if (isAbsolutePathLike(decoded)) {
+      return splitPathAndLocation(decoded);
+    }
+
+    return null;
+  }
+
+  function parseFromVscodeResourceCdn(href) {
+    let url;
+    try {
+      url = new URL(href);
+    } catch {
+      return null;
+    }
+    if (url.protocol !== "https:") return null;
+    if (url.hostname !== "file+.vscode-resource.vscode-cdn.net") return null;
+
+    let decodedPath = safeDecodeURIComponent(url.pathname || "");
+    decodedPath = decodedPath.replace(/^\/+/, "");
+    if (!decodedPath) return null;
+    return splitPathAndLocation(decodedPath);
+  }
+
+  function parseFromFileUri(href) {
+    if (!href.toLowerCase().startsWith("file://")) return null;
+    let url;
+    try {
+      url = new URL(href);
+    } catch {
+      return null;
+    }
+
+    let decodedPath = safeDecodeURIComponent(url.pathname || "");
+    if (/^\/[a-zA-Z]:\//.test(decodedPath)) decodedPath = decodedPath.slice(1);
+    if (!decodedPath) return null;
+    return splitPathAndLocation(decodedPath);
+  }
+
+  function splitPathAndLocation(pathLike) {
+    const text = String(pathLike || "").trim();
+    if (!isAbsolutePathLike(text)) return null;
+
+    const m = text.match(/^(.*?)(?::(\d+)(?::(\d+))?)$/);
+    if (!m) return { fsPath: text };
+
+    const fsPath = String(m[1] || "").trim();
+    if (!isAbsolutePathLike(fsPath)) return { fsPath: text };
+    const line = Number(m[2]);
+    const column = m[3] ? Number(m[3]) : undefined;
+    if (!Number.isFinite(line) || line < 1) return { fsPath: text };
+
+    return {
+      fsPath,
+      line,
+      column: Number.isFinite(column) && column >= 1 ? column : undefined,
+    };
+  }
+
+  function isAbsolutePathLike(s) {
+    const text = String(s || "").trim();
+    if (!text) return false;
+    if (/^[a-zA-Z]:[\\/]/.test(text)) return true;
+    if (text.startsWith("\\\\")) return true;
+    return text.startsWith("/");
+  }
+
+  function safeDecodeURIComponent(s) {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
   }
 })();

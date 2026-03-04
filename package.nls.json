@@ -1,6 +1,6 @@
 {
   "ext.displayName": "Codex History Viewer",
-  "ext.description": "Browse, search, pin, promote (copy to today), and delete local Codex CLI session history stored under ~/.codex/sessions.",
+  "ext.description": "Browse, search, tag, import/export, and manage local Codex CLI session history in ~/.codex/sessions, then resume selected sessions directly in the OpenAI Codex VS Code extension.",
   "viewContainer.title": "Codex History",
   "view.pinned": "Pinned",
   "view.history": "History",

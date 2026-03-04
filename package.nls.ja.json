@@ -1,6 +1,6 @@
 {
   "ext.displayName": "Codex History Viewer",
-  "ext.description": "ローカルの Codex 履歴を一覧表示・検索・ピン留め・最新化（コピー）・削除できます。",
+  "ext.description": "~/.codex/sessions のローカル Codex CLI 履歴を一覧・検索・タグ管理・インポート/エクスポートし、選択したセッションを OpenAI Codex（VS Code 拡張）で直接再開できます。",
   "viewContainer.title": "CODEX 履歴",
   "view.pinned": "ピン留め",
   "view.history": "履歴",

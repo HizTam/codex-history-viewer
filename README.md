@@ -1,7 +1,7 @@
 # Codex History Viewer
 
-A VS Code extension to browse, search, pin, promote (copy to today), and delete local Codex CLI session history stored under `~/.codex/sessions` (or a custom root).
-Latest release: **1.0.0** (2026-03-02).
+A VS Code extension to browse, search, tag, import/export, and manage local Codex CLI session history in `~/.codex/sessions`, then resume selected sessions directly in the OpenAI Codex VS Code extension.
+Latest release: **1.0.1** (2026-03-04).
 
 ## Features
 
@@ -10,7 +10,8 @@ Latest release: **1.0.0** (2026-03-02).
 - History tree view (year/month/day) with filters for date scope, project/CWD, and tags
 - One-click "Filter by Current Project" action in the History view header (toggle on/off)
 - Tag filters in **Pinned** and **Search** views (separate from History filters)
-- Chat-like viewer (Webview) with Markdown rendering, copy actions, and "Open as Markdown"
+- Chat-like viewer (Webview) with Markdown rendering, copy actions, and "Open Markdown transcript"
+- Chat toolbar quick actions: open in OpenAI Codex, toggle pin/unpin, open Markdown transcript, and copy prompt excerpt
 - Chat header annotation block (tags + note), including quick actions (filter/remove/edit)
 - Time zone-aware timestamps (chat view and transcripts)
 - Language-aware command labels (Japanese/English) based on `codexHistoryViewer.ui.language`
@@ -113,14 +114,16 @@ Latest release: **1.0.0** (2026-03-02).
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 - After successful import or promote (copy-to-today), a hint is shown to reload Codex CLI history if Codex is running.
 
-## What's New in 1.0.0
+## What's New in 1.0.1
 
-- Promoted to **1.0.0** as the first stable release.
-- Added configurable resume target for OpenAI Codex integration:
-  - Default: open in Codex sidebar
-  - Optional: open in Codex panel tab via `codexHistoryViewer.resume.openTarget`
-- Improved localization coverage for settings labels and descriptions.
-- Continued stability and usability refinements across Control/History/Search/Status workflows.
+- Added a new chat viewer toolbar action: **Open in OpenAI Codex**.
+- Added a **Pin / Unpin toggle** button next to **Open in OpenAI Codex**.
+- Reordered chat viewer primary actions for faster access:
+  - Open in OpenAI Codex
+  - Pin / Unpin toggle
+- Moved **Open Markdown transcript** and **Copy prompt excerpt** to the right side of the toolbar (before **Show details**).
+- Updated toolbar localization for the new Open-in-Codex action.
+- Improved Markdown link handling in the chat viewer so local file paths open inside VS Code instead of the external browser.
 
 ## Changelog
 

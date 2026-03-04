@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
+import type { PinStore } from "../services/pinStore";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { buildChatSessionModel } from "./chatModelBuilder";
@@ -13,16 +14,23 @@ export class ChatPanelManager {
   private readonly extensionUri: vscode.Uri;
   private readonly historyService: HistoryService;
   private readonly annotationStore: SessionAnnotationStore;
+  private readonly pinStore: PinStore;
 
   private previewPanel: vscode.WebviewPanel | null = null;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
   private readonly stateByPanel = new WeakMap<vscode.WebviewPanel, { fsPath: string; revealMessageIndex?: number }>();
   private readonly readyByPanel = new WeakMap<vscode.WebviewPanel, boolean>();
 
-  constructor(extensionUri: vscode.Uri, historyService: HistoryService, annotationStore: SessionAnnotationStore) {
+  constructor(
+    extensionUri: vscode.Uri,
+    historyService: HistoryService,
+    annotationStore: SessionAnnotationStore,
+    pinStore: PinStore,
+  ) {
     this.extensionUri = extensionUri;
     this.historyService = historyService;
     this.annotationStore = annotationStore;
+    this.pinStore = pinStore;
   }
 
   public refreshI18n(): void {
@@ -152,8 +160,10 @@ export class ChatPanelManager {
 </head>
 <body>
   <div id="toolbar">
-    <button id="btnMarkdown" type="button"></button>
+    <button id="btnResumeInCodex" type="button"></button>
+    <button id="btnPinToggle" type="button"></button>
     <div id="toolbarSpacer"></div>
+    <button id="btnMarkdown" type="button"></button>
     <button id="btnCopyResume" type="button"></button>
     <button id="btnToggleDetails" type="button"></button>
     <button id="btnReload" type="button" class="toolbarIconBtn"></button>
@@ -198,6 +208,49 @@ export class ChatPanelManager {
           fsPath: state.fsPath,
         });
         if (copied) panel.webview.postMessage({ type: "copied" });
+        return;
+      }
+      case "resumeInCodex": {
+        await vscode.commands.executeCommand("codexHistoryViewer.resumeSessionInCodex", {
+          fsPath: state.fsPath,
+        });
+        return;
+      }
+      case "togglePin": {
+        const commandId = this.pinStore.isPinned(state.fsPath)
+          ? "codexHistoryViewer.unpinSession"
+          : "codexHistoryViewer.pinSession";
+        await vscode.commands.executeCommand(commandId, { fsPath: state.fsPath });
+        await this.sendSessionData(panel);
+        return;
+      }
+      case "openLocalFile": {
+        const fsPath = typeof msg?.fsPath === "string" ? msg.fsPath.trim() : "";
+        if (!fsPath) return;
+
+        const line =
+          typeof msg?.line === "number" && Number.isFinite(msg.line) && msg.line >= 1
+            ? Math.floor(msg.line)
+            : undefined;
+        const column =
+          typeof msg?.column === "number" && Number.isFinite(msg.column) && msg.column >= 1
+            ? Math.floor(msg.column)
+            : undefined;
+
+        try {
+          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(fsPath));
+          const opts: vscode.TextDocumentShowOptions = {
+            preview: false,
+            preserveFocus: false,
+          };
+          if (line !== undefined) {
+            const pos = new vscode.Position(Math.max(0, line - 1), Math.max(0, (column ?? 1) - 1));
+            opts.selection = new vscode.Range(pos, pos);
+          }
+          await vscode.window.showTextDocument(doc, opts);
+        } catch {
+          void vscode.window.showErrorMessage(t("app.openLinkedFileFailed", fsPath));
+        }
         return;
       }
       case "reload": {
@@ -254,6 +307,7 @@ export class ChatPanelManager {
       revealMessageIndex: state.revealMessageIndex,
       restoreScrollY: options?.restoreScrollY,
       restoreSelectedMessageIndex: options?.restoreSelectedMessageIndex,
+      isPinned: this.pinStore.isPinned(state.fsPath),
       i18n: this.buildI18n(),
       dateTime,
     });
@@ -262,6 +316,12 @@ export class ChatPanelManager {
   private buildI18n(): Record<string, string> {
     const uiText = (ja: string, en: string): string => (resolveUiLanguage() === "ja" ? ja : en);
     return {
+      resumeInCodex: t("chat.button.resumeInCodex"),
+      resumeInCodexTooltip: t("chat.tooltip.resumeInCodex"),
+      pin: t("chat.button.pin"),
+      unpin: t("chat.button.unpin"),
+      pinTooltip: t("chat.tooltip.pin"),
+      unpinTooltip: t("chat.tooltip.unpin"),
       markdown: t("chat.button.markdown"),
       markdownTooltip: t("chat.tooltip.markdown"),
       copyResume: t("chat.button.copyResume"),

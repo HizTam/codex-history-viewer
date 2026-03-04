@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.0.1] - 2026-03-04
+
+### Added
+
+- New chat viewer toolbar button to resume directly in OpenAI Codex:
+  - `Open in OpenAI Codex`
+- New `Pin / Unpin` toggle button next to `Open in OpenAI Codex`.
+
+### Changed
+
+- Reordered chat viewer primary toolbar actions to improve continuation workflow:
+  - Open in OpenAI Codex
+  - Pin / Unpin toggle
+- Moved `Open Markdown transcript` and `Copy prompt excerpt` to the right side (before `Show details`).
+- Updated localization keys for the new chat toolbar actions and tooltips.
+
+### Fixed
+
+- In the chat viewer, local file links in Markdown now open inside VS Code instead of launching an external browser tab.
+
 ## [1.0.0] - 2026-03-02
 
 ### Added
