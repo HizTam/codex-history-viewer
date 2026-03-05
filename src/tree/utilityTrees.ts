@@ -135,7 +135,10 @@ export class ControlTreeDataProvider implements vscode.TreeDataProvider<UtilityN
 }
 
 export interface StatusSnapshot {
-  sessionCount: number;
+  enableCodexSource: boolean;
+  enableClaudeSource: boolean;
+  codexSessionCount: number;
+  claudeSessionCount: number;
   pinCount: number;
   missingPinCount: number;
   presetCount: number;
@@ -145,7 +148,8 @@ export interface StatusSnapshot {
   currentSearchTagFilter: readonly string[];
   filterSummary: string;
   currentProjectCwd: string | null;
-  sessionsRoot: string;
+  codexSessionsRoot: string;
+  claudeSessionsRoot: string;
   lastRefreshAt: number | null;
 }
 
@@ -177,8 +181,30 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
       typeof s.lastRefreshAt === "number" && Number.isFinite(s.lastRefreshAt)
         ? new Date(s.lastRefreshAt).toLocaleString()
         : t("status.value.none");
-    return [
-      makeInfo("status.sessions", t("status.label.sessions"), String(s.sessionCount), new vscode.ThemeIcon("list-unordered")),
+    const items: UtilityNode[] = [];
+
+    if (s.enableCodexSource) {
+      items.push(
+        makeInfo(
+          "status.sessions.codex",
+          t("status.label.sessionsCodex"),
+          String(s.codexSessionCount),
+          new vscode.ThemeIcon("list-unordered"),
+        ),
+      );
+    }
+    if (s.enableClaudeSource) {
+      items.push(
+        makeInfo(
+          "status.sessions.claude",
+          t("status.label.sessionsClaude"),
+          String(s.claudeSessionCount),
+          new vscode.ThemeIcon("list-unordered"),
+        ),
+      );
+    }
+
+    items.push(
       makeInfo("status.pins", t("status.label.pins"), String(s.pinCount), new vscode.ThemeIcon("pinned")),
       makeInfo("status.missingPins", t("status.label.missingPins"), String(s.missingPinCount), new vscode.ThemeIcon("warning")),
       makeInfo("status.presets", t("status.label.presets"), String(s.presetCount), new vscode.ThemeIcon("bookmark")),
@@ -204,15 +230,33 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
         new vscode.ThemeIcon("folder-library"),
         currentProject ?? undefined,
       ),
-      makeInfo(
-        "status.sessionsRoot",
-        t("status.label.sessionsRoot"),
-        safeDisplayPath(s.sessionsRoot, 64),
-        new vscode.ThemeIcon("folder-opened"),
-        s.sessionsRoot,
-      ),
       makeInfo("status.lastRefresh", t("status.label.lastRefresh"), refreshed, new vscode.ThemeIcon("history")),
-    ];
+    );
+
+    if (s.enableCodexSource) {
+      items.push(
+        makeInfo(
+          "status.sessionsRoot.codex",
+          t("status.label.sessionsRootCodex"),
+          safeDisplayPath(s.codexSessionsRoot, 64),
+          new vscode.ThemeIcon("folder-opened"),
+          s.codexSessionsRoot,
+        ),
+      );
+    }
+    if (s.enableClaudeSource) {
+      items.push(
+        makeInfo(
+          "status.sessionsRoot.claude",
+          t("status.label.sessionsRootClaude"),
+          safeDisplayPath(s.claudeSessionsRoot, 64),
+          new vscode.ThemeIcon("folder-opened"),
+          s.claudeSessionsRoot,
+        ),
+      );
+    }
+
+    return items;
   }
 }
 

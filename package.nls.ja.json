@@ -1,6 +1,6 @@
 {
   "ext.displayName": "Codex History Viewer",
-  "ext.description": "Browse, search, tag, import/export, and manage local Codex CLI / Claude Code session history. Codex is enabled by default; add Claude from 'Codex History Viewer > Sources: Enabled'.",
+  "ext.description": "Browse, search, tag, import/export, and manage local Codex CLI / Claude Code session history.",
   "viewContainer.title": "CODEX 履歴",
   "view.pinned": "ピン留め",
   "view.history": "履歴",

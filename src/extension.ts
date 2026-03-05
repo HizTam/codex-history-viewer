@@ -149,13 +149,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return parts.join(" / ");
   };
 
-  const countMissingPins = (): number => {
+  const resolvePinnedEntrySource = (
+    fsPath: string,
+    cfg: CodexHistoryViewerConfig,
+  ): "codex" | "claude" | null => {
+    const session = historyService.findByFsPath(fsPath);
+    if (session) return session.source;
+
+    if (isPathInsideRoot(fsPath, cfg.sessionsRoot)) return "codex";
+    if (isPathInsideRoot(fsPath, cfg.claudeSessionsRoot)) return "claude";
+
+    const base = path.basename(fsPath).toLowerCase();
+    if (base.startsWith("rollout-")) return "codex";
+    if (base.endsWith(".jsonl")) return "claude";
+    return null;
+  };
+
+  const isSourceEnabledInConfig = (
+    source: "codex" | "claude" | null,
+    cfg: CodexHistoryViewerConfig,
+  ): boolean => {
+    if (source === "codex") return cfg.enableCodexSource;
+    if (source === "claude") return cfg.enableClaudeSource;
+    return false;
+  };
+
+  const countEnabledPins = (cfg: CodexHistoryViewerConfig): { pinCount: number; missingPinCount: number } => {
     const pins = pinStore.getAll();
-    let missing = 0;
+    let pinCount = 0;
+    let missingPinCount = 0;
+
     for (const p of pins) {
-      if (!historyService.findByFsPath(p.fsPath)) missing += 1;
+      const source = resolvePinnedEntrySource(p.fsPath, cfg);
+      if (!isSourceEnabledInConfig(source, cfg)) continue;
+      pinCount += 1;
+      if (!historyService.findByFsPath(p.fsPath)) missingPinCount += 1;
     }
-    return missing;
+
+    return { pinCount, missingPinCount };
   };
 
   const controlProvider = new ControlTreeDataProvider();
@@ -168,20 +199,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // The status pane displays the currently configured default search roles.
     return getConfiguredDefaultSearchRoles();
   };
-  const statusProvider = new StatusTreeDataProvider(() => ({
-    sessionCount: historyService.getIndex().sessions.length,
-    pinCount: pinStore.getAll().length,
-    missingPinCount: countMissingPins(),
-    presetCount: searchPresetStore.getAll().length,
-    totalTagCount: annotationStore.listTagStats().length,
-    searchHitCount: searchProvider.root?.totalHits ?? 0,
-    currentSearchRoles: resolveStatusCurrentSearchRoles(),
-    currentSearchTagFilter: searchTagFilter,
-    filterSummary: buildHistoryFilterSummary(),
-    currentProjectCwd: resolveStatusCurrentProjectCwd(),
-    sessionsRoot: historyService.getIndex().sessionsRoot,
-    lastRefreshAt: lastHistoryRefreshAt,
-  }));
+  const statusProvider = new StatusTreeDataProvider(() => {
+    const cfg = getConfig();
+    const sessions = historyService.getIndex().sessions;
+    const codexSessionCount = sessions.filter((s) => s.source === "codex").length;
+    const claudeSessionCount = sessions.filter((s) => s.source === "claude").length;
+    const pinCounters = countEnabledPins(cfg);
+
+    return {
+      enableCodexSource: cfg.enableCodexSource,
+      enableClaudeSource: cfg.enableClaudeSource,
+      codexSessionCount,
+      claudeSessionCount,
+      pinCount: pinCounters.pinCount,
+      missingPinCount: pinCounters.missingPinCount,
+      presetCount: searchPresetStore.getAll().length,
+      totalTagCount: annotationStore.listTagStats().length,
+      searchHitCount: searchProvider.root?.totalHits ?? 0,
+      currentSearchRoles: resolveStatusCurrentSearchRoles(),
+      currentSearchTagFilter: searchTagFilter,
+      filterSummary: buildHistoryFilterSummary(),
+      currentProjectCwd: resolveStatusCurrentProjectCwd(),
+      codexSessionsRoot: cfg.sessionsRoot,
+      claudeSessionsRoot: cfg.claudeSessionsRoot,
+      lastRefreshAt: lastHistoryRefreshAt,
+    };
+  });
   const debugBuild = "2026-01-19.1";
 
   // Provide a virtual document (conversation log).
@@ -2475,6 +2518,14 @@ function resolveConstrainedHistorySourceFilter(
 ): SessionSourceFilter {
   const locked = resolveLockedHistorySource(config);
   return locked ?? sanitizeHistorySourceFilter(sourceFilter);
+}
+
+function isPathInsideRoot(fsPath: string, rootPath: string): boolean {
+  const root = String(rootPath ?? "").trim();
+  if (!root) return false;
+  const rel = path.relative(root, fsPath);
+  if (!rel) return true;
+  return !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
 function uiText(ja: string, en: string): string {

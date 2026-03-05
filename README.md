@@ -1,7 +1,7 @@
 # Codex History Viewer
 
 A VS Code extension to browse, search, tag, import/export, and manage local Codex CLI / Claude Code session history, then resume selected sessions directly in the related VS Code extension.
-Latest release: **1.1.0** (2026-03-05).
+Latest release: **1.1.1** (2026-03-05).
 
 ## Features
 
@@ -50,47 +50,11 @@ Latest release: **1.1.0** (2026-03-05).
 
 ## Commands
 
-- `Codex History Viewer: Refresh All`
-- `Codex History Viewer: Refresh Pinned`
-- `Codex History Viewer: Refresh History`
-- `Codex History Viewer: Refresh Status`
-- `Codex History Viewer: Search...`
-- `Codex History Viewer: Configure Default Search Roles...`
-- `Codex History Viewer: Rerun Search`
-- `Codex History Viewer: Filter Search by Tags...`
-- `Codex History Viewer: Clear Search Tag Filter`
-- `Codex History Viewer: Filter History...`
-- `Codex History Viewer: Filter History by Tags...`
-- `Codex History Viewer: Filter by Current Project`
-- `Codex History Viewer: Show Codex History Only`
-- `Codex History Viewer: Show Claude History Only`
-- `Codex History Viewer: Show All Sources`
-- `Codex History Viewer: Clear History Filters`
-- `Codex History Viewer: Clear History Tag Filter`
-- `Codex History Viewer: Filter Pinned by Tags...`
-- `Codex History Viewer: Clear Pinned Tag Filter`
-- `Codex History Viewer: Open Session (Chat)`
-- `Codex History Viewer: Open Session (Markdown)`
-- `Codex History Viewer: Copy Prompt Excerpt`
-- `Codex History Viewer: Resume in OpenAI Codex`
-- `Codex History Viewer: Resume in Claude Code`
-- `Codex History Viewer: Open Settings`
-- `Codex History Viewer: Promote to Today (Copy)`
-- `Codex History Viewer: Pin` / `Unpin`
-- `Codex History Viewer: Delete`
-- `Codex History Viewer: Rebuild Cache`
-- `Codex History Viewer: Cleanup Missing Pins`
-- `Codex History Viewer: Debug Info (Copy)`
-- `Codex History Viewer: Export Sessions...`
-- `Codex History Viewer: Import Sessions...`
-- `Codex History Viewer: Run Saved Search...`
-- `Codex History Viewer: Initialize Search Pane`
-- `Codex History Viewer: Save Current Search Preset...`
-- `Codex History Viewer: Delete Saved Search...`
-- `Codex History Viewer: Edit Session Tags/Note...`
-- `Codex History Viewer: Bulk Rename Tag...`
-- `Codex History Viewer: Bulk Delete Tags...`
-- `Codex History Viewer: Undo Last Action`
+Most actions are available from view title buttons and tree context menus.
+
+For the full command list with per-command descriptions, see:
+
+- [Command Reference](docs/commands.md)
 
 ## Configuration
 
@@ -133,16 +97,14 @@ Latest release: **1.1.0** (2026-03-05).
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 - After successful import or promote (copy-to-today), a hint is shown to reload Codex CLI history if Codex is running.
 
-## What's New in 1.1.0
+## What's New in 1.1.1
 
-- Added optional Claude history support with source-aware session handling.
-- Added `Resume in Claude Code` for Claude sessions.
-- Added source filter actions (`Codex only` / `Claude only` / `All`) and source-cycle UI in History.
-- Added `codexHistoryViewer.sources.enabled` and changed its default to `["codex"]`.
-- Added `codexHistoryViewer.claude.sessionsRoot` for Claude session location overrides.
-- When only one source is enabled (`codex` only or `claude` only), source filtering is fixed and cannot be toggled.
-- Improved source-filter consistency in Pinned view (including missing pinned entries).
-- Improved Claude transcript/chat parsing and compact user text rendering for transport tags.
+- Fixed Status view source-awareness:
+  - Session counts are now shown per enabled source (`Codex` / `Claude`).
+  - Session roots are now shown per enabled source (`Codex` / `Claude`).
+  - Pinned count is now aggregated only from enabled sources.
+- Added a dedicated command reference page at `docs/commands.md` and shortened the README command section.
+- Simplified the Marketplace description to a shorter summary sentence.
 
 ## Changelog
 
