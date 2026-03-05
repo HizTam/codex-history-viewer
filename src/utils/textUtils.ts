@@ -7,14 +7,14 @@ export function normalizeWhitespace(s: string): string {
 export function singleLineSnippet(s: string, maxLen: number): string {
   const oneLine = s.replace(/\s+/g, " ").trim();
   if (oneLine.length <= maxLen) return oneLine;
-  return `${oneLine.slice(0, Math.max(0, maxLen - 1))}…`;
+  return `${oneLine.slice(0, Math.max(0, maxLen - 1))}...`;
 }
 
 export function safeDisplayPath(fsPath: string, maxLen: number): string {
   // For long paths, prefer showing the tail by trimming the head.
   if (fsPath.length <= maxLen) return fsPath;
   const tailLen = Math.max(10, Math.floor(maxLen * 0.75));
-  return `…${fsPath.slice(-tailLen)}`;
+  return `...${fsPath.slice(-tailLen)}`;
 }
 
 export function extractMyRequestForCodex(text: string): string | null {
@@ -103,6 +103,46 @@ export function extractUserRequestText(text: string): string | null {
   if (byHeading) return byHeading;
 
   return null;
+}
+
+export function isBoilerplateUserMessageText(text: string): boolean {
+  const t = String(text ?? "").trimStart();
+  if (!t) return false;
+  if (t.startsWith("<environment_context>")) return true;
+  if (t.startsWith("# AGENTS.md instructions")) return true;
+  if (t.startsWith("<INSTRUCTIONS>")) return true;
+  // Treat meta tags as boilerplate only when the line contains only the tag payload.
+  if (t.startsWith("<ide_opened_file>")) return stripTransportMetaTags(t).length === 0;
+  if (t.startsWith("<local-command-caveat>")) return stripTransportMetaTags(t).length === 0;
+  if (/^<command-(name|message|args)>/i.test(t)) return stripTransportMetaTags(t).length === 0;
+  return false;
+}
+
+export function stripTransportMetaTags(text: string): string {
+  const normalized = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  let out = normalized;
+  // ?????????????????
+  out = out.replace(/^[ \t]*<ide_opened_file>[\s\S]*?<\/ide_opened_file>[ \t]*(?:\n|$)/gim, "");
+  out = out.replace(/^[ \t]*<local-command-caveat>[\s\S]*?<\/local-command-caveat>[ \t]*(?:\n|$)/gim, "");
+  out = out.replace(/^[ \t]*<(command-name|command-message|command-args)>[\s\S]*?<\/\1>[ \t]*(?:\n|$)/gim, "");
+  // ???????????????????
+  out = out.replace(
+    /(<\/(?:ide_opened_file|local-command-caveat|command-name|command-message|command-args)>)(?![ \t]*\n)/gi,
+    "$1\n",
+  );
+  return normalizeWhitespace(out);
+}
+
+export function extractCompactUserText(text: string): string | null {
+  const normalized = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!normalized) return null;
+
+  // ??/???????? Task/Request ?????????????
+  const base = extractTaskSectionText(normalized) ?? extractUserRequestText(normalized) ?? normalized;
+  const compact = stripTransportMetaTags(base);
+  // AGENTS / environment_context ??????????????????
+  if (isBoilerplateUserMessageText(compact)) return null;
+  return compact.length > 0 ? compact : null;
 }
 
 function isWideCodePoint(codePoint: number): boolean {

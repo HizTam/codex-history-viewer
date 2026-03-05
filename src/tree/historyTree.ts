@@ -3,7 +3,7 @@ import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import { SessionNode, DayNode, MonthNode, TreeNode, YearNode, toTreeItemContextValue } from "./treeNodes";
-import type { SessionSummary } from "../sessions/sessionTypes";
+import type { SessionSource, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
 import type { DateScope } from "../types/dateScope";
 import { getConfig } from "../settings";
 import { normalizeCacheKey } from "../utils/fsUtils";
@@ -17,9 +17,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private readonly annotationStore: SessionAnnotationStore;
   private filter: DateScope;
   private projectCwd: string | null;
+  private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
-  private readonly pinIconPath: { light: vscode.Uri; dark: vscode.Uri };
-  private readonly blankIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   public readonly onDidChangeTreeData = this.emitter.event;
 
@@ -29,6 +30,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     annotationStore: SessionAnnotationStore,
     filter: DateScope,
     projectCwd: string | null,
+    sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
     extensionUri: vscode.Uri,
   ) {
@@ -37,14 +39,15 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.annotationStore = annotationStore;
     this.filter = filter;
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
+    this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
-    this.pinIconPath = {
-      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "pin.svg"),
-      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "pin.svg"),
+    this.codexIconPath = {
+      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
+      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-codex.svg"),
     };
-    this.blankIconPath = {
-      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "blank.svg"),
-      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "blank.svg"),
+    this.claudeIconPath = {
+      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-claude.svg"),
+      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-claude.svg"),
     };
   }
 
@@ -60,14 +63,24 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
   }
 
+  public setSourceFilter(sourceFilter: SessionSourceFilter): void {
+    this.sourceFilter = normalizeSourceFilter(sourceFilter);
+  }
+
   public setTagFilter(tags: readonly string[]): void {
     this.tagFilter = normalizeTagFilter(tags);
   }
 
-  public setFilters(filter: DateScope, projectCwd: string | null, tagFilter: readonly string[]): void {
+  public setFilters(
+    filter: DateScope,
+    projectCwd: string | null,
+    sourceFilter: SessionSourceFilter,
+    tagFilter: readonly string[],
+  ): void {
     // Update filters in bulk; the caller triggers refresh.
     this.setFilter(filter);
     this.setProjectFilter(projectCwd);
+    this.setSourceFilter(sourceFilter);
     this.setTagFilter(tagFilter);
   }
 
@@ -88,7 +101,12 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   private matchesSession(session: SessionSummary): boolean {
-    return this.matchesProject(session) && this.matchesTags(session);
+    return this.matchesProject(session) && this.matchesSource(session) && this.matchesTags(session);
+  }
+
+  private matchesSource(session: SessionSummary): boolean {
+    if (this.sourceFilter === "all") return true;
+    return session.source === this.sourceFilter;
   }
 
   public getTreeItem(element: TreeNode): vscode.TreeItem {
@@ -127,8 +145,8 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     item.description = buildSessionDescription(session.cwdShort, annotation?.tags ?? []);
     const node = new SessionNode(session, pinned);
     item.contextValue = toTreeItemContextValue(node);
-    // Represent pinned state with an icon left of the time label (use an invisible icon when unpinned).
-    item.iconPath = pinned ? this.pinIconPath : this.blankIconPath;
+    // Show source-specific icons (Codex/Claude) in the list row.
+    item.iconPath = this.resolveSourceIconPath(session.source);
 
     // Clicking the title opens the viewer (preview on selection or openSession); pin/unpin is done via the context menu.
     const previewOnSelection = getConfig().previewOpenOnSelection;
@@ -140,6 +158,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const md = new vscode.MarkdownString(undefined, true);
     md.isTrusted = false;
     md.appendMarkdown(`**${session.localDate} ${session.timeLabel}**  \n`);
+    md.appendMarkdown(`Source: ${sourceName(session.source)}  \n`);
     if (session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(session.cwdShort)}  \n`);
     if (annotation && annotation.tags.length > 0) {
       md.appendMarkdown(`Tags: ${escapeForMarkdown(annotation.tags.join(", "))}  \n`);
@@ -157,9 +176,13 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     return item;
   }
 
+  private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {
+    return source === "claude" ? this.claudeIconPath : this.codexIconPath;
+  }
+
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
     const idx = this.historyService.getIndex();
-    const shouldFilterSessions = !!this.projectCwd || this.tagFilter.length > 0;
+    const shouldFilterSessions = !!this.projectCwd || this.sourceFilter !== "all" || this.tagFilter.length > 0;
     if (!element) {
       const filter = this.filter;
       switch (filter.kind) {
@@ -306,4 +329,12 @@ function normalizeTagFilter(values: readonly string[]): string[] {
 
 function normalizeTagKey(value: string): string {
   return String(value ?? "").trim().toLowerCase();
+}
+
+function normalizeSourceFilter(value: SessionSourceFilter): SessionSourceFilter {
+  return value === "codex" || value === "claude" ? value : "all";
+}
+
+function sourceName(source: SessionSource): string {
+  return source === "claude" ? "Claude" : "Codex";
 }

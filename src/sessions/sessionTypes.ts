@@ -1,5 +1,8 @@
 import type { Ymd } from "../utils/dateUtils";
 
+export type SessionSource = "codex" | "claude";
+export type SessionSourceFilter = "all" | SessionSource;
+
 // Minimal session info extracted from JSONL (for display/search/actions).
 export interface SessionMetaInfo {
   id?: string;
@@ -9,6 +12,7 @@ export interface SessionMetaInfo {
   cliVersion?: string;
   modelProvider?: string;
   source?: string;
+  historySource?: SessionSource;
 }
 
 export type ChatRole = "user" | "assistant";
@@ -21,6 +25,7 @@ export interface PreviewMessage {
 export interface SessionSummary {
   fsPath: string;
   cacheKey: string;
+  source: SessionSource;
   meta: SessionMetaInfo;
   inferredYmd?: Ymd; // Set only if inferred from the path
   localDate: string; // YYYY-MM-DD (display time zone date)

@@ -1,10 +1,9 @@
-import * as path from "node:path";
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig } from "../settings";
 import { findSessionFiles } from "../sessions/sessionDiscovery";
 import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
 import { buildSessionSummary } from "../sessions/sessionSummary";
-import { normalizeCacheKey, pathExists } from "../utils/fsUtils";
+import { normalizeCacheKey } from "../utils/fsUtils";
 import { readJson, writeJson } from "../storage/jsonStorage";
 import { getDateTimeSettingsKey, resolveDateTimeSettings } from "../utils/dateTimeSettings";
 
@@ -16,12 +15,15 @@ interface CacheEntryV1 {
   summary: SessionSummary;
 }
 
-const SUMMARY_CACHE_ALGO_VERSION = 3;
+const SUMMARY_CACHE_ALGO_VERSION = 5;
 
-interface CacheFileV4 {
-  version: 4;
+interface CacheFileV5 {
+  version: 5;
   summaryAlgoVersion: number;
-  sessionsRoot: string;
+  codexSessionsRoot: string;
+  claudeSessionsRoot: string;
+  includeCodex: boolean;
+  includeClaude: boolean;
   previewMaxMessages: number;
   dateTimeSettingsKey: string;
   entries: Record<string, CacheEntryV1>;
@@ -64,28 +66,33 @@ export class HistoryService {
   public async refresh(options: { forceRebuildCache: boolean }): Promise<void> {
     this.updateConfig(this.config); // Hook for potential hot-reload (currently a no-op).
     const sessionsRoot = this.config.sessionsRoot;
-    if (!(await pathExists(sessionsRoot))) {
-      this.index = emptyIndex(sessionsRoot);
-      return;
-    }
+    const claudeSessionsRoot = this.config.claudeSessionsRoot;
 
     const dateTime = resolveDateTimeSettings();
     const dateTimeSettingsKey = getDateTimeSettingsKey(dateTime);
 
-    const cacheUri = vscode.Uri.joinPath(this.globalStorageUri, "cache.v4.json");
-    const cache = options.forceRebuildCache ? null : await readJson<CacheFileV4>(cacheUri);
+    const cacheUri = vscode.Uri.joinPath(this.globalStorageUri, "cache.v5.json");
+    const cache = options.forceRebuildCache ? null : await readJson<CacheFileV5>(cacheUri);
 
     const cachedEntries: Record<string, CacheEntryV1> =
       cache &&
-      cache.version === 4 &&
+      cache.version === 5 &&
       cache.summaryAlgoVersion === SUMMARY_CACHE_ALGO_VERSION &&
-      cache.sessionsRoot === sessionsRoot &&
+      cache.codexSessionsRoot === sessionsRoot &&
+      cache.claudeSessionsRoot === claudeSessionsRoot &&
+      cache.includeCodex === this.config.enableCodexSource &&
+      cache.includeClaude === this.config.enableClaudeSource &&
       cache.previewMaxMessages === this.config.previewMaxMessages &&
       cache.dateTimeSettingsKey === dateTimeSettingsKey
         ? cache.entries
         : {};
 
-    const files = await findSessionFiles(sessionsRoot);
+    const files = await findSessionFiles({
+      codexRoot: sessionsRoot,
+      claudeRoot: claudeSessionsRoot,
+      includeCodex: this.config.enableCodexSource,
+      includeClaude: this.config.enableClaudeSource,
+    });
     const nextEntries: Record<string, CacheEntryV1> = {};
     const summaries: SessionSummary[] = [];
 
@@ -125,10 +132,13 @@ export class HistoryService {
     });
 
     this.index = buildIndex(sessionsRoot, summaries);
-    const nextCache: CacheFileV4 = {
-      version: 4,
+    const nextCache: CacheFileV5 = {
+      version: 5,
       summaryAlgoVersion: SUMMARY_CACHE_ALGO_VERSION,
-      sessionsRoot,
+      codexSessionsRoot: sessionsRoot,
+      claudeSessionsRoot,
+      includeCodex: this.config.enableCodexSource,
+      includeClaude: this.config.enableClaudeSource,
       previewMaxMessages: this.config.previewMaxMessages,
       dateTimeSettingsKey,
       entries: nextEntries,

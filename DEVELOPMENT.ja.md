@@ -28,8 +28,8 @@
 ### 3.2 コマンド（代表）
 
 - Refresh / Rebuild Cache
-- Search…（キャンセル対応、最大ヒット数と大小文字区別は設定で制御）
-- Filter History… / Clear History Filters
+- Search...（キャンセル対応、最大ヒット数と大小文字区別は設定で制御）
+- Filter History... / Clear History Filters
 - Open Session (Chat) / Open Session (Markdown)
 - Pin / Unpin（Pinned ビューへドラッグ&ドロップしてピン留めも可能）
 - Promote to Today (Copy)（元ファイルは変更しない）

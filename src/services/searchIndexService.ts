@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as readline from "node:readline";
 import * as vscode from "vscode";
 import type { HistoryIndex } from "../sessions/sessionTypes";
@@ -21,9 +22,16 @@ interface SearchIndexEntryV1 {
   messages: IndexedSearchMessage[];
 }
 
-interface SearchIndexFileV1 {
-  version: 2;
-  sessionsRoot: string;
+interface SearchIndexContext {
+  codexSessionsRoot: string;
+  claudeSessionsRoot: string;
+  includeCodex: boolean;
+  includeClaude: boolean;
+}
+
+interface SearchIndexFileV2 {
+  version: 4;
+  context: SearchIndexContext;
   entries: Record<string, SearchIndexEntryV1>;
 }
 
@@ -31,28 +39,38 @@ interface SearchIndexFileV1 {
 export class SearchIndexService {
   private readonly cacheUri: vscode.Uri;
   private loaded = false;
-  private sessionsRoot = "";
+  private context: SearchIndexContext = {
+    codexSessionsRoot: "",
+    claudeSessionsRoot: "",
+    includeCodex: true,
+    includeClaude: false,
+  };
   private readonly entries = new Map<string, SearchIndexEntryV1>();
 
   constructor(globalStorageUri: vscode.Uri) {
-    this.cacheUri = vscode.Uri.joinPath(globalStorageUri, "search-index.v1.json");
+    this.cacheUri = vscode.Uri.joinPath(globalStorageUri, "search-index.v2.json");
   }
 
   public async ensureUpToDate(params: {
     index: HistoryIndex;
+    codexSessionsRoot: string;
+    claudeSessionsRoot: string;
+    includeCodex: boolean;
+    includeClaude: boolean;
     token?: vscode.CancellationToken;
     progress?: vscode.Progress<{ message?: string; increment?: number }>;
     forceRebuild?: boolean;
   }): Promise<void> {
     const { index, token, progress, forceRebuild } = params;
-    await this.loadIfNeeded(index.sessionsRoot, !!forceRebuild);
+    const context: SearchIndexContext = {
+      codexSessionsRoot: params.codexSessionsRoot,
+      claudeSessionsRoot: params.claudeSessionsRoot,
+      includeCodex: params.includeCodex,
+      includeClaude: params.includeClaude,
+    };
+    await this.loadIfNeeded(context, !!forceRebuild);
 
     let dirty = false;
-    if (this.sessionsRoot !== index.sessionsRoot) {
-      this.sessionsRoot = index.sessionsRoot;
-      this.entries.clear();
-      dirty = true;
-    }
 
     const activeKeys = new Set(index.sessions.map((s) => s.cacheKey));
     for (const key of Array.from(this.entries.keys())) {
@@ -102,24 +120,31 @@ export class SearchIndexService {
     return this.entries.get(cacheKey)?.messages ?? null;
   }
 
-  private async loadIfNeeded(sessionsRoot: string, forceRebuild: boolean): Promise<void> {
+  private async loadIfNeeded(nextContext: SearchIndexContext, forceRebuild: boolean): Promise<void> {
+    const normalizedContext = normalizeContext(nextContext);
     if (forceRebuild) {
-      this.sessionsRoot = sessionsRoot;
+      this.context = normalizedContext;
       this.entries.clear();
       this.loaded = true;
       return;
     }
-    if (this.loaded) return;
+    if (this.loaded) {
+      if (!isSameContext(this.context, normalizedContext)) {
+        this.context = normalizedContext;
+        this.entries.clear();
+      }
+      return;
+    }
 
-    const raw = await readJson<SearchIndexFileV1>(this.cacheUri);
-    if (!isValidCacheFile(raw) || raw.sessionsRoot !== sessionsRoot) {
-      this.sessionsRoot = sessionsRoot;
+    const raw = await readJson<SearchIndexFileV2>(this.cacheUri);
+    if (!isValidCacheFile(raw) || !isSameContext(raw.context, normalizedContext)) {
+      this.context = normalizedContext;
       this.entries.clear();
       this.loaded = true;
       return;
     }
 
-    this.sessionsRoot = raw.sessionsRoot;
+    this.context = normalizeContext(raw.context);
     this.entries.clear();
     for (const [key, entry] of Object.entries(raw.entries)) {
       this.entries.set(key, entry);
@@ -130,9 +155,9 @@ export class SearchIndexService {
   private async save(): Promise<void> {
     const entries: Record<string, SearchIndexEntryV1> = {};
     for (const [key, value] of this.entries.entries()) entries[key] = value;
-    const payload: SearchIndexFileV1 = {
-      version: 2,
-      sessionsRoot: this.sessionsRoot,
+    const payload: SearchIndexFileV2 = {
+      version: 4,
+      context: this.context,
       entries,
     };
     await writeJson(this.cacheUri, payload);
@@ -149,9 +174,11 @@ async function buildIndexedMessages(
   fsPath: string,
   token?: vscode.CancellationToken,
 ): Promise<IndexedSearchMessage[]> {
-  const messages: IndexedSearchMessage[] = [];
-  let messageIndex = 0;
-  const toolAnchorByCallId = new Map<string, number>();
+  const state: BuildState = {
+    messages: [],
+    messageIndex: 0,
+    toolAnchorByCallId: new Map(),
+  };
 
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -166,91 +193,290 @@ async function buildIndexedMessages(
       } catch {
         continue;
       }
-      if (obj?.type !== "response_item") continue;
-      const payloadType = obj?.payload?.type;
-
-      if (payloadType === "message") {
-        const role = obj?.payload?.role;
-        if (role !== "user" && role !== "assistant" && role !== "developer") continue;
-
-        const textRaw = extractTextFromContent(obj?.payload?.content);
-        const text = normalizeWhitespace(textRaw);
-        if (!text) continue;
-
-        if (role === "user" || role === "assistant") messageIndex += 1;
-        const anchor = Math.max(1, messageIndex);
-        messages.push({ messageIndex: anchor, role, source: "message", text });
-        continue;
-      }
-
-      if (payloadType === "function_call") {
-        const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : "";
-        const name = typeof obj?.payload?.name === "string" ? obj.payload.name : "";
-        const argsRaw = typeof obj?.payload?.arguments === "string" ? obj.payload.arguments : "";
-        const argsText = normalizeWhitespace(argsRaw);
-        const anchor = Math.max(1, messageIndex);
-        if (callId) toolAnchorByCallId.set(callId, anchor);
-
-        // Index both tool name and arguments for search coverage.
-        if (name) {
-          messages.push({
-            messageIndex: anchor,
-            role: "tool",
-            source: "toolArguments",
-            text: name,
-          });
-        }
-        if (argsText) {
-          messages.push({
-            messageIndex: anchor,
-            role: "tool",
-            source: "toolArguments",
-            text: argsText,
-          });
-        }
-        continue;
-      }
-
-      if (payloadType === "function_call_output") {
-        const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : "";
-        const outRaw = typeof obj?.payload?.output === "string" ? obj.payload.output : "";
-        const outText = normalizeWhitespace(outRaw);
-        if (!outText) continue;
-
-        const anchor = callId && toolAnchorByCallId.has(callId) ? toolAnchorByCallId.get(callId)! : Math.max(1, messageIndex);
-        messages.push({
-          messageIndex: anchor,
-          role: "tool",
-          source: "toolOutput",
-          text: outText,
-        });
-        continue;
-      }
+      if (indexCodexRecord(obj, state)) continue;
+      if (indexClaudeRecord(obj, state)) continue;
     }
   } finally {
     rl.close();
     stream.close();
   }
 
-  return messages;
+  return state.messages;
 }
 
-function extractTextFromContent(content: unknown): string {
+interface BuildState {
+  messages: IndexedSearchMessage[];
+  messageIndex: number;
+  toolAnchorByCallId: Map<string, number>;
+}
+
+function indexCodexRecord(obj: any, state: BuildState): boolean {
+  if (obj?.type !== "response_item") return false;
+  const payloadType = obj?.payload?.type;
+
+  if (payloadType === "message") {
+    const role = obj?.payload?.role;
+    if (role !== "user" && role !== "assistant" && role !== "developer") return true;
+
+    const textRaw = extractTextFromCodexContent(obj?.payload?.content);
+    const text = normalizeWhitespace(textRaw);
+    if (!text) return true;
+
+    if (role === "user" || role === "assistant") state.messageIndex += 1;
+    const anchor = Math.max(1, state.messageIndex);
+    state.messages.push({ messageIndex: anchor, role, source: "message", text });
+    return true;
+  }
+
+  if (payloadType === "function_call") {
+    const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : "";
+    const name = typeof obj?.payload?.name === "string" ? obj.payload.name : "";
+    const argsRaw = typeof obj?.payload?.arguments === "string" ? obj.payload.arguments : "";
+    const argsText = normalizeWhitespace(argsRaw);
+    const anchor = Math.max(1, state.messageIndex);
+    if (callId) state.toolAnchorByCallId.set(callId, anchor);
+
+    if (name) {
+      state.messages.push({
+        messageIndex: anchor,
+        role: "tool",
+        source: "toolArguments",
+        text: name,
+      });
+    }
+    if (argsText) {
+      state.messages.push({
+        messageIndex: anchor,
+        role: "tool",
+        source: "toolArguments",
+        text: argsText,
+      });
+    }
+    return true;
+  }
+
+  if (payloadType === "function_call_output") {
+    const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : "";
+    const outRaw = typeof obj?.payload?.output === "string" ? obj.payload.output : "";
+    const outText = normalizeWhitespace(outRaw);
+    if (!outText) return true;
+
+    const anchor =
+      callId && state.toolAnchorByCallId.has(callId)
+        ? state.toolAnchorByCallId.get(callId)!
+        : Math.max(1, state.messageIndex);
+    state.messages.push({
+      messageIndex: anchor,
+      role: "tool",
+      source: "toolOutput",
+      text: outText,
+    });
+    return true;
+  }
+
+  return true;
+}
+
+function indexClaudeRecord(obj: any, state: BuildState): boolean {
+  const role = detectClaudeMessageRole(obj);
+  if (!role) return false;
+
+  const parsed = parseClaudeMessageContent(getClaudeMessageContent(obj));
+  const messageText = normalizeWhitespace(parsed.messageText);
+  if (messageText) {
+    state.messageIndex += 1;
+    const anchor = Math.max(1, state.messageIndex);
+    state.messages.push({ messageIndex: anchor, role, source: "message", text: messageText });
+  }
+
+  const anchor = Math.max(1, state.messageIndex);
+  for (const toolCall of parsed.toolCalls) {
+    const callId = toolCall.callId ?? "";
+    if (callId) state.toolAnchorByCallId.set(callId, anchor);
+
+    const name = normalizeWhitespace(toolCall.name ?? "");
+    if (name) {
+      state.messages.push({
+        messageIndex: anchor,
+        role: "tool",
+        source: "toolArguments",
+        text: name,
+      });
+    }
+
+    const args = normalizeWhitespace(toolCall.argumentsText ?? "");
+    if (args) {
+      state.messages.push({
+        messageIndex: anchor,
+        role: "tool",
+        source: "toolArguments",
+        text: args,
+      });
+    }
+  }
+
+  for (const toolResult of parsed.toolResults) {
+    const outText = normalizeWhitespace(toolResult.outputText ?? "");
+    if (!outText) continue;
+    const callId = toolResult.callId ?? "";
+    const linkedAnchor =
+      callId && state.toolAnchorByCallId.has(callId)
+        ? state.toolAnchorByCallId.get(callId)!
+        : anchor;
+    state.messages.push({
+      messageIndex: linkedAnchor,
+      role: "tool",
+      source: "toolOutput",
+      text: outText,
+    });
+  }
+
+  return true;
+}
+
+function extractTextFromCodexContent(content: unknown): string {
   if (!Array.isArray(content)) return "";
   const texts: string[] = [];
   for (const item of content) {
     if (!item || typeof item !== "object") continue;
-    const maybeText = (item as any).text;
+    const maybeText = (item as { text?: unknown }).text;
     if (typeof maybeText === "string") texts.push(maybeText);
   }
   return texts.join("");
 }
 
-function isValidCacheFile(value: unknown): value is SearchIndexFileV1 {
+function parseClaudeMessageContent(content: unknown): {
+  messageText: string;
+  toolCalls: Array<{ callId?: string; name?: string; argumentsText?: string }>;
+  toolResults: Array<{ callId?: string; outputText?: string }>;
+} {
+  if (typeof content === "string") {
+    return { messageText: content, toolCalls: [], toolResults: [] };
+  }
+  const items = Array.isArray(content) ? content : content && typeof content === "object" ? [content] : null;
+  if (!items) {
+    return { messageText: "", toolCalls: [], toolResults: [] };
+  }
+
+  const messageTexts: string[] = [];
+  const toolCalls: Array<{ callId?: string; name?: string; argumentsText?: string }> = [];
+  const toolResults: Array<{ callId?: string; outputText?: string }> = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const type = typeof (item as { type?: unknown }).type === "string" ? (item as { type: string }).type : "";
+
+    if (type === "text" || type === "input_text" || type === "output_text") {
+      const text = typeof (item as { text?: unknown }).text === "string" ? (item as { text: string }).text : "";
+      if (text) messageTexts.push(text);
+      continue;
+    }
+
+    if (type === "tool_use") {
+      const callId =
+        typeof (item as { id?: unknown }).id === "string"
+          ? (item as { id: string }).id
+          : typeof (item as { tool_use_id?: unknown }).tool_use_id === "string"
+            ? (item as { tool_use_id: string }).tool_use_id
+            : undefined;
+      const name = typeof (item as { name?: unknown }).name === "string" ? (item as { name: string }).name : undefined;
+      const input = (item as { input?: unknown }).input;
+      const argumentsText =
+        typeof input === "string" ? input : input !== undefined ? safeJsonStringify(input) : undefined;
+      toolCalls.push({ callId, name, argumentsText });
+      continue;
+    }
+
+    if (type === "tool_result") {
+      const callId =
+        typeof (item as { tool_use_id?: unknown }).tool_use_id === "string"
+          ? (item as { tool_use_id: string }).tool_use_id
+          : typeof (item as { id?: unknown }).id === "string"
+            ? (item as { id: string }).id
+            : undefined;
+      const outputText = extractClaudeToolResultText((item as { content?: unknown }).content);
+      toolResults.push({ callId, outputText });
+      continue;
+    }
+
+    if (typeof (item as { text?: unknown }).text === "string") {
+      messageTexts.push((item as { text: string }).text);
+    }
+  }
+  return {
+    messageText: messageTexts.join(""),
+    toolCalls,
+    toolResults,
+  };
+}
+
+function detectClaudeMessageRole(obj: any): "user" | "assistant" | null {
+  const messageRole = typeof obj?.message?.role === "string" ? obj.message.role : "";
+  if (messageRole === "user" || messageRole === "assistant") return messageRole;
+
+  const envelopeType = typeof obj?.type === "string" ? obj.type : "";
+  if (envelopeType === "user" || envelopeType === "assistant") return envelopeType;
+
+  const topRole = typeof obj?.role === "string" ? obj.role : "";
+  if (topRole === "user" || topRole === "assistant") return topRole;
+
+  return null;
+}
+
+function getClaudeMessageContent(obj: any): unknown {
+  if (obj?.message && typeof obj.message === "object" && "content" in obj.message) {
+    return (obj.message as { content?: unknown }).content;
+  }
+  if (obj && typeof obj === "object" && "content" in obj) return (obj as { content?: unknown }).content;
+  return undefined;
+}
+
+function extractClaudeToolResultText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const item of content) {
+      if (typeof item === "string") {
+        parts.push(item);
+        continue;
+      }
+      if (item && typeof item === "object") {
+        const type = typeof (item as { type?: unknown }).type === "string" ? (item as { type: string }).type : "";
+        if (type === "text" || type === "input_text" || type === "output_text") {
+          const text = typeof (item as { text?: unknown }).text === "string" ? (item as { text: string }).text : "";
+          if (text) parts.push(text);
+          continue;
+        }
+        if (typeof (item as { text?: unknown }).text === "string") {
+          parts.push((item as { text: string }).text);
+          continue;
+        }
+      }
+      parts.push(safeJsonStringify(item));
+    }
+    return parts.join("\n");
+  }
+  if (content === undefined) return "";
+  return safeJsonStringify(content);
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function isValidCacheFile(value: unknown): value is SearchIndexFileV2 {
   if (!value || typeof value !== "object") return false;
   const obj = value as any;
-  if (obj.version !== 2) return false;
-  if (typeof obj.sessionsRoot !== "string") return false;
+  if (obj.version !== 4) return false;
+  if (!obj.context || typeof obj.context !== "object") return false;
+  if (typeof obj.context.codexSessionsRoot !== "string") return false;
+  if (typeof obj.context.claudeSessionsRoot !== "string") return false;
+  if (typeof obj.context.includeCodex !== "boolean") return false;
+  if (typeof obj.context.includeClaude !== "boolean") return false;
   if (!obj.entries || typeof obj.entries !== "object") return false;
 
   for (const [key, entry] of Object.entries(obj.entries as Record<string, unknown>)) {
@@ -258,6 +484,31 @@ function isValidCacheFile(value: unknown): value is SearchIndexFileV1 {
     if (typeof key !== "string" || key.length === 0) return false;
   }
   return true;
+}
+
+function normalizeContext(context: SearchIndexContext): SearchIndexContext {
+  return {
+    codexSessionsRoot: normalizePathKey(context.codexSessionsRoot),
+    claudeSessionsRoot: normalizePathKey(context.claudeSessionsRoot),
+    includeCodex: !!context.includeCodex,
+    includeClaude: !!context.includeClaude,
+  };
+}
+
+function isSameContext(left: SearchIndexContext, right: SearchIndexContext): boolean {
+  const a = normalizeContext(left);
+  const b = normalizeContext(right);
+  return (
+    a.codexSessionsRoot === b.codexSessionsRoot &&
+    a.claudeSessionsRoot === b.claudeSessionsRoot &&
+    a.includeCodex === b.includeCodex &&
+    a.includeClaude === b.includeClaude
+  );
+}
+
+function normalizePathKey(fsPath: string): string {
+  const normalized = path.normalize(String(fsPath ?? "").trim());
+  return normalized.toLowerCase();
 }
 
 function isValidCacheEntry(value: unknown): value is SearchIndexEntryV1 {

@@ -1,9 +1,9 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { resolveUiLanguage, t } from "./i18n";
-import { getConfig } from "./settings";
+import { getConfig, type CodexHistoryViewerConfig } from "./settings";
 import { HistoryService } from "./services/historyService";
-import type { SessionSummary } from "./sessions/sessionTypes";
+import type { SessionSourceFilter, SessionSummary } from "./sessions/sessionTypes";
 import { PinnedTreeDataProvider } from "./tree/pinnedTree";
 import { HistoryTreeDataProvider } from "./tree/historyTree";
 import { SearchTreeDataProvider } from "./tree/searchTree";
@@ -37,6 +37,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const config = getConfig();
   const HISTORY_FILTER_KEY = "codexHistoryViewer.historyFilter.v1";
   const HISTORY_PROJECT_FILTER_KEY = "codexHistoryViewer.historyProjectFilter.v1";
+  const HISTORY_SOURCE_FILTER_KEY = "codexHistoryViewer.historySourceFilter.v1";
   const HISTORY_TAG_FILTER_KEY = "codexHistoryViewer.historyTagFilter.v1";
   const PINNED_TAG_FILTER_KEY = "codexHistoryViewer.pinnedTagFilter.v1";
   const SEARCH_TAG_FILTER_KEY = "codexHistoryViewer.searchTagFilter.v1";
@@ -79,36 +80,71 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyTagFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedTagFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.searchTagFiltered", false);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceCodexEnabled", true);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceClaudeEnabled", true);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historySourceSwitchable", true);
 
   let pinnedTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(PINNED_TAG_FILTER_KEY));
+  let historyFilter: DateScope = sanitizeDateScope(context.workspaceState.get(HISTORY_FILTER_KEY));
+  let historyProjectCwd: string | null = sanitizeProjectCwd(context.workspaceState.get(HISTORY_PROJECT_FILTER_KEY));
+  let historySourceFilter: SessionSourceFilter = resolveConstrainedHistorySourceFilter(
+    sanitizeHistorySourceFilter(context.workspaceState.get(HISTORY_SOURCE_FILTER_KEY)),
+    config,
+  );
+  let historyTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(HISTORY_TAG_FILTER_KEY));
+  let searchTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(SEARCH_TAG_FILTER_KEY));
   const pinnedProvider = new PinnedTreeDataProvider(
     historyService,
     pinStore,
     annotationStore,
+    historySourceFilter,
     pinnedTagFilter,
     context.extensionUri,
   );
-  let historyFilter: DateScope = sanitizeDateScope(context.workspaceState.get(HISTORY_FILTER_KEY));
-  let historyProjectCwd: string | null = sanitizeProjectCwd(context.workspaceState.get(HISTORY_PROJECT_FILTER_KEY));
-  let historyTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(HISTORY_TAG_FILTER_KEY));
-  let searchTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(SEARCH_TAG_FILTER_KEY));
   const historyProvider = new HistoryTreeDataProvider(
     historyService,
     pinStore,
     annotationStore,
     historyFilter,
     historyProjectCwd,
+    historySourceFilter,
     historyTagFilter,
     context.extensionUri,
   );
   const searchProvider = new SearchTreeDataProvider(pinStore, annotationStore, context.extensionUri);
   let lastHistoryRefreshAt: number | null = null;
 
+  const isCodexSourceEnabled = (sourceFilter: SessionSourceFilter): boolean =>
+    sourceFilter === "all" || sourceFilter === "codex";
+
+  const isClaudeSourceEnabled = (sourceFilter: SessionSourceFilter): boolean =>
+    sourceFilter === "all" || sourceFilter === "claude";
+
+  const constrainHistorySourceFilter = (sourceFilter: SessionSourceFilter): SessionSourceFilter =>
+    resolveConstrainedHistorySourceFilter(sourceFilter, getConfig());
+
+  const isHistorySourceSwitchable = (): boolean => resolveLockedHistorySource(getConfig()) === null;
+
+  const getHistorySourceOptionsForPrompt = (): SessionSourceFilter[] => {
+    const locked = resolveLockedHistorySource(getConfig());
+    if (locked) return [locked];
+    return ["all", "codex", "claude"];
+  };
+
+  const buildSourceFilterSummary = (): string => {
+    if (historySourceFilter === "all") return "";
+    const sourceLabel =
+      historySourceFilter === "codex" ? t("history.filter.source.codex") : t("history.filter.source.claude");
+    return t("history.filter.sourceLabel", sourceLabel);
+  };
+
   const buildHistoryFilterSummary = (): string => {
     const parts: string[] = [];
     const dateValue = getDateScopeValue(historyFilter);
     if (dateValue) parts.push(dateValue);
     if (historyProjectCwd) parts.push(t("history.filter.projectLabel", safeDisplayPath(historyProjectCwd, 60)));
+    const sourceSummary = buildSourceFilterSummary();
+    if (sourceSummary) parts.push(sourceSummary);
     if (historyTagFilter.length > 0) parts.push(`tags: ${historyTagFilter.map((tag) => `#${tag}`).join(", ")}`);
     return parts.join(" / ");
   };
@@ -162,6 +198,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const OPENAI_CODEX_CUSTOM_EDITOR_VIEW_TYPE = "chatgpt.conversationEditor";
   const OPENAI_CODEX_URI_SCHEME = "openai-codex";
   const OPENAI_CODEX_URI_AUTHORITY = "route";
+  const CLAUDE_CODE_EXTENSION_ID = "anthropic.claude-code";
+  const CLAUDE_CODE_OPEN_COMMAND = "claude-vscode.editor.open";
 
   const dedupeFsPaths = (fsPaths: readonly string[]): string[] => {
     // Deduplicate paths (normalize Windows case differences).
@@ -372,17 +410,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyView.description = v ? t("history.filter.active", v) : "";
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyFiltered", v.length > 0);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyTagFiltered", historyTagFilter.length > 0);
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.sourceCodexEnabled",
+      isCodexSourceEnabled(historySourceFilter),
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.sourceClaudeEnabled",
+      isClaudeSourceEnabled(historySourceFilter),
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.historySourceFiltered",
+      historySourceFilter !== "all",
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.historySourceFilter",
+      historySourceFilter,
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.historySourceSwitchable",
+      isHistorySourceSwitchable(),
+    );
   };
 
-  const buildPinnedTagFilterSummary = (): string => {
-    if (pinnedTagFilter.length === 0) return "";
-    return uiText(`タグ: ${pinnedTagFilter.map((tag) => `#${tag}`).join(", ")}`, `tags: ${pinnedTagFilter.map((tag) => `#${tag}`).join(", ")}`);
+  const buildPinnedFilterSummary = (): string => {
+    const parts: string[] = [];
+    const sourceSummary = buildSourceFilterSummary();
+    if (sourceSummary) parts.push(sourceSummary);
+    if (pinnedTagFilter.length > 0) {
+      parts.push(`tags: ${pinnedTagFilter.map((tag) => `#${tag}`).join(", ")}`);
+    }
+    return parts.join(" / ");
   };
 
   const updatePinnedViewDescription = (): void => {
-    const v = buildPinnedTagFilterSummary();
+    const v = buildPinnedFilterSummary();
     pinnedView.description = v;
-    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedTagFiltered", v.length > 0);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedTagFiltered", pinnedTagFilter.length > 0);
   };
 
   const buildSearchTagFilterSummary = (): string => {
@@ -442,21 +510,65 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const applyHistoryFilters = async (
-    next: { date: DateScope; projectCwd: string | null; tags: string[] },
+    next: { date: DateScope; projectCwd: string | null; source: SessionSourceFilter; tags: string[] },
     opts: { persist: boolean },
   ): Promise<void> => {
     historyFilter = next.date;
     historyProjectCwd = next.projectCwd;
+    historySourceFilter = constrainHistorySourceFilter(next.source);
     historyTagFilter = sanitizeTagFilter(next.tags);
-    historyProvider.setFilters(next.date, next.projectCwd, historyTagFilter);
+    historyProvider.setFilters(historyFilter, historyProjectCwd, historySourceFilter, historyTagFilter);
     historyProvider.refresh();
+    pinnedProvider.setSourceFilter(historySourceFilter);
+    pinnedProvider.refresh();
     updateHistoryViewDescription();
+    updatePinnedViewDescription();
     statusProvider.refresh();
     if (opts.persist) {
       await context.workspaceState.update(HISTORY_FILTER_KEY, next.date);
       await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, next.projectCwd ?? "");
+      await context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
       await context.workspaceState.update(HISTORY_TAG_FILTER_KEY, historyTagFilter);
     }
+  };
+
+  const resolveSourceFilterFromEnabledStates = (codexEnabled: boolean, claudeEnabled: boolean): SessionSourceFilter => {
+    if (codexEnabled && claudeEnabled) return "all";
+    if (codexEnabled) return "codex";
+    if (claudeEnabled) return "claude";
+    // Keep at least one source visible to avoid an empty-state trap.
+    return "all";
+  };
+
+  const toggleHistorySource = async (source: "codex" | "claude"): Promise<void> => {
+    const codexEnabledNow = isCodexSourceEnabled(historySourceFilter);
+    const claudeEnabledNow = isClaudeSourceEnabled(historySourceFilter);
+    const codexEnabledNext = source === "codex" ? !codexEnabledNow : codexEnabledNow;
+    const claudeEnabledNext = source === "claude" ? !claudeEnabledNow : claudeEnabledNow;
+    const nextSource = resolveSourceFilterFromEnabledStates(codexEnabledNext, claudeEnabledNext);
+    await applyHistoryFilters(
+      {
+        date: historyFilter,
+        projectCwd: historyProjectCwd,
+        source: nextSource,
+        tags: historyTagFilter,
+      },
+      { persist: true },
+    );
+  };
+
+  const cycleHistorySourceFilter = async (): Promise<void> => {
+    const nextSource: SessionSourceFilter =
+      historySourceFilter === "all" ? "codex" : historySourceFilter === "codex" ? "claude" : "all";
+    await applyHistoryFilters(
+      {
+        date: historyFilter,
+        projectCwd: historyProjectCwd,
+        source: nextSource,
+        tags: historyTagFilter,
+      },
+      { persist: true },
+    );
   };
 
   updateViewTitles();
@@ -479,6 +591,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         `t(chat.button.detailsOff): ${t("chat.button.detailsOff")}`,
         `t(chat.button.toolsOff): ${t("chat.button.toolsOff")}`,
         `History filter: ${formatDateScopeForDebug(historyFilter)}`,
+        `History source filter: ${historySourceFilter}`,
       ];
       const text = lines.join("\n");
       await vscode.env.clipboard.writeText(text);
@@ -496,13 +609,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const uiLanguageChanged = e.affectsConfiguration("codexHistoryViewer.ui.language");
       const headerActionsChanged = e.affectsConfiguration("codexHistoryViewer.ui.alwaysShowHeaderActions");
       const searchDefaultRolesChanged = e.affectsConfiguration("codexHistoryViewer.search.defaultRoles");
+      const sourcesEnabledChanged = e.affectsConfiguration("codexHistoryViewer.sources.enabled");
       if (
         !uiLanguageChanged &&
         !headerActionsChanged &&
-        !searchDefaultRolesChanged
+        !searchDefaultRolesChanged &&
+        !sourcesEnabledChanged
       ) {
         return;
       }
+
+      if (sourcesEnabledChanged) {
+        const constrained = constrainHistorySourceFilter(historySourceFilter);
+        if (constrained !== historySourceFilter) {
+          historySourceFilter = constrained;
+          historyProvider.setSourceFilter(historySourceFilter);
+          pinnedProvider.setSourceFilter(historySourceFilter);
+          void context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
+        }
+      }
+
       if (uiLanguageChanged) updateUiLanguageContext();
       updateViewTitles();
       updatePinnedViewDescription();
@@ -512,7 +638,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void ensureAlwaysShowHeaderActions();
 
       // When UI language changes, rebuild history-dependent displays because date/time formatting can also change.
-      if (!uiLanguageChanged) {
+      if (!uiLanguageChanged && !sourcesEnabledChanged) {
         refreshViews();
         controlProvider.refresh();
         return;
@@ -693,6 +819,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return false;
   };
 
+  const resolveClaudeSessionId = (session: SessionSummary): string | null => {
+    // Pass through the conversation ID from metadata and reject control characters only.
+    if (session.source !== "claude") return null;
+    const id = typeof session.meta.id === "string" ? session.meta.id.trim() : "";
+    if (!id) return null;
+    if (/[\u0000-\u001F\u007F]/.test(id)) return null;
+    return id;
+  };
+
+  const openSessionInClaudeCode = async (session: SessionSummary): Promise<boolean> => {
+    if (session.source !== "claude") {
+      void vscode.window.showErrorMessage(t("app.resumeSessionInClaudeWrongSource"));
+      return false;
+    }
+
+    const sessionId = resolveClaudeSessionId(session);
+    if (!sessionId) {
+      void vscode.window.showErrorMessage(t("app.resumeSessionInClaudeNoSessionId"));
+      return false;
+    }
+
+    const claudeExtension = vscode.extensions.getExtension(CLAUDE_CODE_EXTENSION_ID);
+    if (!claudeExtension) {
+      void vscode.window.showErrorMessage(t("app.resumeSessionInClaudeMissingExtension"));
+      return false;
+    }
+
+    try {
+      await claudeExtension.activate();
+      await vscode.commands.executeCommand(CLAUDE_CODE_OPEN_COMMAND, sessionId);
+      return true;
+    } catch {
+      void vscode.window.showErrorMessage(t("app.resumeSessionInClaudeFailed"));
+      return false;
+    }
+  };
+
   const normalizeTags = (values: readonly string[]): string[] => {
     const out: string[] = [];
     const seen = new Set<string>();
@@ -713,7 +876,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const refreshHistoryIndex = async (forceRebuildCache: boolean): Promise<void> => {
-    historyService.updateConfig(getConfig());
+    const latestConfig = getConfig();
+    historyService.updateConfig(latestConfig);
+    const constrainedSource = resolveConstrainedHistorySourceFilter(historySourceFilter, latestConfig);
+    if (constrainedSource !== historySourceFilter) {
+      historySourceFilter = constrainedSource;
+      historyProvider.setSourceFilter(historySourceFilter);
+      pinnedProvider.setSourceFilter(historySourceFilter);
+      await context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
+    }
     await historyService.refresh({ forceRebuildCache });
     lastHistoryRefreshAt = Date.now();
   };
@@ -815,6 +986,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       annotationStore,
       historyFilter,
       historyProjectCwd,
+      historySourceFilter,
       {
         request,
         defaultRoleFilter: getConfiguredDefaultSearchRoles(),
@@ -1027,6 +1199,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!opened) return false;
 
       void vscode.window.showInformationMessage(t("app.resumeSessionInCodexDone"));
+      return true;
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.resumeSessionInClaude", async (elementOrArgs?: unknown) => {
+      const session = resolveSingleSessionTarget(elementOrArgs);
+      if (!session) return false;
+
+      const opened = await openSessionInClaudeCode(session);
+      if (!opened) return false;
+
+      void vscode.window.showInformationMessage(t("app.resumeSessionInClaudeDone"));
       return true;
     }),
   );
@@ -1324,7 +1509,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const result =
         mode.value === "masked"
           ? await exportMaskedTranscripts({ sessions })
-          : await exportSessions({ sessions, sessionsRoot: historyService.getIndex().sessionsRoot });
+          : await exportSessions({
+              sessions,
+              codexSessionsRoot: getConfig().sessionsRoot,
+              claudeSessionsRoot: getConfig().claudeSessionsRoot,
+            });
       if (!result) return;
 
       void vscode.window.showInformationMessage(
@@ -1354,8 +1543,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!modePick) return;
 
       const before = historyService.getIndex();
+      const latestConfig = getConfig();
       const result = await importSessions({
-        sessionsRoot: before.sessionsRoot,
+        codexSessionsRoot: latestConfig.sessionsRoot,
+        claudeSessionsRoot: latestConfig.claudeSessionsRoot,
         existingSessions: before.sessions,
         duplicateIdMode: modePick.mode,
       });
@@ -1710,6 +1901,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const change = await promptHistoryFilter(idx, {
         date: historyFilter,
         projectCwd: historyProjectCwd,
+        source: historySourceFilter,
+        sourceOptions: getHistorySourceOptionsForPrompt(),
         tags: historyTagFilter,
         availableTags: annotationStore.listTagStats().map((x) => x.tag),
       });
@@ -1717,6 +1910,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const next = {
         date: change.kind === "date" ? change.date : historyFilter,
         projectCwd: change.kind === "project" ? change.projectCwd : historyProjectCwd,
+        source: change.kind === "source" ? change.source : historySourceFilter,
         tags: change.kind === "tags" ? change.tags : historyTagFilter,
       };
       await applyHistoryFilters(next, { persist: true });
@@ -1725,7 +1919,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearHistoryFilter", async () => {
-      await applyHistoryFilters({ date: { kind: "all" }, projectCwd: null, tags: [] }, { persist: true });
+      await applyHistoryFilters({ date: { kind: "all" }, projectCwd: null, source: "all", tags: [] }, { persist: true });
     }),
   );
 
@@ -1741,6 +1935,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           {
             date: historyFilter,
             projectCwd: historyProjectCwd,
+            source: historySourceFilter,
             tags: isSameSingle ? [] : [singleTag],
           },
           { persist: true },
@@ -1786,6 +1981,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         {
           date: historyFilter,
           projectCwd: historyProjectCwd,
+          source: historySourceFilter,
           tags: nextTags,
         },
         { persist: true },
@@ -1799,6 +1995,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         {
           date: historyFilter,
           projectCwd: historyProjectCwd,
+          source: historySourceFilter,
           tags: [],
         },
         { persist: true },
@@ -1824,6 +2021,67 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           date: historyFilter,
           // If the same project filter is already active, allow toggling it off with a second invocation.
           projectCwd: sameProject ? null : targetProjectCwd,
+          source: historySourceFilter,
+          tags: historyTagFilter,
+        },
+        { persist: true },
+      );
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.cycleHistorySourceFilter", async () => {
+      await cycleHistorySourceFilter();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.toggleHistorySourceCodex", async () => {
+      await toggleHistorySource("codex");
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.toggleHistorySourceClaude", async () => {
+      await toggleHistorySource("claude");
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.filterHistorySourceCodex", async () => {
+      await applyHistoryFilters(
+        {
+          date: historyFilter,
+          projectCwd: historyProjectCwd,
+          source: "codex",
+          tags: historyTagFilter,
+        },
+        { persist: true },
+      );
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.filterHistorySourceClaude", async () => {
+      await applyHistoryFilters(
+        {
+          date: historyFilter,
+          projectCwd: historyProjectCwd,
+          source: "claude",
+          tags: historyTagFilter,
+        },
+        { persist: true },
+      );
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.clearHistorySourceFilter", async () => {
+      await applyHistoryFilters(
+        {
+          date: historyFilter,
+          projectCwd: historyProjectCwd,
+          source: "all",
           tags: historyTagFilter,
         },
         { persist: true },
@@ -2114,6 +2372,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     "codexHistoryViewer.ui.en.filterHistoryCurrentProject",
     "codexHistoryViewer.filterHistoryCurrentProject",
   );
+  registerUiCommandAlias("codexHistoryViewer.ui.cycleHistorySourceAll", "codexHistoryViewer.cycleHistorySourceFilter");
+  registerUiCommandAlias("codexHistoryViewer.ui.cycleHistorySourceCodex", "codexHistoryViewer.cycleHistorySourceFilter");
+  registerUiCommandAlias("codexHistoryViewer.ui.cycleHistorySourceClaude", "codexHistoryViewer.cycleHistorySourceFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.clearHistoryFilter", "codexHistoryViewer.clearHistoryFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.en.clearHistoryFilter", "codexHistoryViewer.clearHistoryFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.openSettings", "codexHistoryViewer.openSettings");
@@ -2196,6 +2457,26 @@ function sanitizeTagFilter(value: unknown): string[] {
   return out;
 }
 
+function sanitizeHistorySourceFilter(value: unknown): SessionSourceFilter {
+  const s = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (s === "codex" || s === "claude") return s;
+  return "all";
+}
+
+function resolveLockedHistorySource(config: CodexHistoryViewerConfig): SessionSourceFilter | null {
+  if (config.enableCodexSource && !config.enableClaudeSource) return "codex";
+  if (!config.enableCodexSource && config.enableClaudeSource) return "claude";
+  return null;
+}
+
+function resolveConstrainedHistorySourceFilter(
+  sourceFilter: SessionSourceFilter,
+  config: CodexHistoryViewerConfig,
+): SessionSourceFilter {
+  const locked = resolveLockedHistorySource(config);
+  return locked ?? sanitizeHistorySourceFilter(sourceFilter);
+}
+
 function uiText(ja: string, en: string): string {
   return resolveUiLanguage() === "ja" ? ja : en;
 }
@@ -2203,18 +2484,27 @@ function uiText(ja: string, en: string): string {
 type HistoryFilterChange =
   | { kind: "date"; date: DateScope }
   | { kind: "project"; projectCwd: string | null }
+  | { kind: "source"; source: SessionSourceFilter }
   | { kind: "tags"; tags: string[] };
 
 type HistoryFilterPick = vscode.QuickPickItem & {
-  pickKind?: "date" | "project" | "tags";
+  pickKind?: "date" | "project" | "source" | "tags";
   date?: DateScope;
   projectCwd?: string | null;
+  source?: SessionSourceFilter;
   tags?: string[];
 };
 
 async function promptHistoryFilter(
   idx: import("./sessions/sessionTypes").HistoryIndex,
-  current: { date: DateScope; projectCwd: string | null; tags: string[]; availableTags: string[] },
+  current: {
+    date: DateScope;
+    projectCwd: string | null;
+    source: SessionSourceFilter;
+    sourceOptions: SessionSourceFilter[];
+    tags: string[];
+    availableTags: string[];
+  },
 ): Promise<HistoryFilterChange | null> {
   const years = Array.from(idx.byY.keys()).sort((a, b) => (a < b ? 1 : -1));
   const yms: string[] = [];
@@ -2260,13 +2550,31 @@ async function promptHistoryFilter(
     })),
   ];
 
+  const sourceLabelByValue = (source: SessionSourceFilter): string => {
+    if (source === "codex") return t("history.filter.source.codex");
+    if (source === "claude") return t("history.filter.source.claude");
+    return t("history.filter.source.all");
+  };
+
+  const sourceItemsBase: HistoryFilterPick[] =
+    current.sourceOptions.length >= 2
+      ? [
+          { label: t("history.filter.section.source"), kind: vscode.QuickPickItemKind.Separator },
+          ...current.sourceOptions.map((source) => ({
+            label: sourceLabelByValue(source),
+            pickKind: "source" as const,
+            source,
+          })),
+        ]
+      : [];
+
   const tagItemsBase: HistoryFilterPick[] = [
     { label: uiText("タグ", "Tags"), kind: vscode.QuickPickItemKind.Separator },
     { label: uiText("タグフィルターを編集", "Edit tag filter"), pickKind: "tags" as const, tags: current.tags },
     { label: uiText("タグフィルターを解除", "Clear tag filter"), pickKind: "tags" as const, tags: [] },
   ];
 
-  const baseItems: HistoryFilterPick[] = [...dateItemsBase, ...projectItemsBase, ...tagItemsBase];
+  const baseItems: HistoryFilterPick[] = [...dateItemsBase, ...projectItemsBase, ...sourceItemsBase, ...tagItemsBase];
 
   const isSameDateScope = (a: DateScope, b: DateScope): boolean => a.kind === b.kind && getDateScopeValue(a) === getDateScopeValue(b);
 
@@ -2298,7 +2606,7 @@ async function promptHistoryFilter(
         date: { kind: "day" as const, ymd },
       }));
 
-      qp.items = [...dateItemsBase, ...dayItems, ...projectItemsBase, ...tagItemsBase];
+      qp.items = [...dateItemsBase, ...dayItems, ...projectItemsBase, ...sourceItemsBase, ...tagItemsBase];
     };
 
     let done = false;
@@ -2321,6 +2629,10 @@ async function promptHistoryFilter(
         finish({ kind: "project", projectCwd: picked?.projectCwd ?? null });
         return;
       }
+      if (pickKind === "source") {
+        finish({ kind: "source", source: sanitizeHistorySourceFilter(picked?.source) });
+        return;
+      }
       if (pickKind === "tags") {
         finish({ kind: "tags", tags: sanitizeTagFilter(picked?.tags ?? current.tags) });
         return;
@@ -2337,7 +2649,14 @@ async function promptHistoryFilter(
           (it) => it.pickKind === "project" && it.projectCwd && normalizeCacheKey(it.projectCwd) === currentProjectKey,
         )
       : undefined;
-    qp.activeItems = activeDateItem ? [activeDateItem] : activeProjectItem ? [activeProjectItem] : [];
+    const activeSourceItem = sourceItemsBase.find((it) => it.pickKind === "source" && it.source === current.source);
+    qp.activeItems = activeDateItem
+      ? [activeDateItem]
+      : activeProjectItem
+        ? [activeProjectItem]
+        : activeSourceItem
+          ? [activeSourceItem]
+          : [];
     qp.show();
   });
 }

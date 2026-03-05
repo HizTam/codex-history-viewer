@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig } from "../settings";
-import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
+import type { HistoryIndex, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
 import { resolveUiLanguage, t } from "../i18n";
 import { safeDisplayPath, singleLineSnippet } from "../utils/textUtils";
 import { SearchRootNode, SearchSessionNode, type SearchHit } from "../tree/treeNodes";
@@ -54,6 +54,7 @@ export async function runSearchFlow(
   annotationStore: SessionAnnotationStore,
   scope?: DateScope,
   projectCwd?: string | null,
+  sourceFilter?: SessionSourceFilter,
   options?: { request?: SearchRequest; defaultRoleFilter?: readonly IndexedSearchRole[]; tagFilter?: readonly string[] },
 ): Promise<SearchFlowResult | null> {
   if (index.sessions.length === 0) {
@@ -62,6 +63,7 @@ export async function runSearchFlow(
   }
 
   const effectiveScope = sanitizeDateScope(scope);
+  const effectiveSourceFilter = sanitizeSessionSourceFilter(sourceFilter);
   const tagFilter = sanitizeTagFilter(options?.tagFilter ?? []);
   const request = options?.request;
 
@@ -94,7 +96,11 @@ export async function runSearchFlow(
 
   const project = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
   const candidates = index.sessions.filter(
-    (s) => matchScope(s, effectiveScope) && matchProject(s, project) && matchAnnotationTags(s, tagFilter, annotationStore),
+    (s) =>
+      matchScope(s, effectiveScope) &&
+      matchProject(s, project) &&
+      matchSource(s, effectiveSourceFilter) &&
+      matchAnnotationTags(s, tagFilter, annotationStore),
   );
 
   const results = await vscode.window.withProgress(
@@ -102,7 +108,15 @@ export async function runSearchFlow(
     async (progress, token) => {
       try {
         // Synchronize index delta before searching, and remove index entries for deleted files.
-        await searchIndexService.ensureUpToDate({ index, token, progress });
+        await searchIndexService.ensureUpToDate({
+          index,
+          codexSessionsRoot: config.sessionsRoot,
+          claudeSessionsRoot: config.claudeSessionsRoot,
+          includeCodex: config.enableCodexSource,
+          includeClaude: config.enableClaudeSource,
+          token,
+          progress,
+        });
         return await searchSessions({
           sessions: candidates,
           compiled,
@@ -126,6 +140,9 @@ export async function runSearchFlow(
   const datePart = effectiveScope.kind === "all" ? t("search.filter.all") : getDateScopeValue(effectiveScope);
   if (datePart) scopeParts.push(datePart);
   if (project) scopeParts.push(t("history.filter.projectLabel", safeDisplayPath(project, 50)));
+  if (effectiveSourceFilter !== "all") {
+    scopeParts.push(t("history.filter.sourceLabel", getSourceFilterLabel(effectiveSourceFilter)));
+  }
   if (tagFilter.length > 0) scopeParts.push(`tags: ${tagFilter.map((tag) => `#${tag}`).join(",")}`);
   if (!isDefaultRoleFilter(roleFilter)) scopeParts.push(`roles: ${Array.from(roleFilter).join(",")}`);
   const scopeValue = scopeParts.join(" / ");
@@ -185,6 +202,10 @@ function matchProject(session: SessionSummary, projectCwd: string | null): boole
   const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
   if (!cwd) return false;
   return normalizeCacheKey(cwd) === normalizeCacheKey(projectCwd);
+}
+
+function matchSource(session: SessionSummary, sourceFilter: SessionSourceFilter): boolean {
+  return sourceFilter === "all" ? true : session.source === sourceFilter;
 }
 
 function matchAnnotationTags(
@@ -548,4 +569,12 @@ function sanitizeTagFilter(values: readonly string[]): string[] {
 
 function normalizeTagKey(value: string): string {
   return String(value ?? "").trim().toLowerCase();
+}
+
+function sanitizeSessionSourceFilter(sourceFilter: SessionSourceFilter | undefined): SessionSourceFilter {
+  return sourceFilter === "codex" || sourceFilter === "claude" ? sourceFilter : "all";
+}
+
+function getSourceFilterLabel(sourceFilter: Exclude<SessionSourceFilter, "all">): string {
+  return sourceFilter === "codex" ? t("history.filter.source.codex") : t("history.filter.source.claude");
 }

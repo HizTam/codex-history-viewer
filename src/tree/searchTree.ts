@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
+import type { SessionSource } from "../sessions/sessionTypes";
 import { SearchHelpNode, SearchHitNode, SearchRootNode, SearchSessionNode, SessionNode, TreeNode, toTreeItemContextValue } from "./treeNodes";
 import { t } from "../i18n";
 import { getConfig } from "../settings";
@@ -10,8 +11,8 @@ import { truncateByDisplayWidth } from "../utils/textUtils";
 export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;
-  private readonly pinIconPath: { light: vscode.Uri; dark: vscode.Uri };
-  private readonly blankIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   public readonly onDidChangeTreeData = this.emitter.event;
 
@@ -22,13 +23,13 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   constructor(pinStore: PinStore, annotationStore: SessionAnnotationStore, extensionUri: vscode.Uri) {
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
-    this.pinIconPath = {
-      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "pin.svg"),
-      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "pin.svg"),
+    this.codexIconPath = {
+      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
+      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-codex.svg"),
     };
-    this.blankIconPath = {
-      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "blank.svg"),
-      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "blank.svg"),
+    this.claudeIconPath = {
+      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-claude.svg"),
+      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-claude.svg"),
     };
   }
 
@@ -76,8 +77,8 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       item.description = buildSessionDescription(element.session.cwdShort, annotation?.tags ?? []);
       const node = new SessionNode(element.session, pinned);
       item.contextValue = toTreeItemContextValue(node);
-      // Represent pinned state with an icon left of the time label (use an invisible icon when unpinned).
-      item.iconPath = pinned ? this.pinIconPath : this.blankIconPath;
+      // Show source-specific icons (Codex/Claude) in the list row.
+      item.iconPath = this.resolveSourceIconPath(element.session.source);
 
       // Clicking the title opens the viewer (preview on selection or openSession); pin/unpin is done via the context menu.
       const previewOnSelection = getConfig().previewOpenOnSelection;
@@ -141,6 +142,10 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     }
     return null;
   }
+
+  private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {
+    return source === "claude" ? this.claudeIconPath : this.codexIconPath;
+  }
 }
 
 function formatScopeLabel(root: SearchRootNode): string {
@@ -154,6 +159,7 @@ function buildSearchSessionTooltip(node: SearchSessionNode, tags: readonly strin
   const md = new vscode.MarkdownString(undefined, true);
   md.isTrusted = false;
   md.appendMarkdown(`**${node.session.localDate} ${node.session.timeLabel}**  \n`);
+  md.appendMarkdown(`Source: ${sourceName(node.session.source)}  \n`);
   if (node.session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(node.session.cwdShort)}  \n`);
   if (tags.length > 0) md.appendMarkdown(`Tags: ${escapeForMarkdown(tags.join(", "))}  \n`);
   if (note.trim().length > 0) md.appendMarkdown(`Note: ${escapeForMarkdown(note.trim())}  \n`);
@@ -229,4 +235,8 @@ function isSameSearchHit(
   },
 ): boolean {
   return a.messageIndex === b.messageIndex && a.role === b.role && a.source === b.source && a.snippet === b.snippet;
+}
+
+function sourceName(source: SessionSource): string {
+  return source === "claude" ? "Claude" : "Codex";
 }

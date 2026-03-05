@@ -143,7 +143,9 @@ export function toTreeItemContextValue(node: TreeNode): string {
     case "day":
       return "codexHistoryViewer.day";
     case "session":
-      return node.pinned ? "codexHistoryViewer.sessionPinned" : "codexHistoryViewer.session";
+      return node.pinned
+        ? `codexHistoryViewer.sessionPinned.${node.session.source}`
+        : `codexHistoryViewer.session.${node.session.source}`;
     case "missingPinned":
       return "codexHistoryViewer.sessionMissing";
     case "pinnedDropHint":
@@ -151,9 +153,9 @@ export function toTreeItemContextValue(node: TreeNode): string {
     case "searchRoot":
       return "codexHistoryViewer.searchRoot";
     case "searchSession":
-      return "codexHistoryViewer.searchSession";
+      return `codexHistoryViewer.searchSession.${node.session.source}`;
     case "searchHit":
-      return "codexHistoryViewer.searchHit";
+      return `codexHistoryViewer.searchHit.${node.session.source}`;
     case "searchHelp":
       return "codexHistoryViewer.searchHelp";
     default:

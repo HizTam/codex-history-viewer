@@ -1,7 +1,9 @@
+import * as path from "node:path";
 import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
+import type { SessionSource, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
 import { MissingPinnedNode, PinnedDropHintNode, SessionNode, TreeNode, missingPinnedLabel, toTreeItemContextValue } from "./treeNodes";
 import { getConfig } from "../settings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
@@ -12,8 +14,10 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   private readonly historyService: HistoryService;
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;
+  private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
-  private readonly pinIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   public readonly onDidChangeTreeData = this.emitter.event;
 
@@ -21,16 +25,22 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     historyService: HistoryService,
     pinStore: PinStore,
     annotationStore: SessionAnnotationStore,
+    sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
     extensionUri: vscode.Uri,
   ) {
     this.historyService = historyService;
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
+    this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
-    this.pinIconPath = {
-      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "pin.svg"),
-      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "pin.svg"),
+    this.codexIconPath = {
+      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
+      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-codex.svg"),
+    };
+    this.claudeIconPath = {
+      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-claude.svg"),
+      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-claude.svg"),
     };
   }
 
@@ -42,6 +52,10 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     this.tagFilter = normalizeTagFilter(tags);
   }
 
+  public setSourceFilter(sourceFilter: SessionSourceFilter): void {
+    this.sourceFilter = normalizeSourceFilter(sourceFilter);
+  }
+
   private matchesTags(fsPath: string): boolean {
     if (this.tagFilter.length === 0) return true;
     const ann = this.annotationStore.get(fsPath);
@@ -50,16 +64,30 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     return this.tagFilter.some((tag) => tagKeys.has(normalizeTagKey(tag)));
   }
 
+  private matchesSource(session: SessionSummary): boolean {
+    if (this.sourceFilter === "all") return true;
+    return session.source === this.sourceFilter;
+  }
+
+  private matchesMissingPinnedSource(fsPath: string): boolean {
+    if (this.sourceFilter === "all") return true;
+    const inferred = inferSourceFromFsPath(fsPath);
+    if (!inferred) return true;
+    return inferred === this.sourceFilter;
+  }
+
   public getTreeItem(element: TreeNode): vscode.TreeItem {
     if (element instanceof SessionNode) {
       // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
       const shortTitle = truncateByDisplayWidth(element.session.snippet, 40, "...");
       const annotation = this.annotationStore.get(element.session.fsPath);
-      const item = new vscode.TreeItem(`${element.session.localDate} ${element.session.timeLabel} ${shortTitle}`);
+      const item = new vscode.TreeItem(
+        `${element.session.localDate} ${element.session.timeLabel} ${shortTitle}`,
+      );
       item.description = buildSessionDescription(element.session.cwdShort, annotation?.tags ?? []);
       item.contextValue = toTreeItemContextValue(element);
-      // This view is always pinned, so always show the pin icon left of the time label.
-      item.iconPath = this.pinIconPath;
+      // Show source-specific icons (Codex/Claude) in the list row.
+      item.iconPath = this.resolveSourceIconPath(element.session.source);
 
       // Clicking the title opens the viewer (preview on selection or openSession); unpin is done via the context menu.
       const previewOnSelection = getConfig().previewOpenOnSelection;
@@ -71,6 +99,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       const md = new vscode.MarkdownString(undefined, true);
       md.isTrusted = false;
       md.appendMarkdown(`**${element.session.localDate} ${element.session.timeLabel}**  \n`);
+      md.appendMarkdown(`Source: ${sourceName(element.session.source)}  \n`);
       if (element.session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(element.session.cwdShort)}  \n`);
       if (annotation && annotation.tags.length > 0) {
         md.appendMarkdown(`Tags: ${escapeForMarkdown(annotation.tags.join(", "))}  \n`);
@@ -113,15 +142,21 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     for (const p of pins) {
       const s = this.historyService.findByFsPath(p.fsPath);
       if (s) {
+        if (!this.matchesSource(s)) continue;
         if (!this.matchesTags(s.fsPath)) continue;
         nodes.push(new SessionNode(s, true));
       } else {
+        if (!this.matchesMissingPinnedSource(p.fsPath)) continue;
         nodes.push(new MissingPinnedNode(p.fsPath));
       }
     }
     // Show a drop target even in the initial empty state to avoid DnD no-op right after reload.
     if (nodes.length === 0) return [new PinnedDropHintNode()];
     return nodes;
+  }
+
+  private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {
+    return source === "claude" ? this.claudeIconPath : this.codexIconPath;
   }
 }
 
@@ -153,4 +188,32 @@ function normalizeTagFilter(values: readonly string[]): string[] {
 
 function normalizeTagKey(value: string): string {
   return String(value ?? "").trim().toLowerCase();
+}
+
+function normalizeSourceFilter(value: SessionSourceFilter): SessionSourceFilter {
+  if (value === "codex" || value === "claude") return value;
+  return "all";
+}
+
+function sourceName(source: SessionSource): string {
+  return source === "claude" ? "Claude" : "Codex";
+}
+
+function inferSourceFromFsPath(fsPath: string): SessionSource | null {
+  const cfg = getConfig();
+  if (isPathInsideRoot(fsPath, cfg.sessionsRoot)) return "codex";
+  if (isPathInsideRoot(fsPath, cfg.claudeSessionsRoot)) return "claude";
+
+  const base = path.basename(fsPath).toLowerCase();
+  if (base.startsWith("rollout-")) return "codex";
+  if (base.endsWith(".jsonl")) return "claude";
+  return null;
+}
+
+function isPathInsideRoot(fsPath: string, rootPath: string): boolean {
+  const root = String(rootPath ?? "").trim();
+  if (!root) return false;
+  const rel = path.relative(root, fsPath);
+  if (!rel) return true;
+  return !rel.startsWith("..") && !path.isAbsolute(rel);
 }

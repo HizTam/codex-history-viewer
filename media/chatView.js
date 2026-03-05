@@ -21,6 +21,18 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.2a.75.75 0 0 1 .53.22l4.1 4.1a.75.75 0 1 1-1.06 1.06L8 4.99 4.43 8.58a.75.75 0 1 1-1.06-1.06l4.1-4.1A.75.75 0 0 1 8 3.2Z"/></svg>';
   const NAV_DOWN_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 12.8a.75.75 0 0 1-.53-.22l-4.1-4.1a.75.75 0 0 1 1.06-1.06L8 11.01l3.57-3.59a.75.75 0 0 1 1.06 1.06l-4.1 4.1A.75.75 0 0 1 8 12.8Z"/></svg>';
+  const RESUME_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.5 2.5a.75.75 0 0 1 .75.75v2.53A5.25 5.25 0 1 1 2.75 8a.75.75 0 0 1 1.5 0 3.75 3.75 0 1 0 2-3.31v2.06a.75.75 0 0 1-1.28.53L2.7 5.03a.75.75 0 0 1 0-1.06l2.27-2.25a.75.75 0 0 1 .53-.22Z"/></svg>';
+  const PIN_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.25 1.5a.75.75 0 0 0-.53 1.28L5.94 4v2.38L3.72 8.6a.75.75 0 0 0 .53 1.28h3v4.37a.75.75 0 0 0 1.5 0V9.88h3a.75.75 0 0 0 .53-1.28L10.06 6.38V4l1.22-1.22a.75.75 0 0 0-.53-1.28h-5.5Z"/></svg>';
+  const UNPIN_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M11.28 2.78a.75.75 0 1 0-1.06-1.06L1.72 10.22a.75.75 0 1 0 1.06 1.06l3.13-3.13h1.34v3.1a.75.75 0 1 0 1.5 0v-3.1h1.34l2.13 2.13a.75.75 0 1 0 1.06-1.06L11.06 7V5.66l.22-.22a.75.75 0 0 0 0-1.06L10.84 3.94l.44-.44Z"/></svg>';
+  const MARKDOWN_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 2h9.5A1.75 1.75 0 0 1 14.5 3.75v8.5A1.75 1.75 0 0 1 12.75 14h-9.5A1.75 1.75 0 0 1 1.5 12.25v-8.5A1.75 1.75 0 0 1 3.25 2Zm0 1.5a.25.25 0 0 0-.25.25v8.5c0 .14.11.25.25.25h9.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25h-9.5Zm1.5 1.75h1.5l1.25 1.88 1.25-1.88h1.5v5.5H9V7.55L7.5 9.75 6 7.55v3.2H4.75v-5.5Zm6.5 3h1.25l-1.88 2.5-1.87-2.5h1.25V5.25h1.25v3Z"/></svg>';
+  const DETAILS_ON_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.25c3.53 0 6.25 3.62 6.25 4.75S11.53 12.75 8 12.75 1.75 9.13 1.75 8 4.47 3.25 8 3.25Zm0 1.5c-2.7 0-4.75 2.54-4.75 3.25s2.05 3.25 4.75 3.25 4.75-2.54 4.75-3.25S10.7 4.75 8 4.75Zm0 1a2.25 2.25 0 1 1 0 4.5 2.25 2.25 0 0 1 0-4.5Z"/></svg>';
+  const DETAILS_OFF_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.28 1.72a.75.75 0 1 0-1.06 1.06l11 11a.75.75 0 0 0 1.06-1.06l-1.45-1.45A7.74 7.74 0 0 0 14.25 8C14.25 6.87 11.53 3.25 8 3.25c-.97 0-1.88.27-2.72.7L2.28 1.72Zm4.09 4.09a2.25 2.25 0 0 1 3.82 2.43L6.37 5.81Zm2.82 5.94A5.65 5.65 0 0 1 8 12.75C4.47 12.75 1.75 9.13 1.75 8c0-.7 1.07-2.14 2.75-2.86l1.16 1.16a2.25 2.25 0 0 0 3.04 3.04l.49.49Z"/></svg>';
 
   /** @type {any} */
   let model = null;
@@ -35,16 +47,16 @@
   let isPinned = false;
 
   // Initial button labels (overwritten after receiving sessionData).
-  btnResumeInCodex.textContent = "Open in Codex";
-  btnPinToggle.textContent = "Pin";
-  btnMarkdown.textContent = "Markdown";
-  btnCopyResume.textContent = "Copy prompt";
+  setToolbarButtonWithIcon(btnResumeInCodex, "Resume in Codex", RESUME_ICON_SVG);
+  setToolbarButtonWithIcon(btnPinToggle, "Pin", PIN_ICON_SVG);
+  setToolbarButtonWithIcon(btnMarkdown, "Markdown", MARKDOWN_ICON_SVG);
+  setToolbarButtonWithIcon(btnCopyResume, "Copy prompt", COPY_ICON_SVG);
   // Reload is icon-only (tooltip is set via i18n).
   btnReload.innerHTML = RELOAD_ICON_SVG;
-  btnToggleDetails.textContent = "Details";
+  setToolbarButtonWithIcon(btnToggleDetails, "Details", DETAILS_OFF_ICON_SVG);
 
   btnResumeInCodex.addEventListener("click", () => {
-    vscode.postMessage({ type: "resumeInCodex" });
+    vscode.postMessage({ type: "resumeInSource" });
   });
   btnPinToggle.addEventListener("click", () => {
     vscode.postMessage({ type: "togglePin" });
@@ -148,29 +160,35 @@
   vscode.postMessage({ type: "ready" });
 
   function updateToolbar() {
-    const resumeInCodexLabel = i18n.resumeInCodex || "Open in Codex";
-    const resumeInCodexTooltip = i18n.resumeInCodexTooltip || resumeInCodexLabel;
-    btnResumeInCodex.textContent = resumeInCodexLabel;
-    btnResumeInCodex.title = resumeInCodexTooltip;
-    btnResumeInCodex.setAttribute("aria-label", resumeInCodexTooltip);
+    const isClaudeSession = !!(model && model.meta && model.meta.historySource === "claude");
+    const resumeLabel = isClaudeSession
+      ? i18n.resumeInClaude || "Resume in Claude Code"
+      : i18n.resumeInCodex || "Resume in Codex";
+    const resumeTooltip = isClaudeSession
+      ? i18n.resumeInClaudeTooltip || resumeLabel
+      : i18n.resumeInCodexTooltip || resumeLabel;
+    setToolbarButtonWithIcon(btnResumeInCodex, resumeLabel, RESUME_ICON_SVG);
+    btnResumeInCodex.title = resumeTooltip;
+    btnResumeInCodex.setAttribute("aria-label", resumeTooltip);
 
     const pinLabel = isPinned ? i18n.unpin || "Unpin" : i18n.pin || "Pin";
     const pinTooltip = isPinned
       ? i18n.unpinTooltip || pinLabel
       : i18n.pinTooltip || pinLabel;
-    btnPinToggle.textContent = pinLabel;
+    const pinIcon = isPinned ? UNPIN_ICON_SVG : PIN_ICON_SVG;
+    setToolbarButtonWithIcon(btnPinToggle, pinLabel, pinIcon);
     btnPinToggle.title = pinTooltip;
     btnPinToggle.setAttribute("aria-label", pinTooltip);
 
     const markdownLabel = i18n.markdown || "Markdown";
     const markdownTooltip = i18n.markdownTooltip || markdownLabel;
-    btnMarkdown.textContent = markdownLabel;
+    setToolbarButtonWithIcon(btnMarkdown, markdownLabel, MARKDOWN_ICON_SVG);
     btnMarkdown.title = markdownTooltip;
     btnMarkdown.setAttribute("aria-label", markdownTooltip);
     const copyResumeLabel = i18n.copyResume || "Copy prompt";
     // Show a descriptive tooltip so the button intent is clear.
     const copyResumeTooltip = i18n.copyResumeTooltip || copyResumeLabel;
-    btnCopyResume.textContent = copyResumeLabel;
+    setToolbarButtonWithIcon(btnCopyResume, copyResumeLabel, COPY_ICON_SVG);
     btnCopyResume.title = copyResumeTooltip;
     btnCopyResume.setAttribute("aria-label", copyResumeTooltip);
     const reloadLabel = i18n.reload || "Reload";
@@ -183,9 +201,24 @@
     const detailsTooltip = showDetails
       ? i18n.detailsOnTooltip || detailsLabel
       : i18n.detailsOffTooltip || detailsLabel;
-    btnToggleDetails.textContent = detailsLabel;
+    const detailsIcon = showDetails ? DETAILS_ON_ICON_SVG : DETAILS_OFF_ICON_SVG;
+    setToolbarButtonWithIcon(btnToggleDetails, detailsLabel, detailsIcon);
     btnToggleDetails.title = detailsTooltip;
     btnToggleDetails.setAttribute("aria-label", detailsTooltip);
+  }
+
+  function setToolbarButtonWithIcon(button, label, iconSvg) {
+    if (!(button instanceof HTMLElement)) return;
+
+    const icon = document.createElement("span");
+    icon.className = "toolbarBtnIcon";
+    icon.innerHTML = iconSvg;
+
+    const text = document.createElement("span");
+    text.className = "toolbarBtnLabel";
+    text.textContent = label;
+
+    button.replaceChildren(icon, text);
   }
 
   function render() {

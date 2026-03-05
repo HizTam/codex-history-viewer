@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { PinStore } from "../services/pinStore";
-import type { SessionSummary } from "../sessions/sessionTypes";
+import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { buildChatSessionModel } from "./chatModelBuilder";
 import { resolveUiLanguage, t } from "../i18n";
@@ -15,6 +15,8 @@ export class ChatPanelManager {
   private readonly historyService: HistoryService;
   private readonly annotationStore: SessionAnnotationStore;
   private readonly pinStore: PinStore;
+  private readonly codexPanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly claudePanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
 
   private previewPanel: vscode.WebviewPanel | null = null;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
@@ -31,6 +33,14 @@ export class ChatPanelManager {
     this.historyService = historyService;
     this.annotationStore = annotationStore;
     this.pinStore = pinStore;
+    this.codexPanelIconPath = {
+      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
+      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-codex.svg"),
+    };
+    this.claudePanelIconPath = {
+      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-claude.svg"),
+      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-claude.svg"),
+    };
   }
 
   public refreshI18n(): void {
@@ -52,6 +62,7 @@ export class ChatPanelManager {
       const session = this.historyService.findByFsPath(state.fsPath);
       if (!session) return;
       panel.title = buildPanelTitle(session);
+      panel.iconPath = this.resolveSourceIconPath(session.source);
     };
 
     if (this.previewPanel) update(this.previewPanel);
@@ -67,6 +78,7 @@ export class ChatPanelManager {
 
     this.stateByPanel.set(panel, { fsPath: session.fsPath, revealMessageIndex: options.revealMessageIndex });
     panel.title = buildPanelTitle(session);
+    panel.iconPath = this.resolveSourceIconPath(session.source);
     panel.reveal(panel.viewColumn, options.preview);
 
     // If the webview is already ready, update immediately on selection changes.
@@ -210,10 +222,14 @@ export class ChatPanelManager {
         if (copied) panel.webview.postMessage({ type: "copied" });
         return;
       }
-      case "resumeInCodex": {
-        await vscode.commands.executeCommand("codexHistoryViewer.resumeSessionInCodex", {
-          fsPath: state.fsPath,
-        });
+      case "resumeInCodex":
+      case "resumeInSource": {
+        const session = this.historyService.findByFsPath(state.fsPath);
+        const commandId =
+          session?.source === "claude"
+            ? "codexHistoryViewer.resumeSessionInClaude"
+            : "codexHistoryViewer.resumeSessionInCodex";
+        await vscode.commands.executeCommand(commandId, { fsPath: state.fsPath });
         return;
       }
       case "togglePin": {
@@ -318,6 +334,8 @@ export class ChatPanelManager {
     return {
       resumeInCodex: t("chat.button.resumeInCodex"),
       resumeInCodexTooltip: t("chat.tooltip.resumeInCodex"),
+      resumeInClaude: t("chat.button.resumeInClaude"),
+      resumeInClaudeTooltip: t("chat.tooltip.resumeInClaude"),
       pin: t("chat.button.pin"),
       unpin: t("chat.button.unpin"),
       pinTooltip: t("chat.tooltip.pin"),
@@ -359,6 +377,10 @@ export class ChatPanelManager {
     // Resolve the display time zone from UI language settings (ja=JST, auto/en=system).
     const { timeZone } = resolveDateTimeSettings();
     return { timeZone };
+  }
+
+  private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {
+    return source === "claude" ? this.claudePanelIconPath : this.codexPanelIconPath;
   }
 }
 

@@ -38,6 +38,9 @@ body {
 }
 
 #toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: transparent;
   color: var(--chv-fg);
   border: 1px solid var(--chv-border);
@@ -46,9 +49,30 @@ body {
   cursor: pointer;
 }
 
+#toolbar .toolbarBtnIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  line-height: 0;
+}
+
+#toolbar .toolbarBtnIcon svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+#toolbar .toolbarBtnLabel {
+  line-height: 1;
+  white-space: nowrap;
+}
+
 #toolbar .toolbarIconBtn {
   /* Icon-only toolbar button. */
   padding: 4px 8px;
+  gap: 0;
   line-height: 0;
 }
 

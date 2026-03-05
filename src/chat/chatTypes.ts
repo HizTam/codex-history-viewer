@@ -10,6 +10,7 @@ export interface ChatSessionMeta {
   cliVersion?: string;
   modelProvider?: string;
   source?: string;
+  historySource?: "codex" | "claude";
 }
 
 export interface ChatSessionAnnotation {
