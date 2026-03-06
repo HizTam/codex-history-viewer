@@ -1,14 +1,15 @@
 # Codex History Viewer
 
 A VS Code extension to browse, search, tag, import/export, and manage local Codex CLI / Claude Code session history, then resume selected sessions directly in the related VS Code extension.
-Latest release: **1.1.1** (2026-03-05).
+Latest release: **1.1.2** (2026-03-06).
 
 ## Features
 
 - Five views: **Control**, **Pinned**, **History**, **Search**, and **Status**
+- Control view for settings, import, rebuild cache, empty trash, bulk tag maintenance, undo, and debug info
 - Per-pane refresh actions plus global refresh from the Control view
 - Optional multi-source history support (**Codex** / **Claude**) with source-aware filtering
-- History tree view (year/month/day) with filters for date scope, project/CWD, and tags
+- History tree view (year/month/day) with filters for date scope, project/CWD, source, and tags
 - One-click "Filter by Current Project" action in the History view header (toggle on/off)
 - Tag filters in **Pinned** and **Search** views (separate from History filters)
 - Chat-like viewer (Webview) with Markdown rendering, copy actions, and "Open Markdown transcript"
@@ -23,7 +24,7 @@ Latest release: **1.1.1** (2026-03-05).
 - Resume Claude sessions directly in Claude Code (`Resume in Claude Code`)
 - Full-text search across sessions (cancellable, configurable max results, optional case sensitivity)
 - Incremental local search index for faster repeated searches (tracks file updates/deletions)
-- Search roles filter (default: `user`/`assistant`, optional `developer`/`tool`) with configurable defaults
+- Search roles filter (default: `user`/`assistant`, optional `developer`/`tool`) with configurable defaults from the Search header or Control view
 - Search rerun (current conditions), search pane reset, and saved search presets (run/save/delete)
 - Search hits include session annotations (`tag` / `note`) in addition to message/tool text
 - Advanced query syntax: `/regex/`, `re:...`, `exact:...`, and `AND` / `OR` / `NOT`
@@ -31,19 +32,21 @@ Latest release: **1.1.1** (2026-03-05).
 - Global tag operations: bulk rename tag and bulk delete tags
 - Undo last action (pin/unpin/promote/delete/annotation/tag operations)
 - Cleanup Missing Pins action for stale pinned entries
-- Search scope follows the active History filters (date scope and project/CWD)
+- Search scope follows the active History filters (date scope, project/CWD, and source)
 - Promote: copy a past session into "today" without modifying the original file
 - Safe deletion: moves files to the OS trash/recycle bin by default (falls back to an internal quarantine folder if trash fails)
+- Manual trash cleanup: **Empty Trash** clears internal trash/quarantine files and legacy cache/index generations on demand
 - Multi-select support for open/pin/promote/delete
 - Drag & drop pinning: drag sessions from **History** or **Search** into **Pinned**
 - Import/Export sessions: export raw JSONL or sanitized Markdown transcripts, and import with duplicate session ID handling (skip or overwrite)
-- Status view metrics, including current filters/roles/tags and total tag count
+- Status view metrics, including current filters/roles/tags, total tag count, cache folder size, and trash file count
+- Status view paths for the current project and session roots can be copied via inline copy icons
 
 ## Quick start
 
 1. Open the Activity Bar and select **Codex History**.
-2. Use **Control** for global actions (refresh/import/settings/search defaults).
-3. Browse sessions under **History** and apply filters (date/project/tag) as needed.
+2. Use **Control** for global actions (settings/import/rebuild cache/empty trash/search defaults).
+3. Browse sessions under **History** and apply filters (date/project/source/tag) as needed.
 4. Select a session to open a preview, or run **Open Session (Chat)** to open it normally.
 5. Run **Search...** and refine with roles, query syntax, presets, and search tag filters.
 6. Use context menus or chat header actions to edit tags/notes and run bulk tag operations when needed.
@@ -78,7 +81,8 @@ For the full command list with per-command descriptions, see:
 
 ### Maintenance Tip (All Sources)
 
-- If history display looks incorrect or stale, run **Control → Maintenance → Rebuild Cache** (applies to both Codex and Claude sources).
+- If history or search results look incorrect or stale, run **Control → Rebuild Cache**. It recreates both the history cache and the search index after confirmation.
+- To prevent the cache folder from growing over time, regularly run **Control → Empty Trash**. Trash files are not deleted automatically, and this also removes legacy cache/index generations.
 
 ## OpenAI Codex Integration Notes
 
@@ -97,14 +101,14 @@ For the full command list with per-command descriptions, see:
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 - After successful import or promote (copy-to-today), a hint is shown to reload Codex CLI history if Codex is running.
 
-## What's New in 1.1.1
+## What's New in 1.1.2
 
-- Fixed Status view source-awareness:
-  - Session counts are now shown per enabled source (`Codex` / `Claude`).
-  - Session roots are now shown per enabled source (`Codex` / `Claude`).
-  - Pinned count is now aggregated only from enabled sources.
-- Added a dedicated command reference page at `docs/commands.md` and shortened the README command section.
-- Simplified the Marketplace description to a shorter summary sentence.
+- Added **Empty Trash** in the Control view for manual cleanup of internal trash/quarantine files.
+- Status now shows cache folder size and trash file count.
+- Status now provides inline copy icons for the current project and session root paths.
+- **Rebuild Cache** now rebuilds both the history cache and the search index after confirmation.
+- Search index cache files are now saved in compact JSON form to reduce size.
+- Control view actions were cleaned up to focus on maintenance/global operations.
 
 ## Changelog
 

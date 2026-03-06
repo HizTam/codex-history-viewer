@@ -39,6 +39,7 @@
   "cmd.renameTagGlobally": "Bulk Rename Tag...",
   "cmd.deleteTagsGlobally": "Bulk Delete Tags...",
   "cmd.rebuildCache": "Rebuild Cache",
+  "cmd.emptyTrash": "Empty Trash",
   "cmd.cleanupMissingPins": "Cleanup Missing Pins",
   "cmd.debugInfo": "Debug Info (Copy)",
   "cmd.exportSessions": "Export Sessions...",
@@ -66,5 +67,6 @@
   "cfg.resumeOpenTarget.enumPanel": "Resume in an OpenAI Codex panel tab.",
   "cfg.uiLanguage": "UI language for this extension. Use 'auto' to follow VS Code's display language.",
   "cfg.uiAlwaysShowHeaderActions": "Always show view header action icons (sets VS Code setting 'workbench.view.alwaysShowHeaderActions').",
-  "cmd.copyResumePrompt": "Copy Prompt Excerpt"
+  "cmd.copyResumePrompt": "Copy Prompt Excerpt",
+  "cmd.copyStatusPath": "Copy Path"
 }

@@ -160,7 +160,8 @@ export class SearchIndexService {
       context: this.context,
       entries,
     };
-    await writeJson(this.cacheUri, payload);
+    // Search index files can grow large, so save without pretty-printing to reduce size.
+    await writeJson(this.cacheUri, payload, { pretty: false });
   }
 }
 

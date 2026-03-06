@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -54,6 +54,7 @@
     "onCommand:codexHistoryViewer.openSession",
     "onCommand:codexHistoryViewer.openSessionMarkdown",
     "onCommand:codexHistoryViewer.copyResumePrompt",
+    "onCommand:codexHistoryViewer.copyStatusPath",
     "onCommand:codexHistoryViewer.resumeSessionInCodex",
     "onCommand:codexHistoryViewer.openSettings",
     "onCommand:codexHistoryViewer.promoteSession",
@@ -61,6 +62,7 @@
     "onCommand:codexHistoryViewer.unpinSession",
     "onCommand:codexHistoryViewer.deleteSessions",
     "onCommand:codexHistoryViewer.rebuildCache",
+    "onCommand:codexHistoryViewer.emptyTrash",
     "onCommand:codexHistoryViewer.filterHistory",
     "onCommand:codexHistoryViewer.filterHistoryByTag",
     "onCommand:codexHistoryViewer.filterHistoryCurrentProject",
@@ -172,7 +174,10 @@
         "command": "codexHistoryViewer.searchConfigureDefaultRoles",
         "title": "%cmd.searchConfigureDefaultRoles%",
         "category": "%cmd.category%",
-        "icon": "$(settings-gear)"
+        "icon": {
+          "light": "resources/icons/light/search.svg",
+          "dark": "resources/icons/dark/search.svg"
+        }
       },
       {
         "command": "codexHistoryViewer.searchRerun",
@@ -259,6 +264,12 @@
         "category": "%cmd.category%"
       },
       {
+        "command": "codexHistoryViewer.copyStatusPath",
+        "title": "%cmd.copyStatusPath%",
+        "category": "%cmd.category%",
+        "icon": "$(copy)"
+      },
+      {
         "command": "codexHistoryViewer.resumeSessionInCodex",
         "title": "%cmd.resumeSessionInCodex%",
         "category": "%cmd.category%"
@@ -303,10 +314,16 @@
         "category": "%cmd.category%"
       },
       {
+        "command": "codexHistoryViewer.emptyTrash",
+        "title": "%cmd.emptyTrash%",
+        "category": "%cmd.category%",
+        "icon": "$(trash)"
+      },
+      {
         "command": "codexHistoryViewer.cleanupMissingPins",
         "title": "%cmd.cleanupMissingPins%",
         "category": "%cmd.category%",
-        "icon": "$(trash)"
+        "icon": "$(eraser)"
       },
       {
         "command": "codexHistoryViewer.debugInfo",
@@ -606,14 +623,24 @@
         "icon": "$(sync)"
       },
       {
+        "command": "codexHistoryViewer.ui.ja.emptyTrash",
+        "title": "ゴミ箱を空にする",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.emptyTrash",
+        "title": "Empty Trash",
+        "icon": "$(trash)"
+      },
+      {
         "command": "codexHistoryViewer.ui.ja.cleanupMissingPins",
         "title": "見つからないピンを掃除",
-        "icon": "$(trash)"
+        "icon": "$(eraser)"
       },
       {
         "command": "codexHistoryViewer.ui.en.cleanupMissingPins",
         "title": "Cleanup Missing Pins",
-        "icon": "$(trash)"
+        "icon": "$(eraser)"
       },
       {
         "command": "codexHistoryViewer.exportSessions",
@@ -667,7 +694,7 @@
         "command": "codexHistoryViewer.deleteTagsGlobally",
         "title": "%cmd.deleteTagsGlobally%",
         "category": "%cmd.category%",
-        "icon": "$(trash)"
+        "icon": "$(eraser)"
       },
       {
         "command": "codexHistoryViewer.undoLastAction",
@@ -758,12 +785,12 @@
       {
         "command": "codexHistoryViewer.ui.ja.deleteTagsGlobally",
         "title": "タグを一括削除...",
-        "icon": "$(trash)"
+        "icon": "$(eraser)"
       },
       {
         "command": "codexHistoryViewer.ui.en.deleteTagsGlobally",
         "title": "Bulk Delete Tags...",
-        "icon": "$(trash)"
+        "icon": "$(eraser)"
       },
       {
         "command": "codexHistoryViewer.ui.ja.undoLastAction",
@@ -1076,6 +1103,14 @@
         },
         {
           "command": "codexHistoryViewer.ui.en.rebuildCache",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.emptyTrash",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.emptyTrash",
           "when": "false"
         },
         {
@@ -1659,6 +1694,11 @@
           "command": "codexHistoryViewer.resumeSessionInClaude",
           "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.claude$/",
           "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.copyStatusPath",
+          "when": "view == codexHistoryViewer.statusView && viewItem == codexHistoryViewer.utilityInfo.copyable",
+          "group": "inline"
         }
       ]
     },

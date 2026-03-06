@@ -18,6 +18,12 @@ import { exportMaskedTranscripts, exportSessions, importSessions } from "./servi
 import { SearchPresetStore } from "./services/searchPresetStore";
 import { SessionAnnotationStore } from "./services/sessionAnnotationStore";
 import { UndoService } from "./services/undoService";
+import {
+  type StorageStats,
+  collectStorageStats,
+  emptyTrashAndCleanupLegacy,
+  listLegacyFiles,
+} from "./services/storageMaintenanceService";
 import type { TreeNode } from "./tree/treeNodes";
 import { DayNode, MissingPinnedNode, MonthNode, SearchHitNode, YearNode, isSessionNode } from "./tree/treeNodes";
 import {
@@ -62,6 +68,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const searchIndexService = new SearchIndexService(context.globalStorageUri);
   const transcriptProvider = new TranscriptContentProvider(historyService, annotationStore);
   const chatPanels = new ChatPanelManager(context.extensionUri, historyService, annotationStore, pinStore);
+  let storageStats: StorageStats = {
+    globalStorageBytes: 0,
+    trashFileCount: 0,
+    trashBytes: 0,
+  };
+  const refreshStorageStats = async (): Promise<void> => {
+    storageStats = await collectStorageStats(context.globalStorageUri);
+  };
   let lastSearchRequest: SearchRequest | null = sanitizeSearchRequest(context.workspaceState.get(LAST_SEARCH_REQUEST_KEY));
   const getConfiguredDefaultSearchRoles = (): IndexedSearchRole[] => {
     const raw = vscode.workspace.getConfiguration("codexHistoryViewer").get<unknown>(SEARCH_DEFAULT_ROLES_CONFIG);
@@ -189,7 +203,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return { pinCount, missingPinCount };
   };
 
-  const controlProvider = new ControlTreeDataProvider();
+  const controlProvider = new ControlTreeDataProvider(context.extensionUri);
   const resolveStatusCurrentProjectCwd = (): string | null => {
     if (historyProjectCwd) return historyProjectCwd;
     const folder = resolveCurrentWorkspaceFolder();
@@ -215,6 +229,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       missingPinCount: pinCounters.missingPinCount,
       presetCount: searchPresetStore.getAll().length,
       totalTagCount: annotationStore.listTagStats().length,
+      storageBytes: storageStats.globalStorageBytes,
+      trashCount: storageStats.trashFileCount,
       searchHitCount: searchProvider.root?.totalHits ?? 0,
       currentSearchRoles: resolveStatusCurrentSearchRoles(),
       currentSearchTagFilter: searchTagFilter,
@@ -621,6 +637,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   await ensureAlwaysShowHeaderActions();
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.copyStatusPath", async (value?: unknown) => {
+      const text =
+        typeof value === "string"
+          ? value.trim()
+          : value && typeof value === "object" && typeof (value as { copyValue?: unknown }).copyValue === "string"
+            ? String((value as { copyValue: string }).copyValue).trim()
+            : "";
+      if (!text) return false;
+
+      try {
+        await vscode.env.clipboard.writeText(text);
+        void vscode.window.showInformationMessage(t("app.copyStatusPathDone"));
+        return true;
+      } catch {
+        void vscode.window.showErrorMessage(t("app.copyStatusPathFailed"));
+        return false;
+      }
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.debugInfo", async () => {
       const uiLang = vscode.workspace.getConfiguration("codexHistoryViewer").get<string>("ui.language") ?? "auto";
       const resolvedUiLang = resolveUiLanguage(uiLang === "ja" || uiLang === "en" || uiLang === "auto" ? uiLang : "auto");
@@ -929,6 +966,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
     }
     await historyService.refresh({ forceRebuildCache });
+    await refreshStorageStats();
     lastHistoryRefreshAt = Date.now();
   };
 
@@ -1103,9 +1141,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.rebuildCache", async () => {
+      const choice = await vscode.window.showWarningMessage(
+        uiText(
+          "履歴/検索インデックスを再作成しますか？",
+          "Rebuild history/search indexes?",
+        ),
+        { modal: true },
+        "OK",
+      );
+      if (choice !== "OK") return;
+
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: t("app.rebuildingCache") },
-        async () => refreshHistoryIndex(true),
+        async (progress, token) => {
+          await refreshHistoryIndex(true);
+          const latestConfig = getConfig();
+          await searchIndexService.ensureUpToDate({
+            index: historyService.getIndex(),
+            codexSessionsRoot: latestConfig.sessionsRoot,
+            claudeSessionsRoot: latestConfig.claudeSessionsRoot,
+            includeCodex: latestConfig.enableCodexSource,
+            includeClaude: latestConfig.enableClaudeSource,
+            token,
+            progress,
+            forceRebuild: true,
+          });
+          await refreshStorageStats();
+        },
       );
       refreshViews({ clearSearch: true });
       controlProvider.refresh();
@@ -1636,6 +1698,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         });
         offerUndo(`Removed ${unpinned} missing pin(s).`);
       }
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.emptyTrash", async () => {
+      await refreshStorageStats();
+      const legacyFiles = await listLegacyFiles(context.globalStorageUri);
+      const trashCount = storageStats.trashFileCount;
+
+      if (trashCount === 0 && legacyFiles.length === 0) {
+        void vscode.window.showInformationMessage(uiText("ゴミ箱は空です。", "Trash is already empty."));
+        return;
+      }
+
+      const confirmMessage = uiText(
+        `ゴミ箱 ${trashCount} 件を削除しますか？`,
+        `Delete ${trashCount} trash file(s)?`,
+      );
+      const choice = await vscode.window.showWarningMessage(confirmMessage, { modal: true }, "OK");
+      if (choice !== "OK") return;
+
+      const result = await emptyTrashAndCleanupLegacy(context.globalStorageUri);
+      await refreshStorageStats();
+      statusProvider.refresh();
+
+      if (result.failedPaths.length > 0) {
+        void vscode.window.showWarningMessage(
+          uiText(
+            `一部削除に失敗しました（ゴミ箱: ${result.removedTrashFiles} 件 / 失敗: ${result.failedPaths.length} 件）。`,
+            `Cleanup partially failed (trash: ${result.removedTrashFiles}, failed: ${result.failedPaths.length}).`,
+          ),
+        );
+        return;
+      }
+
+      void vscode.window.showInformationMessage(
+        uiText(
+          `ゴミ箱 ${result.removedTrashFiles} 件を削除しました。`,
+          `Removed ${result.removedTrashFiles} trash file(s).`,
+        ),
+      );
     }),
   );
 
@@ -2424,6 +2527,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.openSettings", "codexHistoryViewer.openSettings");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.rebuildCache", "codexHistoryViewer.rebuildCache");
   registerUiCommandAlias("codexHistoryViewer.ui.en.rebuildCache", "codexHistoryViewer.rebuildCache");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.emptyTrash", "codexHistoryViewer.emptyTrash");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.emptyTrash", "codexHistoryViewer.emptyTrash");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.cleanupMissingPins", "codexHistoryViewer.cleanupMissingPins");
   registerUiCommandAlias("codexHistoryViewer.ui.en.cleanupMissingPins", "codexHistoryViewer.cleanupMissingPins");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.exportSessions", "codexHistoryViewer.exportSessions");

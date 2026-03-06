@@ -12,8 +12,9 @@ export async function readJson<T>(uri: vscode.Uri): Promise<T | null> {
   }
 }
 
-export async function writeJson<T>(uri: vscode.Uri, data: T): Promise<void> {
-  const text = JSON.stringify(data, null, 2);
+export async function writeJson<T>(uri: vscode.Uri, data: T, options?: { pretty?: boolean }): Promise<void> {
+  const pretty = options?.pretty ?? true;
+  const text = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
   const buf = new TextEncoder().encode(text);
   await vscode.workspace.fs.writeFile(uri, buf);
 }

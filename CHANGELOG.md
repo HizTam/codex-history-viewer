@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.2] - 2026-03-06
+
+### Added
+
+- Added a new `Empty Trash` action in the Control view to manually clear internal trash/quarantine files.
+- Added Status view metrics for cache folder size.
+- Added Status view metrics for trash file count.
+- Added inline copy actions for Status view paths (`Current project` / `Sessions root`).
+
+### Changed
+
+- `Rebuild Cache` now asks for confirmation before running.
+- `Rebuild Cache` now rebuilds both the history cache and the search index.
+- Search index cache files are now written in compact JSON form to reduce storage size.
+- Control view actions were reorganized to focus on maintenance/global tasks.
+- `Configure Default Search Roles` now uses the same search icon style as the Search view header.
+
 ## [1.1.1] - 2026-03-05
 
 ### Added
