@@ -1,7 +1,7 @@
 # Codex History Viewer
 
 A VS Code extension to browse, search, tag, import/export, and manage local Codex CLI / Claude Code session history, then resume selected sessions directly in the related VS Code extension.
-Latest release: **1.1.2** (2026-03-06).
+Latest release: **1.1.3** (2026-04-07).
 
 ## Features
 
@@ -76,13 +76,13 @@ For the full command list with per-command descriptions, see:
 
 ### Enable Claude Source (Optional)
 
-- Open Settings and add `claude` to **Codex History Viewer › Sources: Enabled**.
-- If needed, set **Codex History Viewer › Claude: Sessions Root**.
+- Open Settings and add `claude` to **Codex History Viewer > Sources: Enabled**.
+- If needed, set **Codex History Viewer > Claude: Sessions Root**.
 
 ### Maintenance Tip (All Sources)
 
-- If history or search results look incorrect or stale, run **Control → Rebuild Cache**. It recreates both the history cache and the search index after confirmation.
-- To prevent the cache folder from growing over time, regularly run **Control → Empty Trash**. Trash files are not deleted automatically, and this also removes legacy cache/index generations.
+- If history or search results look incorrect or stale, run **Control > Rebuild Cache**. It recreates both the history cache and the search index after confirmation.
+- To prevent the cache folder from growing over time, regularly run **Control > Empty Trash**. Trash files are not deleted automatically, and this also removes legacy cache/index generations.
 
 ## OpenAI Codex Integration Notes
 
@@ -101,14 +101,10 @@ For the full command list with per-command descriptions, see:
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 - After successful import or promote (copy-to-today), a hint is shown to reload Codex CLI history if Codex is running.
 
-## What's New in 1.1.2
+## What's New in 1.1.3
 
-- Added **Empty Trash** in the Control view for manual cleanup of internal trash/quarantine files.
-- Status now shows cache folder size and trash file count.
-- Status now provides inline copy icons for the current project and session root paths.
-- **Rebuild Cache** now rebuilds both the history cache and the search index after confirmation.
-- Search index cache files are now saved in compact JSON form to reduce size.
-- Control view actions were cleaned up to focus on maintenance/global operations.
+- Fixed chat-viewer file links so paths with GitHub-style line suffixes such as `scripts/deploy.sh#L39` open correctly in VS Code.
+- Local file link parsing now also understands `#L39C2`, `#L39-L45`, and `:39:2` location formats.
 
 ## Changelog
 

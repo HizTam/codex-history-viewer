@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
   <!-- For extension listing/details: transparent background, monochrome double-stroke icon (visible on any theme). -->
-  <!-- キャンバスサイズはそのままに、デザインだけを中心基準で 1.1 倍拡大 -->
+  <!-- Keep the canvas size unchanged and scale only the design by 1.1x from the center -->
   <g transform="translate(64 64) scale(1.1) translate(-64 -64)">
     <g stroke="#FFFFFF" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
       <!-- Arc with the top-right quarter missing (remove the 90-degree segment from right to up). -->

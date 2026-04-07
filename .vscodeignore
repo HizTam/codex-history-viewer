@@ -9,10 +9,10 @@
 **/.vscodeignore
 **/*.vsix
 
-# 開発者向けドキュメント（VSIX には同梱しない）
+# Developer documentation (not included in the VSIX)
 DEVELOPMENT.ja.md
 
-# Chat ビューの Markdown レンダリングで markdown-it を使用するため、必要最小限のみ同梱する
+# The chat view uses markdown-it for Markdown rendering, so include only the minimal runtime files
 !node_modules/markdown-it/
 !node_modules/markdown-it/dist/
 !node_modules/markdown-it/dist/markdown-it.min.js

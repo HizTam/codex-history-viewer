@@ -3,7 +3,7 @@ import type { HistoryService } from "../services/historyService";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { PinStore } from "../services/pinStore";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
-import { normalizeCacheKey } from "../utils/fsUtils";
+import { normalizeCacheKey, pathExists } from "../utils/fsUtils";
 import { buildChatSessionModel } from "./chatModelBuilder";
 import { resolveUiLanguage, t } from "../i18n";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
@@ -241,31 +241,32 @@ export class ChatPanelManager {
         return;
       }
       case "openLocalFile": {
-        const fsPath = typeof msg?.fsPath === "string" ? msg.fsPath.trim() : "";
-        if (!fsPath) return;
+        const rawFsPath = typeof msg?.fsPath === "string" ? msg.fsPath.trim() : "";
+        if (!rawFsPath) return;
 
-        const line =
+        const requestedLine =
           typeof msg?.line === "number" && Number.isFinite(msg.line) && msg.line >= 1
             ? Math.floor(msg.line)
             : undefined;
-        const column =
+        const requestedColumn =
           typeof msg?.column === "number" && Number.isFinite(msg.column) && msg.column >= 1
             ? Math.floor(msg.column)
             : undefined;
+        const target = await resolveLinkedFileTarget(rawFsPath, requestedLine, requestedColumn);
 
         try {
-          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(fsPath));
+          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(target.fsPath));
           const opts: vscode.TextDocumentShowOptions = {
             preview: false,
             preserveFocus: false,
           };
-          if (line !== undefined) {
-            const pos = new vscode.Position(Math.max(0, line - 1), Math.max(0, (column ?? 1) - 1));
+          if (target.line !== undefined) {
+            const pos = new vscode.Position(Math.max(0, target.line - 1), Math.max(0, (target.column ?? 1) - 1));
             opts.selection = new vscode.Range(pos, pos);
           }
           await vscode.window.showTextDocument(doc, opts);
         } catch {
-          void vscode.window.showErrorMessage(t("app.openLinkedFileFailed", fsPath));
+          void vscode.window.showErrorMessage(t("app.openLinkedFileFailed", rawFsPath));
         }
         return;
       }
@@ -396,4 +397,88 @@ function buildPanelTitle(session: SessionSummary): string {
   // Keep panel titles compact by truncating only the snippet segment.
   const shortSnippet = truncateByDisplayWidth(session.snippet, 28, "...");
   return `${session.localDate} ${session.timeLabel} ${shortSnippet}`;
+}
+
+type LinkedFileTarget = {
+  fsPath: string;
+  line?: number;
+  column?: number;
+};
+
+async function resolveLinkedFileTarget(
+  rawFsPath: string,
+  requestedLine?: number,
+  requestedColumn?: number,
+): Promise<LinkedFileTarget> {
+  const parsed = splitAbsolutePathAndLocation(rawFsPath);
+  if (!parsed || parsed.fsPath === rawFsPath) {
+    return { fsPath: rawFsPath, line: requestedLine, column: requestedColumn };
+  }
+
+  // Prefer the original path when it exists so real filenames containing #L39 still work.
+  if (await pathExists(rawFsPath)) {
+    return { fsPath: rawFsPath, line: requestedLine, column: requestedColumn };
+  }
+
+  return {
+    fsPath: parsed.fsPath,
+    line: requestedLine ?? parsed.line,
+    column: requestedColumn ?? parsed.column,
+  };
+}
+
+function splitAbsolutePathAndLocation(pathLike: string): LinkedFileTarget | null {
+  const text = String(pathLike || "").trim();
+  if (!isAbsolutePathLike(text)) return null;
+
+  const hashTarget = parseHashPathLocation(text);
+  if (hashTarget) return hashTarget;
+
+  const colonTarget = parseColonPathLocation(text);
+  if (colonTarget) return colonTarget;
+
+  return { fsPath: text };
+}
+
+function parseHashPathLocation(text: string): LinkedFileTarget | null {
+  // Support GitHub / VS Code style locations such as #L39, #L39C2, and #L39-L45.
+  const match = text.match(/^(.*?)(?:#L(\d+)(?:C(\d+))?(?:-L?\d+(?:C\d+)?)?)$/i);
+  if (!match) return null;
+  return buildLinkedFileTarget(match[1], match[2], match[3], text);
+}
+
+function parseColonPathLocation(text: string): LinkedFileTarget | null {
+  const match = text.match(/^(.*?)(?::(\d+)(?::(\d+))?)$/);
+  if (!match) return null;
+  return buildLinkedFileTarget(match[1], match[2], match[3], text);
+}
+
+function buildLinkedFileTarget(
+  fsPathLike: string,
+  lineText: string | undefined,
+  columnText: string | undefined,
+  fallbackFsPath: string,
+): LinkedFileTarget | null {
+  const fsPath = String(fsPathLike || "").trim();
+  if (!isAbsolutePathLike(fsPath)) return null;
+
+  const line = Number(lineText);
+  const column = columnText ? Number(columnText) : undefined;
+  if (!Number.isFinite(line) || line < 1) {
+    return { fsPath: fallbackFsPath };
+  }
+
+  return {
+    fsPath,
+    line,
+    column: typeof column === "number" && Number.isFinite(column) && column >= 1 ? column : undefined,
+  };
+}
+
+function isAbsolutePathLike(input: string): boolean {
+  const text = String(input || "").trim();
+  if (!text) return false;
+  if (/^[a-zA-Z]:[\\/]/.test(text)) return true;
+  if (text.startsWith("\\\\")) return true;
+  return text.startsWith("/");
 }

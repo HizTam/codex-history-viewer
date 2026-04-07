@@ -941,10 +941,10 @@
     if (url.protocol !== "https:") return null;
     if (url.hostname !== "file+.vscode-resource.vscode-cdn.net") return null;
 
-    let decodedPath = safeDecodeURIComponent(url.pathname || "");
+    let decodedPath = safeDecodeURIComponent(`${url.pathname || ""}${url.hash || ""}`);
     decodedPath = decodedPath.replace(/^\/+/, "");
     if (!decodedPath) return null;
-    return splitPathAndLocation(decodedPath);
+    return splitPathAndLocation(decodedPath, { allowHashSuffix: !!url.hash });
   }
 
   function parseFromFileUri(href) {
@@ -956,24 +956,45 @@
       return null;
     }
 
-    let decodedPath = safeDecodeURIComponent(url.pathname || "");
+    let decodedPath = safeDecodeURIComponent(`${url.pathname || ""}${url.hash || ""}`);
     if (/^\/[a-zA-Z]:\//.test(decodedPath)) decodedPath = decodedPath.slice(1);
     if (!decodedPath) return null;
-    return splitPathAndLocation(decodedPath);
+    return splitPathAndLocation(decodedPath, { allowHashSuffix: !!url.hash });
   }
 
-  function splitPathAndLocation(pathLike) {
+  function splitPathAndLocation(pathLike, options) {
     const text = String(pathLike || "").trim();
     if (!isAbsolutePathLike(text)) return null;
 
-    const m = text.match(/^(.*?)(?::(\d+)(?::(\d+))?)$/);
-    if (!m) return { fsPath: text };
+    const hashTarget = options && options.allowHashSuffix === false ? null : parseHashPathLocation(text);
+    if (hashTarget) return hashTarget;
 
-    const fsPath = String(m[1] || "").trim();
-    if (!isAbsolutePathLike(fsPath)) return { fsPath: text };
-    const line = Number(m[2]);
-    const column = m[3] ? Number(m[3]) : undefined;
-    if (!Number.isFinite(line) || line < 1) return { fsPath: text };
+    const colonTarget = options && options.allowColonSuffix === false ? null : parseColonPathLocation(text);
+    if (colonTarget) return colonTarget;
+
+    return { fsPath: text };
+  }
+
+  function parseHashPathLocation(text) {
+    // Support GitHub / VS Code style locations such as #L39, #L39C2, and #L39-L45.
+    const m = text.match(/^(.*?)(?:#L(\d+)(?:C(\d+))?(?:-L?\d+(?:C\d+)?)?)$/i);
+    if (!m) return null;
+    return buildPathLocationTarget(m[1], m[2], m[3], text);
+  }
+
+  function parseColonPathLocation(text) {
+    const m = text.match(/^(.*?)(?::(\d+)(?::(\d+))?)$/);
+    if (!m) return null;
+    return buildPathLocationTarget(m[1], m[2], m[3], text);
+  }
+
+  function buildPathLocationTarget(fsPathLike, lineText, columnText, fallbackFsPath) {
+    const fsPath = String(fsPathLike || "").trim();
+    if (!isAbsolutePathLike(fsPath)) return null;
+
+    const line = Number(lineText);
+    const column = columnText ? Number(columnText) : undefined;
+    if (!Number.isFinite(line) || line < 1) return { fsPath: fallbackFsPath };
 
     return {
       fsPath,

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.3] - 2026-04-07
+
+### Fixed
+
+- Fixed chat-viewer local file links so `scripts/deploy.sh#L39` style paths open the file instead of failing.
+- Added support for GitHub-style file locations such as `#L39C2` and `#L39-L45` when opening local links from the chat view.
+
 ## [1.1.2] - 2026-03-06
 
 ### Added
