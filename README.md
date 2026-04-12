@@ -1,7 +1,7 @@
 # Codex History Viewer
 
 A VS Code extension to browse, search, tag, import/export, and manage local Codex CLI / Claude Code session history, then resume selected sessions directly in the related VS Code extension.
-Latest release: **1.1.3** (2026-04-07).
+Latest release: **1.1.4** (2026-04-12).
 
 ## Features
 
@@ -13,6 +13,7 @@ Latest release: **1.1.3** (2026-04-07).
 - One-click "Filter by Current Project" action in the History view header (toggle on/off)
 - Tag filters in **Pinned** and **Search** views (separate from History filters)
 - Chat-like viewer (Webview) with Markdown rendering, copy actions, and "Open Markdown transcript"
+- Syntax-highlighted fenced code blocks in the chat-like viewer (powered by Shiki)
 - Chat toolbar quick actions: resume in OpenAI Codex, toggle pin/unpin, open Markdown transcript, and copy prompt excerpt
 - Chat tab icon switches by source (`Codex` / `Claude`)
 - Chat header annotation block (tags + note), including quick actions (filter/remove/edit)
@@ -101,10 +102,9 @@ For the full command list with per-command descriptions, see:
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 - After successful import or promote (copy-to-today), a hint is shown to reload Codex CLI history if Codex is running.
 
-## What's New in 1.1.3
+## What's New in 1.1.4
 
-- Fixed chat-viewer file links so paths with GitHub-style line suffixes such as `scripts/deploy.sh#L39` open correctly in VS Code.
-- Local file link parsing now also understands `#L39C2`, `#L39-L45`, and `:39:2` location formats.
+- Added syntax-highlighted fenced code blocks in the chat-like viewer (powered by Shiki).
 
 ## Changelog
 
@@ -117,3 +117,5 @@ This extension reads local session files and renders them inside VS Code. It doe
 If you use **Copy Prompt Excerpt**, this extension copies a compact session excerpt to your clipboard. Data is only sent externally if you paste it into another tool or extension.
 
 When you open a session as a Markdown transcript, the generated transcript includes local paths (e.g., the session file path and CWD). Review before sharing.
+
+[![GitHub Sponsors](https://img.shields.io/badge/GitHub%20Sponsors-Support%20this%20project-ea4aaa?logo=githubsponsors)](https://github.com/sponsors/hiztam)

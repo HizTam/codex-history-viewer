@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.4] - 2026-04-12
+
+### Added
+
+- Added syntax-highlighted fenced code blocks in the chat-like viewer (powered by Shiki).
+
 ## [1.1.3] - 2026-04-07
 
 ### Fixed

@@ -1,0 +1,15 @@
+Codex History Viewer bundles code generated from the following third-party packages:
+
+1. shiki
+   License: MIT
+   Source: https://github.com/shikijs/shiki
+
+2. @shikijs/langs
+   License: MIT
+   Source: https://github.com/shikijs/shiki
+
+3. @shikijs/themes
+   License: MIT
+   Source: https://github.com/shikijs/shiki
+
+These packages are used only for syntax highlighting inside the chat webview.

@@ -149,6 +149,9 @@ export class ChatPanelManager {
     const nonce = randomNonce();
     const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "chatView.css"));
     const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "chatView.js"));
+    const shikiBundleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "chatViewShiki.bundle.js"),
+    );
     const markdownItUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "node_modules", "markdown-it", "dist", "markdown-it.min.js"),
     );
@@ -156,7 +159,7 @@ export class ChatPanelManager {
     const csp = [
       `default-src 'none'`,
       `img-src ${webview.cspSource} data:`,
-      `style-src ${webview.cspSource}`,
+      `style-src ${webview.cspSource} 'unsafe-inline';`,
       `script-src 'nonce-${nonce}'`,
     ].join("; ");
 
@@ -184,6 +187,7 @@ export class ChatPanelManager {
   <div id="meta"></div>
   <div id="timeline"></div>
   <script nonce="${nonce}" src="${markdownItUri}"></script>
+  <script nonce="${nonce}" src="${shikiBundleUri}"></script>
   <script nonce="${nonce}" src="${jsUri}"></script>
 </body>
 </html>`;

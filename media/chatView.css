@@ -472,6 +472,61 @@ pre {
   line-height: 1.4;
 }
 
+.codeBlock pre,
+.codeBlock .codePre,
+.codeBlock .shiki {
+  margin: 0;
+  padding: 10px 10px;
+  overflow: auto;
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  line-height: 1.4;
+}
+
+.codeBlock .shiki {
+  border-radius: 0;
+  background: var(--chv-code-bg);
+}
+
+.codeBlock .shiki code {
+  display: block;
+  min-width: max-content;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+.codeBlock .shiki .line {
+  display: block;
+}
+
+body.vscode-dark .codeBlock .shiki {
+  background-color: var(--shiki-dark-bg) !important;
+  color: var(--shiki-dark) !important;
+}
+
+body.vscode-dark .codeBlock .shiki span {
+  color: var(--shiki-dark) !important;
+}
+
+body.vscode-high-contrast .codeBlock .shiki {
+  background-color: var(--shiki-hcDark-bg) !important;
+  color: var(--shiki-hcDark) !important;
+}
+
+body.vscode-high-contrast .codeBlock .shiki span {
+  color: var(--shiki-hcDark) !important;
+}
+
+body.vscode-high-contrast-light .codeBlock .shiki {
+  background-color: var(--shiki-hcLight-bg) !important;
+  color: var(--shiki-hcLight) !important;
+}
+
+body.vscode-high-contrast-light .codeBlock .shiki span {
+  color: var(--shiki-hcLight) !important;
+}
+
 details {
   border: 1px solid var(--chv-border);
   border-radius: 10px;

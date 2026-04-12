@@ -843,11 +843,12 @@
       const codeEl = pre.querySelector("code");
       const codeText = codeEl ? codeEl.textContent || "" : pre.textContent || "";
       const lang = inferMarkdownCodeLanguage(codeEl);
+      const displayLang = resolveMarkdownCodeLabel(lang, codeText);
 
       const wrap = el("div", { className: "codeBlock" });
       const header = el("div", { className: "codeHeader" });
       const label = el("span", {});
-      label.textContent = lang ? String(lang) : "";
+      label.textContent = displayLang;
       header.appendChild(label);
       const btn = el("button", { type: "button" });
       const copyLabel = i18n.copy || "Copy";
@@ -864,7 +865,8 @@
       wrap.appendChild(header);
 
       pre.replaceWith(wrap);
-      wrap.appendChild(pre);
+      const highlightedPre = createHighlightedCodeBlockElement(codeText, lang);
+      wrap.appendChild(highlightedPre || pre);
     }
   }
 
@@ -873,6 +875,56 @@
     const cls = String(codeEl.className || "");
     const m = cls.match(/(?:^|\\s)language-([a-z0-9_+-]+)(?:\\s|$)/i);
     return m ? m[1] : "";
+  }
+
+  function resolveMarkdownCodeLabel(lang, codeText) {
+    const shiki = getShikiHighlighter();
+    if (shiki && typeof shiki.getLanguageLabel === "function") {
+      const label = shiki.getLanguageLabel(lang, codeText);
+      if (typeof label === "string" && label.trim().length > 0) return label.trim();
+    }
+    return lang ? String(lang) : "";
+  }
+
+  function createHighlightedCodeBlockElement(codeText, lang) {
+    const shiki = getShikiHighlighter();
+    if (!shiki || typeof shiki.highlightCodeToHtml !== "function") return null;
+
+    let html = "";
+    try {
+      html = shiki.highlightCodeToHtml(codeText, lang) || "";
+    } catch {
+      return null;
+    }
+    if (!html) return null;
+
+    const tmp = el("div", {});
+    tmp.innerHTML = html.trim();
+    const highlightedPre = tmp.firstElementChild;
+    if (!(highlightedPre instanceof HTMLElement)) return null;
+    if (highlightedPre.tagName.toLowerCase() !== "pre") return null;
+
+    removeShikiLineBreakTextNodes(highlightedPre);
+    highlightedPre.classList.add("codePre");
+    highlightedPre.setAttribute("dir", "ltr");
+    return highlightedPre;
+  }
+
+  function removeShikiLineBreakTextNodes(highlightedPre) {
+    const codeEl = highlightedPre.querySelector("code");
+    if (!(codeEl instanceof HTMLElement)) return;
+
+    for (const node of Array.from(codeEl.childNodes)) {
+      if (node.nodeType !== Node.TEXT_NODE) continue;
+      if (!/^\s*$/.test(node.textContent || "")) continue;
+      codeEl.removeChild(node);
+    }
+  }
+
+  function getShikiHighlighter() {
+    const candidate = window.codexHistoryViewerShiki;
+    if (!candidate || typeof candidate !== "object") return null;
+    return candidate;
   }
 
   function createMarkdownRenderer() {
