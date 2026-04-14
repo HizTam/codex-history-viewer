@@ -8,6 +8,7 @@ import { MissingPinnedNode, PinnedDropHintNode, SessionNode, TreeNode, missingPi
 import { getConfig } from "../settings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
+import { appendSessionTooltipDateLines } from "./sessionTooltipUtils";
 
 // Provides the pinned sessions view.
 export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
@@ -98,7 +99,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       // Show a short preview in the tooltip for quicker scanning.
       const md = new vscode.MarkdownString(undefined, true);
       md.isTrusted = false;
-      md.appendMarkdown(`**${element.session.localDate} ${element.session.timeLabel}**  \n`);
+      appendSessionTooltipDateLines(md, element.session);
       md.appendMarkdown(`Source: ${sourceName(element.session.source)}  \n`);
       if (element.session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(element.session.cwdShort)}  \n`);
       if (annotation && annotation.tags.length > 0) {

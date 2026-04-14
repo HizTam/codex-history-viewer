@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.5] - 2026-04-14
+
+### Added
+
+- Added `codexHistoryViewer.history.dateBasis` to switch the History tree and date-based search filters between session start date and last message date.
+- Added tooltip date details so sessions can show both `Started` and `Last activity` when they differ.
+
 ## [1.1.4] - 2026-04-12
 
 ### Added

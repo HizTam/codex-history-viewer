@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 
 const TRASH_DIR_NAMES = ["undo-delete", "deleted"] as const;
 
-const CURRENT_HISTORY_CACHE_FILE = "cache.v5.json";
+const CURRENT_HISTORY_CACHE_FILE = "cache.v6.json";
 const CURRENT_SEARCH_INDEX_FILE = "search-index.v2.json";
 const HISTORY_CACHE_FILE_PATTERN = /^cache\.v\d+\.json$/i;
 const SEARCH_INDEX_FILE_PATTERN = /^search-index\.v\d+\.json$/i;

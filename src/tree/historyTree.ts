@@ -9,6 +9,7 @@ import { getConfig } from "../settings";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
+import { appendSessionTooltipDateLines } from "./sessionTooltipUtils";
 
 // Provides the history tree (year → month → day → session).
 export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
@@ -157,7 +158,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     // Tooltip preview shows short user/assistant excerpts.
     const md = new vscode.MarkdownString(undefined, true);
     md.isTrusted = false;
-    md.appendMarkdown(`**${session.localDate} ${session.timeLabel}**  \n`);
+    appendSessionTooltipDateLines(md, session);
     md.appendMarkdown(`Source: ${sourceName(session.source)}  \n`);
     if (session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(session.cwdShort)}  \n`);
     if (annotation && annotation.tags.length > 0) {

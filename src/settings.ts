@@ -2,7 +2,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 
-// Reads configuration and normalizes values for internal use.
+export type HistoryDateBasis = "started" | "lastActivity";
+
 export interface CodexHistoryViewerConfig {
   sessionsRoot: string;
   claudeSessionsRoot: string;
@@ -14,6 +15,7 @@ export interface CodexHistoryViewerConfig {
   searchCaseSensitive: boolean;
   deleteUseTrash: boolean;
   resumeOpenTarget: "sidebar" | "panel";
+  historyDateBasis: HistoryDateBasis;
 }
 
 function getDefaultSessionsRoot(): string {
@@ -46,6 +48,8 @@ export function getConfig(): CodexHistoryViewerConfig {
   const enabledSources = parseEnabledSources(cfg.get<unknown>("sources.enabled"));
   const resumeOpenTargetRaw = (cfg.get<string>("resume.openTarget") ?? "sidebar").trim().toLowerCase();
   const resumeOpenTarget: "sidebar" | "panel" = resumeOpenTargetRaw === "panel" ? "panel" : "sidebar";
+  const historyDateBasisRaw = (cfg.get<string>("history.dateBasis") ?? "started").trim().toLowerCase();
+  const historyDateBasis: HistoryDateBasis = historyDateBasisRaw === "lastactivity" ? "lastActivity" : "started";
 
   return {
     sessionsRoot: sessionsRootRaw.length > 0 ? sessionsRootRaw : getDefaultSessionsRoot(),
@@ -58,5 +62,6 @@ export function getConfig(): CodexHistoryViewerConfig {
     searchCaseSensitive: cfg.get<boolean>("search.caseSensitive") ?? false,
     deleteUseTrash: cfg.get<boolean>("delete.useTrash") ?? true,
     resumeOpenTarget,
+    historyDateBasis,
   };
 }

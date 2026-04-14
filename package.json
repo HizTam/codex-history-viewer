@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -1789,6 +1789,25 @@
           "description": "%cfg.searchMaxResults%",
           "scope": "application",
           "order": 80
+        },
+        "codexHistoryViewer.history.dateBasis": {
+          "type": "string",
+          "default": "started",
+          "enum": [
+            "started",
+            "lastActivity"
+          ],
+          "enumItemLabels": [
+            "%cfg.historyDateBasis.labelStarted%",
+            "%cfg.historyDateBasis.labelLastActivity%"
+          ],
+          "enumDescriptions": [
+            "%cfg.historyDateBasis.enumStarted%",
+            "%cfg.historyDateBasis.enumLastActivity%"
+          ],
+          "description": "%cfg.historyDateBasis%",
+          "scope": "application",
+          "order": 85
         },
         "codexHistoryViewer.resume.openTarget": {
           "type": "string",

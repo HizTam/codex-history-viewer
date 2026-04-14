@@ -6,6 +6,7 @@ import { SearchHelpNode, SearchHitNode, SearchRootNode, SearchSessionNode, Sessi
 import { t } from "../i18n";
 import { getConfig } from "../settings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
+import { appendSessionTooltipDateLines } from "./sessionTooltipUtils";
 
 // Provides the Search view (root → session → hit).
 export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
@@ -158,7 +159,7 @@ function formatScopeLabel(root: SearchRootNode): string {
 function buildSearchSessionTooltip(node: SearchSessionNode, tags: readonly string[], note: string): vscode.MarkdownString {
   const md = new vscode.MarkdownString(undefined, true);
   md.isTrusted = false;
-  md.appendMarkdown(`**${node.session.localDate} ${node.session.timeLabel}**  \n`);
+  appendSessionTooltipDateLines(md, node.session);
   md.appendMarkdown(`Source: ${sourceName(node.session.source)}  \n`);
   if (node.session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(node.session.cwdShort)}  \n`);
   if (tags.length > 0) md.appendMarkdown(`Tags: ${escapeForMarkdown(tags.join(", "))}  \n`);

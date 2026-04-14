@@ -690,11 +690,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const headerActionsChanged = e.affectsConfiguration("codexHistoryViewer.ui.alwaysShowHeaderActions");
       const searchDefaultRolesChanged = e.affectsConfiguration("codexHistoryViewer.search.defaultRoles");
       const sourcesEnabledChanged = e.affectsConfiguration("codexHistoryViewer.sources.enabled");
+      const historyDateBasisChanged = e.affectsConfiguration("codexHistoryViewer.history.dateBasis");
       if (
         !uiLanguageChanged &&
         !headerActionsChanged &&
         !searchDefaultRolesChanged &&
-        !sourcesEnabledChanged
+        !sourcesEnabledChanged &&
+        !historyDateBasisChanged
       ) {
         return;
       }
@@ -718,7 +720,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void ensureAlwaysShowHeaderActions();
 
       // When UI language changes, rebuild history-dependent displays because date/time formatting can also change.
-      if (!uiLanguageChanged && !sourcesEnabledChanged) {
+      if (!uiLanguageChanged && !sourcesEnabledChanged && !historyDateBasisChanged) {
         refreshViews();
         controlProvider.refresh();
         return;

@@ -50,6 +50,8 @@
   "cmd.searchDeletePreset": "Delete Saved Search...",
   "cmd.editSessionAnnotation": "Edit Session Tags/Note...",
   "cmd.undoLastAction": "Undo Last Action",
+  "cmd.copyResumePrompt": "Copy Prompt Excerpt",
+  "cmd.copyStatusPath": "Copy Path",  
   "cfg.title": "Codex History Viewer",
   "cfg.sessionsRoot": "Root folder of Codex sessions. Leave empty to use the default (~/.codex/sessions).",
   "cfg.claudeSessionsRoot": "Root folder of Claude Code sessions. Leave empty to use the default (~/.claude/projects).",
@@ -67,6 +69,9 @@
   "cfg.resumeOpenTarget.enumPanel": "Resume in an OpenAI Codex panel tab.",
   "cfg.uiLanguage": "UI language for this extension. Use 'auto' to follow VS Code's display language.",
   "cfg.uiAlwaysShowHeaderActions": "Always show view header action icons (sets VS Code setting 'workbench.view.alwaysShowHeaderActions').",
-  "cmd.copyResumePrompt": "Copy Prompt Excerpt",
-  "cmd.copyStatusPath": "Copy Path"
+  "cfg.historyDateBasis": "Choose which session date is used by the history tree and date-based search filters.",
+  "cfg.historyDateBasis.labelStarted": "Started date",
+  "cfg.historyDateBasis.labelLastActivity": "Last activity date",
+  "cfg.historyDateBasis.enumStarted": "Group history and apply date filters using the session start date.",
+  "cfg.historyDateBasis.enumLastActivity": "Group history and apply date filters using the latest session activity date."
 }

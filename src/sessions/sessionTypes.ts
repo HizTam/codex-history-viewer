@@ -27,10 +27,16 @@ export interface SessionSummary {
   cacheKey: string;
   source: SessionSource;
   meta: SessionMetaInfo;
-  inferredYmd?: Ymd; // Set only if inferred from the path
-  localDate: string; // YYYY-MM-DD (display time zone date)
-  timeLabel: string; // HH:MM (display time zone time)
-  snippet: string; // Short text for list display
+  inferredYmd?: Ymd;
+  startedAtIso?: string;
+  lastActivityAtIso?: string;
+  startedLocalDate: string;
+  startedTimeLabel: string;
+  lastActivityLocalDate: string;
+  lastActivityTimeLabel: string;
+  localDate: string;
+  timeLabel: string;
+  snippet: string;
   cwdShort: string;
   previewMessages: PreviewMessage[];
 }

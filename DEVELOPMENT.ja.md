@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-04-09
-- 対象バージョン: 1.1.4
+- 最終更新: 2026-04-13
+- 対象バージョン: 1.1.5
 
 ## 1. 概要
 
@@ -99,7 +99,7 @@
 ### 3.4 キャッシュ / インデックス / 保守
 
 - 履歴キャッシュ:
-  - 保存先: `globalStorageUri/cache.v5.json`
+  - 保存先: `globalStorageUri/cache.v6.json`
   - 用途: 一覧表示用の要約キャッシュ
   - 再利用条件:
     - `sessionsRoot`
@@ -143,6 +143,7 @@
 - `search.defaultRoles`
 - `search.caseSensitive`
 - `search.maxResults`
+- `history.dateBasis`
 - `resume.openTarget`
 - `delete.useTrash`
 - `ui.language`
@@ -166,7 +167,7 @@
 ### 4.3 履歴キャッシュ
 
 - `src/services/historyService.ts`
-  - `cache.v5.json` を読み書きする
+  - `cache.v6.json` を読み書きする
   - 変更のないファイルはキャッシュ済み `summary` を再利用する
   - 最終的な一覧はローカル日付 / 時刻順で降順ソートする
 

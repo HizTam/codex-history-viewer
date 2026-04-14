@@ -126,6 +126,69 @@ function getClaudeMessageContent(obj: any): unknown {
   return undefined;
 }
 
+function parseTimestampDate(value: unknown): Date | null {
+  if (typeof value !== "string") return null;
+  const ms = Date.parse(value);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms);
+}
+
+function parseTimestampIso(value: unknown): string | undefined {
+  return parseTimestampDate(value) ? String(value) : undefined;
+}
+
+function extractCodexActivityTimestampIso(obj: any): string | undefined {
+  if (obj?.type !== "response_item") return undefined;
+  const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
+  if (payloadType !== "message" && payloadType !== "function_call" && payloadType !== "function_call_output") {
+    return undefined;
+  }
+  return parseTimestampIso(obj?.timestamp);
+}
+
+function extractClaudeActivityTimestampIso(obj: any): string | undefined {
+  if (!detectClaudeMessageRole(obj)) return undefined;
+  return parseTimestampIso(obj?.timestamp);
+}
+
+async function readLastActivityTimestampIso(fsPath: string, source: SessionSource): Promise<string | undefined> {
+  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+  let lastTimestampIso: string | undefined;
+  try {
+    for await (const line of rl) {
+      if (!line) continue;
+
+      let obj: any;
+      try {
+        obj = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const timestampIso =
+        source === "claude"
+          ? extractClaudeActivityTimestampIso(obj)
+          : extractCodexActivityTimestampIso(obj);
+      if (timestampIso) lastTimestampIso = timestampIso;
+    }
+  } finally {
+    rl.close();
+    stream.close();
+  }
+
+  return lastTimestampIso;
+}
+
+function toLocalDateString(date: Date, timeZone: string): string {
+  return ymdToString(toYmdInTimeZone(date, timeZone));
+}
+
+function toTimeLabel(date: Date, timeZone: string): string {
+  return formatTimeHmInTimeZone(date, timeZone);
+}
+
 export async function readPreviewMessages(fsPath: string, maxMessages: number): Promise<PreviewMessage[]> {
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -194,20 +257,39 @@ export async function buildSessionSummary(params: {
   const readMeta = (await tryReadSessionMeta(fsPath)) ?? {};
   const source = detectSessionSource(readMeta, fsPath);
   const meta: SessionMetaInfo = { ...readMeta, historySource: source };
+  const lastActivityIso = await readLastActivityTimestampIso(fsPath, source);
 
   const inferred = source === "codex" ? inferYmdFromPath(sessionsRoot, fsPath) ?? undefined : undefined;
-  const start = meta.timestampIso ? new Date(meta.timestampIso) : null;
-  const startValid = start && !Number.isNaN(start.getTime()) ? start : null;
+  const startValid = parseTimestampDate(meta.timestampIso);
+  const lastActivityValid = parseTimestampDate(lastActivityIso);
 
-  if (source === "claude" && !startValid) return null;
+  if (source === "claude" && !startValid && !lastActivityValid) return null;
 
-  const ymd =
-    startValid
-      ? toYmdInTimeZone(startValid, timeZone)
-      : inferred ??
-        toYmdInTimeZone(new Date(stat.mtimeMs), timeZone);
-  const localDate = ymdToString(ymd);
-  const timeLabel = startValid ? formatTimeHmInTimeZone(startValid, timeZone) : "--:--";
+  const statDate = new Date(stat.mtimeMs);
+  const startedLocalDate = startValid
+    ? toLocalDateString(startValid, timeZone)
+    : inferred
+      ? ymdToString(inferred)
+      : lastActivityValid && source === "claude"
+        ? toLocalDateString(lastActivityValid, timeZone)
+        : toLocalDateString(statDate, timeZone);
+  const startedTimeLabel = startValid
+    ? toTimeLabel(startValid, timeZone)
+    : lastActivityValid && source === "claude"
+      ? toTimeLabel(lastActivityValid, timeZone)
+      : "--:--";
+  const lastActivityLocalDate = lastActivityValid
+    ? toLocalDateString(lastActivityValid, timeZone)
+    : startValid
+      ? toLocalDateString(startValid, timeZone)
+      : inferred
+        ? ymdToString(inferred)
+        : toLocalDateString(statDate, timeZone);
+  const lastActivityTimeLabel = lastActivityValid
+    ? toTimeLabel(lastActivityValid, timeZone)
+    : startValid
+      ? toTimeLabel(startValid, timeZone)
+      : "--:--";
 
   const previewMessages = await readPreviewMessages(fsPath, previewMaxMessages);
   const snippetSource = pickSessionSnippetSource(previewMessages);
@@ -220,8 +302,14 @@ export async function buildSessionSummary(params: {
     source,
     meta,
     inferredYmd: inferred,
-    localDate,
-    timeLabel,
+    startedAtIso: parseTimestampIso(meta.timestampIso),
+    lastActivityAtIso: lastActivityIso,
+    startedLocalDate,
+    startedTimeLabel,
+    lastActivityLocalDate,
+    lastActivityTimeLabel,
+    localDate: startedLocalDate,
+    timeLabel: startedTimeLabel,
     snippet,
     cwdShort,
     previewMessages,

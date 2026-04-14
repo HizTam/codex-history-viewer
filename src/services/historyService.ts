@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { CodexHistoryViewerConfig } from "../settings";
+import type { CodexHistoryViewerConfig, HistoryDateBasis } from "../settings";
 import { findSessionFiles } from "../sessions/sessionDiscovery";
 import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
 import { buildSessionSummary } from "../sessions/sessionSummary";
@@ -7,18 +7,18 @@ import { normalizeCacheKey } from "../utils/fsUtils";
 import { readJson, writeJson } from "../storage/jsonStorage";
 import { getDateTimeSettingsKey, resolveDateTimeSettings } from "../utils/dateTimeSettings";
 
-// Builds the session index and manages its cache.
-
 interface CacheEntryV1 {
   mtimeMs: number;
   size: number;
   summary: SessionSummary;
 }
 
-const SUMMARY_CACHE_ALGO_VERSION = 5;
+const SUMMARY_CACHE_ALGO_VERSION = 6;
+const HISTORY_CACHE_FILE_NAME = "cache.v6.json";
+const HISTORY_CACHE_FILE_PATTERN = /^cache\.v\d+\.json$/i;
 
-interface CacheFileV5 {
-  version: 5;
+interface CacheFileV6 {
+  version: 6;
   summaryAlgoVersion: number;
   codexSessionsRoot: string;
   claudeSessionsRoot: string;
@@ -27,6 +27,46 @@ interface CacheFileV5 {
   previewMaxMessages: number;
   dateTimeSettingsKey: string;
   entries: Record<string, CacheEntryV1>;
+}
+
+function applyHistoryDateBasis(summary: SessionSummary, historyDateBasis: HistoryDateBasis): SessionSummary {
+  const localDate =
+    historyDateBasis === "lastActivity" ? summary.lastActivityLocalDate : summary.startedLocalDate;
+  const timeLabel =
+    historyDateBasis === "lastActivity" ? summary.lastActivityTimeLabel : summary.startedTimeLabel;
+  return { ...summary, localDate, timeLabel };
+}
+
+function sortSummariesByDisplayDate(summaries: SessionSummary[]): void {
+  summaries.sort((a, b) => {
+    if (a.localDate !== b.localDate) return a.localDate < b.localDate ? 1 : -1;
+    return a.timeLabel < b.timeLabel ? 1 : a.timeLabel > b.timeLabel ? -1 : 0;
+  });
+}
+
+async function cleanupObsoleteHistoryCacheFiles(
+  globalStorageUri: vscode.Uri,
+  currentCacheFileName: string,
+): Promise<void> {
+  let entries: [string, vscode.FileType][];
+  try {
+    entries = await vscode.workspace.fs.readDirectory(globalStorageUri);
+  } catch {
+    return;
+  }
+
+  const deletions = entries
+    .filter(([name, type]) => (type & vscode.FileType.File) !== 0 && HISTORY_CACHE_FILE_PATTERN.test(name))
+    .filter(([name]) => name.toLowerCase() !== currentCacheFileName.toLowerCase())
+    .map(([name]) => vscode.Uri.joinPath(globalStorageUri, name));
+
+  for (const fileUri of deletions) {
+    try {
+      await vscode.workspace.fs.delete(fileUri, { recursive: false, useTrash: false });
+    } catch {
+      // Ignore cleanup failures and keep the current cache usable.
+    }
+  }
 }
 
 function emptyIndex(sessionsRoot: string): HistoryIndex {
@@ -64,19 +104,19 @@ export class HistoryService {
   }
 
   public async refresh(options: { forceRebuildCache: boolean }): Promise<void> {
-    this.updateConfig(this.config); // Hook for potential hot-reload (currently a no-op).
+    this.updateConfig(this.config);
     const sessionsRoot = this.config.sessionsRoot;
     const claudeSessionsRoot = this.config.claudeSessionsRoot;
 
     const dateTime = resolveDateTimeSettings();
     const dateTimeSettingsKey = getDateTimeSettingsKey(dateTime);
 
-    const cacheUri = vscode.Uri.joinPath(this.globalStorageUri, "cache.v5.json");
-    const cache = options.forceRebuildCache ? null : await readJson<CacheFileV5>(cacheUri);
+    const cacheUri = vscode.Uri.joinPath(this.globalStorageUri, HISTORY_CACHE_FILE_NAME);
+    const cache = options.forceRebuildCache ? null : await readJson<CacheFileV6>(cacheUri);
 
     const cachedEntries: Record<string, CacheEntryV1> =
       cache &&
-      cache.version === 5 &&
+      cache.version === 6 &&
       cache.summaryAlgoVersion === SUMMARY_CACHE_ALGO_VERSION &&
       cache.codexSessionsRoot === sessionsRoot &&
       cache.claudeSessionsRoot === claudeSessionsRoot &&
@@ -109,31 +149,29 @@ export class HistoryService {
 
       const cached = cachedEntries[key];
       if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
-        nextEntries[key] = cached;
-        summaries.push(cached.summary);
+        const summary = applyHistoryDateBasis(cached.summary, this.config.historyDateBasis);
+        nextEntries[key] = { ...cached, summary };
+        summaries.push(summary);
         continue;
       }
 
-      const summary = await buildSessionSummary({
+      const builtSummary = await buildSessionSummary({
         sessionsRoot,
         fsPath,
         previewMaxMessages: this.config.previewMaxMessages,
         timeZone: dateTime.timeZone,
       });
-      if (!summary) continue;
+      if (!builtSummary) continue;
+      const summary = applyHistoryDateBasis(builtSummary, this.config.historyDateBasis);
       nextEntries[key] = { mtimeMs: st.mtimeMs, size: st.size, summary };
       summaries.push(summary);
     }
 
-    // Sort by newest (localDate/timeLabel).
-    summaries.sort((a, b) => {
-      if (a.localDate !== b.localDate) return a.localDate < b.localDate ? 1 : -1;
-      return a.timeLabel < b.timeLabel ? 1 : a.timeLabel > b.timeLabel ? -1 : 0;
-    });
+    sortSummariesByDisplayDate(summaries);
 
     this.index = buildIndex(sessionsRoot, summaries);
-    const nextCache: CacheFileV5 = {
-      version: 5,
+    const nextCache: CacheFileV6 = {
+      version: 6,
       summaryAlgoVersion: SUMMARY_CACHE_ALGO_VERSION,
       codexSessionsRoot: sessionsRoot,
       claudeSessionsRoot,
@@ -144,6 +182,7 @@ export class HistoryService {
       entries: nextEntries,
     };
     await writeJson(cacheUri, nextCache);
+    await cleanupObsoleteHistoryCacheFiles(this.globalStorageUri, HISTORY_CACHE_FILE_NAME);
   }
 }
 
