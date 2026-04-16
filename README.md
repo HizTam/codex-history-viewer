@@ -1,7 +1,7 @@
 # Codex History Viewer
 
 A VS Code extension to browse, search, tag, import/export, and manage local Codex CLI / Claude Code session history, then resume selected sessions directly in the related VS Code extension.
-Latest release: **1.1.5** (2026-04-14).
+Latest release: **1.2.0** (2026-04-16).
 
 ## Features
 
@@ -13,6 +13,11 @@ Latest release: **1.1.5** (2026-04-14).
 - Tag filters in **Pinned** and **Search** views (separate from History filters)
 - Session tooltips can show both **Started** and **Last activity** timestamps when they differ
 - Open any session in a chat-like viewer (Webview) with Markdown rendering, syntax-highlighted fenced code blocks (powered by Shiki), and toolbar quick actions for pin/unpin, Markdown transcript, prompt excerpt copy, and source-aware resume (**OpenAI Codex** for Codex sessions, **Claude Code** for Claude sessions)
+- Chat viewer supports tool-specific cards with a configurable display mode (`detailsOnly` / `compactCards`)
+- Chat viewer can softly fold long `user` and `assistant` messages independently, while **Show details** always expands them fully
+- Chat viewer toolbar includes quick scroll actions (top / bottom) and automatically switches label buttons to icon-only mode when the header gets narrow
+- Reload in the chat viewer preserves scroll/selection and refreshes the tab title using the active history date basis
+- Workspace-relative Markdown file links open inside VS Code from both chat sessions and Markdown transcripts
 - Chat tab icon switches by source (`Codex` / `Claude`)
 - Chat header annotation block (tags + note), including quick actions (filter/remove/edit)
 - Time zone-aware timestamps (chat view and transcripts)
@@ -66,6 +71,9 @@ For the full command list with per-command descriptions, see:
 - `codexHistoryViewer.search.caseSensitive`: Whether search is case-sensitive
 - `codexHistoryViewer.search.defaultRoles`: Default roles used when running Search
 - `codexHistoryViewer.history.dateBasis`: Which session date the History tree and date-based search filters use (`started` or `lastActivity`)
+- `codexHistoryViewer.chat.toolDisplayMode`: How tool activity appears in the chat viewer (`detailsOnly` or `compactCards`)
+- `codexHistoryViewer.chat.userLongMessageFolding`: How long `user` messages are folded in the chat viewer (`off`, `auto`, or `always`)
+- `codexHistoryViewer.chat.assistantLongMessageFolding`: How long `assistant` messages are folded in the chat viewer (`off`, `auto`, or `always`)
 - `codexHistoryViewer.delete.useTrash`: When deleting, move files to the OS trash/recycle bin (recommended)
 - `codexHistoryViewer.resume.openTarget`: Where `Resume in OpenAI Codex` opens the conversation (`sidebar` by default, or `panel`)
 - `codexHistoryViewer.ui.language`: UI language for this extension (`auto` / `en` / `ja`). This setting also affects timestamps: `ja` uses `Asia/Tokyo` (JST), while `auto`/`en` use your system time zone (falls back to `UTC` if unavailable).
@@ -98,10 +106,13 @@ For the full command list with per-command descriptions, see:
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 - After successful import or promote (copy-to-today), a hint is shown to reload Codex CLI history if Codex is running.
 
-## What's New in 1.1.5
+## What's New in 1.2.0
 
-- Added `codexHistoryViewer.history.dateBasis` to switch the History tree and date-based search filters between session start date and last message date.
-- Session tooltips now show `Started` and `Last activity` when the two timestamps differ.
+- Added tool-specific cards in the chat viewer, plus `codexHistoryViewer.chat.toolDisplayMode` to keep the old details-only behavior or always show compact cards.
+- Added independent long-message folding controls for `user` and `assistant` messages, with defaults that preserve the previous fully expanded behavior.
+- Added top / bottom scroll buttons in the chat toolbar and automatic icon-only compaction when the toolbar width becomes tight.
+- Reload now refreshes the chat tab title using the active history date basis and keeps the current scroll position and selected message.
+- Workspace-relative Markdown file links now open correctly inside VS Code from both chat sessions and Markdown transcripts.
 
 ## Changelog
 

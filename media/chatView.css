@@ -69,6 +69,16 @@ body {
   white-space: nowrap;
 }
 
+#toolbar.toolbarCompact button:not(.toolbarIconBtn) {
+  padding: 4px 8px;
+  gap: 0;
+  line-height: 0;
+}
+
+#toolbar.toolbarCompact .toolbarBtnLabel {
+  display: none;
+}
+
 #toolbar .toolbarIconBtn {
   /* Icon-only toolbar button. */
   padding: 4px 8px;
@@ -233,7 +243,7 @@ body {
 }
 
 .row.tool {
-  justify-content: center;
+  justify-content: flex-start;
 }
 
 .bubble {
@@ -261,6 +271,199 @@ body {
 
 .bubble.tool {
   background: var(--chv-tool-bg);
+}
+
+.toolCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: hidden;
+  border-color: var(--chv-border);
+  padding-left: 16px;
+  --tool-accent: color-mix(in srgb, var(--chv-border) 55%, var(--chv-muted) 45%);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.toolCard::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--tool-accent);
+  border-radius: 12px 0 0 12px;
+}
+
+.toolCard:not(.toolCard-severity-error):not(.toolCard-severity-warning):hover {
+  border-color: color-mix(in srgb, var(--chv-border) 74%, var(--tool-accent) 26%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chv-border) 78%, var(--tool-accent) 22%);
+}
+
+.toolCardHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.toolCardTitleWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolCardIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--tool-accent);
+}
+
+.toolCardIcon svg,
+.toolCardIcon path {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.toolCardTitle {
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.toolCardBadge {
+  flex-shrink: 0;
+  border: 1px solid var(--chv-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  color: var(--chv-muted);
+  background: color-mix(in srgb, var(--chv-tool-bg) 88%, var(--chv-border) 12%);
+}
+
+.toolCardPrimary {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  font-weight: 500;
+}
+
+.toolCardPrimary-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.toolCardSecondary,
+.toolCardMeta {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--chv-muted);
+  white-space: pre-wrap;
+}
+
+.toolCardPath {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--chv-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.toolCardMetaLine {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.toolCardMetaTags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.toolCardMetaTag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  max-width: 100%;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 84%, var(--tool-accent) 16%);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--chv-muted);
+  background: color-mix(in srgb, var(--chv-tool-bg) 90%, var(--tool-accent) 10%);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolCard.toolCard-kind-bash {
+  --tool-accent: var(--vscode-terminal-ansiBlue, #569cd6);
+}
+
+.toolCard.toolCard-kind-read {
+  --tool-accent: var(--vscode-terminal-ansiCyan, #4ec9b0);
+}
+
+.toolCard.toolCard-kind-write,
+.toolCard.toolCard-kind-edit {
+  --tool-accent: var(--vscode-terminal-ansiGreen, #6a9955);
+}
+
+.toolCard.toolCard-kind-glob,
+.toolCard.toolCard-kind-grep,
+.toolCard.toolCard-kind-webSearch,
+.toolCard.toolCard-kind-webFetch {
+  --tool-accent: var(--vscode-terminal-ansiYellow, #dcdcaa);
+}
+
+.toolCard.toolCard-kind-agent {
+  --tool-accent: var(--vscode-terminal-ansiMagenta, #c586c0);
+}
+
+.toolCard.toolCard-kind-unknown {
+  --tool-accent: color-mix(in srgb, var(--chv-border) 55%, var(--chv-muted) 45%);
+}
+
+.toolCard.toolCard-severity-error {
+  --tool-accent: var(--vscode-errorForeground, #f48771);
+  border-color: var(--vscode-errorForeground, #f48771);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-errorForeground, #f48771) 18%, transparent);
+}
+
+.toolCard.toolCard-severity-warning {
+  --tool-accent: var(--vscode-editorWarning-foreground, #cca700);
+  border-color: var(--vscode-editorWarning-foreground, #cca700);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 18%, transparent);
+}
+
+.toolCard.toolCard-severity-error .toolCardBadge {
+  color: var(--vscode-errorForeground, #f48771);
+  border-color: color-mix(in srgb, var(--vscode-errorForeground, #f48771) 34%, var(--chv-border) 66%);
+  background: color-mix(in srgb, var(--vscode-errorForeground, #f48771) 12%, var(--chv-tool-bg) 88%);
+}
+
+.toolCard.toolCard-severity-warning .toolCardBadge {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  border-color: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 34%, var(--chv-border) 66%);
+  background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 12%, var(--chv-tool-bg) 88%);
 }
 
 .metaLine {
@@ -316,6 +519,61 @@ body {
 
 .textBlock {
   white-space: pre-wrap;
+}
+
+.messageBody {
+  position: relative;
+  min-width: 0;
+}
+
+.messageBody-collapsed {
+  overflow: hidden;
+}
+
+.messageBody-collapsed-user {
+  max-height: 240px;
+}
+
+.messageBody-collapsed-assistant {
+  max-height: 320px;
+}
+
+.messageBodyFade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 72px;
+  pointer-events: none;
+}
+
+.bubble.user .messageBodyFade {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0), var(--chv-user-bg) 86%);
+}
+
+.bubble.assistant .messageBodyFade {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0), var(--chv-assistant-bg) 86%);
+}
+
+.messageExpandRow {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 8px;
+}
+
+.messageExpandBtn {
+  background: transparent;
+  border: 1px solid var(--chv-border);
+  color: var(--chv-muted);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.messageExpandBtn:hover {
+  border-color: var(--chv-accent);
+  color: var(--chv-fg);
 }
 
 .bubbleActions {
@@ -457,7 +715,7 @@ body {
 }
 
 .codeHeader .codeCopyBtn.iconBtn {
-  /* Optimize the icon-only copy button in tool details. */
+  /* Keep code block copy buttons compact when rendered as icons. */
   padding: 2px 6px;
   line-height: 0;
 }

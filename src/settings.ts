@@ -1,8 +1,10 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import type { ToolDisplayMode } from "./tools/toolTypes";
 
 export type HistoryDateBasis = "started" | "lastActivity";
+export type LongMessageFoldingMode = "off" | "auto" | "always";
 
 export interface CodexHistoryViewerConfig {
   sessionsRoot: string;
@@ -16,6 +18,9 @@ export interface CodexHistoryViewerConfig {
   deleteUseTrash: boolean;
   resumeOpenTarget: "sidebar" | "panel";
   historyDateBasis: HistoryDateBasis;
+  toolDisplayMode: ToolDisplayMode;
+  userLongMessageFolding: LongMessageFoldingMode;
+  assistantLongMessageFolding: LongMessageFoldingMode;
 }
 
 function getDefaultSessionsRoot(): string {
@@ -37,6 +42,11 @@ function parseEnabledSources(value: unknown): { enableCodexSource: boolean; enab
   return { enableCodexSource, enableClaudeSource };
 }
 
+function parseLongMessageFoldingMode(value: unknown): LongMessageFoldingMode {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "always" ? "always" : normalized === "auto" ? "auto" : "off";
+}
+
 export function getConfig(): CodexHistoryViewerConfig {
   const cfg = vscode.workspace.getConfiguration("codexHistoryViewer");
   const sessionsRootRaw = (cfg.get<string>("sessionsRoot") ?? "").trim();
@@ -50,6 +60,15 @@ export function getConfig(): CodexHistoryViewerConfig {
   const resumeOpenTarget: "sidebar" | "panel" = resumeOpenTargetRaw === "panel" ? "panel" : "sidebar";
   const historyDateBasisRaw = (cfg.get<string>("history.dateBasis") ?? "started").trim().toLowerCase();
   const historyDateBasis: HistoryDateBasis = historyDateBasisRaw === "lastactivity" ? "lastActivity" : "started";
+  const toolDisplayModeRaw = (cfg.get<string>("chat.toolDisplayMode") ?? "detailsOnly").trim().toLowerCase();
+  const toolDisplayMode: ToolDisplayMode = toolDisplayModeRaw === "compactcards" ? "compactCards" : "detailsOnly";
+  const legacyLongMessageFolding = parseLongMessageFoldingMode(cfg.get<string>("chat.longMessageFolding") ?? "off");
+  const userLongMessageFolding = parseLongMessageFoldingMode(
+    cfg.get<string>("chat.userLongMessageFolding") ?? legacyLongMessageFolding,
+  );
+  const assistantLongMessageFolding = parseLongMessageFoldingMode(
+    cfg.get<string>("chat.assistantLongMessageFolding") ?? legacyLongMessageFolding,
+  );
 
   return {
     sessionsRoot: sessionsRootRaw.length > 0 ? sessionsRootRaw : getDefaultSessionsRoot(),
@@ -63,5 +82,8 @@ export function getConfig(): CodexHistoryViewerConfig {
     deleteUseTrash: cfg.get<boolean>("delete.useTrash") ?? true,
     resumeOpenTarget,
     historyDateBasis,
+    toolDisplayMode,
+    userLongMessageFolding,
+    assistantLongMessageFolding,
   };
 }

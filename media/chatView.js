@@ -2,6 +2,7 @@
 (function () {
   const vscode = acquireVsCodeApi();
 
+  const toolbarEl = document.getElementById("toolbar");
   const metaEl = document.getElementById("meta");
   const annotationEl = document.getElementById("annotation");
   const timelineEl = document.getElementById("timeline");
@@ -9,14 +10,20 @@
   const btnPinToggle = document.getElementById("btnPinToggle");
   const btnMarkdown = document.getElementById("btnMarkdown");
   const btnCopyResume = document.getElementById("btnCopyResume");
-  const btnReload = document.getElementById("btnReload");
   const btnToggleDetails = document.getElementById("btnToggleDetails");
+  const btnScrollTop = document.getElementById("btnScrollTop");
+  const btnScrollBottom = document.getElementById("btnScrollBottom");
+  const btnReload = document.getElementById("btnReload");
 
   const md = createMarkdownRenderer();
   const COPY_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 1.5H6A1.5 1.5 0 0 0 4.5 3H3.75A1.75 1.75 0 0 0 2 4.75v8.5C2 14.216 2.784 15 3.75 15h8.5c.966 0 1.75-.784 1.75-1.75v-8.5C14 3.784 13.216 3 12.25 3H11.5A1.5 1.5 0 0 0 10 1.5Zm-4 1H10a.5.5 0 0 1 .5.5V3H5.5V3a.5.5 0 0 1 .5-.5ZM3.75 4h8.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-8.5a.75.75 0 0 1-.75-.75v-8.5A.75.75 0 0 1 3.75 4Z"/></svg>';
   const RELOAD_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.25a5.75 5.75 0 1 0 5.75 5.75.75.75 0 0 0-1.5 0A4.25 4.25 0 1 1 8 3.75h2.06l-.8.8a.75.75 0 0 0 1.06 1.06l2.08-2.08a.75.75 0 0 0 0-1.06L10.32.39A.75.75 0 0 0 9.26 1.45l.8.8H8Z"/></svg>';
+  const SCROLL_TOP_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 2h9.5a.75.75 0 0 1 0 1.5h-9.5a.75.75 0 0 1 0-1.5Zm4.22 2.47a.75.75 0 0 1 1.06 0l3.25 3.25a.75.75 0 1 1-1.06 1.06L8.75 6.81V13a.75.75 0 0 1-1.5 0V6.81L5.28 8.78a.75.75 0 1 1-1.06-1.06l3.25-3.25Z"/></svg>';
+  const SCROLL_BOTTOM_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 12.5h9.5a.75.75 0 0 1 0 1.5h-9.5a.75.75 0 0 1 0-1.5Zm4-9.5a.75.75 0 0 1 1.5 0v6.19l1.97-1.97a.75.75 0 1 1 1.06 1.06l-3.25 3.25a.75.75 0 0 1-1.06 0L4.22 8.28a.75.75 0 1 1 1.06-1.06l1.97 1.97V3Z"/></svg>';
   const NAV_UP_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.2a.75.75 0 0 1 .53.22l4.1 4.1a.75.75 0 1 1-1.06 1.06L8 4.99 4.43 8.58a.75.75 0 1 1-1.06-1.06l4.1-4.1A.75.75 0 0 1 8 3.2Z"/></svg>';
   const NAV_DOWN_ICON_SVG =
@@ -33,6 +40,28 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.25c3.53 0 6.25 3.62 6.25 4.75S11.53 12.75 8 12.75 1.75 9.13 1.75 8 4.47 3.25 8 3.25Zm0 1.5c-2.7 0-4.75 2.54-4.75 3.25s2.05 3.25 4.75 3.25 4.75-2.54 4.75-3.25S10.7 4.75 8 4.75Zm0 1a2.25 2.25 0 1 1 0 4.5 2.25 2.25 0 0 1 0-4.5Z"/></svg>';
   const DETAILS_OFF_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.28 1.72a.75.75 0 1 0-1.06 1.06l11 11a.75.75 0 0 0 1.06-1.06l-1.45-1.45A7.74 7.74 0 0 0 14.25 8C14.25 6.87 11.53 3.25 8 3.25c-.97 0-1.88.27-2.72.7L2.28 1.72Zm4.09 4.09a2.25 2.25 0 0 1 3.82 2.43L6.37 5.81Zm2.82 5.94A5.65 5.65 0 0 1 8 12.75C4.47 12.75 1.75 9.13 1.75 8c0-.7 1.07-2.14 2.75-2.86l1.16 1.16a2.25 2.25 0 0 0 3.04 3.04l.49.49Z"/></svg>';
+  const TOOL_ICON_SVGS = Object.freeze({
+    agent:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 1.75a.75.75 0 0 1 .75.75v.84a4.5 4.5 0 0 1 3.91 3.91h.84a.75.75 0 0 1 0 1.5h-.84a4.5 4.5 0 0 1-3.91 3.91v.84a.75.75 0 0 1-1.5 0v-.84a4.5 4.5 0 0 1-3.91-3.91H2.5a.75.75 0 0 1 0-1.5h.84a4.5 4.5 0 0 1 3.91-3.91V2.5A.75.75 0 0 1 8 1.75Zm0 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>',
+    bash:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 2h10.5C14.216 2 15 2.784 15 3.75v8.5c0 .966-.784 1.75-1.75 1.75H2.75A1.75 1.75 0 0 1 1 12.25v-8.5C1 2.784 1.784 2 2.75 2Zm0 1.5a.25.25 0 0 0-.25.25v8.5c0 .14.11.25.25.25h10.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25H2.75Zm1.66 2.03a.75.75 0 0 1 1.06 0l1.94 1.94a.75.75 0 0 1 0 1.06l-1.94 1.94a.75.75 0 1 1-1.06-1.06L5.81 8 4.41 6.59a.75.75 0 0 1 0-1.06ZM8 10.25h3a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1 0-1.5Z"/></svg>',
+    edit:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M11.56 1.56a1.9 1.9 0 0 1 2.68 2.68l-7.4 7.4a2.25 2.25 0 0 1-1.01.57l-2.24.56a.75.75 0 0 1-.91-.91l.56-2.24c.1-.4.3-.74.57-1.01l7.4-7.4Zm1.62 1.06a.4.4 0 0 0-.56 0l-1.04 1.04 1.62 1.62 1.04-1.04a.4.4 0 0 0 0-.56l-1.06-1.06ZM10.52 4.72 4.31 10.93a.75.75 0 0 0-.19.34l-.3 1.2 1.2-.3a.75.75 0 0 0 .34-.19l6.21-6.21-1.05-1.05Z"/></svg>',
+    glob:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 3A1.75 1.75 0 0 0 1 4.75v6.5C1 12.216 1.784 13 2.75 13h5.7a.75.75 0 0 0 0-1.5h-5.7a.25.25 0 0 1-.25-.25v-6.5c0-.14.11-.25.25-.25h3.12l1.5 1.5h1.88a.25.25 0 0 1 .25.25v1.2a.75.75 0 0 0 1.5 0v-1.2A1.75 1.75 0 0 0 9.25 4.5H7.99L6.49 3H2.75Zm9.82 5.6a2.6 2.6 0 1 1-1.84 4.44l-1.7 1.7a.75.75 0 1 1-1.06-1.06l1.7-1.7A2.6 2.6 0 0 1 12.57 8.6Zm0 1.5a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2Z"/></svg>',
+    grep:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a4.75 4.75 0 1 1 0 9.5 4.75 4.75 0 0 1 0-9.5Zm0 1.5a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Zm4.9 6.83 2.13 2.14a.75.75 0 1 1-1.06 1.06l-2.14-2.13a.75.75 0 1 1 1.07-1.07Zm-5.9-4.08h2.8a.75.75 0 0 1 0 1.5h-2.8a.75.75 0 0 1 0-1.5Z"/></svg>',
+    read:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 1.75h6.7c.4 0 .78.16 1.06.44l1.8 1.8c.28.28.44.66.44 1.06v7.7c0 .97-.78 1.75-1.75 1.75h-8A1.75 1.75 0 0 1 1.75 12.75v-9c0-.97.78-1.75 1.75-1.75Zm0 1.5a.25.25 0 0 0-.25.25v9c0 .14.11.25.25.25h8a.25.25 0 0 0 .25-.25V5.56L9.69 3.75H3.25Zm1.5 3.5h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1 0-1.5Zm0 2.5h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1 0-1.5Z"/></svg>',
+    unknown:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 1.75a3.25 3.25 0 0 1 3.25 3.25c0 1.11-.53 1.88-1.1 2.43-.27.26-.52.45-.72.6-.14.1-.27.2-.36.29-.18.16-.32.34-.32.68v.25a.75.75 0 0 1-1.5 0V9c0-.9.43-1.44.82-1.79.16-.15.34-.28.51-.41.17-.12.33-.24.47-.38.42-.4.7-.82.7-1.42A1.75 1.75 0 0 0 6.25 5a.75.75 0 0 1-1.5 0A3.25 3.25 0 0 1 8 1.75Zm0 11.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg>',
+    webFetch:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 1.75a6.25 6.25 0 1 1 0 12.5 6.25 6.25 0 0 1 0-12.5Zm0 1.5A4.75 4.75 0 0 0 5.15 12h1.28c-.28-.78-.45-1.7-.45-2.7H3.55a4.74 4.74 0 0 0 1.6 2.7H8Zm2.85-1.25h-1.28c.28.78.45 1.7.45 2.7h2.43a4.74 4.74 0 0 0-1.6-2.7Zm-5.7 0a4.74 4.74 0 0 0-1.6 2.7h2.43c0-1 .17-1.92.45-2.7H5.15ZM8 3.37c-.35.52-.68 1.4-.68 2.83h1.36c0-1.43-.33-2.31-.68-2.83Zm2.02 4.33H6c0 1.24.18 2.28.48 3.05h3.04c.3-.77.48-1.81.48-3.05Zm-.77 5.55h1.6a4.76 4.76 0 0 0 1.6-2.7h-2.43c0 .99-.17 1.92-.45 2.7Zm-2.5 0c-.28-.78-.45-1.71-.45-2.7H3.55a4.76 4.76 0 0 0 1.6 2.7h1.6Zm1.25-.62c.35-.52.68-1.4.68-2.83H7.32c0 1.43.33 2.31.68 2.83Z"/></svg>',
+    webSearch:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a4.75 4.75 0 1 1 0 9.5 4.75 4.75 0 0 1 0-9.5Zm0 1.5a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Zm4.9 6.83 2.13 2.14a.75.75 0 1 1-1.06 1.06l-2.14-2.13a.75.75 0 1 1 1.07-1.07Z"/></svg>',
+    write:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 1.75h7.5c.4 0 .78.16 1.06.44l1 1c.28.28.44.66.44 1.06v8.5c0 .97-.78 1.75-1.75 1.75h-8A1.75 1.75 0 0 1 1.75 12.75v-9c0-.97.78-1.75 1.75-1.75Zm0 1.5a.25.25 0 0 0-.25.25v9c0 .14.11.25.25.25h8a.25.25 0 0 0 .25-.25v-8.19l-.81-.81H3.25Zm1.5 1.5h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5Zm3 3.25a.75.75 0 0 1 .75.75v1h1a.75.75 0 0 1 0 1.5h-1v1a.75.75 0 0 1-1.5 0v-1h-1a.75.75 0 0 1 0-1.5h1v-1A.75.75 0 0 1 7.75 8Z"/></svg>',
+  });
 
   /** @type {any} */
   let model = null;
@@ -40,17 +69,31 @@
   let i18n = {};
   /** @type {{ timeZone?: string }} */
   let dateTime = {};
+  let toolDisplayMode = "detailsOnly";
+  let userLongMessageFolding = "off";
+  let assistantLongMessageFolding = "off";
   let showDetails = false;
   let expandedNote = false;
   let selectedMessageIndex = null;
   let messageNavMap = new Map();
+  let expandedMessageIndexes = new Set();
   let isPinned = false;
+  let toolbarCompactFrame = 0;
+  const toolbarResizeObserver =
+    typeof ResizeObserver === "function" && toolbarEl instanceof HTMLElement
+      ? new ResizeObserver(() => {
+          scheduleToolbarCompactMode();
+        })
+      : null;
 
   // Initial button labels (overwritten after receiving sessionData).
   setToolbarButtonWithIcon(btnResumeInCodex, "Resume in Codex", RESUME_ICON_SVG);
   setToolbarButtonWithIcon(btnPinToggle, "Pin", PIN_ICON_SVG);
   setToolbarButtonWithIcon(btnMarkdown, "Markdown", MARKDOWN_ICON_SVG);
   setToolbarButtonWithIcon(btnCopyResume, "Copy prompt", COPY_ICON_SVG);
+  // Scroll buttons stay icon-only in the toolbar.
+  if (btnScrollTop instanceof HTMLElement) btnScrollTop.innerHTML = SCROLL_TOP_ICON_SVG;
+  if (btnScrollBottom instanceof HTMLElement) btnScrollBottom.innerHTML = SCROLL_BOTTOM_ICON_SVG;
   // Reload is icon-only (tooltip is set via i18n).
   btnReload.innerHTML = RELOAD_ICON_SVG;
   setToolbarButtonWithIcon(btnToggleDetails, "Details", DETAILS_OFF_ICON_SVG);
@@ -72,6 +115,14 @@
     vscode.postMessage({ type: "copyResumePrompt" });
   });
 
+  btnScrollTop.addEventListener("click", () => {
+    scrollToBoundary("top");
+  });
+
+  btnScrollBottom.addEventListener("click", () => {
+    scrollToBoundary("bottom");
+  });
+
   btnReload.addEventListener("click", () => {
     // Send current position to the extension so reload can preserve scroll/selection.
     vscode.postMessage({
@@ -86,6 +137,11 @@
     updateToolbar();
     render();
   });
+
+  window.addEventListener("resize", () => {
+    scheduleToolbarCompactMode();
+  });
+  if (toolbarResizeObserver) toolbarResizeObserver.observe(toolbarEl);
 
   document.addEventListener("click", (event) => {
     const target = event.target;
@@ -117,10 +173,20 @@
 
       const prevShowDetails = showDetails;
       const prevSelectedMessageIndex = selectedMessageIndex;
+      const prevExpandedMessageIndexes = new Set(expandedMessageIndexes);
 
       model = msg.model || null;
       i18n = msg.i18n || {};
       dateTime = msg.dateTime || {};
+      toolDisplayMode = msg.toolDisplayMode === "compactCards" ? "compactCards" : "detailsOnly";
+      userLongMessageFolding = normalizeLongMessageFoldingMode(
+        typeof msg.userLongMessageFolding === "string" ? msg.userLongMessageFolding : msg.longMessageFolding,
+      );
+      assistantLongMessageFolding = normalizeLongMessageFoldingMode(
+        typeof msg.assistantLongMessageFolding === "string"
+          ? msg.assistantLongMessageFolding
+          : msg.longMessageFolding,
+      );
       isPinned = !!msg.isPinned;
       expandedNote = false;
       selectedMessageIndex = isRestore
@@ -130,6 +196,10 @@
         : typeof msg.revealMessageIndex === "number"
           ? msg.revealMessageIndex
           : null;
+      expandedMessageIndexes = isRestore ? prevExpandedMessageIndexes : new Set();
+      if (!isRestore && typeof msg.revealMessageIndex === "number") {
+        expandedMessageIndexes.add(msg.revealMessageIndex);
+      }
 
       // On reload, preserve the current UI state (details visibility); on normal render, auto-determine as before.
       showDetails = isRestore ? prevShowDetails : shouldAutoShowDetails(model, selectedMessageIndex);
@@ -147,6 +217,17 @@
     if (msg.type === "i18n") {
       i18n = msg.i18n || {};
       dateTime = msg.dateTime || dateTime || {};
+      if (msg.toolDisplayMode === "compactCards" || msg.toolDisplayMode === "detailsOnly") {
+        toolDisplayMode = msg.toolDisplayMode;
+      }
+      userLongMessageFolding = normalizeLongMessageFoldingMode(
+        typeof msg.userLongMessageFolding === "string" ? msg.userLongMessageFolding : msg.longMessageFolding,
+      );
+      assistantLongMessageFolding = normalizeLongMessageFoldingMode(
+        typeof msg.assistantLongMessageFolding === "string"
+          ? msg.assistantLongMessageFolding
+          : msg.longMessageFolding,
+      );
       updateToolbar();
       render();
       return;
@@ -191,6 +272,14 @@
     setToolbarButtonWithIcon(btnCopyResume, copyResumeLabel, COPY_ICON_SVG);
     btnCopyResume.title = copyResumeTooltip;
     btnCopyResume.setAttribute("aria-label", copyResumeTooltip);
+    const scrollTopLabel = i18n.scrollTop || "Top";
+    const scrollTopTooltip = i18n.scrollTopTooltip || scrollTopLabel;
+    btnScrollTop.title = scrollTopTooltip;
+    btnScrollTop.setAttribute("aria-label", scrollTopTooltip);
+    const scrollBottomLabel = i18n.scrollBottom || "Bottom";
+    const scrollBottomTooltip = i18n.scrollBottomTooltip || scrollBottomLabel;
+    btnScrollBottom.title = scrollBottomTooltip;
+    btnScrollBottom.setAttribute("aria-label", scrollBottomTooltip);
     const reloadLabel = i18n.reload || "Reload";
     const reloadTooltip = i18n.reloadTooltip || reloadLabel;
     btnReload.title = reloadTooltip;
@@ -205,6 +294,7 @@
     setToolbarButtonWithIcon(btnToggleDetails, detailsLabel, detailsIcon);
     btnToggleDetails.title = detailsTooltip;
     btnToggleDetails.setAttribute("aria-label", detailsTooltip);
+    scheduleToolbarCompactMode();
   }
 
   function setToolbarButtonWithIcon(button, label, iconSvg) {
@@ -219,6 +309,28 @@
     text.textContent = label;
 
     button.replaceChildren(icon, text);
+  }
+
+  function scrollToBoundary(direction) {
+    const scrollingEl = document.scrollingElement || document.documentElement;
+    const top = direction === "bottom" ? scrollingEl.scrollHeight : 0;
+    window.scrollTo({ top, behavior: "smooth" });
+  }
+
+  function scheduleToolbarCompactMode() {
+    if (!(toolbarEl instanceof HTMLElement)) return;
+    if (toolbarCompactFrame) cancelAnimationFrame(toolbarCompactFrame);
+    toolbarCompactFrame = requestAnimationFrame(() => {
+      toolbarCompactFrame = 0;
+      updateToolbarCompactMode();
+    });
+  }
+
+  function updateToolbarCompactMode() {
+    if (!(toolbarEl instanceof HTMLElement)) return;
+    toolbarEl.classList.remove("toolbarCompact");
+    const needsCompact = toolbarEl.scrollWidth > toolbarEl.clientWidth + 1;
+    toolbarEl.classList.toggle("toolbarCompact", needsCompact);
   }
 
   function render() {
@@ -347,8 +459,7 @@
 
   function renderItem(item) {
     if (item.type === "message") return renderMessage(item);
-    // Toggling "Details" also toggles tool/note rendering.
-    if (item.type === "tool") return showDetails ? renderTool(item) : null;
+    if (item.type === "tool") return shouldRenderToolCard() ? renderTool(item) : null;
     return showDetails ? renderNote(item) : null;
   }
 
@@ -402,21 +513,44 @@
     }
     bubble.appendChild(metaLine);
 
+    const collapseState = resolveMessageCollapseState(item, role, textToRender);
+    const body = el("div", { className: `messageBody messageBody-${role}` });
+    if (collapseState.canCollapse && collapseState.collapsed) {
+      body.classList.add("messageBody-collapsed", `messageBody-collapsed-${role}`);
+    }
+
+    const content = el("div", { className: role === "assistant" ? "messageBodyContent markdown" : "messageBodyContent" });
     if (role === "assistant") {
-      const mdBlock = el("div", { className: "markdown" });
-      renderMarkdownInto(mdBlock, textToRender);
-      bubble.appendChild(mdBlock);
+      renderMarkdownInto(content, textToRender);
     } else {
       const blocks = splitFencedCode(textToRender);
       for (const b of blocks) {
         if (b.type === "text") {
           const textBlock = el("div", { className: "textBlock" });
           textBlock.textContent = b.text;
-          bubble.appendChild(textBlock);
+          content.appendChild(textBlock);
         } else if (b.type === "code") {
-          bubble.appendChild(renderCodeBlock(b.lang, b.code));
+          content.appendChild(renderCodeBlock(b.lang, b.code));
         }
       }
+    }
+    body.appendChild(content);
+    if (collapseState.canCollapse && collapseState.collapsed) {
+      body.appendChild(el("div", { className: "messageBodyFade", "aria-hidden": "true" }));
+    }
+    bubble.appendChild(body);
+
+    if (collapseState.canCollapse) {
+      const expandRow = el("div", { className: "messageExpandRow" });
+      const expandBtn = el("button", { type: "button", className: "messageExpandBtn" });
+      expandBtn.textContent = collapseState.collapsed ? i18n.showMore || "Show more" : i18n.showLess || "Show less";
+      expandBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleMessageExpansion(item.messageIndex, collapseState.collapsed);
+      });
+      expandRow.appendChild(expandBtn);
+      bubble.appendChild(expandRow);
     }
 
     if (role === "user" || role === "assistant") {
@@ -439,52 +573,184 @@
     return row;
   }
 
+  function resolveMessageCollapseState(item, role, text) {
+    if (showDetails) return { canCollapse: false, collapsed: false };
+    if (role !== "user" && role !== "assistant") return { canCollapse: false, collapsed: false };
+    if (!item || typeof item.messageIndex !== "number") return { canCollapse: false, collapsed: false };
+    const foldingMode = role === "user" ? userLongMessageFolding : assistantLongMessageFolding;
+    if (foldingMode === "off") {
+      return { canCollapse: false, collapsed: false };
+    }
+    if (!canCollapseMessage(role, text, foldingMode)) return { canCollapse: false, collapsed: false };
+    return {
+      canCollapse: true,
+      collapsed: !expandedMessageIndexes.has(item.messageIndex),
+    };
+  }
+
+  function canCollapseMessage(role, text, foldingMode) {
+    const normalizedText = typeof text === "string" ? text.trim() : "";
+    if (!normalizedText) return false;
+
+    const lineCount = countMessageLines(normalizedText);
+    const charCount = normalizedText.length;
+    const hasCodeFence = normalizedText.includes("```");
+    const useCompactThreshold = foldingMode === "always";
+    if (role === "user") {
+      return useCompactThreshold
+        ? charCount > 240 || lineCount > 5 || (hasCodeFence && lineCount > 4)
+        : charCount > 900 || lineCount > 14 || (hasCodeFence && lineCount > 10);
+    }
+    return useCompactThreshold
+      ? charCount > 320 || lineCount > 7 || (hasCodeFence && lineCount > 5)
+      : charCount > 1400 || lineCount > 20 || (hasCodeFence && lineCount > 12);
+  }
+
+  function countMessageLines(text) {
+    return String(text || "").replace(/\r\n/g, "\n").split("\n").length;
+  }
+
+  function toggleMessageExpansion(messageIndex, expand) {
+    if (typeof messageIndex !== "number") return;
+    if (expand) expandedMessageIndexes.add(messageIndex);
+    else expandedMessageIndexes.delete(messageIndex);
+    render();
+    if (typeof selectedMessageIndex === "number") restoreHighlight(selectedMessageIndex);
+    const target = document.getElementById(`msg-${messageIndex}`);
+    if (target) target.scrollIntoView({ block: "nearest" });
+  }
+
   function renderTool(item) {
     const row = el("div", { className: "row tool" });
-    const bubble = el("div", { className: "bubble tool" });
+    const presentation = resolveToolPresentation(item);
+    const bubble = el("div", { className: "bubble tool toolCard" });
+    bubble.classList.add(`toolCard-kind-${presentation.toolKind}`);
+    if (presentation.severity) bubble.classList.add(`toolCard-severity-${presentation.severity}`);
+    if (showDetails) bubble.classList.add("toolCard-expanded");
 
-    const metaLine = el("div", { className: "metaLine" });
-    const toolTag = el("span", { className: "tag" });
-    toolTag.textContent = i18n.tool || "Tool";
-    metaLine.appendChild(toolTag);
-    const nameTag = el("span", { className: "tag" });
-    nameTag.textContent = item.name || "function_call";
-    metaLine.appendChild(nameTag);
+    const header = el("div", { className: "toolCardHeader" });
+    const titleWrap = el("div", { className: "toolCardTitleWrap" });
+    const icon = el("span", { className: "toolCardIcon", "aria-hidden": "true" });
+    icon.innerHTML = getToolIconSvg(presentation.toolKind);
+    titleWrap.appendChild(icon);
+    const title = el("div", { className: "toolCardTitle" });
+    title.textContent = presentation.title;
+    titleWrap.appendChild(title);
+    header.appendChild(titleWrap);
+    if (presentation.badgeText) {
+      const badge = el("span", { className: "toolCardBadge" });
+      badge.textContent = presentation.badgeText;
+      header.appendChild(badge);
+    }
+    bubble.appendChild(header);
+
+    const primary = el("div", { className: "toolCardPrimary" });
+    if (!showDetails) {
+      primary.classList.add("toolCardPrimary-clamped");
+      primary.title = presentation.primaryText;
+    }
+    primary.textContent = presentation.primaryText;
+    bubble.appendChild(primary);
+
+    if (presentation.secondaryText) {
+      const secondary = el("div", { className: "toolCardSecondary" });
+      secondary.textContent = presentation.secondaryText;
+      bubble.appendChild(secondary);
+    }
+
+    if (presentation.relatedFilePath && presentation.relatedFilePath !== presentation.primaryText) {
+      const pathRow = el("div", { className: "toolCardPath" });
+      pathRow.title = presentation.relatedFilePath;
+      pathRow.textContent = presentation.relatedFilePath;
+      bubble.appendChild(pathRow);
+    }
+
+    const metaLine = el("div", { className: "toolCardMetaLine" });
+    const metaTags = el("div", { className: "toolCardMetaTags" });
+    appendToolMetaTag(metaTags, item.name || "function_call");
+    if (typeof item.messageIndex === "number") {
+      appendToolMetaTag(metaTags, `#${item.messageIndex}`);
+    }
     if (typeof item.callId === "string") {
-      const idTag = el("span", { className: "tag" });
-      idTag.textContent = item.callId;
-      metaLine.appendChild(idTag);
+      appendToolMetaTag(metaTags, item.callId, item.callId);
     }
     if (typeof item.timestampIso === "string") {
-      const ts = el("span", { className: "tag" });
-      ts.textContent = formatIsoYmdHms(item.timestampIso);
-      ts.title = item.timestampIso;
-      metaLine.appendChild(ts);
+      appendToolMetaTag(metaTags, formatIsoYmdHms(item.timestampIso), item.timestampIso);
     }
-    bubble.appendChild(metaLine);
-
-    if (typeof item.argumentsText === "string" && item.argumentsText.length > 0) {
-      const details = el("details", {});
-      details.open = item.argumentsText.length < 2000;
-      const summary = el("summary", {});
-      summary.textContent = i18n.arguments || "Arguments";
-      details.appendChild(summary);
-      details.appendChild(renderCodeBlock("json", item.argumentsText, { copyIcon: true }));
-      bubble.appendChild(details);
+    if (metaTags.childElementCount > 0) {
+      metaLine.appendChild(metaTags);
+      bubble.appendChild(metaLine);
     }
 
-    if (typeof item.outputText === "string" && item.outputText.length > 0) {
-      const details = el("details", {});
-      details.open = item.outputText.length < 2000;
-      const summary = el("summary", {});
-      summary.textContent = i18n.output || "Output";
-      details.appendChild(summary);
-      details.appendChild(renderCodeBlock("", item.outputText, { copyIcon: true }));
-      bubble.appendChild(details);
+    if (showDetails) {
+      appendToolDetailsBlock(bubble, i18n.arguments || "Arguments", "json", item.argumentsText);
+      appendToolDetailsBlock(bubble, i18n.output || "Output", "", item.outputText);
     }
 
     row.appendChild(bubble);
     return row;
+  }
+
+  function shouldRenderToolCard() {
+    return toolDisplayMode === "compactCards" || showDetails;
+  }
+
+  function normalizeLongMessageFoldingMode(value) {
+    return value === "always" ? "always" : value === "auto" ? "auto" : "off";
+  }
+
+  function getToolIconSvg(toolKind) {
+    return TOOL_ICON_SVGS[toolKind] || TOOL_ICON_SVGS.unknown;
+  }
+
+  function resolveToolPresentation(item) {
+    const raw = item && item.presentation && typeof item.presentation === "object" ? item.presentation : null;
+    const toolKind =
+      raw && typeof raw.toolKind === "string" && raw.toolKind.trim().length > 0 ? raw.toolKind.trim() : "unknown";
+    const title =
+      raw && typeof raw.title === "string" && raw.title.trim().length > 0
+        ? raw.title.trim()
+        : i18n.tool || "Tool";
+    const primaryText =
+      raw && typeof raw.primaryText === "string" && raw.primaryText.trim().length > 0
+        ? raw.primaryText.trim()
+        : item.name || "function_call";
+    const secondaryText =
+      raw && typeof raw.secondaryText === "string" && raw.secondaryText.trim().length > 0
+        ? raw.secondaryText.trim()
+        : "";
+    const badgeText =
+      raw && typeof raw.badgeText === "string" && raw.badgeText.trim().length > 0 ? raw.badgeText.trim() : "";
+    const severity =
+      raw && (raw.severity === "info" || raw.severity === "warning" || raw.severity === "error")
+        ? raw.severity
+        : "";
+    const relatedFilePath =
+      raw && typeof raw.relatedFilePath === "string" && raw.relatedFilePath.trim().length > 0
+        ? raw.relatedFilePath.trim()
+        : "";
+    return { toolKind, title, primaryText, secondaryText, badgeText, severity, relatedFilePath };
+  }
+
+  function appendToolMetaTag(container, text, title) {
+    if (!(container instanceof Element)) return;
+    const normalizedText = typeof text === "string" ? text.trim() : "";
+    if (!normalizedText) return;
+    const tag = el("span", { className: "toolCardMetaTag" });
+    tag.textContent = normalizedText;
+    if (typeof title === "string" && title.trim().length > 0) tag.title = title.trim();
+    container.appendChild(tag);
+  }
+
+  function appendToolDetailsBlock(container, label, lang, text) {
+    if (typeof text !== "string" || text.length === 0) return;
+    const details = el("details", {});
+    details.open = text.length < 2000;
+    const summary = el("summary", {});
+    summary.textContent = label;
+    details.appendChild(summary);
+    details.appendChild(renderCodeBlock(lang, text, { copyIcon: true }));
+    container.appendChild(details);
   }
 
   function renderNote(item) {
@@ -605,13 +871,10 @@
     const label = el("span", {});
     label.textContent = lang ? String(lang) : "";
     header.appendChild(label);
-    // Allow the tool details (Arguments/Output) copy button to be icon-only.
-    const useIcon = !!(options && options.copyIcon);
-    const btn = el("button", { type: "button", className: useIcon ? "codeCopyBtn iconBtn" : "codeCopyBtn" });
+    const btn = el("button", { type: "button", className: "codeCopyBtn iconBtn" });
     const copyLabel = i18n.copy || "Copy";
     const copyCodeLabel = i18n.copyCodeTooltip || copyLabel;
-    if (useIcon) btn.innerHTML = COPY_ICON_SVG;
-    else btn.textContent = copyLabel;
+    btn.innerHTML = COPY_ICON_SVG;
     btn.title = copyCodeLabel;
     btn.setAttribute("aria-label", copyCodeLabel);
     btn.addEventListener("click", (e) => {
@@ -743,7 +1006,8 @@
 
   function jumpToMessage(messageIndex) {
     selectedMessageIndex = messageIndex;
-    clearHighlights();
+    expandedMessageIndexes.add(messageIndex);
+    render();
     const elTarget = document.getElementById(`msg-${messageIndex}`);
     if (!elTarget) return;
     elTarget.classList.add("highlight");
@@ -751,7 +1015,8 @@
   }
 
   function revealMessage(messageIndex) {
-    clearHighlights();
+    expandedMessageIndexes.add(messageIndex);
+    render();
     const elTarget = document.getElementById(`msg-${messageIndex}`);
     if (!elTarget) return;
     elTarget.classList.add("highlight");
@@ -850,10 +1115,10 @@
       const label = el("span", {});
       label.textContent = displayLang;
       header.appendChild(label);
-      const btn = el("button", { type: "button" });
+      const btn = el("button", { type: "button", className: "codeCopyBtn iconBtn" });
       const copyLabel = i18n.copy || "Copy";
       const copyCodeLabel = i18n.copyCodeTooltip || copyLabel;
-      btn.textContent = copyLabel;
+      btn.innerHTML = COPY_ICON_SVG;
       btn.title = copyCodeLabel;
       btn.setAttribute("aria-label", copyCodeLabel);
       btn.addEventListener("click", (e) => {
@@ -975,12 +1240,7 @@
     const fromFileUri = parseFromFileUri(href);
     if (fromFileUri) return fromFileUri;
 
-    const decoded = safeDecodeURIComponent(href);
-    if (isAbsolutePathLike(decoded)) {
-      return splitPathAndLocation(decoded);
-    }
-
-    return null;
+    return splitPathAndLocation(safeDecodeURIComponent(href));
   }
 
   function parseFromVscodeResourceCdn(href) {
@@ -1016,7 +1276,8 @@
 
   function splitPathAndLocation(pathLike, options) {
     const text = String(pathLike || "").trim();
-    if (!isAbsolutePathLike(text)) return null;
+    const kind = detectPathKind(text);
+    if (!kind) return null;
 
     const hashTarget = options && options.allowHashSuffix === false ? null : parseHashPathLocation(text);
     if (hashTarget) return hashTarget;
@@ -1024,7 +1285,7 @@
     const colonTarget = options && options.allowColonSuffix === false ? null : parseColonPathLocation(text);
     if (colonTarget) return colonTarget;
 
-    return { fsPath: text };
+    return { fsPath: text, kind };
   }
 
   function parseHashPathLocation(text) {
@@ -1042,17 +1303,26 @@
 
   function buildPathLocationTarget(fsPathLike, lineText, columnText, fallbackFsPath) {
     const fsPath = String(fsPathLike || "").trim();
-    if (!isAbsolutePathLike(fsPath)) return null;
+    const kind = detectPathKind(fsPath);
+    if (!kind) return null;
 
     const line = Number(lineText);
     const column = columnText ? Number(columnText) : undefined;
-    if (!Number.isFinite(line) || line < 1) return { fsPath: fallbackFsPath };
+    if (!Number.isFinite(line) || line < 1) return { fsPath: fallbackFsPath, kind };
 
     return {
       fsPath,
       line,
+      kind,
       column: Number.isFinite(column) && column >= 1 ? column : undefined,
     };
+  }
+
+  function detectPathKind(s) {
+    const text = String(s || "").trim();
+    if (!text) return null;
+    if (isAbsolutePathLike(text)) return "absolute";
+    return looksLikeRelativePath(text) ? "relative" : null;
   }
 
   function isAbsolutePathLike(s) {
@@ -1061,6 +1331,20 @@
     if (/^[a-zA-Z]:[\\/]/.test(text)) return true;
     if (text.startsWith("\\\\")) return true;
     return text.startsWith("/");
+  }
+
+  function looksLikeRelativePath(s) {
+    const text = String(s || "").trim();
+    if (!text) return false;
+    if (isAbsolutePathLike(text)) return false;
+    if (text.startsWith("#") || text.startsWith("?")) return false;
+    if (text.startsWith("//")) return false;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(text)) return false;
+    if (text.startsWith("./") || text.startsWith("../") || text.startsWith(".\\") || text.startsWith("..\\")) return true;
+    if (text.includes("/") || text.includes("\\")) return true;
+
+    const body = text.replace(/[?#].*$/u, "");
+    return /^[^\s\\/]+(?:\.[^\s\\/]+)+$/u.test(body);
   }
 
   function safeDecodeURIComponent(s) {

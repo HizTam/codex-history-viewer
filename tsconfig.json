@@ -3,6 +3,7 @@
     "target": "ES2022",
     "lib": ["ES2022"],
     "module": "commonjs",
+    "types": ["node"],
     "rootDir": "src",
     "outDir": "dist",
     "strict": true,
@@ -13,4 +14,3 @@
   },
   "exclude": ["node_modules", ".vscode-test"]
 }
-

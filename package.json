@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "1.1.5",
+  "version": "1.2.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -1809,6 +1809,69 @@
           "scope": "application",
           "order": 85
         },
+        "codexHistoryViewer.chat.toolDisplayMode": {
+          "type": "string",
+          "default": "detailsOnly",
+          "enum": [
+            "detailsOnly",
+            "compactCards"
+          ],
+          "enumItemLabels": [
+            "%cfg.chatToolDisplayMode.labelDetailsOnly%",
+            "%cfg.chatToolDisplayMode.labelCompactCards%"
+          ],
+          "enumDescriptions": [
+            "%cfg.chatToolDisplayMode.enumDetailsOnly%",
+            "%cfg.chatToolDisplayMode.enumCompactCards%"
+          ],
+          "description": "%cfg.chatToolDisplayMode%",
+          "scope": "application",
+          "order": 88
+        },
+        "codexHistoryViewer.chat.userLongMessageFolding": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "auto",
+            "always"
+          ],
+          "enumItemLabels": [
+            "%cfg.chatLongMessageFolding.labelOff%",
+            "%cfg.chatLongMessageFolding.labelAuto%",
+            "%cfg.chatLongMessageFolding.labelAlways%"
+          ],
+          "enumDescriptions": [
+            "%cfg.chatUserLongMessageFolding.enumOff%",
+            "%cfg.chatUserLongMessageFolding.enumAuto%",
+            "%cfg.chatUserLongMessageFolding.enumAlways%"
+          ],
+          "description": "%cfg.chatUserLongMessageFolding%",
+          "scope": "application",
+          "order": 89
+        },
+        "codexHistoryViewer.chat.assistantLongMessageFolding": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "auto",
+            "always"
+          ],
+          "enumItemLabels": [
+            "%cfg.chatLongMessageFolding.labelOff%",
+            "%cfg.chatLongMessageFolding.labelAuto%",
+            "%cfg.chatLongMessageFolding.labelAlways%"
+          ],
+          "enumDescriptions": [
+            "%cfg.chatAssistantLongMessageFolding.enumOff%",
+            "%cfg.chatAssistantLongMessageFolding.enumAuto%",
+            "%cfg.chatAssistantLongMessageFolding.enumAlways%"
+          ],
+          "description": "%cfg.chatAssistantLongMessageFolding%",
+          "scope": "application",
+          "order": 90
+        },
         "codexHistoryViewer.resume.openTarget": {
           "type": "string",
           "default": "sidebar",
@@ -1875,7 +1938,7 @@
     "@shikijs/themes": "^4.0.2",
     "@types/node": "^20.11.30",
     "@types/vscode": "^1.90.0",
-    "@vscode/vsce": "^3.7.1",
+    "@vscode/vsce": "^3.9.0",
     "esbuild": "^0.28.0",
     "shiki": "^4.0.2",
     "typescript": "^5.5.4"

@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-04-16
+
+### Added
+
+- Added tool-specific cards in the chat viewer, with a new `codexHistoryViewer.chat.toolDisplayMode` setting (`detailsOnly` / `compactCards`).
+- Added independent long-message folding settings for chat viewer `user` and `assistant` messages:
+  - `codexHistoryViewer.chat.userLongMessageFolding`
+  - `codexHistoryViewer.chat.assistantLongMessageFolding`
+- Added chat toolbar quick scroll buttons to jump to the top or bottom of the session.
+
+### Changed
+
+- Chat tool rows are now left-aligned and use card-style presentation with icons, accents, and status emphasis.
+- Chat viewer reload now preserves scroll/selection and refreshes the tab title using the active history date basis.
+- Chat toolbar now automatically switches label buttons to icon-only mode when the header width becomes narrow.
+- Code block copy buttons in the chat viewer now use icon-only actions instead of text labels.
+
+### Fixed
+
+- Added support for workspace-relative Markdown file links in both Claude and Codex session views.
+- Added transcript-side local link resolution so relative Markdown file links open the source file inside VS Code.
+- Fixed chat tab title refresh when `codexHistoryViewer.history.dateBasis` is set to `lastActivity`.
+
 ## [1.1.5] - 2026-04-14
 
 ### Added

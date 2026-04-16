@@ -3,6 +3,7 @@ import * as readline from "node:readline";
 import type { ChatRole, ChatSessionMeta, ChatSessionModel, ChatTimelineItem, ChatToolItem } from "./chatTypes";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import { extractCompactUserText, isBoilerplateUserMessageText } from "../utils/textUtils";
+import { buildToolPresentation } from "../tools/toolSemantics";
 
 // Parse a session JSONL and build a chat-view model.
 export async function buildChatSessionModel(fsPath: string): Promise<ChatSessionModel> {
@@ -47,7 +48,7 @@ async function readTimelineItems(fsPath: string): Promise<ChatTimelineItem[]> {
       if (indexCodexTimelineRecord(obj, items, toolByCallId, () => (messageIndex += 1), () => messageIndex)) {
         continue;
       }
-      if (indexClaudeTimelineRecord(obj, items, toolByCallId, () => (messageIndex += 1))) {
+      if (indexClaudeTimelineRecord(obj, items, toolByCallId, () => (messageIndex += 1), () => messageIndex)) {
         continue;
       }
     }
@@ -56,6 +57,7 @@ async function readTimelineItems(fsPath: string): Promise<ChatTimelineItem[]> {
     stream.close();
   }
 
+  finalizeTimelineItems(items);
   return items;
 }
 
@@ -64,7 +66,7 @@ function indexCodexTimelineRecord(
   items: ChatTimelineItem[],
   toolByCallId: Map<string, ChatToolItem>,
   nextMessageIndex: () => number,
-  _currentMessageIndex: () => number,
+  currentMessageIndex: () => number,
 ): boolean {
   if (obj?.type !== "response_item") return false;
   const payloadType = obj?.payload?.type;
@@ -104,8 +106,9 @@ function indexCodexTimelineRecord(
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
     const argumentsText = typeof obj?.payload?.arguments === "string" ? obj.payload.arguments : undefined;
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    const messageIndex = currentMessageIndex();
 
-    const tool: ChatToolItem = { type: "tool", timestampIso: ts, name, callId, argumentsText };
+    const tool: ChatToolItem = { type: "tool", messageIndex, timestampIso: ts, name, callId, argumentsText };
     items.push(tool);
     if (callId) toolByCallId.set(callId, tool);
     return true;
@@ -119,6 +122,7 @@ function indexCodexTimelineRecord(
     attachOrPushToolOutput(items, toolByCallId, {
       callId,
       outputText,
+      fallbackMessageIndex: currentMessageIndex(),
       timestampIso: ts,
       fallbackName: "function_call_output",
     });
@@ -133,6 +137,7 @@ function indexClaudeTimelineRecord(
   items: ChatTimelineItem[],
   toolByCallId: Map<string, ChatToolItem>,
   nextMessageIndex: () => number,
+  currentMessageIndex: () => number,
 ): boolean {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
@@ -161,8 +166,10 @@ function indexClaudeTimelineRecord(
     const name = normalizeText(toolCall.name ?? "") || "tool_use";
     const callId = toolCall.callId;
     const argumentsText = toolCall.argumentsText ? normalizeText(toolCall.argumentsText) : undefined;
+    const messageIndex = currentMessageIndex();
     const tool: ChatToolItem = {
       type: "tool",
+      messageIndex,
       timestampIso: ts,
       name,
       callId,
@@ -178,6 +185,7 @@ function indexClaudeTimelineRecord(
     attachOrPushToolOutput(items, toolByCallId, {
       callId: toolResult.callId,
       outputText,
+      fallbackMessageIndex: currentMessageIndex(),
       timestampIso: ts,
       fallbackName: "tool_result",
     });
@@ -192,25 +200,37 @@ function attachOrPushToolOutput(
   params: {
     callId?: string;
     outputText?: string;
+    fallbackMessageIndex?: number;
     timestampIso?: string;
     fallbackName: string;
   },
 ): void {
-  const { callId, outputText, timestampIso, fallbackName } = params;
+  const { callId, outputText, fallbackMessageIndex, timestampIso, fallbackName } = params;
   if (callId && toolByCallId.has(callId)) {
     const tool = toolByCallId.get(callId)!;
     tool.outputText = outputText;
     if (!tool.timestampIso) tool.timestampIso = timestampIso;
+    if (typeof tool.messageIndex !== "number" && typeof fallbackMessageIndex === "number") {
+      tool.messageIndex = fallbackMessageIndex;
+    }
     return;
   }
 
   items.push({
     type: "tool",
+    messageIndex: fallbackMessageIndex,
     timestampIso,
     name: fallbackName,
     callId,
     outputText,
   });
+}
+
+function finalizeTimelineItems(items: ChatTimelineItem[]): void {
+  for (const item of items) {
+    if (item.type !== "tool") continue;
+    item.presentation = buildToolPresentation(item);
+  }
 }
 
 function extractTextFromCodexContent(content: unknown): string {

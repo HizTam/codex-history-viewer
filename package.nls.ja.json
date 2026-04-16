@@ -73,5 +73,21 @@
   "cfg.historyDateBasis.labelStarted": "開始日時",
   "cfg.historyDateBasis.labelLastActivity": "最終メッセージ日時",
   "cfg.historyDateBasis.enumStarted": "セッションの開始日時を使って履歴をグループ化し、日付フィルタを適用します。",
-  "cfg.historyDateBasis.enumLastActivity": "セッションの最終メッセージ日時を使って履歴をグループ化し、日付フィルタを適用します。"
+  "cfg.historyDateBasis.enumLastActivity": "セッションの最終メッセージ日時を使って履歴をグループ化し、日付フィルタを適用します。",
+  "cfg.chatToolDisplayMode": "チャットビューでのツール表示方法を選択します。",
+  "cfg.chatToolDisplayMode.labelDetailsOnly": "詳細表示時のみ",
+  "cfg.chatToolDisplayMode.labelCompactCards": "常時カード表示",
+  "cfg.chatToolDisplayMode.enumDetailsOnly": "現在の挙動を維持します。ツール項目は詳細表示時のみ表示されます。",
+  "cfg.chatToolDisplayMode.enumCompactCards": "ツールカードを常時表示し、「詳細を表示」は raw のツール詳細とメモのみを切り替えます。",
+  "cfg.chatLongMessageFolding.labelOff": "折りたたまない",
+  "cfg.chatLongMessageFolding.labelAuto": "長文のみ折りたたむ",
+  "cfg.chatLongMessageFolding.labelAlways": "常に折りたたむ",
+  "cfg.chatUserLongMessageFolding": "チャットビューで長い user メッセージを折りたたむ方法を選択します。",
+  "cfg.chatUserLongMessageFolding.enumOff": "現在の挙動を維持します。user メッセージは常に全文表示します。",
+  "cfg.chatUserLongMessageFolding.enumAuto": "詳細を表示していないときだけ、長い user メッセージを折りたたみます。",
+  "cfg.chatUserLongMessageFolding.enumAlways": "詳細を表示していないときは、対象の user メッセージを常に折りたたみます。",
+  "cfg.chatAssistantLongMessageFolding": "チャットビューで長い assistant メッセージを折りたたむ方法を選択します。",
+  "cfg.chatAssistantLongMessageFolding.enumOff": "現在の挙動を維持します。assistant メッセージは常に全文表示します。",
+  "cfg.chatAssistantLongMessageFolding.enumAuto": "詳細を表示していないときだけ、長い assistant メッセージを折りたたみます。",
+  "cfg.chatAssistantLongMessageFolding.enumAlways": "詳細を表示していないときは、対象の assistant メッセージを常に折りたたみます。"
 }

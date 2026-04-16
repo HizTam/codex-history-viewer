@@ -1,4 +1,5 @@
 // Data model for the chat-like webview.
+import type { ChatToolPresentation } from "../tools/toolTypes";
 
 export type ChatRole = "developer" | "user" | "assistant";
 
@@ -34,11 +35,13 @@ export interface ChatMessageItem {
 
 export interface ChatToolItem {
   type: "tool";
+  messageIndex?: number;
   timestampIso?: string;
   name: string;
   callId?: string;
   argumentsText?: string;
   outputText?: string;
+  presentation?: ChatToolPresentation;
 }
 
 export interface ChatNoteItem {

@@ -73,5 +73,21 @@
   "cfg.historyDateBasis.labelStarted": "Started date",
   "cfg.historyDateBasis.labelLastActivity": "Last activity date",
   "cfg.historyDateBasis.enumStarted": "Group history and apply date filters using the session start date.",
-  "cfg.historyDateBasis.enumLastActivity": "Group history and apply date filters using the latest session activity date."
+  "cfg.historyDateBasis.enumLastActivity": "Group history and apply date filters using the latest session activity date.",
+  "cfg.chatToolDisplayMode": "Choose how tool activity is shown in the chat view.",
+  "cfg.chatToolDisplayMode.labelDetailsOnly": "Details only",
+  "cfg.chatToolDisplayMode.labelCompactCards": "Compact cards",
+  "cfg.chatToolDisplayMode.enumDetailsOnly": "Keep the current behavior. Tool items appear only when details are shown.",
+  "cfg.chatToolDisplayMode.enumCompactCards": "Always show tool cards, while 'Show details' only controls raw tool details and notes.",
+  "cfg.chatLongMessageFolding.labelOff": "Never collapse",
+  "cfg.chatLongMessageFolding.labelAuto": "Collapse long messages",
+  "cfg.chatLongMessageFolding.labelAlways": "Always collapse",
+  "cfg.chatUserLongMessageFolding": "Choose how long user messages are collapsed in the chat view.",
+  "cfg.chatUserLongMessageFolding.enumOff": "Keep the current behavior. User messages are always fully expanded.",
+  "cfg.chatUserLongMessageFolding.enumAuto": "Collapse only long user messages when details are hidden.",
+  "cfg.chatUserLongMessageFolding.enumAlways": "Always start eligible user messages collapsed when details are hidden.",
+  "cfg.chatAssistantLongMessageFolding": "Choose how long assistant messages are collapsed in the chat view.",
+  "cfg.chatAssistantLongMessageFolding.enumOff": "Keep the current behavior. Assistant messages are always fully expanded.",
+  "cfg.chatAssistantLongMessageFolding.enumAuto": "Collapse only long assistant messages when details are hidden.",
+  "cfg.chatAssistantLongMessageFolding.enumAlways": "Always start eligible assistant messages collapsed when details are hidden."
 }

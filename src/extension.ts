@@ -8,6 +8,7 @@ import { PinnedTreeDataProvider } from "./tree/pinnedTree";
 import { HistoryTreeDataProvider } from "./tree/historyTree";
 import { SearchTreeDataProvider } from "./tree/searchTree";
 import { TranscriptContentProvider } from "./transcript/transcriptProvider";
+import { TranscriptDocumentLinkProvider } from "./transcript/transcriptDocumentLinkProvider";
 import { renderResumeContext } from "./transcript/resumeRenderer";
 import { promoteSessionCopyToToday } from "./services/promoteService";
 import { deleteSessionsWithConfirmation } from "./services/deleteService";
@@ -246,6 +247,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Provide a virtual document (conversation log).
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(transcriptProvider.scheme, transcriptProvider),
+    vscode.languages.registerDocumentLinkProvider(
+      { scheme: transcriptProvider.scheme },
+      new TranscriptDocumentLinkProvider(transcriptProvider.scheme),
+    ),
   );
 
   const URI_LIST_MIME = "text/uri-list";
@@ -691,12 +696,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const searchDefaultRolesChanged = e.affectsConfiguration("codexHistoryViewer.search.defaultRoles");
       const sourcesEnabledChanged = e.affectsConfiguration("codexHistoryViewer.sources.enabled");
       const historyDateBasisChanged = e.affectsConfiguration("codexHistoryViewer.history.dateBasis");
+      const toolDisplayModeChanged = e.affectsConfiguration("codexHistoryViewer.chat.toolDisplayMode");
+      const userLongMessageFoldingChanged = e.affectsConfiguration("codexHistoryViewer.chat.userLongMessageFolding");
+      const assistantLongMessageFoldingChanged = e.affectsConfiguration(
+        "codexHistoryViewer.chat.assistantLongMessageFolding",
+      );
+      const legacyLongMessageFoldingChanged = e.affectsConfiguration("codexHistoryViewer.chat.longMessageFolding");
+      const longMessageFoldingChanged =
+        userLongMessageFoldingChanged || assistantLongMessageFoldingChanged || legacyLongMessageFoldingChanged;
       if (
         !uiLanguageChanged &&
         !headerActionsChanged &&
         !searchDefaultRolesChanged &&
         !sourcesEnabledChanged &&
-        !historyDateBasisChanged
+        !historyDateBasisChanged &&
+        !toolDisplayModeChanged &&
+        !longMessageFoldingChanged
       ) {
         return;
       }
@@ -716,7 +731,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       updatePinnedViewDescription();
       updateHistoryViewDescription();
       updateSearchViewDescription();
-      chatPanels.refreshI18n();
+      if (uiLanguageChanged || toolDisplayModeChanged || longMessageFoldingChanged) chatPanels.refreshPanels();
+      else chatPanels.refreshI18n();
       void ensureAlwaysShowHeaderActions();
 
       // When UI language changes, rebuild history-dependent displays because date/time formatting can also change.

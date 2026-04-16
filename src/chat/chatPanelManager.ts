@@ -3,9 +3,12 @@ import type { HistoryService } from "../services/historyService";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { PinStore } from "../services/pinStore";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
-import { normalizeCacheKey, pathExists } from "../utils/fsUtils";
+import { buildSessionSummary } from "../sessions/sessionSummary";
+import { normalizeCacheKey } from "../utils/fsUtils";
+import { collectLocalLinkBaseDirs, openLinkedFileInEditor, resolveLocalFileLinkTarget } from "../utils/localFileLinks";
 import { buildChatSessionModel } from "./chatModelBuilder";
 import { resolveUiLanguage, t } from "../i18n";
+import { getConfig } from "../settings";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 
@@ -20,7 +23,10 @@ export class ChatPanelManager {
 
   private previewPanel: vscode.WebviewPanel | null = null;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
-  private readonly stateByPanel = new WeakMap<vscode.WebviewPanel, { fsPath: string; revealMessageIndex?: number }>();
+  private readonly stateByPanel = new WeakMap<
+    vscode.WebviewPanel,
+    { fsPath: string; revealMessageIndex?: number; sessionCwd?: string }
+  >();
   private readonly readyByPanel = new WeakMap<vscode.WebviewPanel, boolean>();
 
   constructor(
@@ -46,13 +52,34 @@ export class ChatPanelManager {
   public refreshI18n(): void {
     const i18n = this.buildI18n();
     const dateTime = this.buildDateTime();
+    const config = getConfig();
+    const toolDisplayMode = config.toolDisplayMode;
+    const userLongMessageFolding = config.userLongMessageFolding;
+    const assistantLongMessageFolding = config.assistantLongMessageFolding;
     const send = (panel: vscode.WebviewPanel): void => {
       if (!this.readyByPanel.get(panel)) return;
-      void panel.webview.postMessage({ type: "i18n", i18n, dateTime });
+      void panel.webview.postMessage({
+        type: "i18n",
+        i18n,
+        dateTime,
+        toolDisplayMode,
+        userLongMessageFolding,
+        assistantLongMessageFolding,
+      });
     };
 
     if (this.previewPanel) send(this.previewPanel);
     for (const panel of this.panelsByKey.values()) send(panel);
+  }
+
+  public refreshPanels(): void {
+    const refresh = (panel: vscode.WebviewPanel): void => {
+      if (!this.readyByPanel.get(panel)) return;
+      void this.sendSessionData(panel);
+    };
+
+    if (this.previewPanel) refresh(this.previewPanel);
+    for (const panel of this.panelsByKey.values()) refresh(panel);
   }
 
   public refreshTitles(): void {
@@ -181,6 +208,8 @@ export class ChatPanelManager {
     <button id="btnMarkdown" type="button"></button>
     <button id="btnCopyResume" type="button"></button>
     <button id="btnToggleDetails" type="button"></button>
+    <button id="btnScrollTop" type="button" class="toolbarIconBtn"></button>
+    <button id="btnScrollBottom" type="button" class="toolbarIconBtn"></button>
     <button id="btnReload" type="button" class="toolbarIconBtn"></button>
   </div>
   <div id="annotation"></div>
@@ -256,20 +285,16 @@ export class ChatPanelManager {
           typeof msg?.column === "number" && Number.isFinite(msg.column) && msg.column >= 1
             ? Math.floor(msg.column)
             : undefined;
-        const target = await resolveLinkedFileTarget(rawFsPath, requestedLine, requestedColumn);
+        const target = await resolveLocalFileLinkTarget(rawFsPath, {
+          requestedLine,
+          requestedColumn,
+          baseDirs: collectLocalLinkBaseDirs(
+            state.sessionCwd,
+            ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+          ),
+        });
 
-        try {
-          const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(target.fsPath));
-          const opts: vscode.TextDocumentShowOptions = {
-            preview: false,
-            preserveFocus: false,
-          };
-          if (target.line !== undefined) {
-            const pos = new vscode.Position(Math.max(0, target.line - 1), Math.max(0, (target.column ?? 1) - 1));
-            opts.selection = new vscode.Range(pos, pos);
-          }
-          await vscode.window.showTextDocument(doc, opts);
-        } catch {
+        if (!target || !(await openLinkedFileInEditor(target))) {
           void vscode.window.showErrorMessage(t("app.openLinkedFileFailed", rawFsPath));
         }
         return;
@@ -282,6 +307,7 @@ export class ChatPanelManager {
             ? msg.selectedMessageIndex
             : undefined;
         await this.sendSessionData(panel, { restoreScrollY, restoreSelectedMessageIndex });
+        await this.refreshPanelTitleFromFile(panel);
         return;
       }
       case "filterByTag": {
@@ -314,6 +340,10 @@ export class ChatPanelManager {
     const state = this.stateByPanel.get(panel);
     if (!state) return;
     const model = await buildChatSessionModel(state.fsPath);
+    this.stateByPanel.set(panel, {
+      ...state,
+      sessionCwd: typeof model.meta?.cwd === "string" ? model.meta.cwd : undefined,
+    });
     const annotation = this.annotationStore.get(state.fsPath);
     const dateTime = this.buildDateTime();
     void panel.webview.postMessage({
@@ -331,6 +361,9 @@ export class ChatPanelManager {
       isPinned: this.pinStore.isPinned(state.fsPath),
       i18n: this.buildI18n(),
       dateTime,
+      toolDisplayMode: getConfig().toolDisplayMode,
+      userLongMessageFolding: getConfig().userLongMessageFolding,
+      assistantLongMessageFolding: getConfig().assistantLongMessageFolding,
     });
   }
 
@@ -352,6 +385,10 @@ export class ChatPanelManager {
       copyResumeTooltip: t("chat.tooltip.copyResume"),
       reload: t("chat.button.reload"),
       reloadTooltip: t("chat.tooltip.reload"),
+      scrollTop: t("chat.button.scrollTop"),
+      scrollTopTooltip: t("chat.tooltip.scrollTop"),
+      scrollBottom: t("chat.button.scrollBottom"),
+      scrollBottomTooltip: t("chat.tooltip.scrollBottom"),
       detailsOn: t("chat.button.detailsOn"),
       detailsOff: t("chat.button.detailsOff"),
       detailsOnTooltip: t("chat.tooltip.detailsOn"),
@@ -361,6 +398,8 @@ export class ChatPanelManager {
       arguments: t("chat.label.arguments"),
       output: t("chat.label.output"),
       copy: t("chat.button.copy"),
+      showMore: t("chat.button.showMore"),
+      showLess: t("chat.button.showLess"),
       copyMessageTooltip: t("chat.tooltip.copyMessage"),
       copyCodeTooltip: t("chat.tooltip.copyCode"),
       jumpPrevUser: t("chat.nav.prevUser"),
@@ -384,6 +423,24 @@ export class ChatPanelManager {
     return { timeZone };
   }
 
+  private async refreshPanelTitleFromFile(panel: vscode.WebviewPanel): Promise<void> {
+    const state = this.stateByPanel.get(panel);
+    if (!state) return;
+
+    const config = getConfig();
+    const summary = await buildSessionSummary({
+      sessionsRoot: config.sessionsRoot,
+      fsPath: state.fsPath,
+      previewMaxMessages: config.previewMaxMessages,
+      timeZone: this.buildDateTime().timeZone,
+    });
+    if (!summary) return;
+
+    const displaySummary = applyPanelHistoryDateBasis(summary, config.historyDateBasis);
+    panel.title = buildPanelTitle(displaySummary);
+    panel.iconPath = this.resolveSourceIconPath(displaySummary.source);
+  }
+
   private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {
     return source === "claude" ? this.claudePanelIconPath : this.codexPanelIconPath;
   }
@@ -403,86 +460,11 @@ function buildPanelTitle(session: SessionSummary): string {
   return `${session.localDate} ${session.timeLabel} ${shortSnippet}`;
 }
 
-type LinkedFileTarget = {
-  fsPath: string;
-  line?: number;
-  column?: number;
-};
-
-async function resolveLinkedFileTarget(
-  rawFsPath: string,
-  requestedLine?: number,
-  requestedColumn?: number,
-): Promise<LinkedFileTarget> {
-  const parsed = splitAbsolutePathAndLocation(rawFsPath);
-  if (!parsed || parsed.fsPath === rawFsPath) {
-    return { fsPath: rawFsPath, line: requestedLine, column: requestedColumn };
-  }
-
-  // Prefer the original path when it exists so real filenames containing #L39 still work.
-  if (await pathExists(rawFsPath)) {
-    return { fsPath: rawFsPath, line: requestedLine, column: requestedColumn };
-  }
-
-  return {
-    fsPath: parsed.fsPath,
-    line: requestedLine ?? parsed.line,
-    column: requestedColumn ?? parsed.column,
-  };
-}
-
-function splitAbsolutePathAndLocation(pathLike: string): LinkedFileTarget | null {
-  const text = String(pathLike || "").trim();
-  if (!isAbsolutePathLike(text)) return null;
-
-  const hashTarget = parseHashPathLocation(text);
-  if (hashTarget) return hashTarget;
-
-  const colonTarget = parseColonPathLocation(text);
-  if (colonTarget) return colonTarget;
-
-  return { fsPath: text };
-}
-
-function parseHashPathLocation(text: string): LinkedFileTarget | null {
-  // Support GitHub / VS Code style locations such as #L39, #L39C2, and #L39-L45.
-  const match = text.match(/^(.*?)(?:#L(\d+)(?:C(\d+))?(?:-L?\d+(?:C\d+)?)?)$/i);
-  if (!match) return null;
-  return buildLinkedFileTarget(match[1], match[2], match[3], text);
-}
-
-function parseColonPathLocation(text: string): LinkedFileTarget | null {
-  const match = text.match(/^(.*?)(?::(\d+)(?::(\d+))?)$/);
-  if (!match) return null;
-  return buildLinkedFileTarget(match[1], match[2], match[3], text);
-}
-
-function buildLinkedFileTarget(
-  fsPathLike: string,
-  lineText: string | undefined,
-  columnText: string | undefined,
-  fallbackFsPath: string,
-): LinkedFileTarget | null {
-  const fsPath = String(fsPathLike || "").trim();
-  if (!isAbsolutePathLike(fsPath)) return null;
-
-  const line = Number(lineText);
-  const column = columnText ? Number(columnText) : undefined;
-  if (!Number.isFinite(line) || line < 1) {
-    return { fsPath: fallbackFsPath };
-  }
-
-  return {
-    fsPath,
-    line,
-    column: typeof column === "number" && Number.isFinite(column) && column >= 1 ? column : undefined,
-  };
-}
-
-function isAbsolutePathLike(input: string): boolean {
-  const text = String(input || "").trim();
-  if (!text) return false;
-  if (/^[a-zA-Z]:[\\/]/.test(text)) return true;
-  if (text.startsWith("\\\\")) return true;
-  return text.startsWith("/");
+function applyPanelHistoryDateBasis(
+  session: SessionSummary,
+  historyDateBasis: ReturnType<typeof getConfig>["historyDateBasis"],
+): SessionSummary {
+  const localDate = historyDateBasis === "lastActivity" ? session.lastActivityLocalDate : session.startedLocalDate;
+  const timeLabel = historyDateBasis === "lastActivity" ? session.lastActivityTimeLabel : session.startedTimeLabel;
+  return { ...session, localDate, timeLabel };
 }
