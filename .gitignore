@@ -6,3 +6,4 @@ out/
 *.vsix
 media/chatViewShiki.bundle.js
 .private-docs/
+*.md

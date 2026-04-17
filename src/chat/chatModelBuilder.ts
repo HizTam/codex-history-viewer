@@ -1,6 +1,18 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as readline from "node:readline";
-import type { ChatRole, ChatSessionMeta, ChatSessionModel, ChatTimelineItem, ChatToolItem } from "./chatTypes";
+import type {
+  ChatPatchChangeType,
+  ChatPatchEntry,
+  ChatPatchGroupItem,
+  ChatPatchHunk,
+  ChatPatchRow,
+  ChatRole,
+  ChatSessionMeta,
+  ChatSessionModel,
+  ChatTimelineItem,
+  ChatToolItem,
+} from "./chatTypes";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import { extractCompactUserText, isBoilerplateUserMessageText } from "../utils/textUtils";
 import { buildToolPresentation } from "../tools/toolSemantics";
@@ -8,7 +20,7 @@ import { buildToolPresentation } from "../tools/toolSemantics";
 // Parse a session JSONL and build a chat-view model.
 export async function buildChatSessionModel(fsPath: string): Promise<ChatSessionModel> {
   const meta = await readSessionMeta(fsPath);
-  const items = await readTimelineItems(fsPath);
+  const items = await readTimelineItems(fsPath, meta.cwd);
   return { fsPath, meta, items };
 }
 
@@ -27,12 +39,13 @@ async function readSessionMeta(fsPath: string): Promise<ChatSessionMeta> {
   };
 }
 
-async function readTimelineItems(fsPath: string): Promise<ChatTimelineItem[]> {
+async function readTimelineItems(fsPath: string, sessionCwd?: string): Promise<ChatTimelineItem[]> {
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   const items: ChatTimelineItem[] = [];
   const toolByCallId = new Map<string, ChatToolItem>();
+  const pendingPatchGroups = new Map<string, PendingPatchGroup>();
   let messageIndex = 0;
 
   try {
@@ -48,6 +61,9 @@ async function readTimelineItems(fsPath: string): Promise<ChatTimelineItem[]> {
       if (indexCodexTimelineRecord(obj, items, toolByCallId, () => (messageIndex += 1), () => messageIndex)) {
         continue;
       }
+      if (indexCodexEventRecord(obj, items, pendingPatchGroups, () => messageIndex, sessionCwd)) {
+        continue;
+      }
       if (indexClaudeTimelineRecord(obj, items, toolByCallId, () => (messageIndex += 1), () => messageIndex)) {
         continue;
       }
@@ -57,6 +73,7 @@ async function readTimelineItems(fsPath: string): Promise<ChatTimelineItem[]> {
     stream.close();
   }
 
+  flushPendingPatchGroups(items, pendingPatchGroups);
   finalizeTimelineItems(items);
   return items;
 }
@@ -126,6 +143,67 @@ function indexCodexTimelineRecord(
       timestampIso: ts,
       fallbackName: "function_call_output",
     });
+    return true;
+  }
+
+  return true;
+}
+
+function indexCodexEventRecord(
+  obj: any,
+  items: ChatTimelineItem[],
+  pendingPatchGroups: Map<string, PendingPatchGroup>,
+  currentMessageIndex: () => number,
+  sessionCwd?: string,
+): boolean {
+  if (obj?.type !== "event_msg") return false;
+
+  const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
+  if (payloadType === "patch_apply_end") {
+    const key = buildPatchGroupKey(obj);
+    const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id : undefined;
+    const timestampIso = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    const entries = buildPatchEntries(
+      obj?.payload?.changes,
+      sessionCwd,
+      typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined,
+    );
+    if (entries.length === 0) return true;
+
+    const existing = pendingPatchGroups.get(key);
+    if (existing) {
+      existing.lastTimestampIso = timestampIso ?? existing.lastTimestampIso;
+      existing.entries.push(...entries);
+      existing.totalAdded += entries.reduce((sum, entry) => sum + entry.added, 0);
+      existing.totalRemoved += entries.reduce((sum, entry) => sum + entry.removed, 0);
+      return true;
+    }
+
+    pendingPatchGroups.set(key, {
+      turnId,
+      messageIndex: currentMessageIndex() > 0 ? currentMessageIndex() : undefined,
+      firstTimestampIso: timestampIso,
+      lastTimestampIso: timestampIso,
+      entries: [...entries],
+      totalAdded: entries.reduce((sum, entry) => sum + entry.added, 0),
+      totalRemoved: entries.reduce((sum, entry) => sum + entry.removed, 0),
+    });
+    return true;
+  }
+
+  if (payloadType === "task_complete") {
+    const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id : undefined;
+    if (!turnId) {
+      flushPendingPatchGroups(items, pendingPatchGroups);
+      return true;
+    }
+    flushPendingPatchGroup(items, pendingPatchGroups, turnId);
+    return true;
+  }
+
+  if (payloadType === "task_started") {
+    // Finalize any pending patch groups before the next turn begins.
+    flushPendingPatchGroups(items, pendingPatchGroups);
     return true;
   }
 
@@ -231,6 +309,207 @@ function finalizeTimelineItems(items: ChatTimelineItem[]): void {
     if (item.type !== "tool") continue;
     item.presentation = buildToolPresentation(item);
   }
+}
+
+interface PendingPatchGroup {
+  turnId?: string;
+  messageIndex?: number;
+  firstTimestampIso?: string;
+  lastTimestampIso?: string;
+  entries: ChatPatchEntry[];
+  totalAdded: number;
+  totalRemoved: number;
+}
+
+function flushPendingPatchGroup(
+  items: ChatTimelineItem[],
+  pendingPatchGroups: Map<string, PendingPatchGroup>,
+  turnId: string,
+): void {
+  const group = pendingPatchGroups.get(turnId);
+  if (!group) return;
+  items.push(toPatchGroupItem(group));
+  pendingPatchGroups.delete(turnId);
+}
+
+function flushPendingPatchGroups(
+  items: ChatTimelineItem[],
+  pendingPatchGroups: Map<string, PendingPatchGroup>,
+): void {
+  for (const [key, group] of pendingPatchGroups.entries()) {
+    items.push(toPatchGroupItem(group));
+    pendingPatchGroups.delete(key);
+  }
+}
+
+function toPatchGroupItem(group: PendingPatchGroup): ChatPatchGroupItem {
+  return {
+    type: "patchGroup",
+    messageIndex: group.messageIndex,
+    timestampIso: group.lastTimestampIso ?? group.firstTimestampIso,
+    turnId: group.turnId,
+    entryCount: group.entries.length,
+    totalAdded: group.totalAdded,
+    totalRemoved: group.totalRemoved,
+    entries: group.entries,
+  };
+}
+
+function buildPatchGroupKey(obj: any): string {
+  const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id.trim() : "";
+  if (turnId) return turnId;
+  const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id.trim() : "";
+  if (callId) return `call:${callId}`;
+  const timestampIso = typeof obj?.timestamp === "string" ? obj.timestamp.trim() : "";
+  return timestampIso ? `ts:${timestampIso}` : "patch";
+}
+
+function buildPatchEntries(changes: unknown, sessionCwd?: string, callId?: string): ChatPatchEntry[] {
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) return [];
+
+  const entries: ChatPatchEntry[] = [];
+  let index = 0;
+  for (const [rawPath, rawChange] of Object.entries(changes as Record<string, unknown>)) {
+    const change = rawChange && typeof rawChange === "object" ? (rawChange as Record<string, unknown>) : {};
+    const changeType = normalizePatchChangeType(change.type);
+    const movePath = typeof change.move_path === "string" ? change.move_path : undefined;
+    const unifiedDiff = typeof change.unified_diff === "string" ? change.unified_diff : "";
+    const parsed = parseUnifiedDiff(unifiedDiff);
+    const displayPath = formatPatchDisplayPath(rawPath, sessionCwd);
+    const moveDisplayPath = movePath ? formatPatchDisplayPath(movePath, sessionCwd) : undefined;
+
+    entries.push({
+      id: `${callId ?? "patch"}:${index}`,
+      callId,
+      path: rawPath,
+      displayPath,
+      movePath,
+      moveDisplayPath,
+      changeType,
+      added: parsed.added,
+      removed: parsed.removed,
+      hunks: parsed.hunks,
+    });
+    index += 1;
+  }
+  return entries;
+}
+
+function parseUnifiedDiff(diffText: string): { added: number; removed: number; hunks: ChatPatchHunk[] } {
+  const lines = String(diffText ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  const hunks: ChatPatchHunk[] = [];
+  let added = 0;
+  let removed = 0;
+
+  let currentHunk: ChatPatchHunk | null = null;
+  let currentLeftLine = 0;
+  let currentRightLine = 0;
+  let pendingDeletes: Array<{ line: number; text: string }> = [];
+  let pendingAdds: Array<{ line: number; text: string }> = [];
+
+  const flushPendingRows = (): void => {
+    if (!currentHunk || (pendingDeletes.length === 0 && pendingAdds.length === 0)) return;
+    const count = Math.max(pendingDeletes.length, pendingAdds.length);
+    for (let i = 0; i < count; i += 1) {
+      const left = pendingDeletes[i];
+      const right = pendingAdds[i];
+      const kind = left && right ? "modify" : left ? "delete" : "add";
+      currentHunk.rows.push({
+        kind,
+        leftLine: left?.line,
+        leftText: left?.text ?? "",
+        rightLine: right?.line,
+        rightText: right?.text ?? "",
+      });
+    }
+    pendingDeletes = [];
+    pendingAdds = [];
+  };
+
+  for (const rawLine of lines) {
+    if (rawLine.startsWith("@@")) {
+      flushPendingRows();
+      const parsedHeader = parsePatchHeader(rawLine);
+      currentLeftLine = parsedHeader?.leftStart ?? 0;
+      currentRightLine = parsedHeader?.rightStart ?? 0;
+      currentHunk = { header: rawLine, rows: [] };
+      hunks.push(currentHunk);
+      continue;
+    }
+    if (!currentHunk) continue;
+    if (!rawLine) continue;
+    if (rawLine.startsWith("\\")) continue;
+
+    const marker = rawLine[0];
+    const text = rawLine.slice(1);
+    if (marker === " ") {
+      flushPendingRows();
+      currentHunk.rows.push({
+        kind: "context",
+        leftLine: currentLeftLine,
+        leftText: text,
+        rightLine: currentRightLine,
+        rightText: text,
+      });
+      currentLeftLine += 1;
+      currentRightLine += 1;
+      continue;
+    }
+    if (marker === "-") {
+      removed += 1;
+      pendingDeletes.push({ line: currentLeftLine, text });
+      currentLeftLine += 1;
+      continue;
+    }
+    if (marker === "+") {
+      added += 1;
+      pendingAdds.push({ line: currentRightLine, text });
+      currentRightLine += 1;
+      continue;
+    }
+  }
+
+  flushPendingRows();
+  return { added, removed, hunks };
+}
+
+function parsePatchHeader(header: string): { leftStart: number; rightStart: number } | null {
+  const match = header.match(/^@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)(?:,\d+)?\s+@@/u);
+  if (!match) return null;
+  return {
+    leftStart: Number(match[1]),
+    rightStart: Number(match[2]),
+  };
+}
+
+function normalizePatchChangeType(value: unknown): ChatPatchChangeType {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (
+    normalized === "create" ||
+    normalized === "delete" ||
+    normalized === "move" ||
+    normalized === "rename" ||
+    normalized === "update"
+  ) {
+    return normalized;
+  }
+  return "unknown";
+}
+
+function formatPatchDisplayPath(fsPath: string, sessionCwd?: string): string {
+  const normalizedPath = path.normalize(String(fsPath ?? "").trim());
+  if (!normalizedPath) return "";
+  if (!sessionCwd) return normalizedPath;
+
+  try {
+    const relativePath = path.relative(sessionCwd, normalizedPath);
+    if (relativePath && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
+      return relativePath;
+    }
+  } catch {
+    // Fall back to the original path when relative formatting fails.
+  }
+  return normalizedPath;
 }
 
 function extractTextFromCodexContent(content: unknown): string {

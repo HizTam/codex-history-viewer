@@ -14,6 +14,7 @@ scripts/**
 # Developer documentation (not included in the VSIX)
 DEVELOPMENT.ja.md
 .private-docs/**
+*.md
 
 # The chat view uses markdown-it for Markdown rendering, so include only the minimal runtime files
 !node_modules/markdown-it/

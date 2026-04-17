@@ -13,6 +13,38 @@
   --chv-tool-bg: var(--vscode-notifications-background, rgba(128, 128, 128, 0.08));
   --chv-code-bg: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
   --chv-accent: var(--vscode-focusBorder);
+  /* Derive patch colors from the same webview theme variables used by the rest of the UI. */
+  --chv-patch-surface: color-mix(in srgb, var(--chv-code-bg) 68%, var(--chv-assistant-bg) 32%);
+  --chv-patch-surface-alt: color-mix(in srgb, var(--chv-tool-bg) 90%, var(--chv-border) 10%);
+  --chv-patch-divider: color-mix(in srgb, var(--chv-border) 82%, transparent);
+  --chv-patch-divider-soft: color-mix(in srgb, var(--chv-border) 68%, transparent);
+  --chv-patch-header-bg: color-mix(in srgb, var(--chv-tool-bg) 82%, var(--chv-bg) 18%);
+  --chv-patch-column-bg: color-mix(in srgb, var(--chv-tool-bg) 74%, var(--chv-bg) 26%);
+  --chv-patch-gutter-bg: color-mix(in srgb, var(--chv-bg) 56%, transparent);
+  --chv-patch-summary-hover-bg: color-mix(in srgb, var(--chv-tool-bg) 90%, var(--chv-border) 10%);
+  --chv-patch-side-min: 320px;
+  --chv-patch-add-accent-base: var(--vscode-terminal-ansiGreen, #00c853);
+  --chv-patch-remove-accent-base: var(--vscode-errorForeground, #ff5f38);
+  --chv-patch-add-bg: color-mix(in srgb, var(--chv-patch-add-accent-base) 18%, var(--chv-patch-surface) 82%);
+  --chv-patch-remove-bg: color-mix(in srgb, var(--chv-patch-remove-accent-base) 16%, var(--chv-patch-surface) 84%);
+  --chv-patch-add-accent: color-mix(in srgb, var(--chv-patch-add-accent-base) 74%, var(--chv-fg) 26%);
+  --chv-patch-remove-accent: color-mix(in srgb, var(--chv-patch-remove-accent-base) 74%, var(--chv-fg) 26%);
+  --chv-patch-add-badge-fg: var(--chv-patch-add-accent);
+  --chv-patch-remove-badge-fg: var(--chv-patch-remove-accent);
+  --chv-patch-add-badge-bg: color-mix(in srgb, var(--chv-patch-add-accent) 12%, transparent);
+  --chv-patch-remove-badge-bg: color-mix(in srgb, var(--chv-patch-remove-accent) 12%, transparent);
+  --chv-patch-add-badge-border: color-mix(in srgb, var(--chv-patch-add-accent) 34%, var(--chv-border) 66%);
+  --chv-patch-remove-badge-border: color-mix(in srgb, var(--chv-patch-remove-accent) 34%, var(--chv-border) 66%);
+  --chv-find-match-bg: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 179, 8, 0.2));
+  --chv-find-match-active-bg: var(--vscode-editor-findMatchBackground, rgba(234, 179, 8, 0.35));
+  --chv-find-match-border: var(--vscode-editor-findMatchBorder, rgba(234, 179, 8, 0.6));
+  --chv-search-surface: color-mix(in srgb, var(--chv-tool-bg) 72%, var(--chv-assistant-bg) 28%);
+  --chv-search-border: color-mix(in srgb, var(--chv-accent) 22%, var(--chv-border) 78%);
+  --chv-search-accent: color-mix(in srgb, var(--chv-accent) 78%, var(--chv-fg) 22%);
+  --chv-search-field-bg: color-mix(in srgb, var(--chv-bg) 82%, var(--chv-search-surface) 18%);
+  --chv-search-chip-bg: color-mix(in srgb, var(--chv-accent) 10%, var(--chv-bg) 90%);
+  --chv-search-chip-border: color-mix(in srgb, var(--chv-accent) 24%, var(--chv-border) 76%);
+  --chv-page-search-width: min(360px, calc(100vw - 20px));
 }
 
 html,
@@ -100,6 +132,284 @@ body {
   flex: 1;
 }
 
+body.pageSearchResizing {
+  cursor: ew-resize;
+  user-select: none;
+}
+
+#pageSearchBar[hidden] {
+  display: none !important;
+}
+
+#pageSearchBar {
+  position: fixed;
+  top: calc(var(--chv-toolbar-height, 44px) + 8px);
+  right: 10px;
+  bottom: 10px;
+  z-index: 3;
+  width: var(--chv-page-search-width);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--chv-search-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--chv-search-surface) 92%, var(--chv-bg) 8%);
+  box-shadow: 0 16px 32px color-mix(in srgb, var(--chv-bg) 84%, transparent);
+}
+
+#pageSearchResizeHandle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 12px;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 1;
+}
+
+#pageSearchResizeHandle::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 10px;
+  bottom: 10px;
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chv-search-accent) 32%, transparent);
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+#pageSearchBar:hover #pageSearchResizeHandle::after,
+body.pageSearchResizing #pageSearchResizeHandle::after {
+  opacity: 1;
+}
+
+body.pageSearchResizing #pageSearchResizeHandle::after {
+  background: color-mix(in srgb, var(--chv-search-accent) 62%, transparent);
+}
+
+#pageSearchInner {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 10px 10px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--chv-search-border) 70%, transparent);
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--chv-search-surface) 86%, var(--chv-bg) 14%),
+    color-mix(in srgb, var(--chv-search-surface) 98%, var(--chv-bg) 2%)
+  );
+}
+
+#pageSearchInner::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(to bottom, var(--chv-search-accent), color-mix(in srgb, var(--chv-search-accent) 45%, transparent));
+}
+
+#pageSearchInner:focus-within {
+  border-color: var(--chv-accent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--chv-accent) 26%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--chv-accent) 12%, transparent);
+}
+
+#pageSearchHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+#pageSearchTitle {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--chv-muted);
+  text-transform: uppercase;
+}
+
+#pageSearchActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+#pageSearchInputRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+#pageSearchInput {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 78%, transparent);
+  border-radius: 8px;
+  outline: none;
+  background: var(--chv-search-field-bg);
+  color: var(--chv-fg);
+  font: inherit;
+}
+
+#pageSearchInput::placeholder {
+  color: var(--chv-muted);
+}
+
+#pageSearchInput:focus {
+  border-color: var(--chv-accent);
+}
+
+#pageSearchCount {
+  min-width: 52px;
+  padding: 2px 8px;
+  text-align: center;
+  color: var(--chv-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  border: 1px solid var(--chv-search-chip-border);
+  border-radius: 999px;
+  background: var(--chv-search-chip-bg);
+}
+
+#pageSearchInner button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 82%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--chv-bg) 70%, transparent);
+  color: var(--chv-fg);
+  cursor: pointer;
+  line-height: 0;
+}
+
+#pageSearchInner button:hover {
+  border-color: var(--chv-accent);
+  background: color-mix(in srgb, var(--chv-accent) 10%, var(--chv-bg) 90%);
+}
+
+#pageSearchInner button svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+#pageSearchResults {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: color-mix(in srgb, var(--chv-bg) 92%, var(--chv-search-surface) 8%);
+}
+
+.pageSearchEmpty {
+  padding: 12px 10px;
+  border: 1px dashed color-mix(in srgb, var(--chv-border) 80%, transparent);
+  border-radius: 10px;
+  color: var(--chv-muted);
+  font-size: 12px;
+  text-align: center;
+  background: color-mix(in srgb, var(--chv-bg) 88%, transparent);
+}
+
+.pageSearchResult {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 80%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--chv-bg) 84%, var(--chv-search-surface) 16%);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pageSearchResult:hover {
+  border-color: var(--chv-accent);
+  background: color-mix(in srgb, var(--chv-accent) 7%, var(--chv-bg) 93%);
+}
+
+.pageSearchResult-active {
+  border-color: color-mix(in srgb, var(--chv-accent) 72%, var(--chv-border) 28%);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chv-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--chv-accent) 10%, var(--chv-bg) 90%);
+}
+
+.pageSearchResultHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.pageSearchResultLine {
+  min-width: 38px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chv-code-bg) 82%, transparent);
+  color: var(--chv-muted);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.pageSearchResultHeaderText {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pageSearchResultTitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--chv-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pageSearchResultMeta {
+  font-size: 11px;
+  color: var(--chv-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pageSearchResultSnippet {
+  font-size: 12px;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--chv-fg) 92%, var(--chv-muted) 8%);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-word;
+}
+
+.pageSearchResultMatch {
+  background: var(--chv-find-match-bg);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
 #meta {
   padding: 10px 12px 0 12px;
   color: var(--chv-muted);
@@ -108,6 +418,18 @@ body {
 
 #annotation {
   padding: 10px 12px 0 12px;
+}
+
+mark.pageSearchMatch {
+  background: var(--chv-find-match-bg);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+mark.pageSearchMatch-active {
+  background: var(--chv-find-match-active-bg);
+  box-shadow: inset 0 0 0 1px var(--chv-find-match-border);
 }
 
 .sessionHeader {
@@ -466,6 +788,376 @@ body {
   background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 12%, var(--chv-tool-bg) 88%);
 }
 
+.patchGroupCard {
+  gap: 10px;
+}
+
+.patchGroupSummary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.patchEntryList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.patchEntry {
+  padding: 0;
+  overflow: hidden;
+  background: var(--chv-patch-surface-alt);
+  border-color: var(--chv-patch-divider);
+}
+
+.patchEntrySummary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  /* Keep file rows compact in the collapsed state. */
+  padding: 7px 10px;
+  line-height: 1.25;
+}
+
+.patchEntrySummary:hover {
+  background: var(--chv-patch-summary-hover-bg);
+}
+
+.patchEntrySummary::marker,
+.patchEntrySummary::-webkit-details-marker {
+  display: none;
+}
+
+.patchEntrySummary::before {
+  content: ">";
+  color: var(--chv-muted);
+  flex-shrink: 0;
+}
+
+.patchEntry[open] > .patchEntrySummary::before {
+  content: "v";
+}
+
+.patchEntryPathWrap {
+  min-width: 0;
+  flex: 1;
+}
+
+.patchEntryPath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.patchEntryCounts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.patchCountBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 18px;
+  border: 1px solid var(--chv-border);
+  border-radius: 999px;
+  padding: 0 6px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.patchCountBadge-add {
+  color: var(--chv-patch-add-badge-fg);
+  border-color: var(--chv-patch-add-badge-border);
+  background: var(--chv-patch-add-badge-bg);
+}
+
+.patchCountBadge-remove {
+  color: var(--chv-patch-remove-badge-fg);
+  border-color: var(--chv-patch-remove-badge-border);
+  background: var(--chv-patch-remove-badge-bg);
+}
+
+.patchEntryBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 10px 10px 10px;
+  border-top: 1px solid var(--chv-patch-divider);
+}
+
+.patchEntry[open] > .patchEntryBody {
+  padding-top: 8px;
+}
+
+.patchEntryMove {
+  font-size: 12px;
+  color: var(--chv-muted);
+}
+
+.patchHunk {
+  border: 1px solid var(--chv-patch-divider);
+  border-radius: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--chv-patch-surface);
+}
+
+.patchHunkHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--chv-patch-divider);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  color: var(--chv-muted);
+  background: var(--chv-patch-header-bg);
+}
+
+.patchHunkHeaderText {
+  min-width: 0;
+}
+
+.patchHunkActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.patchHunkActionBtn {
+  padding: 2px 5px;
+}
+
+.patchDiffColumnLabels {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  border-bottom: 1px solid var(--chv-patch-divider);
+  background: var(--chv-patch-column-bg);
+}
+
+.patchDiffColumnLabel {
+  padding: 5px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--chv-muted);
+}
+
+.patchDiffColumnLabel-before {
+  border-right: 1px solid var(--chv-patch-divider);
+}
+
+.patchDiffBlocks {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.patchDiffBlock {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  min-width: 0;
+}
+
+.patchDiffBlock-left {
+  border-right: 1px solid var(--chv-patch-divider);
+}
+
+.patchDiffLineColumn,
+.patchDiffTextColumn {
+  display: flex;
+  flex-direction: column;
+}
+
+.patchDiffLineColumn {
+  background: var(--chv-patch-gutter-bg);
+  min-width: 0;
+}
+
+.patchDiffTextColumn {
+  min-width: max-content;
+}
+
+.patchDiffLineNo,
+.patchDiffText {
+  border-top: 1px solid var(--chv-patch-divider-soft);
+}
+
+.patchDiffLineColumn > :first-child,
+.patchDiffTextColumn > :first-child {
+  border-top: 0;
+}
+
+.patchDiffLineNo {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 2px 8px 1px;
+  border-right: 1px solid var(--chv-patch-divider);
+  text-align: right;
+  user-select: none;
+  color: var(--chv-muted);
+  background: var(--chv-patch-gutter-bg);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.patchDiffViewport {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--chv-patch-surface);
+}
+
+.patchDiffText {
+  min-width: max-content;
+  box-sizing: border-box;
+  padding: 2px 10px 1px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.patchDiffCode {
+  display: block;
+  min-width: max-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.patchDiffCode .line {
+  display: block;
+  max-width: 100%;
+}
+
+.patchDiffCode.shiki {
+  background-color: transparent !important;
+}
+
+body.vscode-dark .patchDiffCode.shiki {
+  color: var(--shiki-dark) !important;
+}
+
+body.vscode-dark .patchDiffCode.shiki span {
+  color: var(--shiki-dark) !important;
+}
+
+body.vscode-high-contrast .patchDiffCode.shiki {
+  color: var(--shiki-hcDark) !important;
+}
+
+body.vscode-high-contrast .patchDiffCode.shiki span {
+  color: var(--shiki-hcDark) !important;
+}
+
+body.vscode-high-contrast-light .patchDiffCode.shiki {
+  color: var(--shiki-hcLight) !important;
+}
+
+body.vscode-high-contrast-light .patchDiffCode.shiki span {
+  color: var(--shiki-hcLight) !important;
+}
+
+.patchHunk.patchHunk-wrapEnabled .patchDiffText {
+  min-width: 0;
+  width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.patchHunk.patchHunk-wrapEnabled .patchDiffTextColumn {
+  min-width: 0;
+  width: 100%;
+}
+
+.patchHunk.patchHunk-wrapEnabled .patchDiffViewport {
+  overflow-x: hidden;
+}
+
+.patchHunk.patchHunk-wrapEnabled .patchDiffCode {
+  min-width: 0;
+  width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.patchHunk.patchHunk-wrapEnabled .patchDiffCode .line,
+.patchHunk.patchHunk-wrapEnabled .patchDiffCode span {
+  max-width: 100%;
+  white-space: inherit;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.patchDiffText-add.patchDiffText-right,
+.patchDiffText-modify.patchDiffText-right {
+  background: var(--chv-patch-add-bg);
+}
+
+.patchDiffText-delete.patchDiffText-left,
+.patchDiffText-modify.patchDiffText-left {
+  background: var(--chv-patch-remove-bg);
+}
+
+.patchDiffText-add.patchDiffText-right,
+.patchDiffText-modify.patchDiffText-right,
+.patchDiffText-delete.patchDiffText-left,
+.patchDiffText-modify.patchDiffText-left {
+  position: relative;
+}
+
+.patchDiffText-add.patchDiffText-right::before,
+.patchDiffText-modify.patchDiffText-right::before,
+.patchDiffText-delete.patchDiffText-left::before,
+.patchDiffText-modify.patchDiffText-left::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+}
+
+.patchDiffText-add.patchDiffText-right::before,
+.patchDiffText-modify.patchDiffText-right::before {
+  background: var(--chv-patch-add-accent);
+}
+
+.patchDiffText-delete.patchDiffText-left::before,
+.patchDiffText-modify.patchDiffText-left::before {
+  background: var(--chv-patch-remove-accent);
+}
+
+.patchDiffText-context::before {
+  display: none;
+}
+
 .metaLine {
   display: flex;
   align-items: flex-start;
@@ -800,4 +1492,44 @@ details > summary {
 .highlight {
   outline: 2px solid var(--chv-accent);
   outline-offset: 2px;
+}
+
+@media (max-width: 860px) {
+  #pageSearchResizeHandle {
+    display: none;
+  }
+
+  #pageSearchBar {
+    top: calc(var(--chv-toolbar-height, 44px) + 6px);
+    right: 8px;
+    left: 8px;
+    bottom: 8px;
+    width: auto;
+  }
+
+  .patchDiffColumnLabels {
+    display: none;
+  }
+
+  .patchDiffBlocks {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .patchDiffBlock {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .patchDiffBlock-left {
+    border-right: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--chv-border) 70%, transparent);
+  }
+
+  .patchEntrySummary {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .patchEntryCounts {
+    width: 100%;
+  }
 }

@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-04-13
-- 対象バージョン: 1.1.5
+- 最終更新: 2026-04-17
+- 対象バージョン: 1.2.1
 
 ## 1. 概要
 
@@ -144,6 +144,9 @@
 - `search.caseSensitive`
 - `search.maxResults`
 - `history.dateBasis`
+- `chat.toolDisplayMode`
+- `chat.userLongMessageFolding`
+- `chat.assistantLongMessageFolding`
 - `resume.openTarget`
 - `delete.useTrash`
 - `ui.language`
@@ -214,6 +217,28 @@
 - Control / Status ビュー: `src/tree/utilityTrees.ts`
 - History / Pinned / Search ツリー: `src/tree/*`
 
+### 4.9 ツール意味付けレイヤー
+
+- `src/tools/toolSemantics.ts`
+  - ツール名からカード表示用のメタ情報（アイコン・アクセント・ラベル）を解決する
+  - `detailsOnly` / `compactCards` の表示モードを制御するビルダーを提供する
+- `src/tools/toolTypes.ts`
+  - ツール関連の共通型定義
+
+### 4.10 ローカルファイルリンク
+
+- `src/utils/localFileLinks.ts`
+  - Webview / transcript 内のローカルパス文字列を VS Code URI に変換する
+  - ワークスペース相対パス・行番号指定（`#L39`・`#L39-L45`・`#L39C2`）に対応する
+- `src/transcript/transcriptDocumentLinkProvider.ts`
+  - Markdown transcript ドキュメント上のリンクを `DocumentLinkProvider` として解決する
+
+### 4.11 設定
+
+- `src/settings.ts`
+  - 拡張設定の読み取りヘルパーをまとめる
+  - `chat.toolDisplayMode`・`chat.userLongMessageFolding`・`chat.assistantLongMessageFolding` などチャット表示系設定もここで管理する
+
 ## 5. 開発手順
 
 ### 5.1 セットアップ
@@ -255,3 +280,17 @@ npm run package
 - Status の容量表示と件数表示が更新される
 - Import / Export が両ソースで正しく動く
 - Markdown transcript にローカルパスが含まれるため、共有前確認が必要なことを案内できている
+- `history.dateBasis` を `started` / `lastActivity` で切り替えると履歴ツリーの日付グループが正しく変わる
+- チャット表示で `toolDisplayMode` を `detailsOnly` / `compactCards` で切り替えるとツール行の表示が変わる
+- `userLongMessageFolding` / `assistantLongMessageFolding` が `off` / `auto` / `always` で期待どおり折りたたみ動作する
+- `Show details` ON 時は長文メッセージが常に全文表示になる
+- `patch_apply_end` を含むセッションで差分カードが表示される（`Show details` OFF でも出る）
+- 差分カードの折りたたみ展開、hunk ごとの折り返し切り替え、行ジャンプが動く
+- 差分ハイライトが VS Code テーマに追従する
+- 検索サイドバーがツールバー右端ボタンおよび `Ctrl+F` / `Cmd+F` で開閉する
+- 検索サイドバーの幅をドラッグで変更でき、再表示後も保持される
+- 未入力・一致なし時ともにカウントが `0/0` と表示される
+- チャットヘッダーの先頭・末尾ボタンでスクロールできる
+- ヘッダー幅が狭くなるとラベルボタンが自動的にアイコンのみに切り替わる
+- Reload 後にスクロール位置と選択メッセージが復元される
+- ローカルファイルリンク（相対パス・行番号指定）が VS Code 内で正しく開く

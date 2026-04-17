@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-04-17
+
+### Added
+
+- Added grouped patch-based change cards in the chat viewer by parsing `patch_apply_end` events from session logs.
+- Added collapsible side-by-side before/after diffs for patch entries, with per-hunk wrap toggles and jump-to-line actions.
+- Added a right-side in-page search sidebar for the chat viewer with keyboard shortcuts, match counts, result snippets, and direct result navigation.
+
+### Changed
+
+- Changed patch cards so they are shown even when **Show details** is off, while each file entry remains collapsed by default.
+
 ## [1.2.0] - 2026-04-16
 
 ### Added

@@ -19,7 +19,7 @@ export interface ChatSessionAnnotation {
   note: string;
 }
 
-export type ChatTimelineItem = ChatMessageItem | ChatToolItem | ChatNoteItem;
+export type ChatTimelineItem = ChatMessageItem | ChatToolItem | ChatPatchGroupItem | ChatNoteItem;
 
 export interface ChatMessageItem {
   type: "message";
@@ -42,6 +42,46 @@ export interface ChatToolItem {
   argumentsText?: string;
   outputText?: string;
   presentation?: ChatToolPresentation;
+}
+
+export type ChatPatchChangeType = "create" | "delete" | "move" | "rename" | "update" | "unknown";
+export type ChatPatchRowKind = "context" | "add" | "delete" | "modify";
+
+export interface ChatPatchGroupItem {
+  type: "patchGroup";
+  messageIndex?: number;
+  timestampIso?: string;
+  turnId?: string;
+  entryCount: number;
+  totalAdded: number;
+  totalRemoved: number;
+  entries: ChatPatchEntry[];
+}
+
+export interface ChatPatchEntry {
+  id: string;
+  callId?: string;
+  path: string;
+  displayPath: string;
+  movePath?: string;
+  moveDisplayPath?: string;
+  changeType: ChatPatchChangeType;
+  added: number;
+  removed: number;
+  hunks: ChatPatchHunk[];
+}
+
+export interface ChatPatchHunk {
+  header: string;
+  rows: ChatPatchRow[];
+}
+
+export interface ChatPatchRow {
+  kind: ChatPatchRowKind;
+  leftLine?: number;
+  leftText: string;
+  rightLine?: number;
+  rightText: string;
 }
 
 export interface ChatNoteItem {

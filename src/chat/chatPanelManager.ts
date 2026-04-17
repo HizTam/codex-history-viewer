@@ -210,7 +210,26 @@ export class ChatPanelManager {
     <button id="btnToggleDetails" type="button"></button>
     <button id="btnScrollTop" type="button" class="toolbarIconBtn"></button>
     <button id="btnScrollBottom" type="button" class="toolbarIconBtn"></button>
+    <button id="btnPageSearch" type="button" class="toolbarIconBtn"></button>
     <button id="btnReload" type="button" class="toolbarIconBtn"></button>
+  </div>
+  <div id="pageSearchBar" hidden>
+    <div id="pageSearchResizeHandle" aria-hidden="true"></div>
+    <div id="pageSearchInner">
+      <div id="pageSearchHeader">
+        <div id="pageSearchTitle"></div>
+        <div id="pageSearchActions">
+          <button id="btnPageSearchPrev" type="button" class="toolbarIconBtn"></button>
+          <button id="btnPageSearchNext" type="button" class="toolbarIconBtn"></button>
+          <button id="btnPageSearchClose" type="button" class="toolbarIconBtn"></button>
+        </div>
+      </div>
+      <div id="pageSearchInputRow">
+        <input id="pageSearchInput" type="search" spellcheck="false" autocomplete="off" />
+        <div id="pageSearchCount" aria-live="polite"></div>
+      </div>
+    </div>
+    <div id="pageSearchResults" role="listbox" aria-live="polite"></div>
   </div>
   <div id="annotation"></div>
   <div id="meta"></div>
@@ -393,6 +412,13 @@ export class ChatPanelManager {
       detailsOff: t("chat.button.detailsOff"),
       detailsOnTooltip: t("chat.tooltip.detailsOn"),
       detailsOffTooltip: t("chat.tooltip.detailsOff"),
+      pageSearch: uiText("検索", "Find"),
+      pageSearchTooltip: uiText("ページ内検索を開く", "Open in-page search"),
+      pageSearchPlaceholder: uiText("このビュー内を検索", "Find in this view"),
+      pageSearchPrevTooltip: uiText("前の一致へ移動", "Previous match"),
+      pageSearchNextTooltip: uiText("次の一致へ移動", "Next match"),
+      pageSearchCloseTooltip: uiText("検索を閉じる", "Close search"),
+      pageSearchNoMatches: uiText("一致なし", "No matches"),
       copied: t("chat.toast.copied"),
       tool: t("chat.label.tool"),
       arguments: t("chat.label.arguments"),
@@ -402,6 +428,19 @@ export class ChatPanelManager {
       showLess: t("chat.button.showLess"),
       copyMessageTooltip: t("chat.tooltip.copyMessage"),
       copyCodeTooltip: t("chat.tooltip.copyCode"),
+      patchWrapOn: uiText("差分を折り返す", "Wrap diff"),
+      patchWrapOff: uiText("差分を横スクロール", "No-wrap diff"),
+      patchWrapOnTooltip: uiText("長い差分行を折り返して表示", "Wrap long diff lines"),
+      patchWrapOffTooltip: uiText("長い差分行を横スクロールで表示", "Keep diff lines on one row with horizontal scroll"),
+      patchJumpTooltip: uiText("該当行 {0} へ移動", "Jump to line {0}"),
+      patchGroupTitle: uiText("変更差分", "Changes"),
+      patchGroupCount: uiText("{0} 件の変更", "{0} changes"),
+      patchExpand: uiText("差分を展開", "Expand diff"),
+      patchCollapse: uiText("差分を折りたたむ", "Collapse diff"),
+      patchBefore: uiText("変更前", "Before"),
+      patchAfter: uiText("変更後", "After"),
+      patchNoDiff: uiText("差分はありません", "No diff available"),
+      patchMovedTo: uiText("移動先: {0}", "Moved to: {0}"),
       jumpPrevUser: t("chat.nav.prevUser"),
       jumpNextUser: t("chat.nav.nextUser"),
       jumpPrevAssistant: t("chat.nav.prevAssistant"),

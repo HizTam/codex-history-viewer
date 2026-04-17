@@ -54,13 +54,25 @@ import lightPlus from "@shikijs/themes/light-plus";
     cjs: "javascript",
     cs: "csharp",
     console: "shellscript",
+    css: "css",
     docker: "dockerfile",
     golang: "go",
+    h: "c",
+    hpp: "cpp",
+    htm: "html",
+    html: "html",
     html5: "html",
+    java: "java",
+    js: "javascript",
+    jsx: "jsx",
+    json: "json",
+    json5: "json",
+    jsonc: "jsonc",
     kt: "kotlin",
     kts: "kotlin",
     md: "markdown",
     mjs: "javascript",
+    py: "python",
     psql: "sql",
     plain: "plaintext",
     plaintext: "plaintext",
@@ -74,9 +86,15 @@ import lightPlus from "@shikijs/themes/light-plus";
     sh: "shellscript",
     zsh: "shellscript",
     shell: "shellscript",
+    sql: "sql",
     tf: "terraform",
     text: "plaintext",
+    toml: "toml",
+    ts: "typescript",
+    tsx: "tsx",
     txt: "plaintext",
+    xml: "xml",
+    yaml: "yaml",
     yml: "yaml",
   };
 
@@ -156,15 +174,12 @@ import lightPlus from "@shikijs/themes/light-plus";
     return displayLabelMap[normalized] || normalized;
   }
 
-  function highlightCodeToHtml(codeText, rawLanguage) {
+  function highlightCodeHtml(codeText, normalizedLanguage) {
     if (!highlighter) return "";
-
-    const normalized = normalizeLanguage(rawLanguage, codeText);
-    if (!normalized) return "";
 
     try {
       return highlighter.codeToHtml(String(codeText || ""), {
-        lang: normalized,
+        lang: normalizedLanguage,
         themes: {
           dark: DARK_THEME_NAME,
           hcDark: HIGH_CONTRAST_DARK_THEME_NAME,
@@ -175,15 +190,54 @@ import lightPlus from "@shikijs/themes/light-plus";
     } catch (error) {
       console.warn("[codex-history-viewer] Shiki highlight fallback.", {
         error,
-        language: normalized,
+        language: normalizedLanguage,
       });
       return "";
     }
   }
 
+  function highlightCodeToHtml(codeText, rawLanguage) {
+    if (!highlighter) return "";
+
+    const normalized = normalizeLanguage(rawLanguage, codeText);
+    if (!normalized) return "";
+
+    return highlightCodeHtml(codeText, normalized);
+  }
+
+  function highlightLineFragment(codeText, rawLanguage) {
+    if (!highlighter) return "";
+
+    const normalized = normalizeLanguage(rawLanguage, codeText);
+    if (!normalized) return null;
+
+    const html = highlightCodeHtml(codeText, normalized);
+    if (!html || typeof document === "undefined") return null;
+
+    const tmp = document.createElement("div");
+    tmp.innerHTML = html.trim();
+    const preEl = tmp.querySelector("pre");
+    const codeEl = tmp.querySelector("code");
+    if (!(preEl instanceof HTMLElement) || !(codeEl instanceof HTMLElement)) return null;
+
+    const lineEl = codeEl.querySelector(".line");
+    return {
+      className: preEl.className || "",
+      html: lineEl instanceof HTMLElement ? lineEl.innerHTML || "" : codeEl.innerHTML || "",
+      style: preEl.getAttribute("style") || "",
+    };
+  }
+
+  function highlightLineToHtml(codeText, rawLanguage) {
+    const fragment = highlightLineFragment(codeText, rawLanguage);
+    return fragment && typeof fragment.html === "string" ? fragment.html : "";
+  }
+
   globalThis.codexHistoryViewerShiki = {
     getLanguageLabel,
     highlightCodeToHtml,
+    highlightLineFragment,
+    highlightLineToHtml,
     normalizeLanguage,
   };
 })();

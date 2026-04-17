@@ -14,6 +14,16 @@
   const btnScrollTop = document.getElementById("btnScrollTop");
   const btnScrollBottom = document.getElementById("btnScrollBottom");
   const btnReload = document.getElementById("btnReload");
+  const btnPageSearch = document.getElementById("btnPageSearch");
+  const pageSearchBarEl = document.getElementById("pageSearchBar");
+  const pageSearchResizeHandleEl = document.getElementById("pageSearchResizeHandle");
+  const pageSearchTitleEl = document.getElementById("pageSearchTitle");
+  const pageSearchInputEl = document.getElementById("pageSearchInput");
+  const pageSearchCountEl = document.getElementById("pageSearchCount");
+  const pageSearchResultsEl = document.getElementById("pageSearchResults");
+  const btnPageSearchPrev = document.getElementById("btnPageSearchPrev");
+  const btnPageSearchNext = document.getElementById("btnPageSearchNext");
+  const btnPageSearchClose = document.getElementById("btnPageSearchClose");
 
   const md = createMarkdownRenderer();
   const COPY_ICON_SVG =
@@ -36,6 +46,16 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M11.28 2.78a.75.75 0 1 0-1.06-1.06L1.72 10.22a.75.75 0 1 0 1.06 1.06l3.13-3.13h1.34v3.1a.75.75 0 1 0 1.5 0v-3.1h1.34l2.13 2.13a.75.75 0 1 0 1.06-1.06L11.06 7V5.66l.22-.22a.75.75 0 0 0 0-1.06L10.84 3.94l.44-.44Z"/></svg>';
   const MARKDOWN_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 2h9.5A1.75 1.75 0 0 1 14.5 3.75v8.5A1.75 1.75 0 0 1 12.75 14h-9.5A1.75 1.75 0 0 1 1.5 12.25v-8.5A1.75 1.75 0 0 1 3.25 2Zm0 1.5a.25.25 0 0 0-.25.25v8.5c0 .14.11.25.25.25h9.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25h-9.5Zm1.5 1.75h1.5l1.25 1.88 1.25-1.88h1.5v5.5H9V7.55L7.5 9.75 6 7.55v3.2H4.75v-5.5Zm6.5 3h1.25l-1.88 2.5-1.87-2.5h1.25V5.25h1.25v3Z"/></svg>';
+  const SEARCH_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a4.75 4.75 0 1 1 0 9.5 4.75 4.75 0 0 1 0-9.5Zm0 1.5a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Zm4.9 6.83 2.13 2.14a.75.75 0 1 1-1.06 1.06l-2.14-2.13a.75.75 0 1 1 1.07-1.07Z"/></svg>';
+  const CLOSE_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 1 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/></svg>';
+  const PATCH_WRAP_ON_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 4h10.5a.75.75 0 0 1 0 1.5H5.56l1.22 1.22a.75.75 0 0 1-1.06 1.06L3.22 5.28a.75.75 0 0 1 0-1.06l2.5-2.5a.75.75 0 0 1 1.06 1.06L5.56 4H2.75Zm0 4.5h6.5a2.75 2.75 0 1 1 0 5.5H7.31l1.22 1.22a.75.75 0 1 1-1.06 1.06l-2.5-2.5a.75.75 0 0 1 0-1.06l2.5-2.5a.75.75 0 1 1 1.06 1.06L7.31 12.5h1.94a1.25 1.25 0 0 0 0-2.5h-6.5a.75.75 0 0 1 0-1.5Z"/></svg>';
+  const PATCH_WRAP_OFF_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 4h8.5a.75.75 0 0 1 0 1.5h-8.5a.75.75 0 0 1 0-1.5Zm0 3.25h10.5a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5Zm0 3.25h8.7l-1.2-1.2a.75.75 0 1 1 1.06-1.06l2.47 2.47a.75.75 0 0 1 0 1.06l-2.47 2.47a.75.75 0 0 1-1.06-1.06l1.2-1.2h-8.7a.75.75 0 0 1 0-1.5Z"/></svg>';
+  const PATCH_JUMP_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.75 2h5.5a.75.75 0 0 1 0 1.5h-5.5a.25.25 0 0 0-.25.25v8.5c0 .14.11.25.25.25h8.5a.25.25 0 0 0 .25-.25v-5.5a.75.75 0 0 1 1.5 0v5.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm4.72 1.22a.75.75 0 0 1 .53-.22h4.25a.75.75 0 0 1 .75.75V8a.75.75 0 0 1-1.5 0V5.56L8.78 9.28a.75.75 0 1 1-1.06-1.06l3.72-3.72H9a.75.75 0 0 1-.53-1.28Z"/></svg>';
   const DETAILS_ON_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.25c3.53 0 6.25 3.62 6.25 4.75S11.53 12.75 8 12.75 1.75 9.13 1.75 8 4.47 3.25 8 3.25Zm0 1.5c-2.7 0-4.75 2.54-4.75 3.25s2.05 3.25 4.75 3.25 4.75-2.54 4.75-3.25S10.7 4.75 8 4.75Zm0 1a2.25 2.25 0 1 1 0 4.5 2.25 2.25 0 0 1 0-4.5Z"/></svg>';
   const DETAILS_OFF_ICON_SVG =
@@ -62,6 +82,52 @@
     write:
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 1.75h7.5c.4 0 .78.16 1.06.44l1 1c.28.28.44.66.44 1.06v8.5c0 .97-.78 1.75-1.75 1.75h-8A1.75 1.75 0 0 1 1.75 12.75v-9c0-.97.78-1.75 1.75-1.75Zm0 1.5a.25.25 0 0 0-.25.25v9c0 .14.11.25.25.25h8a.25.25 0 0 0 .25-.25v-8.19l-.81-.81H3.25Zm1.5 1.5h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5Zm3 3.25a.75.75 0 0 1 .75.75v1h1a.75.75 0 0 1 0 1.5h-1v1a.75.75 0 0 1-1.5 0v-1h-1a.75.75 0 0 1 0-1.5h1v-1A.75.75 0 0 1 7.75 8Z"/></svg>',
   });
+  const PATCH_LANGUAGE_BY_EXTENSION = Object.freeze({
+    ".bash": "shellscript",
+    ".c": "c",
+    ".cc": "cpp",
+    ".cpp": "cpp",
+    ".cs": "csharp",
+    ".css": "css",
+    ".go": "go",
+    ".h": "c",
+    ".hpp": "cpp",
+    ".htm": "html",
+    ".html": "html",
+    ".ini": "ini",
+    ".java": "java",
+    ".js": "javascript",
+    ".json": "json",
+    ".jsonc": "jsonc",
+    ".jsx": "jsx",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".md": "markdown",
+    ".nginx": "nginx",
+    ".php": "php",
+    ".proto": "proto",
+    ".ps1": "powershell",
+    ".psm1": "powershell",
+    ".py": "python",
+    ".rb": "ruby",
+    ".rs": "rust",
+    ".sh": "shellscript",
+    ".sql": "sql",
+    ".swift": "swift",
+    ".tf": "terraform",
+    ".toml": "toml",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".xml": "xml",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".zsh": "shellscript",
+  });
+  const PATCH_LANGUAGE_BY_FILENAME = Object.freeze({
+    dockerfile: "dockerfile",
+    makefile: "makefile",
+  });
+  const MIN_PAGE_SEARCH_WIDTH = 280;
 
   /** @type {any} */
   let model = null;
@@ -77,14 +143,27 @@
   let selectedMessageIndex = null;
   let messageNavMap = new Map();
   let expandedMessageIndexes = new Set();
+  let expandedPatchEntries = new Set();
+  let wrappedPatchHunkKeys = new Set();
   let isPinned = false;
+  let pageSearchMatches = [];
+  let pageSearchResults = [];
+  let activePageSearchResultIndex = -1;
+  let pageSearchPanelWidth = null;
+  let pageSearchResizeState = null;
   let toolbarCompactFrame = 0;
+  let patchLayoutFrame = 0;
+  let webviewState = typeof vscode.getState === "function" ? vscode.getState() || {} : {};
   const toolbarResizeObserver =
     typeof ResizeObserver === "function" && toolbarEl instanceof HTMLElement
       ? new ResizeObserver(() => {
           scheduleToolbarCompactMode();
         })
       : null;
+
+  if (Number.isFinite(Number(webviewState.pageSearchPanelWidth))) {
+    pageSearchPanelWidth = Number(webviewState.pageSearchPanelWidth);
+  }
 
   // Initial button labels (overwritten after receiving sessionData).
   setToolbarButtonWithIcon(btnResumeInCodex, "Resume in Codex", RESUME_ICON_SVG);
@@ -94,15 +173,22 @@
   // Scroll buttons stay icon-only in the toolbar.
   if (btnScrollTop instanceof HTMLElement) btnScrollTop.innerHTML = SCROLL_TOP_ICON_SVG;
   if (btnScrollBottom instanceof HTMLElement) btnScrollBottom.innerHTML = SCROLL_BOTTOM_ICON_SVG;
+  if (btnPageSearch instanceof HTMLElement) btnPageSearch.innerHTML = SEARCH_ICON_SVG;
   // Reload is icon-only (tooltip is set via i18n).
   btnReload.innerHTML = RELOAD_ICON_SVG;
   setToolbarButtonWithIcon(btnToggleDetails, "Details", DETAILS_OFF_ICON_SVG);
+  if (btnPageSearchPrev instanceof HTMLElement) btnPageSearchPrev.innerHTML = NAV_UP_ICON_SVG;
+  if (btnPageSearchNext instanceof HTMLElement) btnPageSearchNext.innerHTML = NAV_DOWN_ICON_SVG;
+  if (btnPageSearchClose instanceof HTMLElement) btnPageSearchClose.innerHTML = CLOSE_ICON_SVG;
 
   btnResumeInCodex.addEventListener("click", () => {
     vscode.postMessage({ type: "resumeInSource" });
   });
   btnPinToggle.addEventListener("click", () => {
     vscode.postMessage({ type: "togglePin" });
+  });
+  btnPageSearch.addEventListener("click", () => {
+    openPageSearch();
   });
 
   btnMarkdown.addEventListener("click", () => {
@@ -137,10 +223,77 @@
     updateToolbar();
     render();
   });
+  btnPageSearchPrev.addEventListener("click", () => {
+    navigatePageSearchResults(-1);
+  });
+  btnPageSearchNext.addEventListener("click", () => {
+    navigatePageSearchResults(1);
+  });
+  btnPageSearchClose.addEventListener("click", () => {
+    closePageSearch();
+  });
+  pageSearchInputEl.addEventListener("input", () => {
+    refreshPageSearchResults({ reveal: true });
+  });
+  pageSearchInputEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      navigatePageSearchResults(event.shiftKey ? -1 : 1);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closePageSearch();
+    }
+  });
+  if (pageSearchResizeHandleEl instanceof HTMLElement) {
+    pageSearchResizeHandleEl.addEventListener("pointerdown", (event) => {
+      if (!(pageSearchBarEl instanceof HTMLElement)) return;
+      if (window.innerWidth <= 860) return;
+      event.preventDefault();
+      event.stopPropagation();
+      pageSearchResizeState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: pageSearchBarEl.getBoundingClientRect().width,
+      };
+      pageSearchResizeHandleEl.setPointerCapture(event.pointerId);
+      document.body.classList.add("pageSearchResizing");
+    });
+    pageSearchResizeHandleEl.addEventListener("pointermove", (event) => {
+      if (!pageSearchResizeState || pageSearchResizeState.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      const nextWidth = normalizePageSearchPanelWidth(pageSearchResizeState.startWidth + (pageSearchResizeState.startX - event.clientX));
+      if (nextWidth == null) return;
+      pageSearchPanelWidth = nextWidth;
+      applyPageSearchPanelWidth();
+    });
+    const finishResize = (event) => {
+      if (!pageSearchResizeState || pageSearchResizeState.pointerId !== event.pointerId) return;
+      pageSearchResizeState = null;
+      document.body.classList.remove("pageSearchResizing");
+      persistPageSearchPanelWidth();
+      if (pageSearchResizeHandleEl.hasPointerCapture(event.pointerId)) {
+        pageSearchResizeHandleEl.releasePointerCapture(event.pointerId);
+      }
+    };
+    pageSearchResizeHandleEl.addEventListener("pointerup", finishResize);
+    pageSearchResizeHandleEl.addEventListener("pointercancel", finishResize);
+    pageSearchResizeHandleEl.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      pageSearchPanelWidth = null;
+      applyPageSearchPanelWidth();
+      persistPageSearchPanelWidth();
+    });
+  }
 
   window.addEventListener("resize", () => {
+    pageSearchPanelWidth = normalizePageSearchPanelWidth(pageSearchPanelWidth);
+    applyPageSearchPanelWidth();
     scheduleToolbarCompactMode();
+    schedulePatchLayoutSync();
   });
+  applyPageSearchPanelWidth();
   if (toolbarResizeObserver) toolbarResizeObserver.observe(toolbarEl);
 
   document.addEventListener("click", (event) => {
@@ -163,6 +316,24 @@
     });
   });
 
+  document.addEventListener("keydown", (event) => {
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      openPageSearch();
+      return;
+    }
+    if (event.key === "F3") {
+      event.preventDefault();
+      if (isPageSearchOpen()) navigatePageSearchResults(event.shiftKey ? -1 : 1);
+      else openPageSearch();
+      return;
+    }
+    if (event.key === "Escape" && isPageSearchOpen() && !isTextInputElement(document.activeElement)) {
+      event.preventDefault();
+      closePageSearch();
+    }
+  });
+
   window.addEventListener("message", (event) => {
     const msg = event.data || {};
     if (msg.type === "sessionData") {
@@ -174,6 +345,7 @@
       const prevShowDetails = showDetails;
       const prevSelectedMessageIndex = selectedMessageIndex;
       const prevExpandedMessageIndexes = new Set(expandedMessageIndexes);
+      const prevExpandedPatchEntries = new Set(expandedPatchEntries);
 
       model = msg.model || null;
       i18n = msg.i18n || {};
@@ -197,6 +369,7 @@
           ? msg.revealMessageIndex
           : null;
       expandedMessageIndexes = isRestore ? prevExpandedMessageIndexes : new Set();
+      expandedPatchEntries = isRestore ? prevExpandedPatchEntries : new Set();
       if (!isRestore && typeof msg.revealMessageIndex === "number") {
         expandedMessageIndexes.add(msg.revealMessageIndex);
       }
@@ -240,6 +413,20 @@
 
   vscode.postMessage({ type: "ready" });
 
+  function isJapaneseUi() {
+    return typeof navigator.language === "string" && navigator.language.toLowerCase().startsWith("ja");
+  }
+
+  function looksLikeMojibake(text) {
+    return typeof text === "string" && /(縺|繧|繝|荳|螟|髟|谺|蜑|隧|邱|讀|蟾|蛻|遘|貞|髮)/u.test(text);
+  }
+
+  function getSafeUiText(value, jaFallback, enFallback) {
+    const text = typeof value === "string" ? value.trim() : "";
+    if (text && !looksLikeMojibake(text)) return text;
+    return isJapaneseUi() ? jaFallback : enFallback;
+  }
+
   function updateToolbar() {
     const isClaudeSession = !!(model && model.meta && model.meta.historySource === "claude");
     const resumeLabel = isClaudeSession
@@ -260,6 +447,12 @@
     setToolbarButtonWithIcon(btnPinToggle, pinLabel, pinIcon);
     btnPinToggle.title = pinTooltip;
     btnPinToggle.setAttribute("aria-label", pinTooltip);
+
+    const pageSearchLabel = getSafeUiText(i18n.pageSearch, "検索", "Find");
+    const pageSearchTooltip = getSafeUiText(i18n.pageSearchTooltip, "ページ内検索を開く", "Open in-page search");
+    btnPageSearch.innerHTML = SEARCH_ICON_SVG;
+    btnPageSearch.title = pageSearchTooltip;
+    btnPageSearch.setAttribute("aria-label", pageSearchTooltip);
 
     const markdownLabel = i18n.markdown || "Markdown";
     const markdownTooltip = i18n.markdownTooltip || markdownLabel;
@@ -294,6 +487,24 @@
     setToolbarButtonWithIcon(btnToggleDetails, detailsLabel, detailsIcon);
     btnToggleDetails.title = detailsTooltip;
     btnToggleDetails.setAttribute("aria-label", detailsTooltip);
+    if (pageSearchInputEl instanceof HTMLInputElement) {
+      const searchPlaceholder = getSafeUiText(i18n.pageSearchPlaceholder, "このビュー内を検索", "Find in this view");
+      pageSearchInputEl.placeholder = searchPlaceholder;
+      pageSearchInputEl.setAttribute("aria-label", searchPlaceholder);
+    }
+    if (pageSearchTitleEl instanceof HTMLElement) {
+      pageSearchTitleEl.textContent = pageSearchLabel;
+    }
+    const prevTooltip = getSafeUiText(i18n.pageSearchPrevTooltip, "前の一致へ移動", "Previous match");
+    const nextTooltip = getSafeUiText(i18n.pageSearchNextTooltip, "次の一致へ移動", "Next match");
+    const closeTooltip = getSafeUiText(i18n.pageSearchCloseTooltip, "検索を閉じる", "Close search");
+    btnPageSearchPrev.title = prevTooltip;
+    btnPageSearchPrev.setAttribute("aria-label", prevTooltip);
+    btnPageSearchNext.title = nextTooltip;
+    btnPageSearchNext.setAttribute("aria-label", nextTooltip);
+    btnPageSearchClose.title = closeTooltip;
+    btnPageSearchClose.setAttribute("aria-label", closeTooltip);
+    updatePageSearchStatus();
     scheduleToolbarCompactMode();
   }
 
@@ -331,12 +542,422 @@
     toolbarEl.classList.remove("toolbarCompact");
     const needsCompact = toolbarEl.scrollWidth > toolbarEl.clientWidth + 1;
     toolbarEl.classList.toggle("toolbarCompact", needsCompact);
+    document.documentElement.style.setProperty("--chv-toolbar-height", `${toolbarEl.offsetHeight}px`);
+  }
+
+  function normalizePageSearchPanelWidth(value) {
+    const width = Number(value);
+    if (!Number.isFinite(width) || width <= 0) return null;
+    if (window.innerWidth <= 860) return null;
+    const maxWidth = Math.max(MIN_PAGE_SEARCH_WIDTH, window.innerWidth - 36);
+    return Math.max(MIN_PAGE_SEARCH_WIDTH, Math.min(Math.round(width), maxWidth));
+  }
+
+  function applyPageSearchPanelWidth() {
+    const normalized = normalizePageSearchPanelWidth(pageSearchPanelWidth);
+    pageSearchPanelWidth = normalized;
+    if (normalized == null) {
+      document.documentElement.style.removeProperty("--chv-page-search-width");
+      return;
+    }
+    document.documentElement.style.setProperty("--chv-page-search-width", `${normalized}px`);
+  }
+
+  function persistPageSearchPanelWidth() {
+    if (typeof vscode.setState !== "function") return;
+    webviewState = {
+      ...(webviewState && typeof webviewState === "object" ? webviewState : {}),
+      pageSearchPanelWidth,
+    };
+    vscode.setState(webviewState);
+  }
+
+  function isPageSearchOpen() {
+    return pageSearchBarEl instanceof HTMLElement && !pageSearchBarEl.hidden;
+  }
+
+  function isTextInputElement(element) {
+    return (
+      element instanceof HTMLInputElement ||
+      element instanceof HTMLTextAreaElement ||
+      (element instanceof HTMLElement && element.isContentEditable)
+    );
+  }
+
+  function openPageSearch() {
+    if (!(pageSearchBarEl instanceof HTMLElement) || !(pageSearchInputEl instanceof HTMLInputElement)) return;
+    applyPageSearchPanelWidth();
+    pageSearchBarEl.hidden = false;
+    document.body.classList.add("pageSearchOpen");
+    updateToolbarCompactMode();
+    const selectedText = window.getSelection ? String(window.getSelection() || "").trim() : "";
+    if (!pageSearchInputEl.value && selectedText && !/\s*\n\s*/u.test(selectedText)) {
+      pageSearchInputEl.value = selectedText;
+    }
+    refreshPageSearchResults({ preserveIndex: true, reveal: false });
+    pageSearchInputEl.focus();
+    pageSearchInputEl.select();
+  }
+
+  function closePageSearch() {
+    if (!(pageSearchBarEl instanceof HTMLElement)) return;
+    pageSearchBarEl.hidden = true;
+    document.body.classList.remove("pageSearchOpen");
+    document.body.classList.remove("pageSearchResizing");
+    clearPageSearchHighlights();
+    renderPageSearchResults();
+    updatePageSearchStatus();
+  }
+
+  function refreshPageSearchResults(options = {}) {
+    const preserveIndex = !!options.preserveIndex;
+    const reveal = options.reveal !== false;
+    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    const previousIndex = preserveIndex ? activePageSearchResultIndex : -1;
+    clearPageSearchHighlights();
+    if (!query) {
+      renderPageSearchResults();
+      updatePageSearchStatus();
+      return;
+    }
+
+    const loweredQuery = query.toLowerCase();
+    const roots = [annotationEl, metaEl, timelineEl].filter((node) => node instanceof HTMLElement);
+    const textNodes = [];
+
+    for (const root of roots) {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+          return shouldAcceptPageSearchTextNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+        },
+      });
+      while (walker.nextNode()) {
+        textNodes.push(walker.currentNode);
+      }
+    }
+
+    for (const textNode of textNodes) {
+      const text = textNode.textContent || "";
+      const loweredText = text.toLowerCase();
+      let matchIndex = loweredText.indexOf(loweredQuery);
+      if (matchIndex < 0) continue;
+
+      const fragment = document.createDocumentFragment();
+      const pendingMarks = [];
+      let cursor = 0;
+      while (matchIndex >= 0) {
+        if (matchIndex > cursor) {
+          fragment.appendChild(document.createTextNode(text.slice(cursor, matchIndex)));
+        }
+        const mark = document.createElement("mark");
+        mark.className = "pageSearchMatch";
+        mark.textContent = text.slice(matchIndex, matchIndex + query.length);
+        fragment.appendChild(mark);
+        pendingMarks.push({ mark, start: matchIndex });
+        pageSearchMatches.push(mark);
+        cursor = matchIndex + query.length;
+        matchIndex = loweredText.indexOf(loweredQuery, cursor);
+      }
+      if (cursor < text.length) {
+        fragment.appendChild(document.createTextNode(text.slice(cursor)));
+      }
+      textNode.parentNode.replaceChild(fragment, textNode);
+
+      for (const pending of pendingMarks) {
+        pageSearchResults.push(buildPageSearchResult(pending.mark, text, pending.start, query.length));
+      }
+    }
+
+    renderPageSearchResults();
+
+    if (pageSearchResults.length === 0) {
+      updatePageSearchStatus();
+      return;
+    }
+
+    const nextIndex =
+      preserveIndex && previousIndex >= 0 ? Math.min(previousIndex, pageSearchResults.length - 1) : 0;
+    activatePageSearchResult(nextIndex, { reveal });
+  }
+
+  function shouldAcceptPageSearchTextNode(node) {
+    if (!(node instanceof Text)) return false;
+    const text = node.textContent || "";
+    if (!text.trim()) return false;
+
+    const parent = node.parentElement;
+    if (!(parent instanceof HTMLElement)) return false;
+    if (parent.closest("#pageSearchBar")) return false;
+    if (parent.closest("script, style, textarea, input, select, button")) return false;
+    if (parent.closest("mark.pageSearchMatch")) return false;
+    if (parent.closest("[hidden]")) return false;
+
+    const closedDetails = parent.closest("details:not([open])");
+    if (closedDetails) {
+      const summary = parent.closest("summary");
+      if (!(summary instanceof HTMLElement) || summary.parentElement !== closedDetails) return false;
+    }
+
+    if (parent.getClientRects().length === 0 && !parent.closest("summary")) return false;
+    return true;
+  }
+
+  function clearPageSearchHighlights() {
+    for (const match of Array.from(document.querySelectorAll("mark.pageSearchMatch"))) {
+      const textNode = document.createTextNode(match.textContent || "");
+      const parent = match.parentNode;
+      if (!parent) continue;
+      parent.replaceChild(textNode, match);
+      if (parent instanceof HTMLElement) parent.normalize();
+    }
+    pageSearchMatches = [];
+    pageSearchResults = [];
+    activePageSearchResultIndex = -1;
+  }
+
+  function navigatePageSearchResults(delta) {
+    if (!isPageSearchOpen()) {
+      openPageSearch();
+      return;
+    }
+    if (pageSearchResults.length === 0) {
+      refreshPageSearchResults({ reveal: false });
+      if (pageSearchResults.length === 0) return;
+    }
+    const total = pageSearchResults.length;
+    const currentIndex = activePageSearchResultIndex >= 0 ? activePageSearchResultIndex : 0;
+    const nextIndex = (currentIndex + delta + total) % total;
+    activatePageSearchResult(nextIndex, { reveal: true });
+  }
+
+  function activatePageSearchResult(index, options = {}) {
+    if (pageSearchResults.length === 0) {
+      activePageSearchResultIndex = -1;
+      renderPageSearchResults();
+      updatePageSearchStatus();
+      return;
+    }
+
+    const reveal = options.reveal !== false;
+    for (const match of pageSearchMatches) {
+      if (match instanceof HTMLElement) match.classList.remove("pageSearchMatch-active");
+    }
+
+    const safeIndex = Math.max(0, Math.min(index, pageSearchResults.length - 1));
+    activePageSearchResultIndex = safeIndex;
+    const activeResult = pageSearchResults[safeIndex];
+    if (activeResult && activeResult.mark instanceof HTMLElement) {
+      activeResult.mark.classList.add("pageSearchMatch-active");
+      if (reveal) {
+        activeResult.mark.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      }
+    }
+    renderPageSearchResults();
+    updatePageSearchStatus();
+  }
+
+  function buildPageSearchResult(mark, sourceText, startIndex, queryLength) {
+    const snippet = buildPageSearchSnippet(sourceText, startIndex, queryLength);
+    const context = describePageSearchContext(mark);
+    return {
+      mark,
+      title: context.title,
+      meta: context.meta,
+      lineNumber: context.lineNumber,
+      snippet,
+    };
+  }
+
+  function buildPageSearchSnippet(text, startIndex, queryLength) {
+    const prefixStart = Math.max(0, startIndex - 42);
+    const suffixEnd = Math.min(text.length, startIndex + queryLength + 66);
+    const prefix = text.slice(prefixStart, startIndex).trimStart();
+    const match = text.slice(startIndex, startIndex + queryLength);
+    const suffix = text.slice(startIndex + queryLength, suffixEnd).trimEnd();
+    return {
+      prefix: `${prefixStart > 0 ? "..." : ""}${prefix}`,
+      match,
+      suffix: `${suffix}${suffixEnd < text.length ? "..." : ""}`,
+    };
+  }
+
+  function describePageSearchContext(mark) {
+    const patchCell = mark instanceof HTMLElement ? mark.closest(".patchDiffText") : null;
+    if (patchCell instanceof HTMLElement) {
+      return describePatchSearchContext(patchCell);
+    }
+
+    const patchSummary = mark instanceof HTMLElement ? mark.closest(".patchEntrySummary") : null;
+    if (patchSummary instanceof HTMLElement) {
+      const filePath = patchSummary.querySelector(".patchEntryPath");
+      return {
+        title: getElementText(filePath) || getSafeUiText(i18n.patchGroupTitle, "変更差分", "Changes"),
+        meta: "",
+        lineNumber: "",
+      };
+    }
+
+    const bubble = mark instanceof HTMLElement ? mark.closest(".bubble") : null;
+    if (bubble instanceof HTMLElement) {
+      return describeBubbleSearchContext(bubble);
+    }
+
+    if (mark instanceof HTMLElement && mark.closest("#annotation")) {
+      const inTags = !!mark.closest(".sessionTagList");
+      return {
+        title: inTags
+          ? getSafeUiText(i18n.annotationTags, "タグ", "Tags")
+          : getSafeUiText(i18n.annotationNote, "メモ", "Note"),
+        meta: "",
+        lineNumber: "",
+      };
+    }
+
+    if (mark instanceof HTMLElement && mark.closest("#meta")) {
+      return {
+        title: getSafeUiText("", "セッション情報", "Session info"),
+        meta: "",
+        lineNumber: "",
+      };
+    }
+
+    return {
+      title: getSafeUiText(i18n.pageSearch, "検索", "Find"),
+      meta: "",
+      lineNumber: "",
+    };
+  }
+
+  function describePatchSearchContext(cell) {
+    const patchEntry = cell.closest(".patchEntry");
+    const patchHunk = cell.closest(".patchHunk");
+    const filePath = getElementText(patchEntry && patchEntry.querySelector(".patchEntryPath"));
+    const hunkHeader = getElementText(patchHunk && patchHunk.querySelector(".patchHunkHeaderText"));
+    const sideLabel = cell.classList.contains("patchDiffText-right")
+      ? getSafeUiText(i18n.patchAfter, "変更後", "After")
+      : getSafeUiText(i18n.patchBefore, "変更前", "Before");
+    const lineNumber = resolvePatchSearchLineNumber(cell);
+    return {
+      title: filePath || getSafeUiText(i18n.patchGroupTitle, "変更差分", "Changes"),
+      meta: [sideLabel, hunkHeader].filter(Boolean).join(" · "),
+      lineNumber,
+    };
+  }
+
+  function describeBubbleSearchContext(bubble) {
+    const roleLabel = bubble.classList.contains("user")
+      ? getSafeUiText("", "ユーザー", "User")
+      : bubble.classList.contains("assistant")
+        ? getSafeUiText("", "Assistant", "Assistant")
+        : bubble.classList.contains("developer")
+          ? getSafeUiText("", "Developer", "Developer")
+          : getSafeUiText("", "メッセージ", "Message");
+    const messageIndex = bubble.dataset.messageIndex ? `#${bubble.dataset.messageIndex}` : "";
+    const metaText = getElementText(bubble.querySelector(".metaLine"));
+    return {
+      title: [roleLabel, messageIndex].filter(Boolean).join(" "),
+      meta: metaText,
+      lineNumber: "",
+    };
+  }
+
+  function resolvePatchSearchLineNumber(cell) {
+    if (!(cell instanceof HTMLElement)) return "";
+    const rowIndex = cell.dataset.rowIndex;
+    if (!rowIndex) return "";
+    const block = cell.closest(".patchDiffBlock");
+    if (!(block instanceof HTMLElement)) return "";
+    for (const lineEl of block.querySelectorAll(".patchDiffLineNo")) {
+      if (!(lineEl instanceof HTMLElement)) continue;
+      if (lineEl.dataset.rowIndex !== rowIndex) continue;
+      const text = lineEl.textContent ? lineEl.textContent.trim() : "";
+      if (text) return text;
+    }
+    return "";
+  }
+
+  function renderPageSearchResults() {
+    if (!(pageSearchResultsEl instanceof HTMLElement)) return;
+    pageSearchResultsEl.textContent = "";
+
+    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    if (!query) {
+      const empty = el("div", { className: "pageSearchEmpty" });
+      empty.textContent = getSafeUiText("", "検索語を入力してください", "Type to search");
+      pageSearchResultsEl.appendChild(empty);
+      return;
+    }
+
+    if (pageSearchResults.length === 0) {
+      const empty = el("div", { className: "pageSearchEmpty" });
+      empty.textContent = getSafeUiText(i18n.pageSearchNoMatches, "一致なし", "No matches");
+      pageSearchResultsEl.appendChild(empty);
+      return;
+    }
+
+    pageSearchResults.forEach((result, index) => {
+      const item = el("button", { type: "button", className: "pageSearchResult" });
+      item.dataset.searchIndex = String(index);
+      if (index === activePageSearchResultIndex) item.classList.add("pageSearchResult-active");
+      item.addEventListener("click", () => {
+        activatePageSearchResult(index, { reveal: true });
+      });
+
+      const header = el("div", { className: "pageSearchResultHeader" });
+      if (result.lineNumber) {
+        const lineBadge = el("span", { className: "pageSearchResultLine" });
+        lineBadge.textContent = result.lineNumber;
+        header.appendChild(lineBadge);
+      }
+
+      const headerText = el("div", { className: "pageSearchResultHeaderText" });
+      const title = el("div", { className: "pageSearchResultTitle" });
+      title.textContent = result.title || getSafeUiText(i18n.pageSearch, "検索", "Find");
+      headerText.appendChild(title);
+      if (result.meta) {
+        const meta = el("div", { className: "pageSearchResultMeta" });
+        meta.textContent = result.meta;
+        headerText.appendChild(meta);
+      }
+      header.appendChild(headerText);
+      item.appendChild(header);
+
+      const snippet = el("div", { className: "pageSearchResultSnippet" });
+      if (result.snippet.prefix) snippet.appendChild(document.createTextNode(result.snippet.prefix));
+      const match = el("span", { className: "pageSearchResultMatch" });
+      match.textContent = result.snippet.match;
+      snippet.appendChild(match);
+      if (result.snippet.suffix) snippet.appendChild(document.createTextNode(result.snippet.suffix));
+      item.appendChild(snippet);
+
+      pageSearchResultsEl.appendChild(item);
+    });
+  }
+
+  function getElementText(node) {
+    return node instanceof HTMLElement && typeof node.textContent === "string" ? node.textContent.trim() : "";
+  }
+
+  function updatePageSearchStatus() {
+    if (!(pageSearchCountEl instanceof HTMLElement)) return;
+    const total = pageSearchResults.length;
+    if (btnPageSearchPrev instanceof HTMLButtonElement) btnPageSearchPrev.disabled = total <= 1;
+    if (btnPageSearchNext instanceof HTMLButtonElement) btnPageSearchNext.disabled = total <= 1;
+    if (total === 0) {
+      pageSearchCountEl.textContent = "0/0";
+      return;
+    }
+    const current = activePageSearchResultIndex >= 0 ? activePageSearchResultIndex + 1 : 1;
+    pageSearchCountEl.textContent = `${current}/${total}`;
   }
 
   function render() {
     if (annotationEl) annotationEl.textContent = "";
     metaEl.textContent = "";
     timelineEl.textContent = "";
+    pageSearchMatches = [];
+    pageSearchResults = [];
+    activePageSearchResultIndex = -1;
     if (!model) return;
 
     renderAnnotationHeader(model.annotation);
@@ -358,6 +979,12 @@
       if (!item || typeof item !== "object") continue;
       const rendered = renderItem(item);
       if (rendered) timelineEl.appendChild(rendered);
+    }
+    schedulePatchLayoutSync();
+    if (isPageSearchOpen()) refreshPageSearchResults({ preserveIndex: true, reveal: false });
+    else {
+      renderPageSearchResults();
+      updatePageSearchStatus();
     }
   }
 
@@ -459,6 +1086,7 @@
 
   function renderItem(item) {
     if (item.type === "message") return renderMessage(item);
+    if (item.type === "patchGroup") return renderPatchGroup(item);
     if (item.type === "tool") return shouldRenderToolCard() ? renderTool(item) : null;
     return showDetails ? renderNote(item) : null;
   }
@@ -620,6 +1248,385 @@
     if (target) target.scrollIntoView({ block: "nearest" });
   }
 
+  function renderPatchGroup(item) {
+    const row = el("div", { className: "row tool" });
+    const bubble = el("div", { className: "bubble tool toolCard patchGroupCard toolCard-kind-edit" });
+
+    const header = el("div", { className: "toolCardHeader" });
+    const titleWrap = el("div", { className: "toolCardTitleWrap" });
+    const icon = el("span", { className: "toolCardIcon", "aria-hidden": "true" });
+    icon.innerHTML = getToolIconSvg("edit");
+    titleWrap.appendChild(icon);
+
+    const title = el("div", { className: "toolCardTitle" });
+    title.textContent = formatTemplate(i18n.patchGroupCount || "{0} changes", item.entryCount || 0);
+    titleWrap.appendChild(title);
+    header.appendChild(titleWrap);
+
+    const badge = el("div", { className: "patchGroupSummary" });
+    badge.appendChild(renderSignedCountBadge(item.totalAdded, "add"));
+    badge.appendChild(renderSignedCountBadge(item.totalRemoved, "remove"));
+    header.appendChild(badge);
+    bubble.appendChild(header);
+
+    if (typeof item.timestampIso === "string" || typeof item.turnId === "string") {
+      const metaLine = el("div", { className: "toolCardMetaLine" });
+      const metaTags = el("div", { className: "toolCardMetaTags" });
+      if (typeof item.turnId === "string" && item.turnId.trim()) {
+        appendToolMetaTag(metaTags, item.turnId.trim(), item.turnId.trim());
+      }
+      if (typeof item.timestampIso === "string" && item.timestampIso.trim()) {
+        appendToolMetaTag(metaTags, formatIsoYmdHms(item.timestampIso), item.timestampIso);
+      }
+      if (metaTags.childElementCount > 0) {
+        metaLine.appendChild(metaTags);
+        bubble.appendChild(metaLine);
+      }
+    }
+
+    const entriesWrap = el("div", { className: "patchEntryList" });
+    const entries = Array.isArray(item.entries) ? item.entries : [];
+    if (entries.length === 0) {
+      const empty = el("div", { className: "toolCardSecondary" });
+      empty.textContent = i18n.patchNoDiff || "No diff available";
+      entriesWrap.appendChild(empty);
+    } else {
+      for (const entry of entries) {
+        entriesWrap.appendChild(renderPatchEntry(entry));
+      }
+    }
+    bubble.appendChild(entriesWrap);
+
+    row.appendChild(bubble);
+    return row;
+  }
+
+  function renderPatchEntry(entry) {
+    const details = el("details", { className: "patchEntry" });
+    const entryLanguage = inferPatchLanguage(entry);
+    details.open = expandedPatchEntries.has(entry.id);
+    let body;
+    let bodyReady = false;
+    const ensurePatchBody = () => {
+      if (!(body instanceof HTMLElement) || bodyReady) return;
+      populatePatchEntryBody(body, entry, entryLanguage);
+      bodyReady = true;
+    };
+    let summary;
+    const applyPatchToggleLabel = () => {
+      if (!(summary instanceof HTMLElement)) return;
+      const label = details.open
+        ? i18n.patchCollapse || "Collapse diff"
+        : i18n.patchExpand || "Expand diff";
+      summary.title = label;
+      summary.setAttribute("aria-label", label);
+    };
+    details.addEventListener("toggle", () => {
+      if (details.open) expandedPatchEntries.add(entry.id);
+      else expandedPatchEntries.delete(entry.id);
+      if (details.open) ensurePatchBody();
+      applyPatchToggleLabel();
+    });
+
+    summary = el("summary", { className: "patchEntrySummary" });
+    applyPatchToggleLabel();
+
+    const pathWrap = el("div", { className: "patchEntryPathWrap" });
+    const pathEl = el("div", { className: "patchEntryPath" });
+    pathEl.textContent = buildPatchEntryTitle(entry);
+    pathEl.title = pathEl.textContent;
+    pathWrap.appendChild(pathEl);
+    summary.appendChild(pathWrap);
+
+    const counts = el("div", { className: "patchEntryCounts" });
+    counts.appendChild(renderSignedCountBadge(entry.added, "add"));
+    counts.appendChild(renderSignedCountBadge(entry.removed, "remove"));
+    summary.appendChild(counts);
+    details.appendChild(summary);
+
+    body = el("div", { className: "patchEntryBody" });
+    if (details.open) ensurePatchBody();
+    details.appendChild(body);
+    return details;
+  }
+
+  function populatePatchEntryBody(body, entry, entryLanguage) {
+    if (!(body instanceof HTMLElement)) return;
+
+    if (entry.moveDisplayPath && entry.moveDisplayPath !== entry.displayPath) {
+      const movedTo = el("div", { className: "patchEntryMove" });
+      movedTo.textContent = formatTemplate(i18n.patchMovedTo || "Moved to: {0}", entry.moveDisplayPath);
+      body.appendChild(movedTo);
+    }
+
+    const hunks = Array.isArray(entry.hunks) ? entry.hunks : [];
+    if (hunks.length === 0) {
+      const empty = el("div", { className: "toolCardSecondary" });
+      empty.textContent = i18n.patchNoDiff || "No diff available";
+      body.appendChild(empty);
+      return;
+    }
+
+    for (const [hunkIndex, hunk] of hunks.entries()) {
+      body.appendChild(renderPatchHunk(entry, hunk, entryLanguage, hunkIndex));
+    }
+    schedulePatchLayoutSync();
+  }
+
+  function renderPatchHunk(entry, hunk, entryLanguage, hunkIndex) {
+    const wrap = el("section", { className: "patchHunk" });
+    const hunkKey = buildPatchHunkKey(entry, hunkIndex);
+    if (wrappedPatchHunkKeys.has(hunkKey)) wrap.classList.add("patchHunk-wrapEnabled");
+    const header = el("div", { className: "patchHunkHeader" });
+    const headerText = el("div", { className: "patchHunkHeaderText" });
+    headerText.textContent = hunk.header || "@@";
+    header.appendChild(headerText);
+
+    const actions = el("div", { className: "patchHunkActions" });
+    const wrapBtn = buildPatchWrapToggleButton(wrap, hunkKey);
+    actions.appendChild(wrapBtn);
+
+    const jumpTarget = getPatchJumpTarget(entry, hunk);
+    if (jumpTarget) {
+      const jumpBtn = el("button", { type: "button", className: "patchHunkActionBtn iconBtn" });
+      jumpBtn.innerHTML = PATCH_JUMP_ICON_SVG;
+      const jumpTooltip = formatTemplate(i18n.patchJumpTooltip || "Jump to line {0}", jumpTarget.line);
+      jumpBtn.title = jumpTooltip;
+      jumpBtn.setAttribute("aria-label", jumpTooltip);
+      jumpBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        vscode.postMessage({
+          type: "openLocalFile",
+          fsPath: jumpTarget.fsPath,
+          line: jumpTarget.line,
+        });
+      });
+      actions.appendChild(jumpBtn);
+    }
+
+    header.appendChild(actions);
+    wrap.appendChild(header);
+
+    const labels = el("div", { className: "patchDiffColumnLabels" });
+    const before = el("div", { className: "patchDiffColumnLabel patchDiffColumnLabel-before" });
+    before.textContent = i18n.patchBefore || "Before";
+    const after = el("div", { className: "patchDiffColumnLabel patchDiffColumnLabel-after" });
+    after.textContent = i18n.patchAfter || "After";
+    labels.appendChild(before);
+    labels.appendChild(after);
+    wrap.appendChild(labels);
+
+    const rows = Array.isArray(hunk.rows) ? hunk.rows : [];
+    const blocks = el("div", { className: "patchDiffBlocks" });
+    blocks.appendChild(renderPatchBlock(rows, "left", entryLanguage));
+    blocks.appendChild(renderPatchBlock(rows, "right", entryLanguage));
+    wrap.appendChild(blocks);
+    return wrap;
+  }
+
+  function buildPatchHunkKey(entry, hunkIndex) {
+    const entryId = entry && typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : "patch";
+    const safeIndex = Number.isInteger(hunkIndex) && hunkIndex >= 0 ? hunkIndex : 0;
+    return `${entryId}:hunk:${safeIndex}`;
+  }
+
+  function buildPatchWrapToggleButton(hunkEl, hunkKey) {
+    const button = el("button", { type: "button", className: "patchHunkActionBtn patchHunkActionBtn-wrap iconBtn" });
+    syncPatchWrapButton(button, hunkEl instanceof HTMLElement && hunkEl.classList.contains("patchHunk-wrapEnabled"));
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!(hunkEl instanceof HTMLElement)) return;
+      const enabled = !hunkEl.classList.contains("patchHunk-wrapEnabled");
+      hunkEl.classList.toggle("patchHunk-wrapEnabled", enabled);
+      if (enabled) wrappedPatchHunkKeys.add(hunkKey);
+      else wrappedPatchHunkKeys.delete(hunkKey);
+      syncPatchWrapButton(button, enabled);
+      schedulePatchLayoutSync();
+    });
+    return button;
+  }
+
+  function syncPatchWrapButton(button, enabled) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    button.innerHTML = enabled ? PATCH_WRAP_OFF_ICON_SVG : PATCH_WRAP_ON_ICON_SVG;
+    const label = enabled
+      ? i18n.patchWrapOffTooltip || i18n.patchWrapOff || "Keep diff lines on one row with horizontal scroll"
+      : i18n.patchWrapOnTooltip || i18n.patchWrapOn || "Wrap long diff lines";
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  }
+
+  function getPatchJumpTarget(entry, hunk) {
+    const rows = Array.isArray(hunk && hunk.rows) ? hunk.rows : [];
+    const targetAfterLine = rows.find((row) => row && typeof row.rightLine === "number")?.rightLine;
+    if (typeof targetAfterLine === "number") {
+      const afterPath =
+        entry && typeof entry.movePath === "string" && entry.movePath.trim()
+          ? entry.movePath.trim()
+          : entry && typeof entry.path === "string"
+            ? entry.path
+            : "";
+      if (afterPath) return { fsPath: afterPath, line: targetAfterLine };
+    }
+
+    const targetBeforeLine = rows.find((row) => row && typeof row.leftLine === "number")?.leftLine;
+    if (typeof targetBeforeLine === "number") {
+      const beforePath = entry && typeof entry.path === "string" ? entry.path : "";
+      if (beforePath) return { fsPath: beforePath, line: targetBeforeLine };
+    }
+    return null;
+  }
+
+  function renderPatchBlock(rows, side, entryLanguage) {
+    const block = el("section", { className: `patchDiffBlock patchDiffBlock-${side}` });
+    const lineColumn = el("div", { className: `patchDiffLineColumn patchDiffLineColumn-${side}` });
+    const viewport = el("div", { className: `patchDiffViewport patchDiffViewport-${side}` });
+    const textColumn = el("div", { className: `patchDiffTextColumn patchDiffTextColumn-${side}` });
+
+    rows.forEach((row, index) => {
+      const kind = row && typeof row.kind === "string" ? row.kind : "context";
+      const lineValue =
+        side === "left"
+          ? row && typeof row.leftLine === "number"
+            ? row.leftLine
+            : null
+          : row && typeof row.rightLine === "number"
+            ? row.rightLine
+            : null;
+      const textValue =
+        side === "left"
+          ? row && typeof row.leftText === "string"
+            ? row.leftText
+            : ""
+          : row && typeof row.rightText === "string"
+            ? row.rightText
+            : "";
+
+      lineColumn.appendChild(renderPatchLineNumber(lineValue, side, kind, index));
+      textColumn.appendChild(renderPatchTextCell(textValue, side, entryLanguage, kind, index));
+    });
+
+    viewport.appendChild(textColumn);
+    block.appendChild(lineColumn);
+    block.appendChild(viewport);
+    return block;
+  }
+
+  function renderPatchLineNumber(value, side, kind, rowIndex) {
+    const cell = el("div", {
+      className: `patchDiffLineNo patchDiffLineNo-${side} patchDiffLineNo-${kind}`,
+    });
+    cell.dataset.rowIndex = String(rowIndex);
+    cell.textContent = typeof value === "number" ? String(value) : "";
+    return cell;
+  }
+
+  function renderPatchTextCell(text, side, entryLanguage, kind, rowIndex) {
+    const cell = el("div", {
+      className: `patchDiffText patchDiffText-${side} patchDiffText-${kind}`,
+    });
+    cell.dataset.rowIndex = String(rowIndex);
+    const safeText = typeof text === "string" ? text : "";
+    if (!safeText) {
+      cell.textContent = " ";
+      return cell;
+    }
+
+    const highlighted = createHighlightedInlineCodeElement(safeText, entryLanguage);
+    if (highlighted) {
+      cell.appendChild(highlighted);
+      return cell;
+    }
+
+    cell.textContent = safeText;
+    return cell;
+  }
+
+  function renderSignedCountBadge(value, kind) {
+    const badge = el("span", { className: `patchCountBadge patchCountBadge-${kind}` });
+    const safeValue = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
+    badge.textContent = `${kind === "add" ? "+" : "-"}${safeValue}`;
+    return badge;
+  }
+
+  function buildPatchEntryTitle(entry) {
+    const basePath = entry && typeof entry.displayPath === "string" ? entry.displayPath : "";
+    const movePath = entry && typeof entry.moveDisplayPath === "string" ? entry.moveDisplayPath : "";
+    if (movePath && movePath !== basePath) return `${basePath} -> ${movePath}`;
+    return basePath;
+  }
+
+  function inferPatchLanguage(entry) {
+    const candidates = [
+      entry && typeof entry.path === "string" ? entry.path : "",
+      entry && typeof entry.movePath === "string" ? entry.movePath : "",
+      entry && typeof entry.displayPath === "string" ? entry.displayPath : "",
+      entry && typeof entry.moveDisplayPath === "string" ? entry.moveDisplayPath : "",
+    ];
+
+    for (const candidate of candidates) {
+      const language = inferPatchLanguageFromPath(candidate);
+      if (language) return language;
+    }
+    return "";
+  }
+
+  function schedulePatchLayoutSync() {
+    if (patchLayoutFrame) cancelAnimationFrame(patchLayoutFrame);
+    patchLayoutFrame = requestAnimationFrame(() => {
+      patchLayoutFrame = 0;
+      syncAllPatchHunkLayouts();
+    });
+  }
+
+  function syncAllPatchHunkLayouts() {
+    for (const hunkEl of document.querySelectorAll(".patchHunk")) {
+      if (!(hunkEl instanceof HTMLElement)) continue;
+      syncPatchHunkLayout(hunkEl);
+    }
+  }
+
+  function syncPatchHunkLayout(hunkEl) {
+    const leftLines = Array.from(hunkEl.querySelectorAll(".patchDiffLineColumn-left .patchDiffLineNo"));
+    const rightLines = Array.from(hunkEl.querySelectorAll(".patchDiffLineColumn-right .patchDiffLineNo"));
+    const leftTexts = Array.from(hunkEl.querySelectorAll(".patchDiffTextColumn-left .patchDiffText"));
+    const rightTexts = Array.from(hunkEl.querySelectorAll(".patchDiffTextColumn-right .patchDiffText"));
+    const rowCount = Math.max(leftLines.length, rightLines.length, leftTexts.length, rightTexts.length);
+
+    for (const cell of [...leftLines, ...rightLines, ...leftTexts, ...rightTexts]) {
+      if (cell instanceof HTMLElement) cell.style.minHeight = "";
+    }
+
+    for (let index = 0; index < rowCount; index += 1) {
+      const cells = [leftLines[index], rightLines[index], leftTexts[index], rightTexts[index]].filter(
+        (cell) => cell instanceof HTMLElement,
+      );
+      if (cells.length === 0) continue;
+      const maxHeight = Math.max(...cells.map((cell) => cell.getBoundingClientRect().height));
+      for (const cell of cells) {
+        cell.style.minHeight = `${Math.ceil(maxHeight)}px`;
+      }
+    }
+  }
+
+  function inferPatchLanguageFromPath(rawPath) {
+    const normalized = String(rawPath || "").trim().replace(/\\/g, "/");
+    if (!normalized) return "";
+
+    const segments = normalized.split("/");
+    const fileName = String(segments[segments.length - 1] || "").toLowerCase();
+    if (!fileName) return "";
+
+    if (PATCH_LANGUAGE_BY_FILENAME[fileName]) return PATCH_LANGUAGE_BY_FILENAME[fileName];
+
+    const dotIndex = fileName.lastIndexOf(".");
+    if (dotIndex < 0) return "";
+    const ext = fileName.slice(dotIndex).toLowerCase();
+    return PATCH_LANGUAGE_BY_EXTENSION[ext] || "";
+  }
+
   function renderTool(item) {
     const row = el("div", { className: "row tool" });
     const presentation = resolveToolPresentation(item);
@@ -740,6 +1747,15 @@
     tag.textContent = normalizedText;
     if (typeof title === "string" && title.trim().length > 0) tag.title = title.trim();
     container.appendChild(tag);
+  }
+
+  function formatTemplate(template, ...values) {
+    const base = typeof template === "string" ? template : "";
+    return base.replace(/\{(\d+)\}/g, (_match, indexText) => {
+      const index = Number(indexText);
+      const value = Number.isInteger(index) ? values[index] : "";
+      return value === undefined || value === null ? "" : String(value);
+    });
   }
 
   function appendToolDetailsBlock(container, label, lang, text) {
@@ -1173,6 +2189,33 @@
     highlightedPre.classList.add("codePre");
     highlightedPre.setAttribute("dir", "ltr");
     return highlightedPre;
+  }
+
+  function createHighlightedInlineCodeElement(codeText, lang) {
+    const shiki = getShikiHighlighter();
+    if (!shiki || typeof shiki.highlightLineFragment !== "function") return null;
+
+    let fragment = null;
+    try {
+      fragment = shiki.highlightLineFragment(codeText, lang);
+    } catch {
+      return null;
+    }
+    if (!fragment || typeof fragment.html !== "string" || !fragment.html) return null;
+
+    const codeEl = el("code", { className: "patchDiffCode" });
+    if (typeof fragment.className === "string" && fragment.className.trim()) {
+      for (const className of fragment.className.split(/\s+/)) {
+        if (className) codeEl.classList.add(className);
+      }
+    }
+    if (typeof fragment.style === "string" && fragment.style.trim()) {
+      codeEl.style.cssText = fragment.style;
+      codeEl.style.backgroundColor = "transparent";
+    }
+    codeEl.innerHTML = fragment.html;
+    codeEl.setAttribute("dir", "ltr");
+    return codeEl;
   }
 
   function removeShikiLineBreakTextNodes(highlightedPre) {

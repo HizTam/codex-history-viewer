@@ -1,7 +1,7 @@
 # Codex History Viewer
 
 A VS Code extension to browse, search, tag, import/export, and manage local Codex CLI / Claude Code session history, then resume selected sessions directly in the related VS Code extension.
-Latest release: **1.2.0** (2026-04-16).
+Latest release: **1.2.1** (2026-04-17).
 
 ## Features
 
@@ -15,6 +15,8 @@ Latest release: **1.2.0** (2026-04-16).
 - Open any session in a chat-like viewer (Webview) with Markdown rendering, syntax-highlighted fenced code blocks (powered by Shiki), and toolbar quick actions for pin/unpin, Markdown transcript, prompt excerpt copy, and source-aware resume (**OpenAI Codex** for Codex sessions, **Claude Code** for Claude sessions)
 - Chat viewer supports tool-specific cards with a configurable display mode (`detailsOnly` / `compactCards`)
 - Chat viewer can softly fold long `user` and `assistant` messages independently, while **Show details** always expands them fully
+- Chat viewer shows grouped file-change cards from patch activity, with collapsible side-by-side diffs, per-hunk wrap toggles, syntax highlighting, and jump-to-line actions
+- Chat viewer includes a right-side in-page search sidebar with match counts, result snippets, line hints for diffs, direct result navigation, and resizable overlay behavior
 - Chat viewer toolbar includes quick scroll actions (top / bottom) and automatically switches label buttons to icon-only mode when the header gets narrow
 - Reload in the chat viewer preserves scroll/selection and refreshes the tab title using the active history date basis
 - Workspace-relative Markdown file links open inside VS Code from both chat sessions and Markdown transcripts
@@ -106,13 +108,12 @@ For the full command list with per-command descriptions, see:
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 - After successful import or promote (copy-to-today), a hint is shown to reload Codex CLI history if Codex is running.
 
-## What's New in 1.2.0
+## What's New in 1.2.1
 
-- Added tool-specific cards in the chat viewer, plus `codexHistoryViewer.chat.toolDisplayMode` to keep the old details-only behavior or always show compact cards.
-- Added independent long-message folding controls for `user` and `assistant` messages, with defaults that preserve the previous fully expanded behavior.
-- Added top / bottom scroll buttons in the chat toolbar and automatic icon-only compaction when the toolbar width becomes tight.
-- Reload now refreshes the chat tab title using the active history date basis and keeps the current scroll position and selected message.
-- Workspace-relative Markdown file links now open correctly inside VS Code from both chat sessions and Markdown transcripts.
+- Added grouped patch-based change cards to the chat viewer, including collapsible file entries and side-by-side before/after diffs.
+- Added per-hunk diff controls for wrap toggle and jump-to-line.
+- Added a right-side in-page search sidebar for the chat viewer with keyboard shortcuts, result snippets, line hints, and direct navigation.
+- Changed patch cards so they are shown even when **Show details** is off, while each file entry remains collapsed by default.
 
 ## Changelog
 
