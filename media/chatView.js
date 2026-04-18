@@ -2235,6 +2235,225 @@
     return candidate;
   }
 
+  function renderMathExpression(mdi, content, displayMode) {
+    const rawContent = String(content ?? "");
+    const normalizedContent = rawContent.trim();
+    const escapeHtml =
+      mdi && mdi.utils && typeof mdi.utils.escapeHtml === "function" ? mdi.utils.escapeHtml : fallbackEscapeHtml;
+    const fallbackClass = displayMode ? "mathFallback mathFallback-block" : "mathFallback mathFallback-inline";
+    const fallbackTag = displayMode ? "div" : "code";
+    const fallbackHtml = `<${fallbackTag} class="${fallbackClass}">${escapeHtml(rawContent)}</${fallbackTag}>`;
+    const katex = window.katex;
+
+    if (!normalizedContent || !katex || typeof katex.renderToString !== "function") return fallbackHtml;
+
+    try {
+      return katex.renderToString(normalizedContent, {
+        displayMode,
+        output: "htmlAndMathml",
+        throwOnError: false,
+        strict: "ignore",
+        trust: false,
+      });
+    } catch {
+      return fallbackHtml;
+    }
+  }
+
+  function installMathRenderer(mdi) {
+    mdi.inline.ruler.before("escape", "math_inline", (state, silent) => {
+      const start = state.pos;
+      if (start >= state.posMax) return false;
+
+      const marker = state.src.charCodeAt(start);
+      if (marker === 0x24) return tokenizeDollarMath(state, silent);
+      if (marker === 0x5c) return tokenizeParenthesisMath(state, silent);
+      return false;
+    });
+
+    mdi.block.ruler.before("fence", "math_block", (state, startLine, endLine, silent) => {
+      const start = state.bMarks[startLine] + state.tShift[startLine];
+      const max = state.eMarks[startLine];
+      if (start + 1 >= max) return false;
+      if (state.sCount[startLine] - state.blkIndent >= 4) return false;
+
+      let openDelimiter = "";
+      let closeDelimiter = "";
+      if (state.src.startsWith("$$", start)) {
+        openDelimiter = "$$";
+        closeDelimiter = "$$";
+      } else if (state.src.startsWith("\\[", start)) {
+        openDelimiter = "\\[";
+        closeDelimiter = "\\]";
+      } else {
+        return false;
+      }
+
+      const firstLineText = state.src.slice(start + openDelimiter.length, max);
+      const sameLineContent = extractClosedBlockMathLine(firstLineText, closeDelimiter);
+      if (sameLineContent != null) {
+        if (!silent) {
+          const token = state.push("math_block", "math", 0);
+          token.block = true;
+          token.content = sameLineContent;
+          token.map = [startLine, startLine + 1];
+          token.markup = openDelimiter;
+        }
+        state.line = startLine + 1;
+        return true;
+      }
+
+      const contentLines = [];
+      if (firstLineText.length > 0) contentLines.push(firstLineText);
+
+      let nextLine = startLine;
+      while (nextLine + 1 < endLine) {
+        nextLine += 1;
+        const lineStart = state.bMarks[nextLine] + state.tShift[nextLine];
+        const lineMax = state.eMarks[nextLine];
+        const lineText = state.src.slice(lineStart, lineMax);
+        const closingContent = extractClosedBlockMathLine(lineText, closeDelimiter);
+
+        if (closingContent != null) {
+          if (closingContent.length > 0) contentLines.push(closingContent);
+          if (!silent) {
+            const token = state.push("math_block", "math", 0);
+            token.block = true;
+            token.content = contentLines.join("\n");
+            token.map = [startLine, nextLine + 1];
+            token.markup = openDelimiter;
+          }
+          state.line = nextLine + 1;
+          return true;
+        }
+
+        contentLines.push(lineText);
+      }
+
+      return false;
+    });
+
+    mdi.renderer.rules.math_inline = (tokens, idx) => renderMathExpression(mdi, tokens[idx]?.content, false);
+    mdi.renderer.rules.math_block = (tokens, idx) => `${renderMathExpression(mdi, tokens[idx]?.content, true)}\n`;
+  }
+
+  function tokenizeDollarMath(state, silent) {
+    const start = state.pos;
+    if (start + 1 >= state.posMax) return false;
+    if (state.src.charCodeAt(start + 1) === 0x24) return false;
+
+    const nextChar = state.src.charCodeAt(start + 1);
+    if (isMarkdownWhitespace(nextChar)) return false;
+
+    let match = start + 1;
+    while (match < state.posMax) {
+      match = state.src.indexOf("$", match);
+      if (match < 0 || match >= state.posMax) return false;
+      if (isEscapedMarker(state.src, match)) {
+        match += 1;
+        continue;
+      }
+
+      const prevChar = state.src.charCodeAt(match - 1);
+      const afterChar = match + 1 < state.posMax ? state.src.charCodeAt(match + 1) : -1;
+      if (isMarkdownWhitespace(prevChar) || isAsciiDigit(afterChar)) {
+        match += 1;
+        continue;
+      }
+
+      const content = state.src.slice(start + 1, match);
+      if (content.includes("\n") || !content.trim()) return false;
+
+      if (!silent) {
+        const token = state.push("math_inline", "math", 0);
+        token.content = content;
+        token.markup = "$";
+      }
+
+      state.pos = match + 1;
+      return true;
+    }
+
+    return false;
+  }
+
+  function tokenizeParenthesisMath(state, silent) {
+    const start = state.pos;
+    if (!state.src.startsWith("\\(", start)) return false;
+
+    let match = start + 2;
+    while (match < state.posMax) {
+      match = state.src.indexOf("\\)", match);
+      if (match < 0 || match >= state.posMax) return false;
+      if (isEscapedMarker(state.src, match)) {
+        match += 2;
+        continue;
+      }
+
+      const content = state.src.slice(start + 2, match);
+      if (content.includes("\n") || !content.trim()) return false;
+
+      if (!silent) {
+        const token = state.push("math_inline", "math", 0);
+        token.content = content;
+        token.markup = "\\(";
+      }
+
+      state.pos = match + 2;
+      return true;
+    }
+
+    return false;
+  }
+
+  function extractClosedBlockMathLine(lineText, closeDelimiter) {
+    const text = String(lineText ?? "");
+    if (text.trim() === closeDelimiter) return "";
+
+    if (closeDelimiter === "$$") {
+      const match = text.match(/^(.*?)(?:\s*\$\$\s*)$/);
+      return match ? match[1] : null;
+    }
+
+    const match = text.match(/^(.*?)(?:\s*\\\]\s*)$/);
+    return match ? match[1] : null;
+  }
+
+  function isEscapedMarker(text, index) {
+    let slashCount = 0;
+    for (let i = index - 1; i >= 0 && text.charCodeAt(i) === 0x5c; i -= 1) {
+      slashCount += 1;
+    }
+    return slashCount % 2 === 1;
+  }
+
+  function isMarkdownWhitespace(code) {
+    return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+  }
+
+  function isAsciiDigit(code) {
+    return code >= 0x30 && code <= 0x39;
+  }
+
+  function fallbackEscapeHtml(text) {
+    return String(text ?? "").replace(/[&<>"']/g, (char) => {
+      switch (char) {
+        case "&":
+          return "&amp;";
+        case "<":
+          return "&lt;";
+        case ">":
+          return "&gt;";
+        case '"':
+          return "&quot;";
+        case "'":
+          return "&#39;";
+        default:
+          return char;
+      }
+    });
+  }
+
   function createMarkdownRenderer() {
     if (typeof window.markdownit !== "function") return null;
     const mdi = window.markdownit({
@@ -2270,6 +2489,7 @@
       return defaultLinkOpen(tokens, idx, options, env, self);
     };
 
+    installMathRenderer(mdi);
     return mdi;
   }
 

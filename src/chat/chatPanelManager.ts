@@ -176,6 +176,12 @@ export class ChatPanelManager {
     const nonce = randomNonce();
     const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "chatView.css"));
     const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "chatView.js"));
+    const katexCssUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "vendor", "katex", "katex.min.css"),
+    );
+    const katexJsUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "vendor", "katex", "katex.min.js"),
+    );
     const shikiBundleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "media", "chatViewShiki.bundle.js"),
     );
@@ -186,6 +192,7 @@ export class ChatPanelManager {
     const csp = [
       `default-src 'none'`,
       `img-src ${webview.cspSource} data:`,
+      `font-src ${webview.cspSource}`,
       `style-src ${webview.cspSource} 'unsafe-inline';`,
       `script-src 'nonce-${nonce}'`,
     ].join("; ");
@@ -197,6 +204,7 @@ export class ChatPanelManager {
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="${katexCssUri}">
   <link rel="stylesheet" href="${cssUri}">
   <title>Codex History Viewer</title>
 </head>
@@ -235,6 +243,7 @@ export class ChatPanelManager {
   <div id="meta"></div>
   <div id="timeline"></div>
   <script nonce="${nonce}" src="${markdownItUri}"></script>
+  <script nonce="${nonce}" src="${katexJsUri}"></script>
   <script nonce="${nonce}" src="${shikiBundleUri}"></script>
   <script nonce="${nonce}" src="${jsUri}"></script>
 </body>
