@@ -1809,6 +1809,25 @@
           "scope": "application",
           "order": 85
         },
+        "codexHistoryViewer.history.titleSource": {
+          "type": "string",
+          "default": "generated",
+          "enum": [
+            "generated",
+            "nativeWhenAvailable"
+          ],
+          "enumItemLabels": [
+            "%cfg.historyTitleSource.labelGenerated%",
+            "%cfg.historyTitleSource.labelNativeWhenAvailable%"
+          ],
+          "enumDescriptions": [
+            "%cfg.historyTitleSource.enumGenerated%",
+            "%cfg.historyTitleSource.enumNativeWhenAvailable%"
+          ],
+          "description": "%cfg.historyTitleSource%",
+          "scope": "application",
+          "order": 86
+        },
         "codexHistoryViewer.chat.toolDisplayMode": {
           "type": "string",
           "default": "detailsOnly",
@@ -1938,7 +1957,7 @@
     "@shikijs/themes": "^4.0.2",
     "@types/node": "^20.11.30",
     "@types/vscode": "^1.90.0",
-    "@vscode/vsce": "^3.9.0",
+    "@vscode/vsce": "^3.9.1",
     "esbuild": "^0.28.0",
     "shiki": "^4.0.2",
     "typescript": "^5.5.4"

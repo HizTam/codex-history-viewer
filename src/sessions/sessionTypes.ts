@@ -37,6 +37,8 @@ export interface SessionSummary {
   localDate: string;
   timeLabel: string;
   snippet: string;
+  nativeTitle?: string;
+  displayTitle: string;
   cwdShort: string;
   previewMessages: PreviewMessage[];
 }

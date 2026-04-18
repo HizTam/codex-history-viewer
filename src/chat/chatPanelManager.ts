@@ -476,6 +476,7 @@ export class ChatPanelManager {
     if (!state) return;
 
     const config = getConfig();
+    this.historyService.updateConfig(config);
     const summary = await buildSessionSummary({
       sessionsRoot: config.sessionsRoot,
       fsPath: state.fsPath,
@@ -484,7 +485,9 @@ export class ChatPanelManager {
     });
     if (!summary) return;
 
-    const displaySummary = applyPanelHistoryDateBasis(summary, config.historyDateBasis);
+    const displaySummary = await this.historyService.resolveDisplaySummary(
+      applyPanelHistoryDateBasis(summary, config.historyDateBasis),
+    );
     panel.title = buildPanelTitle(displaySummary);
     panel.iconPath = this.resolveSourceIconPath(displaySummary.source);
   }
@@ -503,9 +506,9 @@ function randomNonce(): string {
 }
 
 function buildPanelTitle(session: SessionSummary): string {
-  // Keep panel titles compact by truncating only the snippet segment.
-  const shortSnippet = truncateByDisplayWidth(session.snippet, 28, "...");
-  return `${session.localDate} ${session.timeLabel} ${shortSnippet}`;
+  // Keep panel titles compact by truncating only the title segment.
+  const shortTitle = truncateByDisplayWidth(session.displayTitle, 28, "...");
+  return `${session.localDate} ${session.timeLabel} ${shortTitle}`;
 }
 
 function applyPanelHistoryDateBasis(
