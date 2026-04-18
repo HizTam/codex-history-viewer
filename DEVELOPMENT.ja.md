@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-04-17
-- 対象バージョン: 1.2.1
+- 最終更新: 2026-04-18
+- 対象バージョン: 1.3.0
 
 ## 1. 概要
 
@@ -95,11 +95,12 @@
   - 保存
   - 削除
 - `Rerun Search` は最後に使った検索条件を再実行する
+- 検索対象にはセッションタイトルは含めず、表示タイトルだけを切り替える
 
 ### 3.4 キャッシュ / インデックス / 保守
 
 - 履歴キャッシュ:
-  - 保存先: `globalStorageUri/cache.v6.json`
+  - 保存先: `globalStorageUri/cache.v8.json`
   - 用途: 一覧表示用の要約キャッシュ
   - 再利用条件:
     - `sessionsRoot`
@@ -108,6 +109,10 @@
     - `preview.maxMessages`
     - 日付時刻設定キー
     - 各ファイルの `mtime` / `size`
+- Codex タイトルキャッシュ:
+  - 保存先: `globalStorageUri/codex-title-cache.v1.json`
+  - 用途: `session_index.jsonl` から消えた古いタイトルも引き続き表示できるようにする
+  - 対象: `history.titleSource = nativeWhenAvailable` で利用する Codex のネイティブタイトル
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
   - 用途: 繰り返し検索を高速化する増分インデックス
@@ -144,6 +149,7 @@
 - `search.caseSensitive`
 - `search.maxResults`
 - `history.dateBasis`
+- `history.titleSource`
 - `chat.toolDisplayMode`
 - `chat.userLongMessageFolding`
 - `chat.assistantLongMessageFolding`
@@ -166,13 +172,20 @@
   - `session_meta` を読み取り、一覧用メタ情報を構築する
   - `user` / `assistant` メッセージを先頭から最大 `preview.maxMessages` 件だけ読んでスニペットを作る
   - 大きすぎるコンテキスト断片は一覧スニペットから除外する
+  - Claude のネイティブタイトルは `custom-title -> ai-title -> rename -> summary` の優先順で抽出する
 
 ### 4.3 履歴キャッシュ
 
 - `src/services/historyService.ts`
-  - `cache.v6.json` を読み書きする
+  - `cache.v8.json` を読み書きする
   - 変更のないファイルはキャッシュ済み `summary` を再利用する
   - 最終的な一覧はローカル日付 / 時刻順で降順ソートする
+  - `history.titleSource` に応じて `displayTitle` を後段で解決する
+- `src/services/codexTitleStore.ts`
+  - Codex の `session_index.jsonl` と `codex-title-cache.v1.json` を使ってネイティブタイトルを解決する
+  - 既知セッションだけを保持しつつ、古い Codex タイトルを軽量キャッシュとして残す
+- `src/sessions/sessionTitleResolver.ts`
+  - `generated` / `nativeWhenAvailable` の設定値に応じて `displayTitle` を決定する
 
 ### 4.4 検索インデックス
 
@@ -237,7 +250,7 @@
 
 - `src/settings.ts`
   - 拡張設定の読み取りヘルパーをまとめる
-  - `chat.toolDisplayMode`・`chat.userLongMessageFolding`・`chat.assistantLongMessageFolding` などチャット表示系設定もここで管理する
+  - `history.titleSource` や `chat.toolDisplayMode` などの表示系設定もここで管理する
 
 ## 5. 開発手順
 

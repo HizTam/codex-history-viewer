@@ -11,7 +11,7 @@ import { truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
 import { appendSessionTooltipDateLines } from "./sessionTooltipUtils";
 
-// Provides the history tree (year → month → day → session).
+// Provides the history tree (year -> month -> day -> session).
 export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly historyService: HistoryService;
   private readonly pinStore: PinStore;

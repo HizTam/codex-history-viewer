@@ -8,7 +8,7 @@ import { getConfig } from "../settings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 import { appendSessionTooltipDateLines } from "./sessionTooltipUtils";
 
-// Provides the Search view (root → session → hit).
+// Provides the Search view (root -> session -> hit).
 export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;

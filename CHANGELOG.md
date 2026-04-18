@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-04-18
+
+### Added
+
+- Added KaTeX-based equation rendering in the chat viewer for inline and block math expressions.
+- Added `codexHistoryViewer.history.titleSource` to switch between generated titles and native titles when available.
+- Added native title resolution for Codex sessions from `session_index.jsonl`, plus a lightweight cache to preserve known titles for older sessions.
+
+### Changed
+
+- Session list labels and chat panel titles can now use native titles when `history.titleSource` is set to `nativeWhenAvailable`.
+
 ## [1.2.1] - 2026-04-17
 
 ### Added

@@ -1,7 +1,7 @@
 # Codex History Viewer
 
 A VS Code extension to browse, search, tag, import/export, and manage local Codex CLI / Claude Code session history, then resume selected sessions directly in the related VS Code extension.
-Latest release: **1.2.1** (2026-04-17).
+Latest release: **1.3.0** (2026-04-18).
 
 ## Features
 
@@ -13,6 +13,7 @@ Latest release: **1.2.1** (2026-04-17).
 - Tag filters in **Pinned** and **Search** views (separate from History filters)
 - Session tooltips can show both **Started** and **Last activity** timestamps when they differ
 - Open any session in a chat-like viewer (Webview) with Markdown rendering, syntax-highlighted fenced code blocks (powered by Shiki), and toolbar quick actions for pin/unpin, Markdown transcript, prompt excerpt copy, and source-aware resume (**OpenAI Codex** for Codex sessions, **Claude Code** for Claude sessions)
+- Chat viewer renders inline and block equations with KaTeX-compatible math support
 - Chat viewer supports tool-specific cards with a configurable display mode (`detailsOnly` / `compactCards`)
 - Chat viewer can softly fold long `user` and `assistant` messages independently, while **Show details** always expands them fully
 - Chat viewer shows grouped file-change cards from patch activity, with collapsible side-by-side diffs, per-hunk wrap toggles, syntax highlighting, and jump-to-line actions
@@ -31,6 +32,7 @@ Latest release: **1.2.1** (2026-04-17).
 - Search rerun (current conditions), search pane reset, and saved search presets (run/save/delete)
 - Search hits include session annotations (`tag` / `note`) in addition to message/tool text
 - Advanced query syntax: `/regex/`, `re:...`, `exact:...`, and `AND` / `OR` / `NOT`
+- Session titles can optionally prefer native titles from Codex / Claude metadata while preserving the generated-title default
 - Session tags/notes annotations (editable from tree context menus and chat view)
 - Global tag operations: bulk rename tag and bulk delete tags
 - Cleanup Missing Pins action for stale pinned entries
@@ -73,6 +75,7 @@ For the full command list with per-command descriptions, see:
 - `codexHistoryViewer.search.caseSensitive`: Whether search is case-sensitive
 - `codexHistoryViewer.search.defaultRoles`: Default roles used when running Search
 - `codexHistoryViewer.history.dateBasis`: Which session date the History tree and date-based search filters use (`started` or `lastActivity`)
+- `codexHistoryViewer.history.titleSource`: How session titles are resolved (`generated` or `nativeWhenAvailable`)
 - `codexHistoryViewer.chat.toolDisplayMode`: How tool activity appears in the chat viewer (`detailsOnly` or `compactCards`)
 - `codexHistoryViewer.chat.userLongMessageFolding`: How long `user` messages are folded in the chat viewer (`off`, `auto`, or `always`)
 - `codexHistoryViewer.chat.assistantLongMessageFolding`: How long `assistant` messages are folded in the chat viewer (`off`, `auto`, or `always`)
@@ -108,12 +111,12 @@ For the full command list with per-command descriptions, see:
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 - After successful import or promote (copy-to-today), a hint is shown to reload Codex CLI history if Codex is running.
 
-## What's New in 1.2.1
+## What's New in 1.3.0
 
-- Added grouped patch-based change cards to the chat viewer, including collapsible file entries and side-by-side before/after diffs.
-- Added per-hunk diff controls for wrap toggle and jump-to-line.
-- Added a right-side in-page search sidebar for the chat viewer with keyboard shortcuts, result snippets, line hints, and direct navigation.
-- Changed patch cards so they are shown even when **Show details** is off, while each file entry remains collapsed by default.
+- Added KaTeX-based equation rendering in the chat viewer for inline and block math expressions.
+- Added `codexHistoryViewer.history.titleSource` to switch between generated titles and native titles when available.
+- Added native title support for Codex (`session_index.jsonl`) and Claude (`custom-title`, `ai-title`, rename, and summary), with fallback to generated titles.
+- Added a lightweight Codex title cache so older native titles can remain visible even after they disappear from the current Codex session index.
 
 ## Changelog
 
