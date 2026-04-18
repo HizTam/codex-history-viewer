@@ -80,7 +80,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   public getTreeItem(element: TreeNode): vscode.TreeItem {
     if (element instanceof SessionNode) {
       // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
-      const shortTitle = truncateByDisplayWidth(element.session.snippet, 40, "...");
+      const shortTitle = truncateByDisplayWidth(element.session.displayTitle, 40, "...");
       const annotation = this.annotationStore.get(element.session.fsPath);
       const item = new vscode.TreeItem(
         `${element.session.localDate} ${element.session.timeLabel} ${shortTitle}`,

@@ -4,6 +4,7 @@ import * as vscode from "vscode";
 import type { ToolDisplayMode } from "./tools/toolTypes";
 
 export type HistoryDateBasis = "started" | "lastActivity";
+export type HistoryTitleSource = "generated" | "nativeWhenAvailable";
 export type LongMessageFoldingMode = "off" | "auto" | "always";
 
 export interface CodexHistoryViewerConfig {
@@ -18,6 +19,7 @@ export interface CodexHistoryViewerConfig {
   deleteUseTrash: boolean;
   resumeOpenTarget: "sidebar" | "panel";
   historyDateBasis: HistoryDateBasis;
+  historyTitleSource: HistoryTitleSource;
   toolDisplayMode: ToolDisplayMode;
   userLongMessageFolding: LongMessageFoldingMode;
   assistantLongMessageFolding: LongMessageFoldingMode;
@@ -60,6 +62,9 @@ export function getConfig(): CodexHistoryViewerConfig {
   const resumeOpenTarget: "sidebar" | "panel" = resumeOpenTargetRaw === "panel" ? "panel" : "sidebar";
   const historyDateBasisRaw = (cfg.get<string>("history.dateBasis") ?? "started").trim().toLowerCase();
   const historyDateBasis: HistoryDateBasis = historyDateBasisRaw === "lastactivity" ? "lastActivity" : "started";
+  const historyTitleSourceRaw = (cfg.get<string>("history.titleSource") ?? "generated").trim().toLowerCase();
+  const historyTitleSource: HistoryTitleSource =
+    historyTitleSourceRaw === "nativewhenavailable" ? "nativeWhenAvailable" : "generated";
   const toolDisplayModeRaw = (cfg.get<string>("chat.toolDisplayMode") ?? "detailsOnly").trim().toLowerCase();
   const toolDisplayMode: ToolDisplayMode = toolDisplayModeRaw === "compactcards" ? "compactCards" : "detailsOnly";
   const legacyLongMessageFolding = parseLongMessageFoldingMode(cfg.get<string>("chat.longMessageFolding") ?? "off");
@@ -82,6 +87,7 @@ export function getConfig(): CodexHistoryViewerConfig {
     deleteUseTrash: cfg.get<boolean>("delete.useTrash") ?? true,
     resumeOpenTarget,
     historyDateBasis,
+    historyTitleSource,
     toolDisplayMode,
     userLongMessageFolding,
     assistantLongMessageFolding,

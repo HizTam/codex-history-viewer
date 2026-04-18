@@ -151,11 +151,50 @@ function extractClaudeActivityTimestampIso(obj: any): string | undefined {
   return parseTimestampIso(obj?.timestamp);
 }
 
-async function readLastActivityTimestampIso(fsPath: string, source: SessionSource): Promise<string | undefined> {
+function extractClaudeSummaryTitle(obj: any): string | undefined {
+  const summary = typeof obj?.summary === "string" ? obj.summary.trim() : "";
+  if (obj?.type !== "summary" || !summary) return undefined;
+  return summary;
+}
+
+function extractClaudeAiTitle(obj: any): string | undefined {
+  const title = typeof obj?.aiTitle === "string" ? obj.aiTitle.trim() : "";
+  if (obj?.type !== "ai-title" || !title) return undefined;
+  return title;
+}
+
+function extractClaudeCustomTitle(obj: any): string | undefined {
+  const title = typeof obj?.customTitle === "string" ? obj.customTitle.trim() : "";
+  if (obj?.type !== "custom-title" || !title) return undefined;
+  return title;
+}
+
+function extractClaudeRenameTitle(obj: any): string | undefined {
+  if (obj?.type !== "system" || obj?.subtype !== "local_command") return undefined;
+
+  const candidates = [obj?.content, obj?.message?.content];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const match = candidate.match(/<local-command-stdout>Session renamed to:\s*(.+?)<\/local-command-stdout>/i);
+    const renamed = match?.[1]?.trim();
+    if (renamed) return renamed;
+  }
+
+  return undefined;
+}
+
+async function readSessionActivityInfo(
+  fsPath: string,
+  source: SessionSource,
+): Promise<{ lastActivityTimestampIso?: string; nativeTitle?: string }> {
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   let lastTimestampIso: string | undefined;
+  let claudeCustomTitle: string | undefined;
+  let claudeAiTitle: string | undefined;
+  let claudeSummaryTitle: string | undefined;
+  let claudeRenameTitle: string | undefined;
   try {
     for await (const line of rl) {
       if (!line) continue;
@@ -172,13 +211,33 @@ async function readLastActivityTimestampIso(fsPath: string, source: SessionSourc
           ? extractClaudeActivityTimestampIso(obj)
           : extractCodexActivityTimestampIso(obj);
       if (timestampIso) lastTimestampIso = timestampIso;
+
+      if (source === "claude") {
+        const customTitle = extractClaudeCustomTitle(obj);
+        if (customTitle) claudeCustomTitle = customTitle;
+
+        const aiTitle = extractClaudeAiTitle(obj);
+        if (aiTitle) claudeAiTitle = aiTitle;
+
+        const summaryTitle = extractClaudeSummaryTitle(obj);
+        if (summaryTitle) claudeSummaryTitle = summaryTitle;
+
+        const renameTitle = extractClaudeRenameTitle(obj);
+        if (renameTitle) claudeRenameTitle = renameTitle;
+      }
     }
   } finally {
     rl.close();
     stream.close();
   }
 
-  return lastTimestampIso;
+  return {
+    lastActivityTimestampIso: lastTimestampIso,
+    nativeTitle:
+      source === "claude"
+        ? claudeCustomTitle ?? claudeAiTitle ?? claudeRenameTitle ?? claudeSummaryTitle
+        : undefined,
+  };
 }
 
 function toLocalDateString(date: Date, timeZone: string): string {
@@ -257,7 +316,8 @@ export async function buildSessionSummary(params: {
   const readMeta = (await tryReadSessionMeta(fsPath)) ?? {};
   const source = detectSessionSource(readMeta, fsPath);
   const meta: SessionMetaInfo = { ...readMeta, historySource: source };
-  const lastActivityIso = await readLastActivityTimestampIso(fsPath, source);
+  const activityInfo = await readSessionActivityInfo(fsPath, source);
+  const lastActivityIso = activityInfo.lastActivityTimestampIso;
 
   const inferred = source === "codex" ? inferYmdFromPath(sessionsRoot, fsPath) ?? undefined : undefined;
   const startValid = parseTimestampDate(meta.timestampIso);
@@ -311,6 +371,8 @@ export async function buildSessionSummary(params: {
     localDate: startedLocalDate,
     timeLabel: startedTimeLabel,
     snippet,
+    nativeTitle: activityInfo.nativeTitle,
+    displayTitle: snippet,
     cwdShort,
     previewMessages,
   };

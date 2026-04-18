@@ -70,7 +70,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       const pinned = this.pinStore.isPinned(element.session.fsPath);
       const annotation = this.annotationStore.get(element.session.fsPath);
       // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
-      const shortTitle = truncateByDisplayWidth(element.session.snippet, 40, "...");
+      const shortTitle = truncateByDisplayWidth(element.session.displayTitle, 40, "...");
       const item = new vscode.TreeItem(
         `${element.session.localDate} ${element.session.timeLabel} ${shortTitle} (${element.hits.length})`,
         vscode.TreeItemCollapsibleState.Collapsed,

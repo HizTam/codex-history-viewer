@@ -139,7 +139,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   private sessionToTreeItem(session: SessionSummary, pinned: boolean): vscode.TreeItem {
     // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
-    const shortTitle = truncateByDisplayWidth(session.snippet, 40, "...");
+    const shortTitle = truncateByDisplayWidth(session.displayTitle, 40, "...");
     const label = `${session.timeLabel} ${shortTitle}`;
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
     const annotation = this.annotationStore.get(session.fsPath);

@@ -696,6 +696,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const searchDefaultRolesChanged = e.affectsConfiguration("codexHistoryViewer.search.defaultRoles");
       const sourcesEnabledChanged = e.affectsConfiguration("codexHistoryViewer.sources.enabled");
       const historyDateBasisChanged = e.affectsConfiguration("codexHistoryViewer.history.dateBasis");
+      const historyTitleSourceChanged = e.affectsConfiguration("codexHistoryViewer.history.titleSource");
       const toolDisplayModeChanged = e.affectsConfiguration("codexHistoryViewer.chat.toolDisplayMode");
       const userLongMessageFoldingChanged = e.affectsConfiguration("codexHistoryViewer.chat.userLongMessageFolding");
       const assistantLongMessageFoldingChanged = e.affectsConfiguration(
@@ -710,6 +711,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         !searchDefaultRolesChanged &&
         !sourcesEnabledChanged &&
         !historyDateBasisChanged &&
+        !historyTitleSourceChanged &&
         !toolDisplayModeChanged &&
         !longMessageFoldingChanged
       ) {
@@ -736,7 +738,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void ensureAlwaysShowHeaderActions();
 
       // When UI language changes, rebuild history-dependent displays because date/time formatting can also change.
-      if (!uiLanguageChanged && !sourcesEnabledChanged && !historyDateBasisChanged) {
+      if (!uiLanguageChanged && !sourcesEnabledChanged && !historyDateBasisChanged && !historyTitleSourceChanged) {
         refreshViews();
         controlProvider.refresh();
         return;
