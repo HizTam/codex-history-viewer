@@ -12,4 +12,8 @@ Codex History Viewer bundles code generated from the following third-party packa
    License: MIT
    Source: https://github.com/shikijs/shiki
 
-These packages are used only for syntax highlighting inside the chat webview.
+4. KaTeX
+   License: MIT
+   Source: https://github.com/KaTeX/KaTeX
+
+These packages are used only for syntax highlighting and math rendering inside the chat webview.

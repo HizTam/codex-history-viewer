@@ -1375,6 +1375,32 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
   font-size: 1.1em;
 }
 
+.markdown .katex-display {
+  margin: 0 0 8px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+}
+
+.markdown .katex-display > .katex {
+  min-width: max-content;
+}
+
+.markdown .mathFallback-block {
+  margin: 0 0 8px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--chv-border);
+  border-radius: 8px;
+  background: var(--chv-code-bg);
+  overflow-x: auto;
+  font-family: var(--vscode-editor-font-family);
+  white-space: pre-wrap;
+}
+
+.markdown .mathFallback-inline {
+  font-family: var(--vscode-editor-font-family);
+}
+
 .codeBlock {
   margin-top: 8px;
   border: 1px solid var(--chv-border);
