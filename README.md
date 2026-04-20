@@ -3,6 +3,8 @@
 A VS Code extension to browse, search, tag, import/export, and manage local Codex CLI / Claude Code session history, then resume selected sessions directly in the related VS Code extension.
 Latest release: **1.3.0** (2026-04-18).
 
+![Codex History Viewer screenshot](media/screenshot.png)
+
 ## Features
 
 - Five views: **Control**, **Pinned**, **History**, **Search**, and **Status**
