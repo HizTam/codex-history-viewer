@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -422,7 +422,7 @@
       },
       {
         "command": "codexHistoryViewer.ui.ja.refreshPinned",
-        "title": "ピン止めを再読み込み",
+        "title": "ピン留めを再読み込み",
         "icon": {
           "light": "resources/icons/light/refresh.svg",
           "dark": "resources/icons/dark/refresh.svg"

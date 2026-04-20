@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-04-18
-- 対象バージョン: 1.3.0
+- 最終更新: 2026-04-20
+- 対象バージョン: 1.3.1
 
 ## 1. 概要
 
@@ -17,7 +17,8 @@
 - `src/`: TypeScript 実装
 - `dist/`: ビルド成果物
 - `media/`: Webview（チャット表示）用の CSS / JS
-- `l10n/`: ローカライズ用バンドル
+- `l10n/`: 実行時 UI / Webview 用のローカライズバンドル
+- `package.nls*.json`: VS Code manifest (`package.json`) 用のローカライズ
 - `resources/`: アイコン等
 - `docs/`: 補助ドキュメント
 
@@ -226,6 +227,8 @@
 ### 4.8 表示
 
 - チャット表示: `src/chat/*`
+  - `user` / `assistant` / tool / note / diff などのカードは個別に最大幅展開できる
+  - grouped diff カードは前後の diff へ移動する上下ナビゲーションを持つ
 - Markdown transcript: `src/transcript/*`
 - Control / Status ビュー: `src/tree/utilityTrees.ts`
 - History / Pinned / Search ツリー: `src/tree/*`
@@ -251,6 +254,23 @@
 - `src/settings.ts`
   - 拡張設定の読み取りヘルパーをまとめる
   - `history.titleSource` や `chat.toolDisplayMode` などの表示系設定もここで管理する
+
+### 4.12 ローカライズ
+
+- `package.nls.json` / `package.nls.ja.json`
+  - VS Code が拡張起動前に解決する `package.json` の `%...%` プレースホルダーを担当する
+  - コマンド名、View 名、設定説明、拡張説明などの manifest 文言を置く
+- `l10n/bundle.l10n.json` / `l10n/bundle.l10n.ja.json`
+  - `src/i18n.ts` の `t(...)` から参照する実行時 UI 文言を担当する
+  - 通知、QuickPick、InputBox、Webview に渡すラベル/tooltip などを置く
+- `package.json` の `codexHistoryViewer.ui.ja.*` / `codexHistoryViewer.ui.en.*`
+  - `codexHistoryViewer.ui.language` に合わせてメニュー文言を切り替えるための alias command
+  - VS Code の表示言語ではなく拡張独自設定に従う必要があるため、例外的に言語別タイトルを直接持つ
+- 実行時の View タイトルは `runtime.view.*` キーを使う
+  - `package.nls.*` の `view.*` と同名にしないことで、manifest 用キーと実行時キーの責務を分ける
+- TypeScript 内に UI 表示用の日本語を直書きしない
+  - 新しい UI 文言は `t("...")` と `l10n/bundle.l10n*.json` に追加する
+  - ソースコードコメントは英語で記述する
 
 ## 5. 開発手順
 
@@ -299,6 +319,8 @@ npm run package
 - `Show details` ON 時は長文メッセージが常に全文表示になる
 - `patch_apply_end` を含むセッションで差分カードが表示される（`Show details` OFF でも出る）
 - 差分カードの折りたたみ展開、hunk ごとの折り返し切り替え、行ジャンプが動く
+- diff カードの上下ナビゲーションで前後の diff へ移動できる
+- 各カードの最大幅展開ボタンで対象カードだけが広がり、再クリックで通常幅に戻る
 - 差分ハイライトが VS Code テーマに追従する
 - 検索サイドバーがツールバー右端ボタンおよび `Ctrl+F` / `Cmd+F` で開閉する
 - 検索サイドバーの幅をドラッグで変更でき、再表示後も保持される
@@ -307,3 +329,5 @@ npm run package
 - ヘッダー幅が狭くなるとラベルボタンが自動的にアイコンのみに切り替わる
 - Reload 後にスクロール位置と選択メッセージが復元される
 - ローカルファイルリンク（相対パス・行番号指定）が VS Code 内で正しく開く
+- `package.nls.*` と `l10n/bundle.l10n.*` のキー所有が混ざっていない
+- ソースコードコメントに日本語が残っていない

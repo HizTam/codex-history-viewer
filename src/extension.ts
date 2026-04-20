@@ -462,11 +462,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const updateViewTitles = (): void => {
-    controlView.title = t("view.control");
-    statusView.title = t("view.status");
-    pinnedView.title = t("view.pinned");
-    historyView.title = t("view.history");
-    searchView.title = t("view.search");
+    controlView.title = t("runtime.view.control");
+    statusView.title = t("runtime.view.status");
+    pinnedView.title = t("runtime.view.pinned");
+    historyView.title = t("runtime.view.history");
+    searchView.title = t("runtime.view.search");
   };
 
   const updateHistoryViewDescription = (): void => {
@@ -519,7 +519,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const buildSearchTagFilterSummary = (): string => {
     if (searchTagFilter.length === 0) return "";
-    return uiText(`タグ: ${searchTagFilter.map((tag) => `#${tag}`).join(", ")}`, `tags: ${searchTagFilter.map((tag) => `#${tag}`).join(", ")}`);
+    return t("search.tagFilter.summary", searchTagFilter.map((tag) => `#${tag}`).join(", "));
   };
 
   const updateSearchViewDescription = (): void => {
@@ -551,12 +551,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     if (!opts.rerunSearch || !changed) return;
     if (!lastSearchRequest) {
-      void vscode.window.showInformationMessage(
-        uiText(
-          "検索条件がまだないため、タグフィルタは次回の検索から適用されます。",
-          "No previous search request yet. The tag filter will apply from the next search.",
-        ),
-      );
+      void vscode.window.showInformationMessage(t("search.tagFilter.deferred"));
       return;
     }
     await executeSearch(lastSearchRequest);
@@ -672,7 +667,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         `VS Code env.language: ${vscode.env.language}`,
         `codexHistoryViewer.ui.language: ${uiLang}`,
         `Resolved UI language: ${resolvedUiLang}`,
-        `t(view.history): ${t("view.history")}`,
+        `t(runtime.view.history): ${t("runtime.view.history")}`,
         `t(chat.button.detailsOff): ${t("chat.button.detailsOff")}`,
         `t(chat.button.toolsOff): ${t("chat.button.toolsOff")}`,
         `History filter: ${formatDateScopeForDebug(historyFilter)}`,
@@ -680,12 +675,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ];
       const text = lines.join("\n");
       await vscode.env.clipboard.writeText(text);
-      void vscode.window.showInformationMessage(
-        uiText(
-          "Codex History Viewer: デバッグ情報をクリップボードにコピーしました。",
-          "Codex History Viewer: debug info copied to clipboard.",
-        ),
-      );
+      void vscode.window.showInformationMessage(t("app.debugInfoCopied"));
     }),
   );
 
@@ -1014,13 +1004,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
   };
 
-  const offerCodexReloadHint = (): void => {
-    void vscode.window.showInformationMessage(
-      uiText(
-        "Codex CLI が起動中の場合、履歴を再読み込みしてください。",
-        "If Codex CLI is running, reload its history to reflect file changes.",
-      ),
-    );
+  const offerHistoryReloadHint = (): void => {
+    void vscode.window.showInformationMessage(t("app.historyReloadHint"));
   };
 
   const resolveAnnotationTargets = (element?: unknown): SessionSummary[] => {
@@ -1109,7 +1094,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!id) return false;
     const preset = searchPresetStore.getAll().find((x) => x.id === id);
     if (!preset) {
-      void vscode.window.showErrorMessage(uiText("指定された検索プリセットが見つかりません。", "Search preset not found."));
+      void vscode.window.showErrorMessage(t("app.searchPresetNotFound"));
       return false;
     }
     return executeSearch(preset.request);
@@ -1162,10 +1147,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.rebuildCache", async () => {
       const choice = await vscode.window.showWarningMessage(
-        uiText(
-          "履歴/検索インデックスを再作成しますか？",
-          "Rebuild history/search indexes?",
-        ),
+        t("app.rebuildCacheConfirm"),
         { modal: true },
         "OK",
       );
@@ -1355,8 +1337,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const current = new Set(getConfiguredDefaultSearchRoles());
       const picked = await new Promise<readonly (typeof items)[number][] | undefined>((resolve) => {
         const qp = vscode.window.createQuickPick<(typeof items)[number]>();
-        qp.title = uiText("検索対象ロールの既定値", "Default search roles");
-        qp.placeholder = uiText("検索で対象にするロールを選択", "Select roles used by default in Search");
+        qp.title = t("search.roles.defaultTitle");
+        qp.placeholder = t("search.roles.defaultPlaceholder");
         qp.canSelectMany = true;
         qp.items = items;
         qp.selectedItems = items.filter((it) => current.has(it.role));
@@ -1378,9 +1360,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         .getConfiguration("codexHistoryViewer")
         .update(SEARCH_DEFAULT_ROLES_CONFIG, next, vscode.ConfigurationTarget.Global);
       statusProvider.refresh();
-      void vscode.window.showInformationMessage(
-        uiText(`検索既定ロール: ${next.join(", ")}`, `Search default roles: ${next.join(", ")}`),
-      );
+      void vscode.window.showInformationMessage(t("search.roles.defaultUpdated", next.join(", ")));
     }),
   );
 
@@ -1421,7 +1401,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const tagStats = annotationStore.listTagStats();
       if (tagStats.length === 0) {
-        void vscode.window.showInformationMessage(uiText("利用可能なタグがありません。", "No tags available."));
+        void vscode.window.showInformationMessage(t("tag.noTagsAvailable"));
         return;
       }
 
@@ -1433,8 +1413,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const picked = await new Promise<readonly (typeof items)[number][] | undefined>((resolve) => {
         const qp = vscode.window.createQuickPick<(typeof items)[number]>();
-        qp.title = uiText("検索をタグで絞り込む", "Filter Search by Tags");
-        qp.placeholder = uiText("検索対象のタグを選択", "Select tags included in search");
+        qp.title = t("search.tagFilter.title");
+        qp.placeholder = t("search.tagFilter.placeholder");
         qp.canSelectMany = true;
         qp.items = items;
         const currentKeys = new Set(searchTagFilter.map((x) => x.toLowerCase()));
@@ -1479,7 +1459,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const tagStats = annotationStore.listTagStats();
       if (tagStats.length === 0) {
-        void vscode.window.showInformationMessage(uiText("利用可能なタグがありません。", "No tags available."));
+        void vscode.window.showInformationMessage(t("tag.noTagsAvailable"));
         return;
       }
 
@@ -1491,8 +1471,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const picked = await new Promise<readonly (typeof items)[number][] | undefined>((resolve) => {
         const qp = vscode.window.createQuickPick<(typeof items)[number]>();
-        qp.title = uiText("ピン留めをタグで絞り込む", "Filter Pinned by Tags");
-        qp.placeholder = uiText("表示するタグを選択", "Select tags shown in Pinned");
+        qp.title = t("pinned.tagFilter.title");
+        qp.placeholder = t("pinned.tagFilter.placeholder");
         qp.canSelectMany = true;
         qp.items = items;
         const currentKeys = new Set(pinnedTagFilter.map((x) => x.toLowerCase()));
@@ -1537,7 +1517,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.searchRunPreset", async () => {
       const presets = searchPresetStore.getAll();
       if (presets.length === 0) {
-        void vscode.window.showInformationMessage(uiText("保存済み検索がありません。", "No saved search presets."));
+        void vscode.window.showInformationMessage(t("savedSearches.noPresets"));
         return;
       }
       const picked = await vscode.window.showQuickPick(
@@ -1548,7 +1528,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           presetId: p.id,
         })),
         {
-          title: uiText("保存済み検索を実行", "Run saved search"),
+          title: t("savedSearches.run.title"),
         },
       );
       if (!picked) return;
@@ -1559,18 +1539,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.searchSavePreset", async () => {
       if (!lastSearchRequest) {
-        void vscode.window.showInformationMessage(
-          uiText("保存する検索条件がありません。先に検索を実行してください。", "No search request to save. Run search first."),
-        );
+        void vscode.window.showInformationMessage(t("savedSearches.noRequestToSave"));
         return;
       }
 
       const suggested = lastSearchRequest.queryInput.slice(0, 80);
       const nameInput = await vscode.window.showInputBox({
-        title: uiText("検索プリセットを保存", "Save search preset"),
-        prompt: uiText("プリセット名を入力", "Enter a preset name"),
+        title: t("savedSearches.save.title"),
+        prompt: t("savedSearches.save.prompt"),
         value: suggested,
-        validateInput: (v) => (v.trim().length === 0 ? uiText("名前を入力してください。", "Name is required.") : undefined),
+        validateInput: (v) => (v.trim().length === 0 ? t("common.nameRequired") : undefined),
       });
       if (nameInput === undefined) return;
       const name = nameInput.trim();
@@ -1583,7 +1561,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         overwriteId: existing?.id,
       });
       statusProvider.refresh();
-      void vscode.window.showInformationMessage(uiText(`保存しました: ${name}`, `Saved: ${name}`));
+      void vscode.window.showInformationMessage(t("savedSearches.saved", name));
     }),
   );
 
@@ -1591,7 +1569,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.searchDeletePreset", async () => {
       const presets = searchPresetStore.getAll();
       if (presets.length === 0) {
-        void vscode.window.showInformationMessage(uiText("削除できるプリセットがありません。", "No presets to delete."));
+        void vscode.window.showInformationMessage(t("savedSearches.noPresetsToDelete"));
         return;
       }
 
@@ -1602,7 +1580,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           presetId: p.id,
         })),
         {
-          title: uiText("検索プリセットを削除", "Delete search preset"),
+          title: t("savedSearches.delete.title"),
         },
       );
       if (!picked) return;
@@ -1610,7 +1588,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const deleted = await searchPresetStore.delete(picked.presetId);
       if (!deleted) return;
       statusProvider.refresh();
-      void vscode.window.showInformationMessage(uiText(`削除しました: ${picked.label}`, `Deleted: ${picked.label}`));
+      void vscode.window.showInformationMessage(t("savedSearches.deleted", picked.label));
     }),
   );
 
@@ -1618,16 +1596,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.exportSessions", async (element?: unknown) => {
       const sessions = collectSessionsFromTargets(resolveTargets(element));
       if (sessions.length === 0) {
-        void vscode.window.showInformationMessage(uiText("エクスポート対象がありません。", "No sessions selected."));
+        void vscode.window.showInformationMessage(t("export.noSessionsSelected"));
         return;
       }
 
       const mode = await vscode.window.showQuickPick(
         [
-          { label: uiText("生JSONLをエクスポート", "Export raw JSONL"), value: "raw" as const },
-          { label: uiText("サニタイズ済みMarkdownをエクスポート", "Export sanitized Markdown"), value: "masked" as const },
+          { label: t("export.format.rawJsonl"), value: "raw" as const },
+          { label: t("export.format.sanitizedMarkdown"), value: "masked" as const },
         ],
-        { title: uiText("エクスポート形式を選択", "Select export format") },
+        { title: t("export.format.title") },
       );
       if (!mode) return;
 
@@ -1642,10 +1620,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!result) return;
 
       void vscode.window.showInformationMessage(
-        uiText(
-          `完了: 成功 ${result.exported} / 失敗 ${result.failed} / スキップ ${result.skipped}`,
-          `Done: exported ${result.exported}, failed ${result.failed}, skipped ${result.skipped}`,
-        ),
+        t("export.done", result.exported, result.failed, result.skipped),
       );
     }),
   );
@@ -1655,15 +1630,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const modePick = await vscode.window.showQuickPick(
         [
           {
-            label: uiText("重複IDはスキップ", "Skip duplicate session IDs"),
+            label: t("import.duplicate.skip"),
             mode: "skip" as const,
           },
           {
-            label: uiText("重複IDは上書き", "Overwrite duplicate session IDs"),
+            label: t("import.duplicate.overwrite"),
             mode: "overwrite" as const,
           },
         ],
-        { title: uiText("インポート時の重複ID処理", "How to handle duplicate IDs on import") },
+        { title: t("import.duplicate.title") },
       );
       if (!modePick) return;
 
@@ -1680,13 +1655,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await refreshHistoryIndex(false);
       refreshViews({ clearSearch: true });
       controlProvider.refresh();
-      if (result.imported > 0 || result.overwritten > 0) offerCodexReloadHint();
+      if (result.imported > 0 || result.overwritten > 0) offerHistoryReloadHint();
 
       void vscode.window.showInformationMessage(
-        uiText(
-          `完了: 新規 ${result.imported} / 上書き ${result.overwritten} / 失敗 ${result.failed} / スキップ ${result.skipped}`,
-          `Done: imported ${result.imported}, overwritten ${result.overwritten}, failed ${result.failed}, skipped ${result.skipped}`,
-        ),
+        t("import.done", result.imported, result.overwritten, result.failed, result.skipped),
       );
     }),
   );
@@ -1698,12 +1670,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         .map((x) => x.fsPath)
         .filter((fsPath) => !historyService.findByFsPath(fsPath));
       if (missingPaths.length === 0) {
-        void vscode.window.showInformationMessage(uiText("欠損ピンはありません。", "No missing pins."));
+        void vscode.window.showInformationMessage(t("pins.noMissing"));
         return;
       }
 
       const choice = await vscode.window.showWarningMessage(
-        uiText(`${missingPaths.length} 件の欠損ピンを削除しますか？`, `Remove ${missingPaths.length} missing pin(s)?`),
+        t("pins.removeMissingConfirm", missingPaths.length),
         { modal: true },
         "OK",
       );
@@ -1728,14 +1700,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const trashCount = storageStats.trashFileCount;
 
       if (trashCount === 0 && legacyFiles.length === 0) {
-        void vscode.window.showInformationMessage(uiText("ゴミ箱は空です。", "Trash is already empty."));
+        void vscode.window.showInformationMessage(t("trash.empty"));
         return;
       }
 
-      const confirmMessage = uiText(
-        `ゴミ箱 ${trashCount} 件を削除しますか？`,
-        `Delete ${trashCount} trash file(s)?`,
-      );
+      const confirmMessage = t("trash.deleteConfirm", trashCount);
       const choice = await vscode.window.showWarningMessage(confirmMessage, { modal: true }, "OK");
       if (choice !== "OK") return;
 
@@ -1745,19 +1714,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       if (result.failedPaths.length > 0) {
         void vscode.window.showWarningMessage(
-          uiText(
-            `一部削除に失敗しました（ゴミ箱: ${result.removedTrashFiles} 件 / 失敗: ${result.failedPaths.length} 件）。`,
-            `Cleanup partially failed (trash: ${result.removedTrashFiles}, failed: ${result.failedPaths.length}).`,
-          ),
+          t("trash.cleanupPartialFailed", result.removedTrashFiles, result.failedPaths.length),
         );
         return;
       }
 
       void vscode.window.showInformationMessage(
-        uiText(
-          `ゴミ箱 ${result.removedTrashFiles} 件を削除しました。`,
-          `Removed ${result.removedTrashFiles} trash file(s).`,
-        ),
+        t("trash.removed", result.removedTrashFiles),
       );
     }),
   );
@@ -1766,12 +1729,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.undoLastAction", async () => {
       const action = await undoService.undoLast();
       if (!action) {
-        void vscode.window.showInformationMessage(uiText("取り消せる操作がありません。", "Nothing to undo."));
+        void vscode.window.showInformationMessage(t("undo.none"));
         return;
       }
       await refreshHistoryIndex(false);
       refreshViews({ clearSearch: true });
-      void vscode.window.showInformationMessage(uiText(`取り消しました: ${action.label}`, `Undone: ${action.label}`));
+      void vscode.window.showInformationMessage(t("undo.done", action.label));
     }),
   );
 
@@ -1779,17 +1742,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.editSessionAnnotation", async (element?: unknown) => {
       const sessions = resolveAnnotationTargets(element);
       if (sessions.length === 0) {
-        void vscode.window.showInformationMessage(uiText("対象セッションが選択されていません。", "No session selected."));
+        void vscode.window.showInformationMessage(t("annotation.noSessionSelected"));
         return;
       }
 
       const action = await vscode.window.showQuickPick(
         [
-          { label: uiText("タグとメモを編集", "Edit tags and note"), value: "edit" as const },
-          { label: uiText("既存タグを追加", "Add existing tags"), value: "addExisting" as const },
-          { label: uiText("タグを削除", "Remove tags"), value: "remove" as const },
+          { label: t("annotation.action.edit"), value: "edit" as const },
+          { label: t("annotation.action.addExisting"), value: "addExisting" as const },
+          { label: t("annotation.action.remove"), value: "remove" as const },
         ],
-        { title: uiText("注釈の操作を選択", "Choose annotation action") },
+        { title: t("annotation.action.title") },
       );
       if (!action) return;
 
@@ -1800,15 +1763,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (action.value === "edit") {
         const seed = sessions.length === 1 ? annotationStore.get(sessions[0]!.fsPath) : null;
         const tagsInput = await vscode.window.showInputBox({
-          title: uiText("セッションタグを編集", "Edit session tags"),
-          prompt: uiText("カンマ区切りでタグを入力。空でタグなし。", "Comma-separated tags. Empty means no tags."),
+          title: t("annotation.editTags.title"),
+          prompt: t("annotation.editTags.prompt"),
           value: seed?.tags.join(", ") ?? "",
         });
         if (tagsInput === undefined) return;
 
         const noteInput = await vscode.window.showInputBox({
-          title: uiText("セッションメモを編集", "Edit session note"),
-          prompt: uiText("任意メモ（最大500文字）。空で削除。", "Optional note (max 500 chars). Empty clears note."),
+          title: t("annotation.editNote.title"),
+          prompt: t("annotation.editNote.prompt"),
           value: seed?.note ?? "",
         });
         if (noteInput === undefined) return;
@@ -1824,7 +1787,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       } else if (action.value === "addExisting") {
         const tagStats = annotationStore.listTagStats();
         if (tagStats.length === 0) {
-          void vscode.window.showInformationMessage(uiText("利用可能なタグがありません。", "No tags available."));
+          void vscode.window.showInformationMessage(t("tag.noTagsAvailable"));
           return;
         }
         const picked = await vscode.window.showQuickPick(
@@ -1833,7 +1796,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             description: `${x.count}`,
             tag: x.tag,
           })),
-          { title: uiText("追加するタグを選択", "Select tags to add"), canPickMany: true },
+          { title: t("annotation.addTags.title"), canPickMany: true },
         );
         if (!picked || picked.length === 0) return;
         changed = await annotationStore.addTagsMany(sessionPaths, picked.map((x) => x.tag));
@@ -1847,19 +1810,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           }
         }
         if (tagUnion.size === 0) {
-          void vscode.window.showInformationMessage(uiText("削除できるタグがありません。", "No tags to remove."));
+          void vscode.window.showInformationMessage(t("annotation.removeTags.noTags"));
           return;
         }
         const picked = await vscode.window.showQuickPick(
           Array.from(tagUnion.values()).map((tag) => ({ label: `#${tag}`, tag })),
-          { title: uiText("削除するタグを選択", "Select tags to remove"), canPickMany: true },
+          { title: t("annotation.removeTags.title"), canPickMany: true },
         );
         if (!picked || picked.length === 0) return;
         changed = await annotationStore.removeTagsMany(sessionPaths, picked.map((x) => x.tag));
       }
 
       if (changed <= 0) {
-        void vscode.window.showInformationMessage(uiText("変更はありませんでした。", "No changes were applied."));
+        void vscode.window.showInformationMessage(t("annotation.noChanges"));
         return;
       }
       refreshViews();
@@ -1904,7 +1867,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.renameTagGlobally", async () => {
       const tagStats = annotationStore.listTagStats();
       if (tagStats.length === 0) {
-        void vscode.window.showInformationMessage(uiText("リネーム対象のタグがありません。", "No tags available to rename."));
+        void vscode.window.showInformationMessage(t("tagRename.noTags"));
         return;
       }
 
@@ -1914,30 +1877,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           description: `${x.count}`,
           tag: x.tag,
         })),
-        { title: uiText("置換元のタグを選択", "Select source tag") },
+        { title: t("tagRename.sourceTitle") },
       );
       if (!sourcePicked) return;
 
       const sourceTag = sourcePicked.tag;
       const nextInput = await vscode.window.showInputBox({
-        title: uiText("置換先のタグ名", "Destination tag name"),
-        prompt: uiText("新しいタグ名を入力", "Enter the new tag name"),
+        title: t("tagRename.destinationTitle"),
+        prompt: t("tagRename.destinationPrompt"),
         value: sourceTag,
         validateInput: (v) => {
           const normalized = normalizeTags([String(v ?? "").replace(/^#+/, "").trim()]);
-          return normalized.length > 0 ? undefined : uiText("タグ名を入力してください。", "Tag name is required.");
+          return normalized.length > 0 ? undefined : t("tagRename.nameRequired");
         },
       });
       if (nextInput === undefined) return;
 
       const normalized = normalizeTags([String(nextInput ?? "").replace(/^#+/, "").trim()]);
       if (normalized.length === 0) {
-        void vscode.window.showErrorMessage(uiText("タグ名が不正です。", "Invalid tag name."));
+        void vscode.window.showErrorMessage(t("tagRename.invalid"));
         return;
       }
       const destinationTag = normalized[0]!;
       if (destinationTag.toLowerCase() === sourceTag.toLowerCase()) {
-        void vscode.window.showInformationMessage(uiText("同じタグ名のため変更はありません。", "No changes: the tag name is unchanged."));
+        void vscode.window.showInformationMessage(t("tagRename.unchanged"));
         return;
       }
 
@@ -1967,7 +1930,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       if (changedCount <= 0) {
-        void vscode.window.showInformationMessage(uiText("変更対象はありませんでした。", "No matching tags were found."));
+        void vscode.window.showInformationMessage(t("tag.noMatching"));
         return;
       }
 
@@ -1985,10 +1948,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
         refreshViews();
       });
-      offerUndo(uiText(
-        `タグ #${sourceTag} を #${destinationTag} に変更しました（${changedCount} 件）。`,
-        `Renamed #${sourceTag} to #${destinationTag} (${changedCount} sessions).`,
-      ));
+      offerUndo(t("tagRename.done", sourceTag, destinationTag, changedCount));
     }),
   );
 
@@ -1996,7 +1956,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.deleteTagsGlobally", async () => {
       const tagStats = annotationStore.listTagStats();
       if (tagStats.length === 0) {
-        void vscode.window.showInformationMessage(uiText("削除対象のタグがありません。", "No tags available to delete."));
+        void vscode.window.showInformationMessage(t("tagDelete.noTags"));
         return;
       }
 
@@ -2007,7 +1967,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           tag: x.tag,
         })),
         {
-          title: uiText("全セッションから削除するタグを選択", "Select tags to delete from all sessions"),
+          title: t("tagDelete.title"),
           canPickMany: true,
         },
       );
@@ -2034,7 +1994,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       if (changedCount <= 0) {
-        void vscode.window.showInformationMessage(uiText("変更対象はありませんでした。", "No matching tags were found."));
+        void vscode.window.showInformationMessage(t("tag.noMatching"));
         return;
       }
 
@@ -2052,12 +2012,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
         refreshViews();
       });
-      offerUndo(
-        uiText(
-          `タグを削除しました（${changedCount} 件のセッション）。`,
-          `Deleted tags from ${changedCount} session(s).`,
-        ),
-      );
+      offerUndo(t("tagDelete.done", changedCount));
     }),
   );
 
@@ -2111,7 +2066,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const tagStats = annotationStore.listTagStats();
       if (tagStats.length === 0) {
-        void vscode.window.showInformationMessage(uiText("利用可能なタグがありません。", "No tags available."));
+        void vscode.window.showInformationMessage(t("tag.noTagsAvailable"));
         return;
       }
 
@@ -2123,8 +2078,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const picked = await new Promise<readonly (typeof items)[number][] | undefined>((resolve) => {
         const qp = vscode.window.createQuickPick<(typeof items)[number]>();
-        qp.title = uiText("タグで履歴を絞り込む", "Filter history by tags");
-        qp.placeholder = uiText("対象タグを選択", "Select tags");
+        qp.title = t("history.tags.filterTitle");
+        qp.placeholder = t("history.tags.placeholder");
         qp.canSelectMany = true;
         qp.items = items;
         const currentKeys = new Set(historyTagFilter.map((x) => x.toLowerCase()));
@@ -2290,7 +2245,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
         refreshViews({ clearSearch: true });
         await transcriptProvider.openSessionTranscript(promoted, { preview: false });
-        offerCodexReloadHint();
+        offerHistoryReloadHint();
         return;
       }
 
@@ -2335,7 +2290,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         async () => refreshHistoryIndex(false),
       );
       refreshViews({ clearSearch: true });
-      if (succeeded > 0) offerCodexReloadHint();
+      if (succeeded > 0) offerHistoryReloadHint();
     }),
   );
 
@@ -2653,10 +2608,6 @@ function isPathInsideRoot(fsPath: string, rootPath: string): boolean {
   return !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
-function uiText(ja: string, en: string): string {
-  return resolveUiLanguage() === "ja" ? ja : en;
-}
-
 type HistoryFilterChange =
   | { kind: "date"; date: DateScope }
   | { kind: "project"; projectCwd: string | null }
@@ -2745,9 +2696,9 @@ async function promptHistoryFilter(
       : [];
 
   const tagItemsBase: HistoryFilterPick[] = [
-    { label: uiText("タグ", "Tags"), kind: vscode.QuickPickItemKind.Separator },
-    { label: uiText("タグフィルターを編集", "Edit tag filter"), pickKind: "tags" as const, tags: current.tags },
-    { label: uiText("タグフィルターを解除", "Clear tag filter"), pickKind: "tags" as const, tags: [] },
+    { label: t("history.tags.separator"), kind: vscode.QuickPickItemKind.Separator },
+    { label: t("history.tags.editFilter"), pickKind: "tags" as const, tags: current.tags },
+    { label: t("history.tags.clearFilter"), pickKind: "tags" as const, tags: [] },
   ];
 
   const baseItems: HistoryFilterPick[] = [...dateItemsBase, ...projectItemsBase, ...sourceItemsBase, ...tagItemsBase];

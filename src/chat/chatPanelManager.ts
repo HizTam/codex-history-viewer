@@ -7,7 +7,7 @@ import { buildSessionSummary } from "../sessions/sessionSummary";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { collectLocalLinkBaseDirs, openLinkedFileInEditor, resolveLocalFileLinkTarget } from "../utils/localFileLinks";
 import { buildChatSessionModel } from "./chatModelBuilder";
-import { resolveUiLanguage, t } from "../i18n";
+import { t } from "../i18n";
 import { getConfig } from "../settings";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
@@ -396,7 +396,6 @@ export class ChatPanelManager {
   }
 
   private buildI18n(): Record<string, string> {
-    const uiText = (ja: string, en: string): string => (resolveUiLanguage() === "ja" ? ja : en);
     return {
       resumeInCodex: t("chat.button.resumeInCodex"),
       resumeInCodexTooltip: t("chat.tooltip.resumeInCodex"),
@@ -421,13 +420,13 @@ export class ChatPanelManager {
       detailsOff: t("chat.button.detailsOff"),
       detailsOnTooltip: t("chat.tooltip.detailsOn"),
       detailsOffTooltip: t("chat.tooltip.detailsOff"),
-      pageSearch: uiText("検索", "Find"),
-      pageSearchTooltip: uiText("ページ内検索を開く", "Open in-page search"),
-      pageSearchPlaceholder: uiText("このビュー内を検索", "Find in this view"),
-      pageSearchPrevTooltip: uiText("前の一致へ移動", "Previous match"),
-      pageSearchNextTooltip: uiText("次の一致へ移動", "Next match"),
-      pageSearchCloseTooltip: uiText("検索を閉じる", "Close search"),
-      pageSearchNoMatches: uiText("一致なし", "No matches"),
+      pageSearch: t("chat.pageSearch.title"),
+      pageSearchTooltip: t("chat.pageSearch.tooltip"),
+      pageSearchPlaceholder: t("chat.pageSearch.placeholder"),
+      pageSearchPrevTooltip: t("chat.pageSearch.prevTooltip"),
+      pageSearchNextTooltip: t("chat.pageSearch.nextTooltip"),
+      pageSearchCloseTooltip: t("chat.pageSearch.closeTooltip"),
+      pageSearchNoMatches: t("chat.pageSearch.noMatches"),
       copied: t("chat.toast.copied"),
       tool: t("chat.label.tool"),
       arguments: t("chat.label.arguments"),
@@ -437,31 +436,35 @@ export class ChatPanelManager {
       showLess: t("chat.button.showLess"),
       copyMessageTooltip: t("chat.tooltip.copyMessage"),
       copyCodeTooltip: t("chat.tooltip.copyCode"),
-      patchWrapOn: uiText("差分を折り返す", "Wrap diff"),
-      patchWrapOff: uiText("差分を横スクロール", "No-wrap diff"),
-      patchWrapOnTooltip: uiText("長い差分行を折り返して表示", "Wrap long diff lines"),
-      patchWrapOffTooltip: uiText("長い差分行を横スクロールで表示", "Keep diff lines on one row with horizontal scroll"),
-      patchJumpTooltip: uiText("該当行 {0} へ移動", "Jump to line {0}"),
-      patchGroupTitle: uiText("変更差分", "Changes"),
-      patchGroupCount: uiText("{0} 件の変更", "{0} changes"),
-      patchExpand: uiText("差分を展開", "Expand diff"),
-      patchCollapse: uiText("差分を折りたたむ", "Collapse diff"),
-      patchBefore: uiText("変更前", "Before"),
-      patchAfter: uiText("変更後", "After"),
-      patchNoDiff: uiText("差分はありません", "No diff available"),
-      patchMovedTo: uiText("移動先: {0}", "Moved to: {0}"),
+      expandCardWidthTooltip: t("chat.tooltip.expandCardWidth"),
+      restoreCardWidthTooltip: t("chat.tooltip.restoreCardWidth"),
+      patchWrapOn: t("chat.patch.wrapOn"),
+      patchWrapOff: t("chat.patch.wrapOff"),
+      patchWrapOnTooltip: t("chat.patch.wrapOnTooltip"),
+      patchWrapOffTooltip: t("chat.patch.wrapOffTooltip"),
+      patchJumpTooltip: t("chat.patch.jumpTooltip"),
+      patchGroupTitle: t("chat.patch.groupTitle"),
+      patchGroupCount: t("chat.patch.groupCount"),
+      patchExpand: t("chat.patch.expand"),
+      patchCollapse: t("chat.patch.collapse"),
+      patchBefore: t("chat.patch.before"),
+      patchAfter: t("chat.patch.after"),
+      patchNoDiff: t("chat.patch.noDiff"),
+      patchMovedTo: t("chat.patch.movedTo"),
+      jumpPrevDiff: t("chat.nav.prevDiff"),
+      jumpNextDiff: t("chat.nav.nextDiff"),
       jumpPrevUser: t("chat.nav.prevUser"),
       jumpNextUser: t("chat.nav.nextUser"),
       jumpPrevAssistant: t("chat.nav.prevAssistant"),
       jumpNextAssistant: t("chat.nav.nextAssistant"),
-      annotationTags: uiText("タグ", "Tags"),
-      annotationNote: uiText("メモ", "Note"),
-      annotationNone: uiText("なし", "None"),
-      annotationEdit: uiText("編集", "Edit"),
-      annotationFilterTag: uiText("このタグで履歴を絞り込む", "Filter history by this tag"),
-      annotationRemoveTag: uiText("このタグを削除", "Remove this tag"),
-      annotationShowMore: uiText("もっと見る", "Show more"),
-      annotationShowLess: uiText("閉じる", "Show less"),
+      annotationTags: t("chat.annotation.tags"),
+      annotationNote: t("chat.annotation.note"),
+      annotationNone: t("chat.annotation.none"),
+      annotationEdit: t("chat.annotation.edit"),
+      annotationFilterTag: t("chat.annotation.filterTag"),
+      annotationRemoveTag: t("chat.annotation.removeTag"),
+      annotationShowMore: t("chat.annotation.showMore"),
+      annotationShowLess: t("chat.annotation.showLess"),
     };
   }
 

@@ -570,12 +570,18 @@ mark.pageSearchMatch-active {
 
 .bubble {
   max-width: min(900px, 92%);
+  box-sizing: border-box;
   border: 1px solid var(--chv-border);
   border-radius: 12px;
   padding: 10px 12px;
   line-height: 1.45;
   white-space: normal;
   overflow-wrap: anywhere;
+}
+
+.bubble.bubble-wide {
+  width: 100%;
+  max-width: 100%;
 }
 
 .bubble.user {
@@ -630,10 +636,21 @@ mark.pageSearchMatch-active {
   gap: 8px;
 }
 
+.toolCardHeaderActions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+  max-width: 55%;
+}
+
 .toolCardTitleWrap {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -799,6 +816,10 @@ mark.pageSearchMatch-active {
   flex-wrap: wrap;
   gap: 6px;
   flex-shrink: 0;
+}
+
+.patchGroupHeaderActions {
+  max-width: 62%;
 }
 
 .patchEntryList {
@@ -1173,6 +1194,7 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
 }
 
 .tag {
@@ -1200,11 +1222,24 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
   flex-shrink: 0;
 }
 
+.cardHeaderActions {
+  justify-content: flex-end;
+}
+
 .messageNav .navBtn {
   padding: 2px 5px;
 }
 
 .messageNav .navBtn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.cardWidthBtn {
+  padding: 2px 5px;
+}
+
+.cardWidthBtn svg {
   width: 12px;
   height: 12px;
 }
@@ -1557,5 +1592,14 @@ details > summary {
 
   .patchEntryCounts {
     width: 100%;
+  }
+
+  .toolCardHeader {
+    flex-wrap: wrap;
+  }
+
+  .toolCardHeaderActions,
+  .patchGroupHeaderActions {
+    max-width: 100%;
   }
 }

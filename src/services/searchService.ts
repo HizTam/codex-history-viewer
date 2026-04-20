@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig } from "../settings";
 import type { HistoryIndex, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
-import { resolveUiLanguage, t } from "../i18n";
+import { t } from "../i18n";
 import { safeDisplayPath, singleLineSnippet } from "../utils/textUtils";
 import { SearchRootNode, SearchSessionNode, type SearchHit } from "../tree/treeNodes";
 import { getDateScopeValue, sanitizeDateScope, type DateScope } from "../types/dateScope";
@@ -44,8 +44,6 @@ export interface SearchFlowResult {
   request: SearchRequest;
 }
 
-const uiText = (ja: string, en: string): string => (resolveUiLanguage() === "ja" ? ja : en);
-
 // Runs search using user input or a preset request.
 export async function runSearchFlow(
   index: HistoryIndex,
@@ -72,7 +70,7 @@ export async function runSearchFlow(
   if (request) {
     queryInput = typeof request.queryInput === "string" ? request.queryInput.trim() : "";
     if (!queryInput) {
-      void vscode.window.showErrorMessage(uiText("保存済み検索リクエストが空です。", "Saved search request is empty."));
+      void vscode.window.showErrorMessage(t("search.error.savedRequestEmpty"));
       return null;
     }
     roleFilter = sanitizeRoleFilter(request.roleFilter);
@@ -88,9 +86,7 @@ export async function runSearchFlow(
 
   const compiled = compileSearchQuery(queryInput, config.searchCaseSensitive);
   if (!compiled) {
-    void vscode.window.showErrorMessage(
-      uiText("検索クエリの形式が不正です。正規表現または論理式を確認してください。", "Invalid search query format. Check regex or boolean expression."),
-    );
+    void vscode.window.showErrorMessage(t("search.error.invalidQueryFormatDetailed"));
     return null;
   }
 

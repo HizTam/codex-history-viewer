@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1] - 2026-04-20
+
+### Added
+
+- Added per-card full-width expansion controls in the chat viewer for messages, tool cards, notes, and grouped diffs.
+- Added previous/next navigation controls to grouped diff cards.
+
+### Changed
+
+- Clarified localization ownership by keeping VS Code manifest strings in `package.nls.*` and runtime/Webview strings in `l10n/bundle.l10n.*`.
+
+### Fixed
+
+- Fixed wording inconsistencies around pinned-session labels, Codex/Claude resume messages, card-width tooltips, and history reload messages.
+
 ## [1.3.0] - 2026-04-18
 
 ### Added

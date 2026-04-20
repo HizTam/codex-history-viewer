@@ -6,7 +6,7 @@ import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import { toYmdInTimeZone } from "../utils/dateUtils";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { renderTranscript } from "../transcript/transcriptRenderer";
-import { resolveUiLanguage } from "../i18n";
+import { t } from "../i18n";
 
 export interface ExportSessionsResult {
   destinationDir: string;
@@ -66,7 +66,7 @@ export async function exportSessions(params: {
     canSelectMany: false,
     canSelectFolders: true,
     canSelectFiles: false,
-    openLabel: localizeDialogLabel("Choose export destination", "エクスポート先を選択"),
+    openLabel: t("import.dialog.exportDestination"),
   });
   if (!picked || picked.length === 0) return null;
   const baseDir = picked[0]!.fsPath;
@@ -141,7 +141,7 @@ export async function exportMaskedTranscripts(params: {
     canSelectMany: false,
     canSelectFolders: true,
     canSelectFiles: false,
-    openLabel: localizeDialogLabel("Choose sanitized export destination", "サニタイズ済みエクスポート先を選択"),
+    openLabel: t("import.dialog.sanitizedExportDestination"),
   });
   if (!picked || picked.length === 0) return null;
   const baseDir = picked[0]!.fsPath;
@@ -184,7 +184,7 @@ export async function importSessions(params: {
     canSelectMany: false,
     canSelectFolders: true,
     canSelectFiles: false,
-    openLabel: localizeDialogLabel("Choose import source", "インポート元を選択"),
+    openLabel: t("import.dialog.importSource"),
   });
   if (!picked || picked.length === 0) return null;
   const sourceDir = picked[0]!.fsPath;
@@ -613,8 +613,4 @@ function isValidExportManifest(value: unknown): value is ExportManifestV1 {
     if (sessionId !== undefined && typeof sessionId !== "string") return false;
   }
   return true;
-}
-
-function localizeDialogLabel(en: string, ja: string): string {
-  return resolveUiLanguage() === "ja" ? ja : en;
 }

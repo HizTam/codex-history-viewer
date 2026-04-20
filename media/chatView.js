@@ -38,6 +38,10 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.2a.75.75 0 0 1 .53.22l4.1 4.1a.75.75 0 1 1-1.06 1.06L8 4.99 4.43 8.58a.75.75 0 1 1-1.06-1.06l4.1-4.1A.75.75 0 0 1 8 3.2Z"/></svg>';
   const NAV_DOWN_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 12.8a.75.75 0 0 1-.53-.22l-4.1-4.1a.75.75 0 0 1 1.06-1.06L8 11.01l3.57-3.59a.75.75 0 0 1 1.06 1.06l-4.1 4.1A.75.75 0 0 1 8 12.8Z"/></svg>';
+  const CARD_EXPAND_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.75 2h3a.75.75 0 0 1 0 1.5H5.56l2.22 2.22a.75.75 0 1 1-1.06 1.06L4.5 4.56v1.19a.75.75 0 0 1-1.5 0v-3A.75.75 0 0 1 3.75 2Zm5.5 0h3a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0V4.56L9.28 6.78a.75.75 0 1 1-1.06-1.06l2.22-2.22H9.25a.75.75 0 0 1 0-1.5ZM7.78 10.28 5.56 12.5h1.19a.75.75 0 0 1 0 1.5h-3A.75.75 0 0 1 3 13.25v-3a.75.75 0 0 1 1.5 0v1.19l2.22-2.22a.75.75 0 1 1 1.06 1.06Zm1.44 0a.75.75 0 0 1 1.06-1.06l2.22 2.22v-1.19a.75.75 0 0 1 1.5 0v3a.75.75 0 0 1-.75.75h-3a.75.75 0 0 1 0-1.5h1.19l-2.22-2.22Z"/></svg>';
+  const CARD_RESTORE_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a.75.75 0 0 1 .75.75v3A.75.75 0 0 1 6.75 6h-3a.75.75 0 0 1 0-1.5h1.19L2.72 2.28a.75.75 0 1 1 1.06-1.06L6 3.44V2.75A.75.75 0 0 1 6.75 2Zm2.5 0a.75.75 0 0 1 .75.75v.69l2.22-2.22a.75.75 0 1 1 1.06 1.06L11.06 4.5h1.19a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1-.75-.75v-3A.75.75 0 0 1 9.25 2ZM3.75 10h3a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0v-.69l-2.22 2.22a.75.75 0 1 1-1.06-1.06L4.94 12H3.75a.75.75 0 0 1 0-1.5Zm5.5 0h3a.75.75 0 0 1 0 1.5h-1.19l2.22 2.22a.75.75 0 1 1-1.06 1.06L10 12.56v.69a.75.75 0 0 1-1.5 0v-3a.75.75 0 0 1 .75-.75Z"/></svg>';
   const RESUME_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.5 2.5a.75.75 0 0 1 .75.75v2.53A5.25 5.25 0 1 1 2.75 8a.75.75 0 0 1 1.5 0 3.75 3.75 0 1 0 2-3.31v2.06a.75.75 0 0 1-1.28.53L2.7 5.03a.75.75 0 0 1 0-1.06l2.27-2.25a.75.75 0 0 1 .53-.22Z"/></svg>';
   const PIN_ICON_SVG =
@@ -142,8 +146,10 @@
   let expandedNote = false;
   let selectedMessageIndex = null;
   let messageNavMap = new Map();
+  let patchGroupNavMap = new Map();
   let expandedMessageIndexes = new Set();
   let expandedPatchEntries = new Set();
+  let wideTimelineCardKeys = new Set();
   let wrappedPatchHunkKeys = new Set();
   let isPinned = false;
   let pageSearchMatches = [];
@@ -346,6 +352,7 @@
       const prevSelectedMessageIndex = selectedMessageIndex;
       const prevExpandedMessageIndexes = new Set(expandedMessageIndexes);
       const prevExpandedPatchEntries = new Set(expandedPatchEntries);
+      const prevWideTimelineCardKeys = new Set(wideTimelineCardKeys);
 
       model = msg.model || null;
       i18n = msg.i18n || {};
@@ -370,6 +377,7 @@
           : null;
       expandedMessageIndexes = isRestore ? prevExpandedMessageIndexes : new Set();
       expandedPatchEntries = isRestore ? prevExpandedPatchEntries : new Set();
+      wideTimelineCardKeys = isRestore ? prevWideTimelineCardKeys : new Set();
       if (!isRestore && typeof msg.revealMessageIndex === "number") {
         expandedMessageIndexes.add(msg.revealMessageIndex);
       }
@@ -975,9 +983,10 @@
     const items = Array.isArray(model.items) ? model.items : [];
     // Build navigation metadata between messages before rendering.
     messageNavMap = buildMessageNavMap(items);
-    for (const item of items) {
+    patchGroupNavMap = buildPatchGroupNavMap(items);
+    for (const [itemIndex, item] of items.entries()) {
       if (!item || typeof item !== "object") continue;
-      const rendered = renderItem(item);
+      const rendered = renderItem(item, itemIndex);
       if (rendered) timelineEl.appendChild(rendered);
     }
     schedulePatchLayoutSync();
@@ -1084,14 +1093,15 @@
     annotationEl.appendChild(wrap);
   }
 
-  function renderItem(item) {
-    if (item.type === "message") return renderMessage(item);
-    if (item.type === "patchGroup") return renderPatchGroup(item);
-    if (item.type === "tool") return shouldRenderToolCard() ? renderTool(item) : null;
-    return showDetails ? renderNote(item) : null;
+  function renderItem(item, itemIndex) {
+    const cardKey = buildTimelineCardKey(item, itemIndex);
+    if (item.type === "message") return renderMessage(item, cardKey);
+    if (item.type === "patchGroup") return renderPatchGroup(item, itemIndex, cardKey);
+    if (item.type === "tool") return shouldRenderToolCard() ? renderTool(item, cardKey) : null;
+    return showDetails ? renderNote(item, cardKey) : null;
   }
 
-  function renderMessage(item) {
+  function renderMessage(item, cardKey) {
     const role = item.role === "user" || item.role === "assistant" || item.role === "developer" ? item.role : "assistant";
     if (role !== "assistant" && !showDetails && item.isContext) return null;
 
@@ -1102,6 +1112,7 @@
     const row = el("div", { className: `row ${role}` });
 
     const bubble = el("div", { className: `bubble ${role}` });
+    applyTimelineCardWidthState(bubble, cardKey);
     if (typeof item.messageIndex === "number") {
       bubble.id = `msg-${item.messageIndex}`;
       bubble.dataset.messageIndex = String(item.messageIndex);
@@ -1130,15 +1141,16 @@
     }
     metaLine.appendChild(metaTags);
 
+    const headerActions = el("div", { className: "messageNav cardHeaderActions" });
     if ((role === "user" || role === "assistant") && typeof item.messageIndex === "number") {
       const nav = messageNavMap.get(item.messageIndex);
       if (nav && nav.showNav) {
-        const navActions = el("div", { className: "messageNav" });
-        navActions.appendChild(createMessageNavButton("prev", nav.role, nav.prevIndex));
-        navActions.appendChild(createMessageNavButton("next", nav.role, nav.nextIndex));
-        metaLine.appendChild(navActions);
+        headerActions.appendChild(createMessageNavButton("prev", nav.role, nav.prevIndex));
+        headerActions.appendChild(createMessageNavButton("next", nav.role, nav.nextIndex));
       }
     }
+    headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
+    metaLine.appendChild(headerActions);
     bubble.appendChild(metaLine);
 
     const collapseState = resolveMessageCollapseState(item, role, textToRender);
@@ -1248,9 +1260,12 @@
     if (target) target.scrollIntoView({ block: "nearest" });
   }
 
-  function renderPatchGroup(item) {
+  function renderPatchGroup(item, itemIndex, cardKey) {
     const row = el("div", { className: "row tool" });
     const bubble = el("div", { className: "bubble tool toolCard patchGroupCard toolCard-kind-edit" });
+    applyTimelineCardWidthState(bubble, cardKey);
+    bubble.id = `patch-group-${itemIndex}`;
+    bubble.dataset.patchGroupIndex = String(itemIndex);
 
     const header = el("div", { className: "toolCardHeader" });
     const titleWrap = el("div", { className: "toolCardTitleWrap" });
@@ -1263,10 +1278,19 @@
     titleWrap.appendChild(title);
     header.appendChild(titleWrap);
 
+    const headerActions = el("div", { className: "toolCardHeaderActions patchGroupHeaderActions" });
     const badge = el("div", { className: "patchGroupSummary" });
     badge.appendChild(renderSignedCountBadge(item.totalAdded, "add"));
     badge.appendChild(renderSignedCountBadge(item.totalRemoved, "remove"));
-    header.appendChild(badge);
+    headerActions.appendChild(badge);
+
+    const nav = patchGroupNavMap.get(itemIndex) || { prevIndex: null, nextIndex: null };
+    const navActions = el("div", { className: "messageNav patchGroupNav" });
+    navActions.appendChild(createPatchGroupNavButton("prev", nav.prevIndex));
+    navActions.appendChild(createPatchGroupNavButton("next", nav.nextIndex));
+    headerActions.appendChild(navActions);
+    headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
+    header.appendChild(headerActions);
     bubble.appendChild(header);
 
     if (typeof item.timestampIso === "string" || typeof item.turnId === "string") {
@@ -1627,10 +1651,11 @@
     return PATCH_LANGUAGE_BY_EXTENSION[ext] || "";
   }
 
-  function renderTool(item) {
+  function renderTool(item, cardKey) {
     const row = el("div", { className: "row tool" });
     const presentation = resolveToolPresentation(item);
     const bubble = el("div", { className: "bubble tool toolCard" });
+    applyTimelineCardWidthState(bubble, cardKey);
     bubble.classList.add(`toolCard-kind-${presentation.toolKind}`);
     if (presentation.severity) bubble.classList.add(`toolCard-severity-${presentation.severity}`);
     if (showDetails) bubble.classList.add("toolCard-expanded");
@@ -1644,11 +1669,14 @@
     title.textContent = presentation.title;
     titleWrap.appendChild(title);
     header.appendChild(titleWrap);
+    const headerActions = el("div", { className: "toolCardHeaderActions" });
     if (presentation.badgeText) {
       const badge = el("span", { className: "toolCardBadge" });
       badge.textContent = presentation.badgeText;
-      header.appendChild(badge);
+      headerActions.appendChild(badge);
     }
+    headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
+    header.appendChild(headerActions);
     bubble.appendChild(header);
 
     const primary = el("div", { className: "toolCardPrimary" });
@@ -1769,11 +1797,17 @@
     container.appendChild(details);
   }
 
-  function renderNote(item) {
+  function renderNote(item, cardKey) {
     const row = el("div", { className: "row tool" });
     const bubble = el("div", { className: "bubble tool" });
+    applyTimelineCardWidthState(bubble, cardKey);
     const title = el("div", { className: "metaLine" });
-    title.textContent = item && item.title ? String(item.title) : "note";
+    const titleText = el("span", {});
+    titleText.textContent = item && item.title ? String(item.title) : "note";
+    title.appendChild(titleText);
+    const headerActions = el("div", { className: "messageNav cardHeaderActions" });
+    headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
+    title.appendChild(headerActions);
     bubble.appendChild(title);
     if (item && item.text) {
       const textBlock = el("div", { className: "textBlock" });
@@ -1963,6 +1997,54 @@
     return true;
   }
 
+  function buildTimelineCardKey(item, itemIndex) {
+    const type = item && typeof item.type === "string" && item.type.trim() ? item.type.trim() : "item";
+    const safeIndex = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex : 0;
+    if (type === "message" && item && typeof item.messageIndex === "number") return `message:${item.messageIndex}`;
+    if (type === "patchGroup") return `patchGroup:${safeIndex}`;
+    if (type === "tool") {
+      const callId = item && typeof item.callId === "string" && item.callId.trim() ? item.callId.trim() : "";
+      if (callId) return `tool:${callId}`;
+    }
+    return `${type}:${safeIndex}`;
+  }
+
+  function applyTimelineCardWidthState(bubble, cardKey) {
+    if (!(bubble instanceof HTMLElement)) return;
+    const key = typeof cardKey === "string" ? cardKey : "";
+    if (key) bubble.dataset.cardKey = key;
+    bubble.classList.toggle("bubble-wide", key.length > 0 && wideTimelineCardKeys.has(key));
+  }
+
+  function createTimelineCardWidthButton(cardKey, bubble) {
+    const btn = el("button", { type: "button", className: "iconBtn cardWidthBtn" });
+    const key = typeof cardKey === "string" ? cardKey : "";
+    syncTimelineCardWidthButton(btn, key.length > 0 && wideTimelineCardKeys.has(key));
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!key) return;
+      const expanded = !wideTimelineCardKeys.has(key);
+      if (expanded) wideTimelineCardKeys.add(key);
+      else wideTimelineCardKeys.delete(key);
+      if (bubble instanceof HTMLElement) bubble.classList.toggle("bubble-wide", expanded);
+      syncTimelineCardWidthButton(btn, expanded);
+      schedulePatchLayoutSync();
+    });
+    return btn;
+  }
+
+  function syncTimelineCardWidthButton(button, expanded) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    button.innerHTML = expanded ? CARD_RESTORE_ICON_SVG : CARD_EXPAND_ICON_SVG;
+    const label = expanded
+      ? getSafeUiText(i18n.restoreCardWidthTooltip, "元の幅に戻す", "Restore card width")
+      : getSafeUiText(i18n.expandCardWidthTooltip, "カードを最大幅に広げる", "Expand card to full width");
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-pressed", expanded ? "true" : "false");
+  }
+
   function buildMessageNavMap(items) {
     const navMap = new Map();
     const indexesByRole = { user: [], assistant: [] };
@@ -1991,6 +2073,26 @@
     return navMap;
   }
 
+  function buildPatchGroupNavMap(items) {
+    const navMap = new Map();
+    const patchIndexes = [];
+    for (const [itemIndex, item] of items.entries()) {
+      if (!item || typeof item !== "object") continue;
+      if (item.type !== "patchGroup") continue;
+      patchIndexes.push(itemIndex);
+      navMap.set(itemIndex, { prevIndex: null, nextIndex: null });
+    }
+
+    for (let i = 0; i < patchIndexes.length; i += 1) {
+      const itemIndex = patchIndexes[i];
+      navMap.set(itemIndex, {
+        prevIndex: i > 0 ? patchIndexes[i - 1] : null,
+        nextIndex: i + 1 < patchIndexes.length ? patchIndexes[i + 1] : null,
+      });
+    }
+    return navMap;
+  }
+
   function createMessageNavButton(direction, role, targetIndex) {
     const btn = el("button", { type: "button", className: "iconBtn navBtn" });
     const label = getMessageNavLabel(direction, role);
@@ -2005,6 +2107,27 @@
       e.preventDefault();
       e.stopPropagation();
       jumpToMessage(targetIndex);
+    });
+    return btn;
+  }
+
+  function createPatchGroupNavButton(direction, targetIndex) {
+    const btn = el("button", { type: "button", className: "iconBtn navBtn" });
+    const label =
+      direction === "prev"
+        ? getSafeUiText(i18n.jumpPrevDiff, "前の差分へ移動", "Jump to previous diff")
+        : getSafeUiText(i18n.jumpNextDiff, "次の差分へ移動", "Jump to next diff");
+    btn.title = label;
+    btn.setAttribute("aria-label", label);
+    btn.innerHTML = direction === "prev" ? NAV_UP_ICON_SVG : NAV_DOWN_ICON_SVG;
+    if (typeof targetIndex !== "number") {
+      btn.disabled = true;
+      return btn;
+    }
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      jumpToPatchGroup(targetIndex);
     });
     return btn;
   }
@@ -2028,6 +2151,17 @@
     if (!elTarget) return;
     elTarget.classList.add("highlight");
     elTarget.scrollIntoView({ block: "center" });
+  }
+
+  function jumpToPatchGroup(itemIndex) {
+    clearHighlights();
+    const elTarget = document.getElementById(`patch-group-${itemIndex}`);
+    if (!elTarget) return;
+    elTarget.classList.add("highlight");
+    elTarget.scrollIntoView({ block: "center" });
+    setTimeout(() => {
+      elTarget.classList.remove("highlight");
+    }, 1800);
   }
 
   function revealMessage(messageIndex) {

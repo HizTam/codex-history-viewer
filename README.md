@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **1.3.0** (2026-04-18).
+Latest release: **1.3.1** (2026-04-20).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -34,7 +34,8 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Chat viewer renders inline and block equations with KaTeX-compatible math support
 - Chat viewer supports tool-specific cards with a configurable display mode (`detailsOnly` / `compactCards`)
 - Chat viewer can softly fold long `user` and `assistant` messages independently, while **Show details** always expands them fully
-- Chat viewer shows grouped file-change cards from patch activity, with collapsible side-by-side diffs, per-hunk wrap toggles, syntax highlighting, and jump-to-line actions
+- Chat viewer cards can be expanded individually to full width when a message, tool result, or diff needs more horizontal space
+- Chat viewer shows grouped file-change cards from patch activity, with collapsible side-by-side diffs, per-hunk wrap toggles, syntax highlighting, previous/next diff navigation, and jump-to-line actions
 - Chat viewer includes a right-side in-page search sidebar with match counts, result snippets, line hints for diffs, direct result navigation, and resizable overlay behavior
 - Chat viewer toolbar includes quick scroll actions (top / bottom) and automatically switches label buttons to icon-only mode when the header gets narrow
 - Reload in the chat viewer preserves scroll/selection and refreshes the tab title using the active history date basis
@@ -128,14 +129,12 @@ For the full command list with per-command descriptions, see:
 - Multi-select export preserves `YYYY/MM/DD` hierarchy for each source session.
 - Import recursively scans the selected source folder for `.jsonl` files.
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
-- After successful import or promote (copy-to-today), a hint is shown to reload Codex CLI history if Codex is running.
 
-## What's New in 1.3.0
+## What's New in 1.3.1
 
-- Added KaTeX-based equation rendering in the chat viewer for inline and block math expressions.
-- Added `codexHistoryViewer.history.titleSource` to switch between generated titles and native titles when available.
-- Added native title support for Codex (`session_index.jsonl`) and Claude (`custom-title`, `ai-title`, rename, and summary), with fallback to generated titles.
-- Added a lightweight Codex title cache so older native titles can remain visible even after they disappear from the current Codex session index.
+- Added per-card full-width expansion controls in the chat viewer.
+- Added previous/next navigation controls for grouped diff cards.
+- Clarified localization ownership between VS Code manifest strings (`package.nls.*`) and runtime/Webview strings (`l10n/bundle.l10n.*`).
 
 ## Changelog
 
