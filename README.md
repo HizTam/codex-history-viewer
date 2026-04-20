@@ -1,11 +1,27 @@
 # Codex History Viewer
 
-A VS Code extension to browse, search, tag, import/export, and manage local Codex CLI / Claude Code session history, then resume selected sessions directly in the related VS Code extension.
+Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
+
 Latest release: **1.3.0** (2026-04-18).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
-## Features
+## Why Use This Extension?
+
+Codex and Claude Code sessions can become hard to revisit once they are no longer active in the editor. Codex History Viewer keeps those local session files useful by turning them into a searchable, chat-like history browser inside VS Code.
+
+Use it to find past prompts, reuse useful answers, inspect file changes, organize sessions with tags and notes, and hand off past sessions to the official Codex and Claude Code VS Code extensions for resume.
+
+## Highlights
+
+- Revisit past Codex CLI and Claude Code sessions that are no longer easy to access from the active editor flow
+- Browse sessions in a year / month / day tree
+- Search across prompts, responses, tool output, tags, and notes
+- View sessions in a chat-like UI with Markdown, code highlighting, math rendering, and file-change diffs
+- Organize sessions with pins, tags, notes, saved searches, and filters
+- Resume past sessions through the official Codex and Claude Code VS Code extensions
+
+## Detailed Features
 
 - Five views: **Control**, **Pinned**, **History**, **Search**, and **Status**
 - Optional multi-source history support (**Codex** / **Claude**) with source-aware filtering
@@ -57,6 +73,7 @@ Latest release: **1.3.0** (2026-04-18).
 4. Select a session to open a preview, or run **Open Session (Chat)** to open it normally.
 5. Run **Search...** and refine with roles, query syntax, presets, and search tag filters.
 6. Use context menus or chat header actions to edit tags/notes and run bulk tag operations when needed.
+7. Resume a session through the official Codex or Claude Code extension when you want to continue the work.
 
 ## Commands
 
