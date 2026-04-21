@@ -1502,18 +1502,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexHistoryViewer.searchRunPresetById", async (presetIdArg?: unknown) => {
-      const presetId =
-        typeof presetIdArg === "string"
-          ? presetIdArg
-          : presetIdArg && typeof presetIdArg === "object" && typeof (presetIdArg as { id?: unknown }).id === "string"
-            ? String((presetIdArg as { id: string }).id)
-            : "";
-      await runSearchPresetById(presetId);
-    }),
-  );
-
-  context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.searchRunPreset", async () => {
       const presets = searchPresetStore.getAll();
       if (presets.length === 0) {

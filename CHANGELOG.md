@@ -119,6 +119,37 @@ All notable changes to this project will be documented in this file.
   - Session roots are now shown per enabled source (`Codex` / `Claude`).
   - Pinned count is now aggregated only from enabled sources.
 
+## [1.1.0] - 2026-03-05
+
+### Added
+
+- Optional Claude history support (in addition to Codex history).
+- Chat Webview tab icons now switch by session source (`Codex` / `Claude`).
+- New source settings:
+  - `codexHistoryViewer.sources.enabled`
+  - `codexHistoryViewer.claude.sessionsRoot`
+- New command to continue Claude sessions:
+  - `Resume in Claude Code`
+- Source filter actions for History:
+  - `Show Codex History Only`
+  - `Show Claude History Only`
+  - `Show All Sources`
+
+### Changed
+
+- `codexHistoryViewer.sources.enabled` default changed to `["codex"]`.
+- Source filter behavior is now locked when only one source is enabled (`codex` only or `claude` only).
+- Pinned view now follows the active source filter consistently, including missing pinned entries.
+- README command list now uses the exact command label `Refresh All`.
+- Updated README to document:
+  - how to enable Claude from **Codex History Viewer › Sources: Enabled**
+  - when to run **Control → Maintenance → Rebuild Cache**
+
+### Fixed
+
+- Fixed compact user rendering so transport tags are hidden only when they are standalone metadata.
+- Added line-break normalization after transport tag closing tokens to improve compact user message rendering.
+
 ## [1.0.1] - 2026-03-04
 
 ### Added

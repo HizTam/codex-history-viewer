@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -35,61 +35,6 @@
     "url": "https://github.com/hiztam/codex-history-viewer"
   },
   "homepage": "https://github.com/hiztam/codex-history-viewer",
-  "activationEvents": [
-    "onView:codexHistoryViewer.controlView",
-    "onView:codexHistoryViewer.pinnedView",
-    "onView:codexHistoryViewer.historyView",
-    "onView:codexHistoryViewer.searchView",
-    "onView:codexHistoryViewer.statusView",
-    "onCommand:codexHistoryViewer.refresh",
-    "onCommand:codexHistoryViewer.refreshPinned",
-    "onCommand:codexHistoryViewer.refreshHistoryPane",
-    "onCommand:codexHistoryViewer.refreshStatusPane",
-    "onCommand:codexHistoryViewer.search",
-    "onCommand:codexHistoryViewer.searchConfigureDefaultRoles",
-    "onCommand:codexHistoryViewer.searchRerun",
-    "onCommand:codexHistoryViewer.searchClearResults",
-    "onCommand:codexHistoryViewer.searchFilterByTag",
-    "onCommand:codexHistoryViewer.clearSearchTagFilter",
-    "onCommand:codexHistoryViewer.openSession",
-    "onCommand:codexHistoryViewer.openSessionMarkdown",
-    "onCommand:codexHistoryViewer.copyResumePrompt",
-    "onCommand:codexHistoryViewer.copyStatusPath",
-    "onCommand:codexHistoryViewer.resumeSessionInCodex",
-    "onCommand:codexHistoryViewer.openSettings",
-    "onCommand:codexHistoryViewer.promoteSession",
-    "onCommand:codexHistoryViewer.pinSession",
-    "onCommand:codexHistoryViewer.unpinSession",
-    "onCommand:codexHistoryViewer.deleteSessions",
-    "onCommand:codexHistoryViewer.rebuildCache",
-    "onCommand:codexHistoryViewer.emptyTrash",
-    "onCommand:codexHistoryViewer.filterHistory",
-    "onCommand:codexHistoryViewer.filterHistoryByTag",
-    "onCommand:codexHistoryViewer.filterHistoryCurrentProject",
-    "onCommand:codexHistoryViewer.clearHistoryFilter",
-    "onCommand:codexHistoryViewer.clearHistoryTagFilter",
-    "onCommand:codexHistoryViewer.filterPinnedByTag",
-    "onCommand:codexHistoryViewer.clearPinnedTagFilter",
-    "onCommand:codexHistoryViewer.debugInfo",
-    "onCommand:codexHistoryViewer.exportSessions",
-    "onCommand:codexHistoryViewer.importSessions",
-    "onCommand:codexHistoryViewer.searchRunPreset",
-    "onCommand:codexHistoryViewer.searchSavePreset",
-    "onCommand:codexHistoryViewer.searchDeletePreset",
-    "onCommand:codexHistoryViewer.cleanupMissingPins",
-    "onCommand:codexHistoryViewer.searchRunPresetById",
-    "onCommand:codexHistoryViewer.editSessionAnnotation",
-    "onCommand:codexHistoryViewer.renameTagGlobally",
-    "onCommand:codexHistoryViewer.deleteTagsGlobally",
-    "onCommand:codexHistoryViewer.undoLastAction",
-    "onCommand:codexHistoryViewer.resumeSessionInClaude",
-    "onCommand:codexHistoryViewer.filterHistorySourceCodex",
-    "onCommand:codexHistoryViewer.filterHistorySourceClaude",
-    "onCommand:codexHistoryViewer.clearHistorySourceFilter",
-    "onCommand:codexHistoryViewer.toggleHistorySourceCodex",
-    "onCommand:codexHistoryViewer.toggleHistorySourceClaude",
-    "onCommand:codexHistoryViewer.cycleHistorySourceFilter"
-  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -105,25 +50,30 @@
         {
           "id": "codexHistoryViewer.controlView",
           "name": "%view.control%",
-          "visibility": "collapsed"
+          "visibility": "collapsed",
+          "icon": "resources/codex-history-viewer.svg"
         },
         {
           "id": "codexHistoryViewer.pinnedView",
           "name": "%view.pinned%",
-          "visibility": "collapsed"
+          "visibility": "collapsed",
+          "icon": "resources/codex-history-viewer.svg"
         },
         {
           "id": "codexHistoryViewer.historyView",
-          "name": "%view.history%"
+          "name": "%view.history%",
+          "icon": "resources/codex-history-viewer.svg"
         },
         {
           "id": "codexHistoryViewer.searchView",
-          "name": "%view.search%"
+          "name": "%view.search%",
+          "icon": "resources/codex-history-viewer.svg"
         },
         {
           "id": "codexHistoryViewer.statusView",
           "name": "%view.status%",
-          "visibility": "collapsed"
+          "visibility": "collapsed",
+          "icon": "resources/codex-history-viewer.svg"
         }
       ]
     },
