@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -197,6 +197,18 @@
         "title": "%cmd.filterHistoryCurrentProject%",
         "category": "%cmd.category%",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "codexHistoryViewer.showHistoryLatestView",
+        "title": "%cmd.showHistoryLatestView%",
+        "category": "%cmd.category%",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "codexHistoryViewer.showHistoryDateView",
+        "title": "%cmd.showHistoryDateView%",
+        "category": "%cmd.category%",
+        "icon": "$(calendar)"
       },
       {
         "command": "codexHistoryViewer.openSession",
@@ -546,6 +558,26 @@
           "light": "resources/icons/light/tag-clear.svg",
           "dark": "resources/icons/dark/tag-clear.svg"
         }
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.showHistoryLatestView",
+        "title": "最新順に切り替え",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.showHistoryLatestView",
+        "title": "Show Latest First",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.showHistoryDateView",
+        "title": "日付別に切り替え",
+        "icon": "$(calendar)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.showHistoryDateView",
+        "title": "Show by Date",
+        "icon": "$(calendar)"
       },
       {
         "command": "codexHistoryViewer.ui.ja.openSettings",
@@ -1175,6 +1207,22 @@
           "when": "false"
         },
         {
+          "command": "codexHistoryViewer.ui.ja.showHistoryLatestView",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.showHistoryLatestView",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.showHistoryDateView",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.showHistoryDateView",
+          "when": "false"
+        },
+        {
           "command": "codexHistoryViewer.ui.cycleHistorySourceAll",
           "when": "false"
         },
@@ -1277,6 +1325,26 @@
           "command": "codexHistoryViewer.ui.en.refreshHistoryPane",
           "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.showHistoryLatestView",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyViewMode == 'date' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@10"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.showHistoryLatestView",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyViewMode == 'date' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@10"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.showHistoryDateView",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyViewMode == 'latest' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@10"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.showHistoryDateView",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyViewMode == 'latest' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@10"
         },
         {
           "command": "codexHistoryViewer.ui.ja.refreshStatusPane",

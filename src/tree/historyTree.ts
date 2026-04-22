@@ -11,11 +11,14 @@ import { truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
 import { appendSessionTooltipDateLines } from "./sessionTooltipUtils";
 
+export type HistoryViewMode = "date" | "latest";
+
 // Provides the history tree (year -> month -> day -> session).
 export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly historyService: HistoryService;
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;
+  private viewMode: HistoryViewMode;
   private filter: DateScope;
   private projectCwd: string | null;
   private sourceFilter: SessionSourceFilter;
@@ -29,6 +32,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     historyService: HistoryService,
     pinStore: PinStore,
     annotationStore: SessionAnnotationStore,
+    viewMode: HistoryViewMode,
     filter: DateScope,
     projectCwd: string | null,
     sourceFilter: SessionSourceFilter,
@@ -38,6 +42,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.historyService = historyService;
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
+    this.viewMode = viewMode;
     this.filter = filter;
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
@@ -58,6 +63,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public setFilter(filter: DateScope): void {
     this.filter = filter;
+  }
+
+  public setViewMode(viewMode: HistoryViewMode): void {
+    this.viewMode = normalizeHistoryViewMode(viewMode);
   }
 
   public setProjectFilter(projectCwd: string | null): void {
@@ -101,8 +110,29 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     return this.tagFilter.some((tag) => tagKeys.has(normalizeTagKey(tag)));
   }
 
+  private matchesDateFilter(session: SessionSummary): boolean {
+    const filter = this.filter;
+    switch (filter.kind) {
+      case "all":
+        return true;
+      case "year":
+        return session.localDate.startsWith(`${filter.yyyy}-`);
+      case "month":
+        return session.localDate.startsWith(`${filter.ym}-`);
+      case "day":
+        return session.localDate === filter.ymd;
+      default:
+        return false;
+    }
+  }
+
   private matchesSession(session: SessionSummary): boolean {
-    return this.matchesProject(session) && this.matchesSource(session) && this.matchesTags(session);
+    return (
+      this.matchesDateFilter(session) &&
+      this.matchesProject(session) &&
+      this.matchesSource(session) &&
+      this.matchesTags(session)
+    );
   }
 
   private matchesSource(session: SessionSummary): boolean {
@@ -140,7 +170,8 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private sessionToTreeItem(session: SessionSummary, pinned: boolean): vscode.TreeItem {
     // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
     const shortTitle = truncateByDisplayWidth(session.displayTitle, 40, "...");
-    const label = `${session.timeLabel} ${shortTitle}`;
+    const prefix = this.viewMode === "latest" ? `${session.localDate} ${session.timeLabel}` : session.timeLabel;
+    const label = `${prefix} ${shortTitle}`;
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
     const annotation = this.annotationStore.get(session.fsPath);
     item.description = buildSessionDescription(session.cwdShort, annotation?.tags ?? []);
@@ -183,7 +214,15 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
     const idx = this.historyService.getIndex();
-    const shouldFilterSessions = !!this.projectCwd || this.sourceFilter !== "all" || this.tagFilter.length > 0;
+    const shouldFilterSessions =
+      this.filter.kind !== "all" || !!this.projectCwd || this.sourceFilter !== "all" || this.tagFilter.length > 0;
+    if (this.viewMode === "latest") {
+      if (element) return [];
+      return idx.sessions
+        .filter((s) => this.matchesSession(s))
+        .map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+    }
+
     if (!element) {
       const filter = this.filter;
       switch (filter.kind) {
@@ -334,6 +373,10 @@ function normalizeTagKey(value: string): string {
 
 function normalizeSourceFilter(value: SessionSourceFilter): SessionSourceFilter {
   return value === "codex" || value === "claude" ? value : "all";
+}
+
+function normalizeHistoryViewMode(value: HistoryViewMode): HistoryViewMode {
+  return value === "latest" ? "latest" : "date";
 }
 
 function sourceName(source: SessionSource): string {

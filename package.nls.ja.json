@@ -47,6 +47,8 @@
   "cmd.copyResumePrompt": "プロンプト抜粋をコピー",
   "cmd.copyStatusPath": "パスをコピー",
   "cmd.filterHistoryCurrentProject": "現在のプロジェクトで絞り込む",
+  "cmd.showHistoryLatestView": "最新順で表示",
+  "cmd.showHistoryDateView": "日付別で表示",
   "cmd.filterHistorySourceCodex": "Codex のみ表示",
   "cmd.filterHistorySourceClaude": "Claude のみ表示",
   "cmd.clearHistorySourceFilter": "全ソース表示",

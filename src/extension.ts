@@ -5,7 +5,7 @@ import { getConfig, type CodexHistoryViewerConfig } from "./settings";
 import { HistoryService } from "./services/historyService";
 import type { SessionSourceFilter, SessionSummary } from "./sessions/sessionTypes";
 import { PinnedTreeDataProvider } from "./tree/pinnedTree";
-import { HistoryTreeDataProvider } from "./tree/historyTree";
+import { HistoryTreeDataProvider, type HistoryViewMode } from "./tree/historyTree";
 import { SearchTreeDataProvider } from "./tree/searchTree";
 import { TranscriptContentProvider } from "./transcript/transcriptProvider";
 import { TranscriptDocumentLinkProvider } from "./transcript/transcriptDocumentLinkProvider";
@@ -44,6 +44,7 @@ const SEARCH_ROLE_ORDER: IndexedSearchRole[] = ["user", "assistant", "developer"
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const config = getConfig();
   const HISTORY_FILTER_KEY = "codexHistoryViewer.historyFilter.v1";
+  const HISTORY_VIEW_MODE_KEY = "codexHistoryViewer.historyViewMode.v1";
   const HISTORY_PROJECT_FILTER_KEY = "codexHistoryViewer.historyProjectFilter.v1";
   const HISTORY_SOURCE_FILTER_KEY = "codexHistoryViewer.historySourceFilter.v1";
   const HISTORY_TAG_FILTER_KEY = "codexHistoryViewer.historyTagFilter.v1";
@@ -98,6 +99,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.canUndo", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasSearchResults", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyTagFiltered", false);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyViewMode", "date");
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedTagFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.searchTagFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceCodexEnabled", true);
@@ -105,6 +107,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historySourceSwitchable", true);
 
   let pinnedTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(PINNED_TAG_FILTER_KEY));
+  let historyViewMode: HistoryViewMode = sanitizeHistoryViewMode(context.workspaceState.get(HISTORY_VIEW_MODE_KEY));
   let historyFilter: DateScope = sanitizeDateScope(context.workspaceState.get(HISTORY_FILTER_KEY));
   let historyProjectCwd: string | null = sanitizeProjectCwd(context.workspaceState.get(HISTORY_PROJECT_FILTER_KEY));
   let historySourceFilter: SessionSourceFilter = resolveConstrainedHistorySourceFilter(
@@ -125,6 +128,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyService,
     pinStore,
     annotationStore,
+    historyViewMode,
     historyFilter,
     historyProjectCwd,
     historySourceFilter,
@@ -477,6 +481,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyView.description = v ? t("history.filter.active", v) : "";
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyFiltered", v.length > 0);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyTagFiltered", historyTagFilter.length > 0);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyViewMode", historyViewMode);
     void vscode.commands.executeCommand(
       "setContext",
       "codexHistoryViewer.sourceCodexEnabled",
@@ -568,6 +573,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusProvider.refresh();
     if (opts.persist) {
       await context.workspaceState.update(PINNED_TAG_FILTER_KEY, pinnedTagFilter);
+    }
+  };
+
+  const applyHistoryViewMode = async (nextMode: HistoryViewMode, opts: { persist: boolean }): Promise<void> => {
+    const normalized = sanitizeHistoryViewMode(nextMode);
+    if (historyViewMode === normalized) return;
+
+    historyViewMode = normalized;
+    historyProvider.setViewMode(historyViewMode);
+    historyProvider.refresh();
+    updateHistoryViewDescription();
+    if (opts.persist) {
+      await context.workspaceState.update(HISTORY_VIEW_MODE_KEY, historyViewMode);
     }
   };
 
@@ -1125,6 +1143,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       historyProvider.refresh();
       statusProvider.refresh();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.showHistoryLatestView", async () => {
+      await applyHistoryViewMode("latest", { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.showHistoryDateView", async () => {
+      await applyHistoryViewMode("date", { persist: true });
     }),
   );
 
@@ -2454,6 +2484,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.refreshPinned", "codexHistoryViewer.refreshPinned");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.refreshHistoryPane", "codexHistoryViewer.refreshHistoryPane");
   registerUiCommandAlias("codexHistoryViewer.ui.en.refreshHistoryPane", "codexHistoryViewer.refreshHistoryPane");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.showHistoryLatestView", "codexHistoryViewer.showHistoryLatestView");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.showHistoryLatestView", "codexHistoryViewer.showHistoryLatestView");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.showHistoryDateView", "codexHistoryViewer.showHistoryDateView");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.showHistoryDateView", "codexHistoryViewer.showHistoryDateView");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.refreshStatusPane", "codexHistoryViewer.refreshStatusPane");
   registerUiCommandAlias("codexHistoryViewer.ui.en.refreshStatusPane", "codexHistoryViewer.refreshStatusPane");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.search", "codexHistoryViewer.search");
@@ -2570,6 +2604,11 @@ function sanitizeHistorySourceFilter(value: unknown): SessionSourceFilter {
   const s = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (s === "codex" || s === "claude") return s;
   return "all";
+}
+
+function sanitizeHistoryViewMode(value: unknown): HistoryViewMode {
+  const s = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return s === "latest" ? "latest" : "date";
 }
 
 function resolveLockedHistorySource(config: CodexHistoryViewerConfig): SessionSourceFilter | null {
