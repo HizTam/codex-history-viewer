@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-04-20
-- 対象バージョン: 1.3.1
+- 最終更新: 2026-04-22
+- 対象バージョン: 1.3.2
 
 ## 1. 概要
 
@@ -37,7 +37,6 @@
   - `Bulk Rename Tag`
   - `Bulk Delete Tags`
   - `Empty Trash`
-  - `Debug Info`
 - **Pinned**: ピン留め済みセッション一覧
   - タグ絞り込み対応
   - 欠損ピンも表示対象
@@ -103,6 +102,7 @@
 - 履歴キャッシュ:
   - 保存先: `globalStorageUri/cache.v8.json`
   - 用途: 一覧表示用の要約キャッシュ
+  - セッションファイル処理は上限付き並列で行う（無制限 `Promise.all` は使わない）
   - 再利用条件:
     - `sessionsRoot`
     - `claudeSessionsRoot`
@@ -117,6 +117,7 @@
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
   - 用途: 繰り返し検索を高速化する増分インデックス
+  - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
   - 再利用条件:
     - `sessionsRoot`
     - `claudeSessionsRoot`
@@ -131,6 +132,10 @@
   - 既定は OS のゴミ箱 / リサイクルビンへ移動
   - 失敗時は `globalStorageUri/deleted` に退避
   - Undo 用バックアップを `globalStorageUri/undo-delete` に作成
+  - Undo アクションの破棄 / clear / 完了時に不要バックアップを cleanup する
+- `Undo Last Action`:
+  - メモリ上の Undo スタックは直近 20 件を上限とする
+  - 上限超過で破棄された Undo アクションは cleanup hook を実行する
 - `Empty Trash`:
   - `deleted` と `undo-delete` を手動削除する
   - あわせて旧世代の `cache.v*.json` / `search-index.v*.json` も削除する
@@ -158,6 +163,7 @@
 - `delete.useTrash`
 - `ui.language`
 - `ui.alwaysShowHeaderActions`
+- `debug.logging.enabled`
 
 ## 4. 実装要点
 
@@ -180,6 +186,8 @@
 - `src/services/historyService.ts`
   - `cache.v8.json` を読み書きする
   - 変更のないファイルはキャッシュ済み `summary` を再利用する
+  - ファイルごとの `stat` / キャッシュ判定 / `buildSessionSummary` は最大 4 並列で処理する
+  - `HistoryIndex.byCacheKey` を構築し、`findByFsPath()` は `Map` で引く
   - 最終的な一覧はローカル日付 / 時刻順で降順ソートする
   - `history.titleSource` に応じて `displayTitle` を後段で解決する
 - `src/services/codexTitleStore.ts`
@@ -194,6 +202,8 @@
   - `search-index.v2.json` を管理する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
   - JSONL をストリーミングで読み、検索対象メッセージ列を構築する
+  - `cleanupOrphanEntries()` で現在の履歴に存在しない cacheKey を削除する
+  - 実ファイルが消えている場合は `stat` 失敗時に該当エントリを削除する
   - `forceRebuild` 指定時は内部エントリをクリアして最初から作り直す
 
 ### 4.5 検索フロー
@@ -210,6 +220,10 @@
   - 削除前に確認ダイアログを出す
   - Undo 用コピーを `undo-delete` に保存する
   - OS ゴミ箱失敗時は `deleted` へ退避してデータ損失を避ける
+  - `cleanupDeletedSessionUndoBackups()` で不要になった Undo 用コピーを削除する
+- `src/services/undoService.ts`
+  - Undo スタックを直近 20 件に制限する
+  - cleanup hook を `discarded` / `cleared` / `undone` の理由付きで実行する
 - `src/services/storageMaintenanceService.ts`
   - キャッシュフォルダ全体容量を集計する
   - `undo-delete` / `deleted` 件数を合算して返す
@@ -227,6 +241,8 @@
 ### 4.8 表示
 
 - チャット表示: `src/chat/*`
+  - `ChatPanelManager` は対象ファイルの存在を確認してから開く / reload する
+  - refresh や削除で元ファイルが消えたパネルは閉じる
   - `user` / `assistant` / tool / note / diff などのカードは個別に最大幅展開できる
   - grouped diff カードは前後の diff へ移動する上下ナビゲーションを持つ
 - Markdown transcript: `src/transcript/*`
@@ -254,6 +270,9 @@
 - `src/settings.ts`
   - 拡張設定の読み取りヘルパーをまとめる
   - `history.titleSource` や `chat.toolDisplayMode` などの表示系設定もここで管理する
+- `src/utils/dateTimeSettings.ts`
+  - 日付時刻表示は VS Code Extension Host のタイムゾーンを使う
+  - UI 言語はタイムゾーン決定に使わない
 
 ### 4.12 ローカライズ
 
@@ -271,6 +290,19 @@
 - TypeScript 内に UI 表示用の日本語を直書きしない
   - 新しい UI 文言は `t("...")` と `l10n/bundle.l10n*.json` に追加する
   - ソースコードコメントは英語で記述する
+
+### 4.13 診断ログ
+
+- `src/services/logger.ts`
+  - `codexHistoryViewer.debug.logging.enabled` が `true` のときだけ OutputChannel `Codex History Viewer` に出力する
+  - 出力内容は件数と処理時間のみとし、セッションパス・セッションID・メッセージ本文は含めない
+  - ログ時刻はローカル時刻で出力し、`Asia/Tokyo` などのタイムゾーン名は付けない
+- `src/services/historyService.ts`
+  - `history.refresh done` として `totalMs` / `discoverMs` / `processMs` / `cacheHit` / `cacheMiss` などを出力する
+- `src/services/searchIndexService.ts`
+  - `search.index ensure done` として `orphanRemoved` / `missingRemoved` / `cacheHit` / `rebuilt` などを出力する
+- `Debug Info (Copy)` のような通常 UI 導線は持たない
+  - 必要時は `settings.json` で診断ログを有効化し、OutputChannel からコピーする
 
 ## 5. 開発手順
 
@@ -309,7 +341,12 @@ npm run package
 - `Search` のロール設定、保存済み検索、再検索、タグ絞り込みが動く
 - `Rebuild Cache` 実行前に確認が出て、履歴キャッシュと検索インデックスが再作成される
 - `Delete` 実行後に `undo-delete` / `deleted` の扱いと `Undo Last Action` が整合する
+- `Delete` 後に該当チャットパネルが閉じ、存在しないセッションを開こうとしてもゴーストパネルが残らない
+- Undo 付き通知のボタンと Undo 完了メッセージが `ui.language` に応じて表示される
 - `Empty Trash` 実行後に Status のゴミ箱件数が 0 になり、旧世代キャッシュも削除される
+- Control ビューと Command Palette に `Debug Info (Copy)` が出ない
+- `debug.logging.enabled` を `true` にすると OutputChannel に履歴 refresh / 検索インデックスの診断ログが出る
+- 診断ログにセッションパス、セッションID、メッセージ本文が含まれない
 - Status の容量表示と件数表示が更新される
 - Import / Export が両ソースで正しく動く
 - Markdown transcript にローカルパスが含まれるため、共有前確認が必要なことを案内できている

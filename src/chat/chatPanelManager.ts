@@ -12,12 +12,15 @@ import { getConfig } from "../settings";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 
+type MissingSessionHandler = (fsPath: string) => Promise<void> | void;
+
 // Manages chat-like WebviewPanels opened in the editor area.
 export class ChatPanelManager {
   private readonly extensionUri: vscode.Uri;
   private readonly historyService: HistoryService;
   private readonly annotationStore: SessionAnnotationStore;
   private readonly pinStore: PinStore;
+  private readonly onMissingSession?: MissingSessionHandler;
   private readonly codexPanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudePanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
 
@@ -34,11 +37,13 @@ export class ChatPanelManager {
     historyService: HistoryService,
     annotationStore: SessionAnnotationStore,
     pinStore: PinStore,
+    onMissingSession?: MissingSessionHandler,
   ) {
     this.extensionUri = extensionUri;
     this.historyService = historyService;
     this.annotationStore = annotationStore;
     this.pinStore = pinStore;
+    this.onMissingSession = onMissingSession;
     this.codexPanelIconPath = {
       light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
       dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-codex.svg"),
@@ -96,10 +101,35 @@ export class ChatPanelManager {
     for (const panel of this.panelsByKey.values()) update(panel);
   }
 
+  public closeSessionsByFsPath(fsPaths: readonly string[]): void {
+    const keys = new Set(fsPaths.map((fsPath) => normalizeCacheKey(fsPath)));
+    if (keys.size === 0) return;
+
+    for (const panel of this.getOpenPanels()) {
+      const state = this.stateByPanel.get(panel);
+      if (!state || !keys.has(normalizeCacheKey(state.fsPath))) continue;
+      this.disposePanel(panel);
+    }
+  }
+
+  public async closeMissingPanels(): Promise<void> {
+    for (const panel of this.getOpenPanels()) {
+      const state = this.stateByPanel.get(panel);
+      if (!state) continue;
+      if (await this.ensureSessionFileAvailable(state.fsPath)) continue;
+      await this.handleMissingSession(panel, state.fsPath, { showMessage: false, notify: false });
+    }
+  }
+
   public async openSession(
     session: SessionSummary,
     options: { preview: boolean; revealMessageIndex?: number },
   ): Promise<void> {
+    if (!(await this.ensureSessionFileAvailable(session.fsPath))) {
+      await this.handleMissingSession(null, session.fsPath);
+      return;
+    }
+
     const key = normalizeCacheKey(session.fsPath);
     const panel = options.preview ? this.getOrCreatePreviewPanel() : this.getOrCreatePanelForKey(key);
 
@@ -255,6 +285,10 @@ export class ChatPanelManager {
     if (!state) return;
 
     const type = typeof msg?.type === "string" ? msg.type : "";
+    if (type !== "ready" && type !== "copy" && !(await this.ensurePanelSessionFile(panel, state.fsPath))) {
+      return;
+    }
+
     switch (type) {
       case "ready": {
         this.readyByPanel.set(panel, true);
@@ -334,7 +368,8 @@ export class ChatPanelManager {
           typeof msg?.selectedMessageIndex === "number" && Number.isFinite(msg.selectedMessageIndex)
             ? msg.selectedMessageIndex
             : undefined;
-        await this.sendSessionData(panel, { restoreScrollY, restoreSelectedMessageIndex });
+        const sent = await this.sendSessionData(panel, { restoreScrollY, restoreSelectedMessageIndex });
+        if (!sent) return;
         await this.refreshPanelTitleFromFile(panel);
         return;
       }
@@ -364,10 +399,20 @@ export class ChatPanelManager {
   private async sendSessionData(
     panel: vscode.WebviewPanel,
     options?: { restoreScrollY?: number; restoreSelectedMessageIndex?: number },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const state = this.stateByPanel.get(panel);
-    if (!state) return;
-    const model = await buildChatSessionModel(state.fsPath);
+    if (!state) return false;
+    if (!(await this.ensurePanelSessionFile(panel, state.fsPath))) return false;
+
+    let model: Awaited<ReturnType<typeof buildChatSessionModel>>;
+    try {
+      model = await buildChatSessionModel(state.fsPath);
+    } catch {
+      if (!(await this.ensurePanelSessionFile(panel, state.fsPath))) return false;
+      void vscode.window.showErrorMessage(t("app.openSessionFailed"));
+      return false;
+    }
+
     this.stateByPanel.set(panel, {
       ...state,
       sessionCwd: typeof model.meta?.cwd === "string" ? model.meta.cwd : undefined,
@@ -393,6 +438,7 @@ export class ChatPanelManager {
       userLongMessageFolding: getConfig().userLongMessageFolding,
       assistantLongMessageFolding: getConfig().assistantLongMessageFolding,
     });
+    return true;
   }
 
   private buildI18n(): Record<string, string> {
@@ -477,6 +523,7 @@ export class ChatPanelManager {
   private async refreshPanelTitleFromFile(panel: vscode.WebviewPanel): Promise<void> {
     const state = this.stateByPanel.get(panel);
     if (!state) return;
+    if (!(await this.ensurePanelSessionFile(panel, state.fsPath))) return;
 
     const config = getConfig();
     this.historyService.updateConfig(config);
@@ -493,6 +540,56 @@ export class ChatPanelManager {
     );
     panel.title = buildPanelTitle(displaySummary);
     panel.iconPath = this.resolveSourceIconPath(displaySummary.source);
+  }
+
+  private async ensureSessionFileAvailable(fsPath: string): Promise<boolean> {
+    const trimmed = typeof fsPath === "string" ? fsPath.trim() : "";
+    if (!trimmed) return false;
+    try {
+      const stat = await vscode.workspace.fs.stat(vscode.Uri.file(trimmed));
+      return (stat.type & vscode.FileType.File) !== 0;
+    } catch {
+      return false;
+    }
+  }
+
+  private async ensurePanelSessionFile(panel: vscode.WebviewPanel, fsPath: string): Promise<boolean> {
+    if (await this.ensureSessionFileAvailable(fsPath)) return true;
+    await this.handleMissingSession(panel, fsPath);
+    return false;
+  }
+
+  private async handleMissingSession(
+    panel: vscode.WebviewPanel | null,
+    fsPath: string,
+    options: { showMessage?: boolean; notify?: boolean } = {},
+  ): Promise<void> {
+    if (panel) this.disposePanel(panel);
+
+    if (options.showMessage ?? true) {
+      void vscode.window.showErrorMessage(t("app.openSessionFailed"));
+    }
+    if (!(options.notify ?? true)) return;
+    try {
+      await this.onMissingSession?.(fsPath);
+    } catch {
+      // A failed refresh notification must not break panel disposal.
+    }
+  }
+
+  private getOpenPanels(): vscode.WebviewPanel[] {
+    const panels: vscode.WebviewPanel[] = [];
+    if (this.previewPanel) panels.push(this.previewPanel);
+    for (const panel of this.panelsByKey.values()) panels.push(panel);
+    return panels;
+  }
+
+  private disposePanel(panel: vscode.WebviewPanel): void {
+    try {
+      panel.dispose();
+    } catch {
+      // Ignore dispose failures; the panel may already be closed.
+    }
   }
 
   private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {

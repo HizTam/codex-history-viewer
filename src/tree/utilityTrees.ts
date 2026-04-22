@@ -121,13 +121,6 @@ export class ControlTreeDataProvider implements vscode.TreeDataProvider<UtilityN
         icon: new vscode.ThemeIcon("trash"),
         command: { command: "codexHistoryViewer.emptyTrash", title: "" },
       }),
-      makeAction({
-        id: "debugInfo",
-        label: t("maintenance.action.debugInfo"),
-        description: t("maintenance.action.debugInfo.description"),
-        icon: new vscode.ThemeIcon("bug"),
-        command: { command: "codexHistoryViewer.debugInfo", title: "" },
-      }),
     ];
   }
 }

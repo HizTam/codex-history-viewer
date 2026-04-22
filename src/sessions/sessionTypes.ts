@@ -46,6 +46,7 @@ export interface SessionSummary {
 export interface HistoryIndex {
   sessionsRoot: string;
   sessions: SessionSummary[];
+  byCacheKey: Map<string, SessionSummary>;
   byYmd: Map<string, SessionSummary[]>; // key: YYYY-MM-DD
   byYm: Map<string, Map<string, SessionSummary[]>>; // YYYY -> (MM -> sessions)
   byY: Map<string, Map<string, Map<string, SessionSummary[]>>>; // YYYY -> MM -> DD -> sessions

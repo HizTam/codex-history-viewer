@@ -41,16 +41,12 @@ function isSupportedTimeZone(timeZone: string): boolean {
 
 export function resolveDateTimeSettings(setting: UiLanguageSetting = readUiLanguageSetting()): DateTimeSettings {
   const sysTz = resolveSystemTimeZone();
-  const desired = setting === "ja" ? "Asia/Tokyo" : sysTz;
-
-  const timeZone = isSupportedTimeZone(desired) ? desired : isSupportedTimeZone(sysTz) ? sysTz : "UTC";
+  const timeZone = isSupportedTimeZone(sysTz) ? sysTz : "UTC";
   return { uiLanguage: setting, timeZone };
 }
 
 export function getDateTimeSettingsKey(settings: DateTimeSettings): string {
-  // Cache key for anything that depends on UI language/time zone.
-  const lang = typeof settings.uiLanguage === "string" ? settings.uiLanguage : "auto";
+  // Cache key for anything that depends on the display time zone.
   const tz = typeof settings.timeZone === "string" ? settings.timeZone : "UTC";
-  return `uiLanguage=${lang};timeZone=${tz}`;
+  return `timeZone=${tz}`;
 }
-

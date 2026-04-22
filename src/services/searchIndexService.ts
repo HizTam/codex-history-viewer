@@ -5,6 +5,7 @@ import * as vscode from "vscode";
 import type { HistoryIndex } from "../sessions/sessionTypes";
 import { readJson, writeJson } from "../storage/jsonStorage";
 import { normalizeWhitespace } from "../utils/textUtils";
+import type { DebugLogger } from "./logger";
 
 export type IndexedSearchRole = "user" | "assistant" | "developer" | "tool";
 
@@ -38,6 +39,7 @@ interface SearchIndexFileV2 {
 // Maintains an incremental on-disk search index for session files.
 export class SearchIndexService {
   private readonly cacheUri: vscode.Uri;
+  private readonly logger?: DebugLogger;
   private loaded = false;
   private context: SearchIndexContext = {
     codexSessionsRoot: "",
@@ -47,8 +49,9 @@ export class SearchIndexService {
   };
   private readonly entries = new Map<string, SearchIndexEntryV1>();
 
-  constructor(globalStorageUri: vscode.Uri) {
+  constructor(globalStorageUri: vscode.Uri, logger?: DebugLogger) {
     this.cacheUri = vscode.Uri.joinPath(globalStorageUri, "search-index.v2.json");
+    this.logger = logger;
   }
 
   public async ensureUpToDate(params: {
@@ -61,7 +64,16 @@ export class SearchIndexService {
     progress?: vscode.Progress<{ message?: string; increment?: number }>;
     forceRebuild?: boolean;
   }): Promise<void> {
+    const totalStartedAt = nowMs();
     const { index, token, progress, forceRebuild } = params;
+    let orphanRemoved = 0;
+    let statMiss = 0;
+    let missingRemoved = 0;
+    let cacheHit = 0;
+    let rebuilt = 0;
+    let buildMs = 0;
+    let writeMs = 0;
+
     const context: SearchIndexContext = {
       codexSessionsRoot: params.codexSessionsRoot,
       claudeSessionsRoot: params.claudeSessionsRoot,
@@ -73,12 +85,8 @@ export class SearchIndexService {
     let dirty = false;
 
     const activeKeys = new Set(index.sessions.map((s) => s.cacheKey));
-    for (const key of Array.from(this.entries.keys())) {
-      if (!activeKeys.has(key)) {
-        this.entries.delete(key);
-        dirty = true;
-      }
-    }
+    orphanRemoved = this.cleanupOrphanEntries(activeKeys);
+    if (orphanRemoved > 0) dirty = true;
 
     const total = index.sessions.length;
     for (let i = 0; i < total; i += 1) {
@@ -91,7 +99,11 @@ export class SearchIndexService {
       try {
         stat = await vscode.workspace.fs.stat(uri);
       } catch {
-        if (this.entries.delete(session.cacheKey)) dirty = true;
+        statMiss += 1;
+        if (this.entries.delete(session.cacheKey)) {
+          missingRemoved += 1;
+          dirty = true;
+        }
         continue;
       }
 
@@ -101,23 +113,59 @@ export class SearchIndexService {
         cached.fsPath === session.fsPath &&
         cached.mtimeMs === stat.mtime &&
         cached.size === stat.size;
-      if (unchanged) continue;
+      if (unchanged) {
+        cacheHit += 1;
+        continue;
+      }
 
+      const buildStartedAt = nowMs();
       const messages = await buildIndexedMessages(session.fsPath, token);
+      buildMs += elapsedMs(buildStartedAt);
       this.entries.set(session.cacheKey, {
         fsPath: session.fsPath,
         mtimeMs: stat.mtime,
         size: stat.size,
         messages,
       });
+      rebuilt += 1;
       dirty = true;
     }
 
-    if (dirty) await this.save();
+    if (dirty) {
+      const writeStartedAt = nowMs();
+      await this.save();
+      writeMs = elapsedMs(writeStartedAt);
+    }
+
+    this.logger?.debug(
+      [
+        "search.index ensure done",
+        `totalMs=${elapsedMs(totalStartedAt)}`,
+        `sessions=${total}`,
+        `orphanRemoved=${orphanRemoved}`,
+        `statMiss=${statMiss}`,
+        `missingRemoved=${missingRemoved}`,
+        `cacheHit=${cacheHit}`,
+        `rebuilt=${rebuilt}`,
+        `buildMs=${buildMs}`,
+        `writeMs=${writeMs}`,
+        `forceRebuild=${forceRebuild ? 1 : 0}`,
+      ].join(" "),
+    );
   }
 
   public getMessages(cacheKey: string): IndexedSearchMessage[] | null {
     return this.entries.get(cacheKey)?.messages ?? null;
+  }
+
+  private cleanupOrphanEntries(activeKeys: ReadonlySet<string>): number {
+    let removed = 0;
+    for (const key of Array.from(this.entries.keys())) {
+      if (activeKeys.has(key)) continue;
+      this.entries.delete(key);
+      removed += 1;
+    }
+    return removed;
   }
 
   private async loadIfNeeded(nextContext: SearchIndexContext, forceRebuild: boolean): Promise<void> {
@@ -169,6 +217,14 @@ function throwIfCancelled(token?: vscode.CancellationToken): void {
   if (token?.isCancellationRequested) {
     throw new vscode.CancellationError();
   }
+}
+
+function nowMs(): number {
+  return Date.now();
+}
+
+function elapsedMs(startedAt: number): number {
+  return Math.max(0, nowMs() - startedAt);
 }
 
 async function buildIndexedMessages(

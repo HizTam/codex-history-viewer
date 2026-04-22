@@ -17,6 +17,29 @@ export interface DeleteSessionsResult {
   undoItems: DeletedSessionUndoItem[];
 }
 
+export async function cleanupDeletedSessionUndoBackups(
+  undoItems: readonly DeletedSessionUndoItem[],
+  options: { requireOriginalExists?: boolean } = {},
+): Promise<void> {
+  const seenBackups = new Set<string>();
+  for (const item of undoItems) {
+    const backupFsPath = typeof item.backupFsPath === "string" ? item.backupFsPath.trim() : "";
+    if (!backupFsPath) continue;
+
+    const backupKey = normalizeCacheKey(backupFsPath);
+    if (seenBackups.has(backupKey)) continue;
+    seenBackups.add(backupKey);
+
+    if (options.requireOriginalExists && !(await fileExists(item.originalFsPath))) continue;
+
+    try {
+      await vscode.workspace.fs.delete(vscode.Uri.file(backupFsPath), { recursive: false, useTrash: false });
+    } catch {
+      // Ignore cleanup failures; the manual trash cleanup command can remove leftovers.
+    }
+  }
+}
+
 // Handles deletion (single / multi-select / bulk). Returns undo metadata when possible.
 export async function deleteSessionsWithConfirmation(params: {
   element?: unknown;
@@ -93,6 +116,15 @@ async function backupForUndo(undoDir: vscode.Uri, originalFsPath: string): Promi
     return backupFsPath;
   } catch {
     return null;
+  }
+}
+
+async function fileExists(fsPath: string): Promise<boolean> {
+  try {
+    await vscode.workspace.fs.stat(vscode.Uri.file(fsPath));
+    return true;
+  } catch {
+    return false;
   }
 }
 

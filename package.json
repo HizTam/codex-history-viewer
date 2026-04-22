@@ -276,11 +276,6 @@
         "icon": "$(eraser)"
       },
       {
-        "command": "codexHistoryViewer.debugInfo",
-        "title": "%cmd.debugInfo%",
-        "category": "%cmd.category%"
-      },
-      {
         "command": "codexHistoryViewer.ui.ja.openSession",
         "title": "セッションを開く（チャット）"
       },
@@ -1885,6 +1880,13 @@
           "description": "%cfg.uiAlwaysShowHeaderActions%",
           "scope": "application",
           "order": 120
+        },
+        "codexHistoryViewer.debug.logging.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "%cfg.debugLoggingEnabled%",
+          "scope": "application",
+          "order": 130
         }
       }
     }

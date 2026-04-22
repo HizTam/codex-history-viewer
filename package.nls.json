@@ -41,7 +41,6 @@
   "cmd.rebuildCache": "Rebuild Cache",
   "cmd.emptyTrash": "Empty Trash",
   "cmd.cleanupMissingPins": "Cleanup Missing Pins",
-  "cmd.debugInfo": "Debug Info (Copy)",
   "cmd.exportSessions": "Export Sessions...",
   "cmd.importSessions": "Import Sessions...",
   "cmd.searchRunPreset": "Run Saved Search...",
@@ -94,5 +93,6 @@
   "cfg.chatAssistantLongMessageFolding": "Choose how long assistant messages are collapsed in the chat view.",
   "cfg.chatAssistantLongMessageFolding.enumOff": "Keep the current behavior. Assistant messages are always fully expanded.",
   "cfg.chatAssistantLongMessageFolding.enumAuto": "Collapse only long assistant messages when details are hidden.",
-  "cfg.chatAssistantLongMessageFolding.enumAlways": "Always start eligible assistant messages collapsed when details are hidden."
+  "cfg.chatAssistantLongMessageFolding.enumAlways": "Always start eligible assistant messages collapsed when details are hidden.",
+  "cfg.debugLoggingEnabled": "Write diagnostic timing logs to the Codex History Viewer output channel. Logs include counts and durations, not session paths or message content."
 }

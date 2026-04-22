@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **1.3.1** (2026-04-20).
+Latest release: **1.3.2** (2026-04-22).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -42,10 +42,10 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Workspace-relative Markdown file links open inside VS Code from both chat sessions and Markdown transcripts
 - Chat tab icon switches by source (`Codex` / `Claude`)
 - Chat header annotation block (tags + note), including quick actions (filter/remove/edit)
-- Time zone-aware timestamps (chat view and transcripts)
+- Time zone-aware timestamps based on the VS Code extension host environment (falls back to `UTC` if unavailable)
 - Language-aware command labels (Japanese/English) based on `codexHistoryViewer.ui.language`
 - Full-text search across sessions (cancellable, configurable max results, optional case sensitivity)
-- Incremental local search index for faster repeated searches (tracks file updates/deletions)
+- Incremental local search index for faster repeated searches (tracks file updates/deletions and prunes stale entries)
 - Search scope follows the active History filters (date scope, project/CWD, and source)
 - Search roles filter (default: `user`/`assistant`, optional `developer`/`tool`) with configurable defaults from the Search header or Control view
 - Search rerun (current conditions), search pane reset, and saved search presets (run/save/delete)
@@ -60,7 +60,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Multi-select support for open/pin/promote/delete
 - Drag & drop pinning: drag sessions from **History** or **Search** into **Pinned**
 - Import/Export sessions: export raw JSONL or sanitized Markdown transcripts, and import with duplicate session ID handling (skip or overwrite)
-- Control view for settings, import, rebuild cache, empty trash, bulk tag maintenance, undo, and debug info
+- Control view for settings, import, rebuild cache, empty trash, bulk tag maintenance, and undo
 - Dedicated refresh actions for **Pinned**, **History**, and **Status**, plus global refresh from the Control view
 - Manual trash cleanup: **Empty Trash** clears internal trash/quarantine files and legacy cache/index generations on demand
 - Undo last action (pin/unpin/promote/delete/annotation/tag operations)
@@ -101,8 +101,9 @@ For the full command list with per-command descriptions, see:
 - `codexHistoryViewer.chat.assistantLongMessageFolding`: How long `assistant` messages are folded in the chat viewer (`off`, `auto`, or `always`)
 - `codexHistoryViewer.delete.useTrash`: When deleting, move files to the OS trash/recycle bin (recommended)
 - `codexHistoryViewer.resume.openTarget`: Where `Resume in OpenAI Codex` opens the conversation (`sidebar` by default, or `panel`)
-- `codexHistoryViewer.ui.language`: UI language for this extension (`auto` / `en` / `ja`). This setting also affects timestamps: `ja` uses `Asia/Tokyo` (JST), while `auto`/`en` use your system time zone (falls back to `UTC` if unavailable).
+- `codexHistoryViewer.ui.language`: UI language for this extension (`auto` / `en` / `ja`)
 - `codexHistoryViewer.ui.alwaysShowHeaderActions`: Always show view header action icons (enables VS Code setting `workbench.view.alwaysShowHeaderActions`)
+- `codexHistoryViewer.debug.logging.enabled`: Write diagnostic timing logs to the **Codex History Viewer** output channel. Disabled by default and intended for troubleshooting.
 
 ### Enable Claude Source (Optional)
 
@@ -113,6 +114,7 @@ For the full command list with per-command descriptions, see:
 
 - If history or search results look incorrect or stale, run **Control > Rebuild Cache**. It recreates both the history cache and the search index after confirmation.
 - To prevent the cache folder from growing over time, regularly run **Control > Empty Trash**. Trash files are not deleted automatically, and this also removes legacy cache/index generations.
+- For performance troubleshooting, enable `codexHistoryViewer.debug.logging.enabled` in `settings.json`, then inspect **Output > Codex History Viewer**. Logs include counts and timings, not session paths or message content.
 
 ## OpenAI Codex Integration Notes
 
@@ -130,11 +132,13 @@ For the full command list with per-command descriptions, see:
 - Import recursively scans the selected source folder for `.jsonl` files.
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 
-## What's New in 1.3.1
+## What's New in 1.3.2
 
-- Added per-card full-width expansion controls in the chat viewer.
-- Added previous/next navigation controls for grouped diff cards.
-- Clarified localization ownership between VS Code manifest strings (`package.nls.*`) and runtime/Webview strings (`l10n/bundle.l10n.*`).
+- Capped the in-memory Undo stack and cleaned up delete-undo backup files when actions are discarded, cleared, or completed.
+- Improved deleted/missing session handling so stale chat panels are closed instead of lingering.
+- Improved large-history refresh behavior with bounded parallel file processing and faster session lookups.
+- Added opt-in diagnostic timing logs for history refresh and search-index maintenance.
+- Changed timestamp handling to follow the VS Code extension host time zone.
 
 ## Changelog
 

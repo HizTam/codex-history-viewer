@@ -11,14 +11,15 @@ import { TranscriptContentProvider } from "./transcript/transcriptProvider";
 import { TranscriptDocumentLinkProvider } from "./transcript/transcriptDocumentLinkProvider";
 import { renderResumeContext } from "./transcript/resumeRenderer";
 import { promoteSessionCopyToToday } from "./services/promoteService";
-import { deleteSessionsWithConfirmation } from "./services/deleteService";
+import { cleanupDeletedSessionUndoBackups, deleteSessionsWithConfirmation } from "./services/deleteService";
 import { PinStore } from "./services/pinStore";
 import { type SearchRequest, runSearchFlow } from "./services/searchService";
 import { type IndexedSearchRole, SearchIndexService } from "./services/searchIndexService";
 import { exportMaskedTranscripts, exportSessions, importSessions } from "./services/importExportService";
 import { SearchPresetStore } from "./services/searchPresetStore";
 import { SessionAnnotationStore } from "./services/sessionAnnotationStore";
-import { UndoService } from "./services/undoService";
+import { type UndoCleanupReason, UndoService } from "./services/undoService";
+import { OutputChannelLogger } from "./services/logger";
 import {
   type StorageStats,
   collectStorageStats,
@@ -65,10 +66,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const pinStore = new PinStore(context.globalState);
   const annotationStore = new SessionAnnotationStore(context.globalState);
   const searchPresetStore = new SearchPresetStore(context.globalState);
-  const historyService = new HistoryService(context.globalStorageUri, config);
-  const searchIndexService = new SearchIndexService(context.globalStorageUri);
+  const logger = new OutputChannelLogger();
+  context.subscriptions.push(logger);
+  const historyService = new HistoryService(context.globalStorageUri, config, logger);
+  const searchIndexService = new SearchIndexService(context.globalStorageUri, logger);
   const transcriptProvider = new TranscriptContentProvider(historyService, annotationStore);
-  const chatPanels = new ChatPanelManager(context.extensionUri, historyService, annotationStore, pinStore);
+  const chatPanels = new ChatPanelManager(context.extensionUri, historyService, annotationStore, pinStore, async () => {
+    await vscode.commands.executeCommand("codexHistoryViewer.refresh");
+  });
   let storageStats: StorageStats = {
     globalStorageBytes: 0,
     trashFileCount: 0,
@@ -242,8 +247,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       lastRefreshAt: lastHistoryRefreshAt,
     };
   });
-  const debugBuild = "2026-01-19.1";
-
   // Provide a virtual document (conversation log).
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(transcriptProvider.scheme, transcriptProvider),
@@ -658,28 +661,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexHistoryViewer.debugInfo", async () => {
-      const uiLang = vscode.workspace.getConfiguration("codexHistoryViewer").get<string>("ui.language") ?? "auto";
-      const resolvedUiLang = resolveUiLanguage(uiLang === "ja" || uiLang === "en" || uiLang === "auto" ? uiLang : "auto");
-      const lines: string[] = [
-        `Extension: ${context.extension.id} v${context.extension.packageJSON.version}`,
-        `Build: ${debugBuild}`,
-        `VS Code env.language: ${vscode.env.language}`,
-        `codexHistoryViewer.ui.language: ${uiLang}`,
-        `Resolved UI language: ${resolvedUiLang}`,
-        `t(runtime.view.history): ${t("runtime.view.history")}`,
-        `t(chat.button.detailsOff): ${t("chat.button.detailsOff")}`,
-        `t(chat.button.toolsOff): ${t("chat.button.toolsOff")}`,
-        `History filter: ${formatDateScopeForDebug(historyFilter)}`,
-        `History source filter: ${historySourceFilter}`,
-      ];
-      const text = lines.join("\n");
-      await vscode.env.clipboard.writeText(text);
-      void vscode.window.showInformationMessage(t("app.debugInfoCopied"));
-    }),
-  );
-
-  context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       const uiLanguageChanged = e.affectsConfiguration("codexHistoryViewer.ui.language");
       const headerActionsChanged = e.affectsConfiguration("codexHistoryViewer.ui.alwaysShowHeaderActions");
@@ -727,10 +708,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       else chatPanels.refreshI18n();
       void ensureAlwaysShowHeaderActions();
 
-      // When UI language changes, rebuild history-dependent displays because date/time formatting can also change.
+      // UI language changes only need view rerendering; history cache depends on time zone, not UI language.
       if (!uiLanguageChanged && !sourcesEnabledChanged && !historyDateBasisChanged && !historyTitleSourceChanged) {
         refreshViews();
         controlProvider.refresh();
+        return;
+      }
+
+      if (uiLanguageChanged && !sourcesEnabledChanged && !historyDateBasisChanged && !historyTitleSourceChanged) {
+        refreshViews();
+        controlProvider.refresh();
+        chatPanels.refreshTitles();
         return;
       }
 
@@ -976,6 +964,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
     }
     await historyService.refresh({ forceRebuildCache });
+    await chatPanels.closeMissingPanels();
     await refreshStorageStats();
     lastHistoryRefreshAt = Date.now();
   };
@@ -993,13 +982,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusProvider.refresh();
   };
 
-  const pushUndoAction = (label: string, undo: () => Promise<void>): void => {
-    undoService.push({ label, undo });
+  const pushUndoAction = (
+    label: string,
+    undo: () => Promise<void>,
+    cleanup?: (reason: UndoCleanupReason) => Promise<void> | void,
+  ): void => {
+    undoService.push({ label, undo, cleanup });
   };
 
   const offerUndo = (message: string): void => {
-    void vscode.window.showInformationMessage(message, "Undo").then(async (picked) => {
-      if (picked !== "Undo") return;
+    const undoChoice = t("undo.action");
+    void vscode.window.showInformationMessage(message, undoChoice).then(async (picked) => {
+      if (picked !== undoChoice) return;
       await vscode.commands.executeCommand("codexHistoryViewer.undoLastAction");
     });
   };
@@ -1672,11 +1666,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const { unpinned } = await pinStore.unpinMany(missingPaths);
       refreshViews();
       if (unpinned > 0) {
-        pushUndoAction(`cleanup missing pins (${unpinned})`, async () => {
+        pushUndoAction(t("undo.label.cleanupMissingPins", unpinned), async () => {
           await pinStore.pinMany(missingPaths);
           refreshViews();
         });
-        offerUndo(`Removed ${unpinned} missing pin(s).`);
+        offerUndo(t("app.cleanupMissingPinsDone", unpinned));
       }
     }),
   );
@@ -1815,10 +1809,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       refreshViews();
 
-      pushUndoAction(`annotation update (${sessions.length})`, async () => {
+      pushUndoAction(t("undo.label.annotationUpdate", sessions.length), async () => {
         await restoreAnnotations(sessions, previous);
       });
-      offerUndo(`Updated annotation for ${changed} session(s).`);
+      offerUndo(t("undo.offer.annotationUpdate", changed));
     }),
   );
 
@@ -1845,7 +1839,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (changed <= 0) return;
 
       refreshViews();
-      pushUndoAction(`remove tag (${tag})`, async () => {
+      pushUndoAction(t("undo.label.removeTag", tag), async () => {
         await restoreAnnotations(sessions, previous);
       });
     }),
@@ -1923,7 +1917,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       refreshViews();
-      pushUndoAction(`rename tag globally (${sourceTag} -> ${destinationTag})`, async () => {
+      pushUndoAction(t("undo.label.renameTagGlobally", sourceTag, destinationTag), async () => {
         for (const entry of changed.values()) {
           if (!entry.before) {
             await annotationStore.remove(entry.fsPath);
@@ -1987,7 +1981,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       refreshViews();
-      pushUndoAction(`delete tags globally (${picked.length})`, async () => {
+      pushUndoAction(t("undo.label.deleteTagsGlobally", picked.length), async () => {
         for (const entry of changed.values()) {
           if (!entry.before) {
             await annotationStore.remove(entry.fsPath);
@@ -2217,14 +2211,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         const promoted = await promoteSessionCopyToToday(sessions[0]!, historyService, getConfig());
         await vscode.window.showInformationMessage(t("app.promoteDone"));
-        pushUndoAction("promote", async () => {
+        pushUndoAction(t("undo.label.promote"), async () => {
           try {
             await vscode.workspace.fs.delete(vscode.Uri.file(promoted.fsPath), { recursive: false, useTrash: false });
           } catch {
             // Skip if already removed.
           }
         });
-        offerUndo("Promoted session created.");
+        offerUndo(t("app.promoteDone"));
 
         // Refresh views and open the newly created session.
         await vscode.window.withProgress(
@@ -2260,7 +2254,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       void vscode.window.showInformationMessage(t("app.promoteDoneMulti", succeeded, failed));
       if (promotedPaths.length > 0) {
-        pushUndoAction(`promote (${promotedPaths.length})`, async () => {
+        pushUndoAction(t("undo.label.promoteMulti", promotedPaths.length), async () => {
           for (const fsPath of promotedPaths) {
             try {
               await vscode.workspace.fs.delete(vscode.Uri.file(fsPath), { recursive: false, useTrash: false });
@@ -2269,7 +2263,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             }
           }
         });
-        offerUndo(`Promoted ${promotedPaths.length} session(s).`);
+        offerUndo(t("undo.offer.promoteMulti", promotedPaths.length));
       }
 
       // Refresh views in bulk (viewer restores position after multiple copies).
@@ -2304,10 +2298,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       refreshViews();
       const newlyPinned = fsPaths.filter((p) => !pinnedBefore.has(normalizeCacheKey(p)));
       if (newlyPinned.length > 0) {
-        pushUndoAction(`pin (${newlyPinned.length})`, async () => {
+        pushUndoAction(t("undo.label.pin", newlyPinned.length), async () => {
           await pinStore.unpinMany(newlyPinned);
         });
-        offerUndo(`Pinned ${newlyPinned.length} session(s).`);
+        offerUndo(t("undo.offer.pin", newlyPinned.length));
       }
       if (pinned === 1 && skipped === 0) {
         void vscode.window.showInformationMessage(t("app.pinDone"));
@@ -2340,10 +2334,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const { unpinned, skipped } = await pinStore.unpinMany(fsPaths);
       refreshViews();
       if (pinnedNow.length > 0) {
-        pushUndoAction(`unpin (${pinnedNow.length})`, async () => {
+        pushUndoAction(t("undo.label.unpin", pinnedNow.length), async () => {
           await pinStore.pinMany(pinnedNow);
         });
-        offerUndo(`Unpinned ${pinnedNow.length} session(s).`);
+        offerUndo(t("undo.offer.unpin", pinnedNow.length));
       }
       if (unpinned === 1 && skipped === 0) {
         void vscode.window.showInformationMessage(t("app.unpinDone"));
@@ -2381,6 +2375,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!result) return;
 
       const deletedPaths = result.undoItems.map((x) => x.originalFsPath);
+      chatPanels.closeSessionsByFsPath(deletedPaths);
       const previousAnnotations = new Map<string, { tags: string[]; note: string } | null>();
       for (const fsPath of deletedPaths) {
         const ann = annotationStore.get(fsPath);
@@ -2389,29 +2384,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await annotationStore.removeMany(deletedPaths);
 
       if (result.undoItems.length > 0) {
-        pushUndoAction(`delete (${result.deleted})`, async () => {
-          for (const item of result.undoItems) {
-            if (!item.backupFsPath) continue;
-            if (await pathExists(item.originalFsPath)) continue;
-            try {
-              await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(item.originalFsPath)));
-              await vscode.workspace.fs.copy(
-                vscode.Uri.file(item.backupFsPath),
-                vscode.Uri.file(item.originalFsPath),
-                { overwrite: false },
-              );
-            } catch {
-              // Continue restoring remaining files.
+        pushUndoAction(
+          t("undo.label.delete", result.deleted),
+          async () => {
+            for (const item of result.undoItems) {
+              if (!item.backupFsPath) continue;
+              if (await pathExists(item.originalFsPath)) continue;
+              try {
+                await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(item.originalFsPath)));
+                await vscode.workspace.fs.copy(
+                  vscode.Uri.file(item.backupFsPath),
+                  vscode.Uri.file(item.originalFsPath),
+                  { overwrite: false },
+                );
+              } catch {
+                // Continue restoring remaining files.
+              }
             }
-          }
 
-          for (const fsPath of deletedPaths) {
-            const before = previousAnnotations.get(normalizeCacheKey(fsPath)) ?? null;
-            if (!before) continue;
-            await annotationStore.set(fsPath, { tags: before.tags, note: before.note });
-          }
-        });
-        offerUndo(`Deleted ${result.deleted} session(s).`);
+            for (const fsPath of deletedPaths) {
+              const before = previousAnnotations.get(normalizeCacheKey(fsPath)) ?? null;
+              if (!before) continue;
+              await annotationStore.set(fsPath, { tags: before.tags, note: before.note });
+            }
+          },
+          async (reason) => {
+            await cleanupDeletedSessionUndoBackups(result.undoItems, {
+              requireOriginalExists: reason === "undone",
+            });
+          },
+        );
+        offerUndo(t("app.deleteDone", result.deleted));
       }
 
       await refreshHistoryIndex(false);
@@ -2522,11 +2525,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   refreshViews();
   controlProvider.refresh();
-}
-
-function formatDateScopeForDebug(scope: DateScope): string {
-  const v = getDateScopeValue(scope);
-  return v ? `${scope.kind}:${v}` : "all";
 }
 
 function sanitizeProjectCwd(value: unknown): string | null {

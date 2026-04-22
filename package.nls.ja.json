@@ -36,7 +36,6 @@
   "cmd.rebuildCache": "キャッシュ再作成",
   "cmd.emptyTrash": "ゴミ箱を空にする",
   "cmd.cleanupMissingPins": "見つからないピンを掃除",
-  "cmd.debugInfo": "デバッグ情報をコピー",
   "cmd.exportSessions": "セッションをエクスポート...",
   "cmd.importSessions": "セッションをインポート...",
   "cmd.searchRunPreset": "保存済み検索を実行...",
@@ -94,5 +93,6 @@
   "cfg.chatAssistantLongMessageFolding": "チャットビューで長い assistant メッセージを折りたたむ方法を選択します。",
   "cfg.chatAssistantLongMessageFolding.enumOff": "現在の挙動を維持します。assistant メッセージは常に全文表示します。",
   "cfg.chatAssistantLongMessageFolding.enumAuto": "詳細を表示していないときだけ、長い assistant メッセージを折りたたみます。",
-  "cfg.chatAssistantLongMessageFolding.enumAlways": "詳細を表示していないときは、対象の assistant メッセージを常に折りたたみます。"
+  "cfg.chatAssistantLongMessageFolding.enumAlways": "詳細を表示していないときは、対象の assistant メッセージを常に折りたたみます。",
+  "cfg.debugLoggingEnabled": "Codex History Viewer の出力チャンネルに診断用の処理時間ログを書き込みます。ログには件数と所要時間のみを含め、セッションパスやメッセージ本文は含めません。"
 }

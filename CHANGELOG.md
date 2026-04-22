@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.2] - 2026-04-22
+
+### Added
+
+- Added opt-in diagnostic timing logs for history refresh and search-index maintenance.
+
+### Changed
+
+- Capped the in-memory Undo stack at 20 recent actions to avoid unbounded memory growth.
+- Changed history refresh to process session files with bounded parallelism for better first-load and cache-miss performance.
+- Changed history lookup to use a `Map`-backed index instead of scanning all sessions.
+- Changed timestamp handling to use the VS Code extension host time zone.
+
+### Fixed
+
+- Fixed stale chat panels for deleted or missing session files by checking file existence before opening/reloading and closing missing panels on refresh/delete.
+- Fixed delete Undo cleanup so temporary backup files are removed when Undo actions are discarded, cleared, or completed.
+- Made search-index stale-entry cleanup explicit.
+- Localized Undo notification labels and action names.
+
 ## [1.3.1] - 2026-04-20
 
 ### Added
