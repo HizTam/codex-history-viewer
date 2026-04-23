@@ -7,3 +7,4 @@ out/
 media/chatViewShiki.bundle.js
 .private-docs/
 AG*.md
+.claude

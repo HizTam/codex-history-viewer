@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-04-22
-- 対象バージョン: 1.3.2
+- 最終更新: 2026-04-23
+- 対象バージョン: 1.4.0
 
 ## 1. 概要
 
@@ -41,9 +41,10 @@
   - タグ絞り込み対応
   - 欠損ピンも表示対象
   - `History` / `Search` からのドラッグ&ドロップで追加可能
-- **History**: 年 / 月 / 日でグルーピングした履歴ツリー
+- **History**: 年 / 月 / 日でグルーピングした履歴ツリー、または最新順のフラット一覧
+  - 表示モード: `日付別` / `最新順`
   - 絞り込み: 日付スコープ / プロジェクト (`cwd`) / ソース / タグ
-  - ヘッダー操作: 再読み込み、絞り込み、現在のプロジェクトで絞り込み、ソース切替、絞り込み解除など
+  - ヘッダー操作: 再読み込み、表示モード切替、絞り込み、現在のプロジェクトで絞り込み、ソース切替、絞り込み解除など
   - 複数選択で開く / エクスポート / Promote / Delete が可能
 - **Search**: 検索結果ツリー
   - 表示構造: セッション -> ヒット一覧
@@ -61,7 +62,7 @@
 
 ### 3.2 セッション操作
 
-- `Open Session (Chat)`: Webview で会話表示
+- `Open in New Tab (Chat)`: Webview で会話をセッションタブとして表示
 - `Open Session (Markdown)`: 仮想ドキュメントとして Markdown 化して表示
 - `Copy Prompt Excerpt`: 連携用に短い抜粋をクリップボードへコピー
 - `Resume in OpenAI Codex`: OpenAI Codex 拡張へ引き継ぐ
@@ -144,7 +145,54 @@
   - 行わない
   - 不要ファイル整理はユーザー操作 (`Empty Trash` / `Rebuild Cache`) に委ねる
 
-### 3.5 設定（`codexHistoryViewer.*`）
+### 3.5 自動更新
+
+- 既定では無効 (`autoRefresh.enabled = false`)
+- 有効時は Codex / Claude の履歴 `.jsonl` を監視する
+- 変更イベントは `autoRefresh.debounceMs` でまとめ、`autoRefresh.minIntervalMs` より短い間隔では refresh しない
+- 実際の refresh 実行条件:
+  - History view が表示中
+  - VS Code ウィンドウがフォーカス中
+- History view 非表示中、またはウィンドウ非フォーカス中の変更は pending として保持する
+- 表示 / フォーカス復帰時に pending があれば 1 回だけ更新予約する
+- 自動更新では Search 結果を消さない
+- 自動更新では検索インデックス再構築を行わない
+
+### 3.6 チャット表示 / 画像
+
+- チャット表示では Codex / Claude のメッセージ内に含まれる対応画像をサムネイル表示する
+- 対応形式:
+  - `image/png`
+  - `image/jpeg`
+  - `image/gif`
+  - `image/webp`
+- 対応入力:
+  - base64 / data URI 形式の画像データ
+  - セッションの CWD から解決できるローカル画像ファイル
+- `<image></image>` のような画像プレースホルダーだけが残る場合は、本文からプレースホルダーを除去し、表示不能状態の画像カードを表示する
+- remote-only / API 参照のみ / 未対応形式 / 欠損ファイル / サイズ超過 / 設定無効の場合は、画像カードに理由を表示する
+- `images.maxSizeMB` はプレビュー表示と保存のために読み込む画像サイズ上限として扱う
+- `images.thumbnailSize` はチャット本文内のサムネイルサイズだけを切り替える
+- サムネイルクリックで Webview 内の画像プレビューモーダルを開く
+- 画像プレビューモーダル:
+  - 上部ヘッダーに、1 枚の場合も含めてサムネイルを表示する
+  - 複数画像はサムネイル、前後ボタン、左右キーで切り替える
+  - 先頭 / 末尾を超えて反対側へループしない
+  - 画像が多い場合はサムネイル列を横スクロールできる
+  - fit 表示 / 原寸表示を切り替えられる
+  - 表示中の画像を保存できる
+  - `Escape`、閉じるボタン、背景クリックで閉じる
+  - 別セッションへ切り替わった場合は閉じる
+- チャットのスクロール領域は固定ヘッダーの下に分離し、スクロールバーがヘッダー横から始まらないようにする
+- `chat.openPosition`:
+  - `top`: 通常は先頭から開く
+  - `lastMessage`: 最後に見えていたメッセージ付近を復元する
+- ツリー選択で開くチャットは再利用タブとして扱い、次のツリー選択で中身を差し替える
+- メニューから開くチャットはセッションタブとして扱い、別セッションを開いても差し替えない
+- 再利用タブに表示中の同じセッションをメニューから開いた場合、そのタブをセッションタブへ昇格する
+- ツリー選択 / メニュー操作のどちらでも、同じセッションのチャットタブが既に開いていれば既存タブをアクティブにする
+
+### 3.7 設定（`codexHistoryViewer.*`）
 
 - `sessionsRoot`
 - `claude.sessionsRoot`
@@ -156,9 +204,16 @@
 - `search.maxResults`
 - `history.dateBasis`
 - `history.titleSource`
+- `autoRefresh.enabled`
+- `autoRefresh.debounceMs`
+- `autoRefresh.minIntervalMs`
+- `chat.openPosition`
 - `chat.toolDisplayMode`
 - `chat.userLongMessageFolding`
 - `chat.assistantLongMessageFolding`
+- `images.enabled`
+- `images.maxSizeMB`
+- `images.thumbnailSize`
 - `resume.openTarget`
 - `delete.useTrash`
 - `ui.language`
@@ -196,7 +251,17 @@
 - `src/sessions/sessionTitleResolver.ts`
   - `generated` / `nativeWhenAvailable` の設定値に応じて `displayTitle` を決定する
 
-### 4.4 検索インデックス
+### 4.4 自動更新
+
+- `src/services/autoRefreshService.ts`
+  - `autoRefresh.enabled` が `true` のときだけ FileSystemWatcher を作成する
+  - Codex は `**/rollout-*.jsonl`、Claude は `*/*.jsonl` を監視する
+  - watcher イベントは即 refresh せず、pending 状態にして debounce / min interval を適用する
+  - `History` view が非表示、または VS Code ウィンドウが非フォーカスの場合は timer を止めて pending を保持する
+  - `vscode.window.state.focused` と `onDidChangeWindowState` により、フォーカス中のウィンドウだけ自動 refresh を実行する
+  - 自動 refresh は `refreshHistoryIndex(false)` と view refresh のみを行い、Search 結果のクリアや検索インデックス再構築は行わない
+
+### 4.5 検索インデックス
 
 - `src/services/searchIndexService.ts`
   - `search-index.v2.json` を管理する
@@ -206,7 +271,7 @@
   - 実ファイルが消えている場合は `stat` 失敗時に該当エントリを削除する
   - `forceRebuild` 指定時は内部エントリをクリアして最初から作り直す
 
-### 4.5 検索フロー
+### 4.6 検索フロー
 
 - `src/services/searchService.ts`
   - 検索開始時に検索インデックスの差分同期を行う
@@ -214,7 +279,7 @@
   - 候補絞り込みは「日付 / プロジェクト / ソース / Search タグ」の順で適用する
   - 進捗表示とキャンセルに対応する
 
-### 4.6 削除とゴミ箱
+### 4.7 削除とゴミ箱
 
 - `src/services/deleteService.ts`
   - 削除前に確認ダイアログを出す
@@ -229,7 +294,7 @@
   - `undo-delete` / `deleted` 件数を合算して返す
   - `Empty Trash` 実行時に旧世代キャッシュ / インデックスも整理する
 
-### 4.7 注釈 / ピン / 保存済み検索
+### 4.8 注釈 / ピン / 保存済み検索
 
 - `src/services/sessionAnnotationStore.ts`
   - タグ / ノートを `globalState` に保存する
@@ -237,19 +302,31 @@
   - ピン留め情報を `globalState` に保存する
 - `src/services/searchPresetStore.ts`
   - 保存済み検索条件を `workspaceState` に保存する
+- `src/services/chatOpenPositionStore.ts`
+  - 最後に見えていた表示位置を `globalState` に最大 100 セッション分保存する
+  - 復元には `chat.openPosition = lastMessage` のときだけ使用する
 
-### 4.8 表示
+### 4.9 表示
 
 - チャット表示: `src/chat/*`
   - `ChatPanelManager` は対象ファイルの存在を確認してから開く / reload する
   - refresh や削除で元ファイルが消えたパネルは閉じる
+  - `ChatPanelManager` はツリー選択用の `reusable` タブと、明示的に開いた `session` タブを区別する
+  - 既存タブ検索では `session` タブを優先し、なければ同じセッションを表示中の `reusable` タブを使う
+  - `ChatPanelManager` は `ChatOpenPositionStore` を使い、明示的な移動先がない場合だけ最後に見えていたメッセージ付近を復元する
+  - `ChatPanelManager` は保存可能な画像をパネル単位で保持し、Webview からの保存要求時に `showSaveDialog` 経由で書き出す
+  - `chatImageAttachments.ts` は Codex / Claude の画像データ、ローカル画像参照、画像プレースホルダーを正規化する
+  - 対応画像は data URI として Webview へ渡し、未対応 / 欠損 / remote-only / サイズ超過 / 設定無効は表示不能理由としてモデル化する
   - `user` / `assistant` / tool / note / diff などのカードは個別に最大幅展開できる
   - grouped diff カードは前後の diff へ移動する上下ナビゲーションを持つ
+  - 画像プレビューは Webview 内モーダルとして実装し、ヘッダーのサムネイル列、前後ボタン、左右キー、fit / 原寸切替、保存、閉じる操作を持つ
+  - Webview のスクロール対象は `#scrollRoot` に限定し、固定ヘッダーをスクロール領域から分離する
 - Markdown transcript: `src/transcript/*`
 - Control / Status ビュー: `src/tree/utilityTrees.ts`
 - History / Pinned / Search ツリー: `src/tree/*`
+  - History は `date` / `latest` の表示モードを持ち、`latest` ではセッションをフラットに降順表示する
 
-### 4.9 ツール意味付けレイヤー
+### 4.10 ツール意味付けレイヤー
 
 - `src/tools/toolSemantics.ts`
   - ツール名からカード表示用のメタ情報（アイコン・アクセント・ラベル）を解決する
@@ -257,7 +334,7 @@
 - `src/tools/toolTypes.ts`
   - ツール関連の共通型定義
 
-### 4.10 ローカルファイルリンク
+### 4.11 ローカルファイルリンク
 
 - `src/utils/localFileLinks.ts`
   - Webview / transcript 内のローカルパス文字列を VS Code URI に変換する
@@ -265,16 +342,17 @@
 - `src/transcript/transcriptDocumentLinkProvider.ts`
   - Markdown transcript ドキュメント上のリンクを `DocumentLinkProvider` として解決する
 
-### 4.11 設定
+### 4.12 設定
 
 - `src/settings.ts`
   - 拡張設定の読み取りヘルパーをまとめる
-  - `history.titleSource` や `chat.toolDisplayMode` などの表示系設定もここで管理する
+  - `history.titleSource`、`autoRefresh.*`、`chat.openPosition`、`chat.toolDisplayMode`、`images.*` などの設定もここで管理する
+  - 数値設定は下限 / 上限を丸め、想定外の enum 値は既定値へ戻す
 - `src/utils/dateTimeSettings.ts`
   - 日付時刻表示は VS Code Extension Host のタイムゾーンを使う
   - UI 言語はタイムゾーン決定に使わない
 
-### 4.12 ローカライズ
+### 4.13 ローカライズ
 
 - `package.nls.json` / `package.nls.ja.json`
   - VS Code が拡張起動前に解決する `package.json` の `%...%` プレースホルダーを担当する
@@ -291,7 +369,7 @@
   - 新しい UI 文言は `t("...")` と `l10n/bundle.l10n*.json` に追加する
   - ソースコードコメントは英語で記述する
 
-### 4.13 診断ログ
+### 4.14 診断ログ
 
 - `src/services/logger.ts`
   - `codexHistoryViewer.debug.logging.enabled` が `true` のときだけ OutputChannel `Codex History Viewer` に出力する
@@ -301,6 +379,9 @@
   - `history.refresh done` として `totalMs` / `discoverMs` / `processMs` / `cacheHit` / `cacheMiss` などを出力する
 - `src/services/searchIndexService.ts`
   - `search.index ensure done` として `orphanRemoved` / `missingRemoved` / `cacheHit` / `rebuilt` などを出力する
+- `src/chat/chatPanelManager.ts`
+  - `chatOpenPosition ...` として復元対象メッセージの記録 / 復元状況を出力する
+  - セッションパス全体は出さず、ファイル名相当の安全化した識別子だけを出す
 - `Debug Info (Copy)` のような通常 UI 導線は持たない
   - 必要時は `settings.json` で診断ログを有効化し、OutputChannel からコピーする
 
@@ -337,6 +418,11 @@ npm run package
 
 - Codex のみ有効 / Claude のみ有効 / 両方有効で履歴が正しく出る
 - `History` の日付 / プロジェクト / ソース / タグ絞り込みが期待どおり動く
+- `History` の表示モードを `日付別` / `最新順` で切り替えられ、選択中セッションの操作が維持される
+- `autoRefresh.enabled = true` のとき、履歴ファイル作成 / 変更 / 削除で History が自動更新される
+- `History` view が非表示のとき、自動更新は保留され、表示時に 1 回だけ反映される
+- VS Code ウィンドウが非フォーカスのとき、自動更新は保留され、フォーカス復帰時に 1 回だけ反映される
+- 自動更新で Search 結果が勝手にクリアされない
 - `Search` が履歴側の絞り込み条件に追従する
 - `Search` のロール設定、保存済み検索、再検索、タグ絞り込みが動く
 - `Rebuild Cache` 実行前に確認が出て、履歴キャッシュと検索インデックスが再作成される
@@ -351,9 +437,33 @@ npm run package
 - Import / Export が両ソースで正しく動く
 - Markdown transcript にローカルパスが含まれるため、共有前確認が必要なことを案内できている
 - `history.dateBasis` を `started` / `lastActivity` で切り替えると履歴ツリーの日付グループが正しく変わる
+- `chat.openPosition = top` のとき、移動先指定のないチャット表示が先頭から開く
+- `chat.openPosition = lastMessage` のとき、同じセッションを開き直すと最後に見ていたメッセージ付近へ戻る
+- 保存位置がない場合、または保存位置が現在の詳細表示設定で表示される先頭メッセージの場合は、タグ / メモカードが見えるスクロール最上部から開く
+- ツリー選択で同じセッションの `session` タブが開いている場合、そのタブがアクティブになり、`reusable` タブは差し替わらない
+- ツリー選択で同じセッションの `reusable` タブだけが開いている場合、そのタブがアクティブになる
+- 別タブ表示中に、既に選択されている履歴行を再クリックしても、同じセッションの既存チャットタブがアクティブになる
+- メニューからチャットを開くと、未オープンのセッションは `session` タブとして開く
+- メニューからチャットを開くと、同じセッションの `session` / `reusable` タブが既にあれば既存タブがアクティブになる
+- `reusable` タブに表示中のセッションをメニューから開いた後、別履歴をツリー選択すると新しい `reusable` タブが使われ、昇格済みタブは差し替わらない
+- `session` タブとして開いたセッションをツリー選択しても、`reusable` タブへ降格しない
 - チャット表示で `toolDisplayMode` を `detailsOnly` / `compactCards` で切り替えるとツール行の表示が変わる
 - `userLongMessageFolding` / `assistantLongMessageFolding` が `off` / `auto` / `always` で期待どおり折りたたみ動作する
 - `Show details` ON 時は長文メッセージが常に全文表示になる
+- チャットのスクロールバーが固定ヘッダーの横ではなく、ヘッダー下のスクロール領域から始まる
+- Codex / Claude の画像付きセッションで、対応画像がサムネイル表示される
+- `<image></image>` だけが残るセッションで、プレースホルダー文字列が本文に残らず、表示不能状態の画像カードが出る
+- `images.enabled = false` のとき、画像は読み込まれず表示不能状態になる
+- `images.maxSizeMB` を超える画像は読み込まれず、サイズ超過として表示される
+- `images.thumbnailSize` を `small` / `medium` / `large` で切り替えると本文内サムネイルサイズが変わる
+- 画像サムネイルをクリックするとプレビューモーダルが開く
+- 画像が 1 枚だけのときも、プレビューモーダル上部にサムネイルが表示される
+- 複数画像のプレビューで、サムネイルクリック、前後ボタン、左右キーによる切り替えができる
+- 複数画像のプレビューで、先頭 / 末尾を超えて移動しても反対側へループしない
+- 画像が多いとき、プレビューモーダル上部のサムネイル列を横スクロールできる
+- プレビューモーダルで fit / 原寸表示を切り替えられる
+- プレビューモーダルで表示中の画像を保存できる
+- プレビューモーダルを開いたまま別セッションを開くと、モーダルが閉じる
 - `patch_apply_end` を含むセッションで差分カードが表示される（`Show details` OFF でも出る）
 - 差分カードの折りたたみ展開、hunk ごとの折り返し切り替え、行ジャンプが動く
 - diff カードの上下ナビゲーションで前後の diff へ移動できる

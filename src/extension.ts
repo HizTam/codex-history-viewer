@@ -18,6 +18,8 @@ import { type IndexedSearchRole, SearchIndexService } from "./services/searchInd
 import { exportMaskedTranscripts, exportSessions, importSessions } from "./services/importExportService";
 import { SearchPresetStore } from "./services/searchPresetStore";
 import { SessionAnnotationStore } from "./services/sessionAnnotationStore";
+import { AutoRefreshService } from "./services/autoRefreshService";
+import { ChatOpenPositionStore } from "./services/chatOpenPositionStore";
 import { type UndoCleanupReason, UndoService } from "./services/undoService";
 import { OutputChannelLogger } from "./services/logger";
 import {
@@ -67,14 +69,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const pinStore = new PinStore(context.globalState);
   const annotationStore = new SessionAnnotationStore(context.globalState);
   const searchPresetStore = new SearchPresetStore(context.globalState);
+  const chatOpenPositionStore = new ChatOpenPositionStore(context.globalState);
   const logger = new OutputChannelLogger();
   context.subscriptions.push(logger);
   const historyService = new HistoryService(context.globalStorageUri, config, logger);
   const searchIndexService = new SearchIndexService(context.globalStorageUri, logger);
   const transcriptProvider = new TranscriptContentProvider(historyService, annotationStore);
-  const chatPanels = new ChatPanelManager(context.extensionUri, historyService, annotationStore, pinStore, async () => {
-    await vscode.commands.executeCommand("codexHistoryViewer.refresh");
-  });
+  const chatPanels = new ChatPanelManager(
+    context.extensionUri,
+    historyService,
+    annotationStore,
+    pinStore,
+    chatOpenPositionStore,
+    async () => {
+      await vscode.commands.executeCommand("codexHistoryViewer.refresh");
+    },
+    logger,
+  );
   let storageStats: StorageStats = {
     globalStorageBytes: 0,
     trashFileCount: 0,
@@ -445,6 +456,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     canSelectMany: true,
     dragAndDropController: searchDragController,
   });
+  let autoRefreshService: AutoRefreshService | null = null;
 
   context.subscriptions.push(
     controlView,
@@ -684,8 +696,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const headerActionsChanged = e.affectsConfiguration("codexHistoryViewer.ui.alwaysShowHeaderActions");
       const searchDefaultRolesChanged = e.affectsConfiguration("codexHistoryViewer.search.defaultRoles");
       const sourcesEnabledChanged = e.affectsConfiguration("codexHistoryViewer.sources.enabled");
+      const sessionsRootChanged =
+        e.affectsConfiguration("codexHistoryViewer.sessionsRoot") ||
+        e.affectsConfiguration("codexHistoryViewer.claude.sessionsRoot") ||
+        e.affectsConfiguration("codexHistoryViewer.claudeSessionsRoot");
       const historyDateBasisChanged = e.affectsConfiguration("codexHistoryViewer.history.dateBasis");
       const historyTitleSourceChanged = e.affectsConfiguration("codexHistoryViewer.history.titleSource");
+      const autoRefreshChanged = e.affectsConfiguration("codexHistoryViewer.autoRefresh");
+      const chatOpenPositionChanged = e.affectsConfiguration("codexHistoryViewer.chat.openPosition");
       const toolDisplayModeChanged = e.affectsConfiguration("codexHistoryViewer.chat.toolDisplayMode");
       const userLongMessageFoldingChanged = e.affectsConfiguration("codexHistoryViewer.chat.userLongMessageFolding");
       const assistantLongMessageFoldingChanged = e.affectsConfiguration(
@@ -694,15 +712,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const legacyLongMessageFoldingChanged = e.affectsConfiguration("codexHistoryViewer.chat.longMessageFolding");
       const longMessageFoldingChanged =
         userLongMessageFoldingChanged || assistantLongMessageFoldingChanged || legacyLongMessageFoldingChanged;
+      const imagesChanged = e.affectsConfiguration("codexHistoryViewer.images");
       if (
         !uiLanguageChanged &&
         !headerActionsChanged &&
         !searchDefaultRolesChanged &&
         !sourcesEnabledChanged &&
+        !sessionsRootChanged &&
         !historyDateBasisChanged &&
         !historyTitleSourceChanged &&
+        !autoRefreshChanged &&
+        !chatOpenPositionChanged &&
         !toolDisplayModeChanged &&
-        !longMessageFoldingChanged
+        !longMessageFoldingChanged &&
+        !imagesChanged
       ) {
         return;
       }
@@ -722,18 +745,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       updatePinnedViewDescription();
       updateHistoryViewDescription();
       updateSearchViewDescription();
-      if (uiLanguageChanged || toolDisplayModeChanged || longMessageFoldingChanged) chatPanels.refreshPanels();
+      void autoRefreshService?.configure(getConfig(), historyView.visible, vscode.window.state.focused);
+      if (uiLanguageChanged || toolDisplayModeChanged || longMessageFoldingChanged || imagesChanged) chatPanels.refreshPanels();
       else chatPanels.refreshI18n();
       void ensureAlwaysShowHeaderActions();
 
       // UI language changes only need view rerendering; history cache depends on time zone, not UI language.
-      if (!uiLanguageChanged && !sourcesEnabledChanged && !historyDateBasisChanged && !historyTitleSourceChanged) {
+      if (
+        !uiLanguageChanged &&
+        !sourcesEnabledChanged &&
+        !sessionsRootChanged &&
+        !historyDateBasisChanged &&
+        !historyTitleSourceChanged
+      ) {
         refreshViews();
         controlProvider.refresh();
         return;
       }
 
-      if (uiLanguageChanged && !sourcesEnabledChanged && !historyDateBasisChanged && !historyTitleSourceChanged) {
+      if (
+        uiLanguageChanged &&
+        !sourcesEnabledChanged &&
+        !sessionsRootChanged &&
+        !historyDateBasisChanged &&
+        !historyTitleSourceChanged
+      ) {
         refreshViews();
         controlProvider.refresh();
         chatPanels.refreshTitles();
@@ -749,13 +785,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  // Open a session preview on selection (if enabled).
+  const openReusableSessionFromElement = async (element: unknown): Promise<void> => {
+    if (!isSessionNode(element)) return;
+    const reveal = element instanceof SearchHitNode ? element.hit.messageIndex : undefined;
+    if (await chatPanels.revealExistingSessionPanel(element.session.fsPath, reveal, { preserveFocus: true })) return;
+    await chatPanels.openSession(element.session, { kind: "reusable", revealMessageIndex: reveal });
+  };
+
+  // Open a reusable session tab on selection (if enabled).
   const tryOpenPreview = async (element: unknown): Promise<void> => {
     const latestConfig = getConfig();
     if (!latestConfig.previewOpenOnSelection) return;
-    if (!isSessionNode(element)) return;
-    const reveal = element instanceof SearchHitNode ? element.hit.messageIndex : undefined;
-    await chatPanels.openSession(element.session, { preview: true, revealMessageIndex: reveal });
+    await openReusableSessionFromElement(element);
   };
 
   // Track the last interacted view, since multiple views can be visible at the same time.
@@ -1000,6 +1041,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusProvider.refresh();
   };
 
+  autoRefreshService = new AutoRefreshService(
+    async () => {
+      await refreshHistoryIndex(false);
+      refreshViews();
+      chatPanels.refreshTitles();
+    },
+    logger,
+  );
+  context.subscriptions.push(
+    autoRefreshService,
+    historyView.onDidChangeVisibility((e) => {
+      autoRefreshService?.setVisible(e.visible);
+    }),
+    vscode.window.onDidChangeWindowState((e) => {
+      autoRefreshService?.setFocused(e.focused);
+    }),
+  );
+
   const pushUndoAction = (
     label: string,
     undo: () => Promise<void>,
@@ -1201,6 +1260,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.openSessionReusable", async (element?: unknown) => {
+      await openReusableSessionFromElement(element);
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.openSession", async (elementOrArgs?: unknown) => {
       const hasDirectFsPath =
         !!elementOrArgs &&
@@ -1211,7 +1276,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const session = resolveSessionFromElementOrFsPath(historyService, elementOrArgs);
         if (!session) return;
         const reveal = resolveRevealIndexFromArgs(elementOrArgs);
-        await chatPanels.openSession(session, { preview: false, revealMessageIndex: reveal });
+        if (await chatPanels.revealExistingSessionPanel(session.fsPath, reveal, { promoteReusable: true })) {
+          return;
+        }
+        await chatPanels.openSession(session, { kind: "session", revealMessageIndex: reveal });
         return;
       }
 
@@ -1227,21 +1295,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const choice = await vscode.window.showWarningMessage(msg, { modal: true }, "OK");
         if (choice !== "OK") return;
         for (const it of limited) {
-          await chatPanels.openSession(it.session, { preview: false, revealMessageIndex: it.revealMessageIndex });
+          if (
+            await chatPanels.revealExistingSessionPanel(it.session.fsPath, it.revealMessageIndex, {
+              promoteReusable: true,
+            })
+          ) {
+            continue;
+          }
+          await chatPanels.openSession(it.session, { kind: "session", revealMessageIndex: it.revealMessageIndex });
         }
         return;
       }
 
       if (openTargets.length === 1) {
         const it = openTargets[0]!;
-        await chatPanels.openSession(it.session, { preview: false, revealMessageIndex: it.revealMessageIndex });
+        if (
+          await chatPanels.revealExistingSessionPanel(it.session.fsPath, it.revealMessageIndex, {
+            promoteReusable: true,
+          })
+        ) {
+          return;
+        }
+        await chatPanels.openSession(it.session, { kind: "session", revealMessageIndex: it.revealMessageIndex });
         return;
       }
 
       const session = resolveSessionFromElementOrActive(historyService, transcriptProvider.scheme, elementOrArgs);
       if (!session) return;
       const reveal = resolveRevealIndex(elementOrArgs);
-      await chatPanels.openSession(session, { preview: false, revealMessageIndex: reveal });
+      if (await chatPanels.revealExistingSessionPanel(session.fsPath, reveal, { promoteReusable: true })) {
+        return;
+      }
+      await chatPanels.openSession(session, { kind: "session", revealMessageIndex: reveal });
     }),
   );
 
@@ -2412,6 +2497,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         previousAnnotations.set(normalizeCacheKey(fsPath), ann ? { tags: [...ann.tags], note: ann.note } : null);
       }
       await annotationStore.removeMany(deletedPaths);
+      try {
+        await chatOpenPositionStore.deleteMany(deletedPaths);
+      } catch {
+        logger.debug("chatOpenPosition deleteMany failed");
+      }
 
       if (result.undoItems.length > 0) {
         pushUndoAction(
@@ -2470,6 +2560,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.copyResumePrompt", "codexHistoryViewer.copyResumePrompt");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.resumeSessionInCodex", "codexHistoryViewer.resumeSessionInCodex");
   registerUiCommandAlias("codexHistoryViewer.ui.en.resumeSessionInCodex", "codexHistoryViewer.resumeSessionInCodex");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.resumeSessionInClaude", "codexHistoryViewer.resumeSessionInClaude");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.resumeSessionInClaude", "codexHistoryViewer.resumeSessionInClaude");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.promoteSession", "codexHistoryViewer.promoteSession");
   registerUiCommandAlias("codexHistoryViewer.ui.en.promoteSession", "codexHistoryViewer.promoteSession");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.pinSession", "codexHistoryViewer.pinSession");
@@ -2559,6 +2651,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   refreshViews();
   controlProvider.refresh();
+  await autoRefreshService.configure(getConfig(), historyView.visible, vscode.window.state.focused);
 }
 
 function sanitizeProjectCwd(value: unknown): string | null {

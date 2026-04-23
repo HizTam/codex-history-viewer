@@ -21,6 +21,20 @@ export interface ChatSessionAnnotation {
 
 export type ChatTimelineItem = ChatMessageItem | ChatToolItem | ChatPatchGroupItem | ChatNoteItem;
 
+export type ChatImageAttachmentStatus = "available" | "unavailable";
+export type ChatImageAttachmentReason = "unsupported" | "missing" | "tooLarge" | "invalid" | "remote" | "disabled";
+
+export interface ChatImageAttachment {
+  id?: string;
+  type: "image";
+  status: ChatImageAttachmentStatus;
+  source: "data" | "local" | "reference";
+  src?: string;
+  mimeType?: string;
+  label?: string;
+  reason?: ChatImageAttachmentReason;
+}
+
 export interface ChatMessageItem {
   type: "message";
   role: ChatRole;
@@ -29,6 +43,7 @@ export interface ChatMessageItem {
   timestampIso?: string;
   text: string;
   requestText?: string;
+  images?: ChatImageAttachment[];
   // Treat large environment/rule messages as "context".
   isContext: boolean;
 }

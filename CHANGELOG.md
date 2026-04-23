@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-04-23
+
+### Added
+
+- Added a History view mode switch between date-grouped history and a latest-first flat session list.
+- Added opt-in automatic history refresh for local session file changes, with debounce delay and refresh interval settings.
+- Automatic refresh is deferred while the History view is hidden or the VS Code window is not focused.
+- Added image attachment rendering in the chat viewer for supported Codex / Claude image data and local image references.
+- Added an option to open chat sessions from the top or restore near the last viewed message.
+
+### Changed
+
+- Changed chat tab handling so session selection uses a reusable tab, while **Open in New Tab (Chat)** keeps sessions in dedicated tabs and reuses existing matching tabs.
+- Changed the chat viewer scroll area so the fixed toolbar stays outside the scrollable content.
+- Changed the settings display order.
+
 ## [1.3.2] - 2026-04-22
 
 ### Added

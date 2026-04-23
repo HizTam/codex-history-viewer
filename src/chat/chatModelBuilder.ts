@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import type {
+  ChatImageAttachment,
   ChatPatchChangeType,
   ChatPatchEntry,
   ChatPatchGroupItem,
@@ -13,14 +14,28 @@ import type {
   ChatTimelineItem,
   ChatToolItem,
 } from "./chatTypes";
+import type { ImagesConfig } from "../settings";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import { extractCompactUserText, isBoilerplateUserMessageText } from "../utils/textUtils";
 import { buildToolPresentation } from "../tools/toolSemantics";
+import {
+  addUnavailablePlaceholderIfNeeded,
+  extractClaudeImageAttachments,
+  extractCodexMessageContent,
+  stripImagePlaceholders,
+} from "./chatImageAttachments";
+
+export interface ChatSessionModelBuildOptions {
+  images?: ImagesConfig;
+}
 
 // Parse a session JSONL and build a chat-view model.
-export async function buildChatSessionModel(fsPath: string): Promise<ChatSessionModel> {
+export async function buildChatSessionModel(
+  fsPath: string,
+  options: ChatSessionModelBuildOptions = {},
+): Promise<ChatSessionModel> {
   const meta = await readSessionMeta(fsPath);
-  const items = await readTimelineItems(fsPath, meta.cwd);
+  const items = await readTimelineItems(fsPath, meta.cwd, options);
   return { fsPath, meta, items };
 }
 
@@ -39,7 +54,11 @@ async function readSessionMeta(fsPath: string): Promise<ChatSessionMeta> {
   };
 }
 
-async function readTimelineItems(fsPath: string, sessionCwd?: string): Promise<ChatTimelineItem[]> {
+async function readTimelineItems(
+  fsPath: string,
+  sessionCwd: string | undefined,
+  options: ChatSessionModelBuildOptions,
+): Promise<ChatTimelineItem[]> {
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
@@ -58,13 +77,33 @@ async function readTimelineItems(fsPath: string, sessionCwd?: string): Promise<C
         continue;
       }
 
-      if (indexCodexTimelineRecord(obj, items, toolByCallId, () => (messageIndex += 1), () => messageIndex)) {
+      if (
+        await indexCodexTimelineRecord(
+          obj,
+          items,
+          toolByCallId,
+          () => (messageIndex += 1),
+          () => messageIndex,
+          sessionCwd,
+          options,
+        )
+      ) {
         continue;
       }
       if (indexCodexEventRecord(obj, items, pendingPatchGroups, () => messageIndex, sessionCwd)) {
         continue;
       }
-      if (indexClaudeTimelineRecord(obj, items, toolByCallId, () => (messageIndex += 1), () => messageIndex)) {
+      if (
+        await indexClaudeTimelineRecord(
+          obj,
+          items,
+          toolByCallId,
+          () => (messageIndex += 1),
+          () => messageIndex,
+          sessionCwd,
+          options,
+        )
+      ) {
         continue;
       }
     }
@@ -78,13 +117,15 @@ async function readTimelineItems(fsPath: string, sessionCwd?: string): Promise<C
   return items;
 }
 
-function indexCodexTimelineRecord(
+async function indexCodexTimelineRecord(
   obj: any,
   items: ChatTimelineItem[],
   toolByCallId: Map<string, ChatToolItem>,
   nextMessageIndex: () => number,
   currentMessageIndex: () => number,
-): boolean {
+  sessionCwd?: string,
+  options: ChatSessionModelBuildOptions = {},
+): Promise<boolean> {
   if (obj?.type !== "response_item") return false;
   const payloadType = obj?.payload?.type;
 
@@ -92,19 +133,25 @@ function indexCodexTimelineRecord(
     const role = obj?.payload?.role as ChatRole | undefined;
     if (role !== "developer" && role !== "user" && role !== "assistant") return true;
 
-    const textRaw = extractTextFromCodexContent(obj?.payload?.content);
-    const text = normalizeText(textRaw);
-    if (!text) return true;
+    const parsed = await extractCodexMessageContent(
+      obj?.payload?.content,
+      sessionCwd,
+      toImageExtractionOptions(options.images),
+    );
+    const text = normalizeText(parsed.text);
+    const images = parsed.images;
+    if (!text && images.length === 0) return true;
 
     const compactUserText = role === "user" ? extractCompactUserText(text) : null;
     const isBoilerplate = role === "assistant" ? false : isBoilerplateUserMessageText(text);
     const requestText = role === "user" ? compactUserText ?? text : undefined;
     // For user rows, treat only empty compact text as context.
     const isContext =
-      role === "assistant" ? false : role === "user" ? !compactUserText : isBoilerplate;
+      role === "assistant" ? false : role === "user" ? !compactUserText && images.length === 0 : isBoilerplate;
 
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
     const idx = role === "user" || role === "assistant" ? nextMessageIndex() : undefined;
+    assignImageIds(images, typeof idx === "number" ? `m${idx}` : `item${items.length}`);
 
     items.push({
       type: "message",
@@ -113,6 +160,7 @@ function indexCodexTimelineRecord(
       timestampIso: ts,
       text,
       requestText,
+      ...(images.length > 0 ? { images } : {}),
       isContext,
     });
     return true;
@@ -210,32 +258,42 @@ function indexCodexEventRecord(
   return true;
 }
 
-function indexClaudeTimelineRecord(
+async function indexClaudeTimelineRecord(
   obj: any,
   items: ChatTimelineItem[],
   toolByCallId: Map<string, ChatToolItem>,
   nextMessageIndex: () => number,
   currentMessageIndex: () => number,
-): boolean {
+  sessionCwd?: string,
+  options: ChatSessionModelBuildOptions = {},
+): Promise<boolean> {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
-  const parsed = parseClaudeMessageContent(getClaudeMessageContent(obj));
-  const text = normalizeText(parsed.messageText);
+  const rawContent = getClaudeMessageContent(obj);
+  const parsed = parseClaudeMessageContent(rawContent);
+  const stripped = stripImagePlaceholders(parsed.messageText);
+  const imageOptions = toImageExtractionOptions(options.images);
+  const images = await extractClaudeImageAttachments(rawContent, sessionCwd, imageOptions);
+  addUnavailablePlaceholderIfNeeded(images, stripped.placeholderCount, imageOptions.enabled ? "remote" : "disabled");
+  const text = normalizeText(stripped.text);
   const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
 
-  if (text) {
+  if (text || images.length > 0) {
     const compactUserText = role === "user" ? extractCompactUserText(text) : null;
     const requestText = role === "user" ? compactUserText ?? text : undefined;
-    const isContext = role === "user" ? !compactUserText : false;
+    const isContext = role === "user" ? !compactUserText && images.length === 0 : false;
+    const idx = nextMessageIndex();
+    assignImageIds(images, `m${idx}`);
 
     items.push({
       type: "message",
       role,
-      messageIndex: nextMessageIndex(),
+      messageIndex: idx,
       timestampIso: ts,
       text,
       requestText,
+      ...(images.length > 0 ? { images } : {}),
       isContext,
     });
   }
@@ -308,6 +366,23 @@ function finalizeTimelineItems(items: ChatTimelineItem[]): void {
   for (const item of items) {
     if (item.type !== "tool") continue;
     item.presentation = buildToolPresentation(item);
+  }
+}
+
+function toImageExtractionOptions(images?: ImagesConfig): { enabled: boolean; maxBytes: number } {
+  const maxSizeMB = Number(images?.maxSizeMB);
+  const safeMaxSizeMB = Number.isFinite(maxSizeMB) && maxSizeMB > 0 ? Math.min(100, Math.floor(maxSizeMB)) : 20;
+  return {
+    enabled: images?.enabled ?? true,
+    maxBytes: safeMaxSizeMB * 1024 * 1024,
+  };
+}
+
+function assignImageIds(images: ChatImageAttachment[], scope: string): void {
+  for (let i = 0; i < images.length; i += 1) {
+    const image = images[i];
+    if (!image || image.id) continue;
+    image.id = `${scope}-image-${i + 1}`;
   }
 }
 
@@ -510,17 +585,6 @@ function formatPatchDisplayPath(fsPath: string, sessionCwd?: string): string {
     // Fall back to the original path when relative formatting fails.
   }
   return normalizedPath;
-}
-
-function extractTextFromCodexContent(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  const texts: string[] = [];
-  for (const item of content) {
-    if (!item || typeof item !== "object") continue;
-    const maybeText = (item as { text?: unknown }).text;
-    if (typeof maybeText === "string") texts.push(maybeText);
-  }
-  return texts.join("");
 }
 
 function parseClaudeMessageContent(content: unknown): {

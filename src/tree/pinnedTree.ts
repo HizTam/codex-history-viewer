@@ -90,11 +90,13 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       // Show source-specific icons (Codex/Claude) in the list row.
       item.iconPath = this.resolveSourceIconPath(element.session.source);
 
-      // Clicking the title opens the viewer (preview on selection or openSession); unpin is done via the context menu.
+      // Clicking the title opens the reusable viewer or a session tab depending on the preview setting.
       const previewOnSelection = getConfig().previewOpenOnSelection;
-      if (!previewOnSelection) {
-        item.command = { command: "codexHistoryViewer.openSession", title: "", arguments: [element] };
-      }
+      item.command = {
+        command: previewOnSelection ? "codexHistoryViewer.openSessionReusable" : "codexHistoryViewer.openSession",
+        title: "",
+        arguments: [element],
+      };
 
       // Show a short preview in the tooltip for quicker scanning.
       const md = new vscode.MarkdownString(undefined, true);

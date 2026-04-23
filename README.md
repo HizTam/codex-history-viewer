@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **1.3.2** (2026-04-22).
+Latest release: **1.4.0** (2026-04-23).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -15,9 +15,10 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 ## Highlights
 
 - Revisit past Codex CLI and Claude Code sessions that are no longer easy to access from the active editor flow
-- Browse sessions in a year / month / day tree
+- Browse sessions in a year / month / day tree or a latest-first list
 - Search across prompts, responses, tool output, tags, and notes
 - View sessions in a chat-like UI with Markdown, code highlighting, math rendering, and file-change diffs
+- Show supported image attachments from Codex / Claude sessions, with preview and save controls
 - Organize sessions with pins, tags, notes, saved searches, and filters
 - Resume past sessions through the official Codex and Claude Code VS Code extensions
 
@@ -25,19 +26,27 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 
 - Five views: **Control**, **Pinned**, **History**, **Search**, and **Status**
 - Optional multi-source history support (**Codex** / **Claude**) with source-aware filtering
-- History tree view (year/month/day) with filters for date scope, project/CWD, source, and tags
+- History view can switch between a year/month/day tree and a latest-first flat session list
+- History filters for date scope, project/CWD, source, and tags
 - Configurable history date basis (`started` / `lastActivity`) for the History tree and date-based search filtering
+- Optional automatic history refresh for local session file changes, with debounce and automatic refresh interval controls
 - One-click "Filter by Current Project" action in the History view header (toggle on/off)
 - Tag filters in **Pinned** and **Search** views (separate from History filters)
 - Session tooltips can show both **Started** and **Last activity** timestamps when they differ
 - Open any session in a chat-like viewer (Webview) with Markdown rendering, syntax-highlighted fenced code blocks (powered by Shiki), and toolbar quick actions for pin/unpin, Markdown transcript, prompt excerpt copy, and source-aware resume (**OpenAI Codex** for Codex sessions, **Claude Code** for Claude sessions)
 - Chat viewer renders inline and block equations with KaTeX-compatible math support
+- Chat viewer renders supported image attachments from data/local image references, and shows a clear unavailable state for unsupported, missing, remote-only, disabled, or oversized images
+- Image attachments open in an in-view preview modal with a thumbnail strip, previous/next navigation, left/right keyboard navigation, fit/original-size toggle, and save action
 - Chat viewer supports tool-specific cards with a configurable display mode (`detailsOnly` / `compactCards`)
 - Chat viewer can softly fold long `user` and `assistant` messages independently, while **Show details** always expands them fully
 - Chat viewer cards can be expanded individually to full width when a message, tool result, or diff needs more horizontal space
 - Chat viewer shows grouped file-change cards from patch activity, with collapsible side-by-side diffs, per-hunk wrap toggles, syntax highlighting, previous/next diff navigation, and jump-to-line actions
 - Chat viewer includes a right-side in-page search sidebar with match counts, result snippets, line hints for diffs, direct result navigation, and resizable overlay behavior
 - Chat viewer toolbar includes quick scroll actions (top / bottom) and automatically switches label buttons to icon-only mode when the header gets narrow
+- Selecting a session uses a reusable chat tab, while **Open in New Tab (Chat)** keeps the session in its own tab
+- If the same session is already open, selecting or opening it activates the existing chat tab instead of creating a duplicate
+- Chat sessions can reopen at the top or near the last viewed message, based on the setting
+- Chat viewer scrolling starts below the fixed toolbar so the scrollbar belongs to the scrollable content area
 - Reload in the chat viewer preserves scroll/selection and refreshes the tab title using the active history date basis
 - Workspace-relative Markdown file links open inside VS Code from both chat sessions and Markdown transcripts
 - Chat tab icon switches by source (`Codex` / `Claude`)
@@ -71,10 +80,23 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 1. Open the Activity Bar and select **Codex History**.
 2. Use **Control** for global actions (settings/import/rebuild cache/empty trash/search defaults).
 3. Browse sessions under **History** and apply filters (date/project/source/tag) as needed.
-4. Select a session to open a preview, or run **Open Session (Chat)** to open it normally.
+4. Select a session to open the reusable chat tab, or run **Open in New Tab (Chat)** to keep it in its own tab.
 5. Run **Search...** and refine with roles, query syntax, presets, and search tag filters.
 6. Use context menus or chat header actions to edit tags/notes and run bulk tag operations when needed.
 7. Resume a session through the official Codex or Claude Code extension when you want to continue the work.
+
+## History View Header Actions
+
+The History view header uses compact icon actions:
+
+| Action | What it does |
+| --- | --- |
+| Refresh | Reloads the History view |
+| Show Latest First / Show by Date | Switches between the latest-first list and date-grouped tree |
+| Filter History | Filters by date, project, source, or tags |
+| Filter by Current Project | Narrows history to the active workspace |
+| Source | Cycles Codex / Claude / all enabled sources |
+| Clear Filters | Removes active History filters |
 
 ## Commands
 
@@ -91,16 +113,23 @@ For the full command list with per-command descriptions, see:
 - `codexHistoryViewer.sources.enabled`: Enabled history sources. Default is `["codex"]`. Add `claude` to load Claude history too.
 - `codexHistoryViewer.preview.openOnSelection`: Open a preview when selecting an item
 - `codexHistoryViewer.preview.maxMessages`: Max number of user/assistant messages to include in tooltips and quick previews
-- `codexHistoryViewer.search.maxResults`: Max number of search hits to collect
-- `codexHistoryViewer.search.caseSensitive`: Whether search is case-sensitive
 - `codexHistoryViewer.search.defaultRoles`: Default roles used when running Search
+- `codexHistoryViewer.search.caseSensitive`: Whether search is case-sensitive
+- `codexHistoryViewer.search.maxResults`: Max number of search hits to collect
 - `codexHistoryViewer.history.dateBasis`: Which session date the History tree and date-based search filters use (`started` or `lastActivity`)
 - `codexHistoryViewer.history.titleSource`: How session titles are resolved (`generated` or `nativeWhenAvailable`)
+- `codexHistoryViewer.autoRefresh.enabled`: Automatically refresh History when local session files change. Disabled by default.
+- `codexHistoryViewer.autoRefresh.debounceMs`: Delay before automatic refresh after file changes. Multiple events in this window are merged.
+- `codexHistoryViewer.autoRefresh.minIntervalMs`: Minimum automatic refresh interval
+- `codexHistoryViewer.chat.openPosition`: Where a chat session opens when returning to a previously viewed session (`top` or `lastMessage`)
 - `codexHistoryViewer.chat.toolDisplayMode`: How tool activity appears in the chat viewer (`detailsOnly` or `compactCards`)
 - `codexHistoryViewer.chat.userLongMessageFolding`: How long `user` messages are folded in the chat viewer (`off`, `auto`, or `always`)
 - `codexHistoryViewer.chat.assistantLongMessageFolding`: How long `assistant` messages are folded in the chat viewer (`off`, `auto`, or `always`)
-- `codexHistoryViewer.delete.useTrash`: When deleting, move files to the OS trash/recycle bin (recommended)
+- `codexHistoryViewer.images.enabled`: Show supported image attachments in the chat viewer
+- `codexHistoryViewer.images.maxSizeMB`: Maximum image size to load for preview and saving
+- `codexHistoryViewer.images.thumbnailSize`: Thumbnail size for image attachments (`small`, `medium`, or `large`)
 - `codexHistoryViewer.resume.openTarget`: Where `Resume in OpenAI Codex` opens the conversation (`sidebar` by default, or `panel`)
+- `codexHistoryViewer.delete.useTrash`: When deleting, move files to the OS trash/recycle bin (recommended)
 - `codexHistoryViewer.ui.language`: UI language for this extension (`auto` / `en` / `ja`)
 - `codexHistoryViewer.ui.alwaysShowHeaderActions`: Always show view header action icons (enables VS Code setting `workbench.view.alwaysShowHeaderActions`)
 - `codexHistoryViewer.debug.logging.enabled`: Write diagnostic timing logs to the **Codex History Viewer** output channel. Disabled by default and intended for troubleshooting.
@@ -113,6 +142,7 @@ For the full command list with per-command descriptions, see:
 ### Maintenance Tip (All Sources)
 
 - If history or search results look incorrect or stale, run **Control > Rebuild Cache**. It recreates both the history cache and the search index after confirmation.
+- If you want new or updated local sessions to appear without manual refresh, enable `codexHistoryViewer.autoRefresh.enabled`. Automatic refresh runs only while the History view is visible and the VS Code window is focused.
 - To prevent the cache folder from growing over time, regularly run **Control > Empty Trash**. Trash files are not deleted automatically, and this also removes legacy cache/index generations.
 - For performance troubleshooting, enable `codexHistoryViewer.debug.logging.enabled` in `settings.json`, then inspect **Output > Codex History Viewer**. Logs include counts and timings, not session paths or message content.
 
@@ -132,13 +162,16 @@ For the full command list with per-command descriptions, see:
 - Import recursively scans the selected source folder for `.jsonl` files.
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 
-## What's New in 1.3.2
+## What's New in 1.4.0
 
-- Capped the in-memory Undo stack and cleaned up delete-undo backup files when actions are discarded, cleared, or completed.
-- Improved deleted/missing session handling so stale chat panels are closed instead of lingering.
-- Improved large-history refresh behavior with bounded parallel file processing and faster session lookups.
-- Added opt-in diagnostic timing logs for history refresh and search-index maintenance.
-- Changed timestamp handling to follow the VS Code extension host time zone.
+- Added a History view mode switch between date-grouped history and a latest-first flat session list.
+- Added opt-in automatic history refresh for local session file changes, with debounce delay and refresh interval settings.
+- Automatic refresh is deferred while the History view is hidden or the VS Code window is not focused.
+- Added image attachment rendering in the chat viewer for supported Codex / Claude image data and local image references.
+- Added an option to open chat sessions from the top or restore near the last viewed message.
+- Changed chat opening so selecting or opening a session activates an existing matching chat tab when possible.
+- Changed the chat viewer scroll area so the fixed toolbar stays outside the scrollable content.
+- Changed the settings display order.
 
 ## Changelog
 

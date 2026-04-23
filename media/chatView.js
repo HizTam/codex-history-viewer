@@ -3,6 +3,7 @@
   const vscode = acquireVsCodeApi();
 
   const toolbarEl = document.getElementById("toolbar");
+  const scrollRootEl = document.getElementById("scrollRoot");
   const metaEl = document.getElementById("meta");
   const annotationEl = document.getElementById("annotation");
   const timelineEl = document.getElementById("timeline");
@@ -38,6 +39,10 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.2a.75.75 0 0 1 .53.22l4.1 4.1a.75.75 0 1 1-1.06 1.06L8 4.99 4.43 8.58a.75.75 0 1 1-1.06-1.06l4.1-4.1A.75.75 0 0 1 8 3.2Z"/></svg>';
   const NAV_DOWN_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 12.8a.75.75 0 0 1-.53-.22l-4.1-4.1a.75.75 0 0 1 1.06-1.06L8 11.01l3.57-3.59a.75.75 0 0 1 1.06 1.06l-4.1 4.1A.75.75 0 0 1 8 12.8Z"/></svg>';
+  const NAV_LEFT_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M9.53 3.22a.75.75 0 0 1 0 1.06L5.81 8l3.72 3.72a.75.75 0 1 1-1.06 1.06l-4.25-4.25a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 0Z"/></svg>';
+  const NAV_RIGHT_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.47 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06L10.19 8 6.47 4.28a.75.75 0 0 1 0-1.06Z"/></svg>';
   const CARD_EXPAND_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.75 2h3a.75.75 0 0 1 0 1.5H5.56l2.22 2.22a.75.75 0 1 1-1.06 1.06L4.5 4.56v1.19a.75.75 0 0 1-1.5 0v-3A.75.75 0 0 1 3.75 2Zm5.5 0h3a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0V4.56L9.28 6.78a.75.75 0 1 1-1.06-1.06l2.22-2.22H9.25a.75.75 0 0 1 0-1.5ZM7.78 10.28 5.56 12.5h1.19a.75.75 0 0 1 0 1.5h-3A.75.75 0 0 1 3 13.25v-3a.75.75 0 0 1 1.5 0v1.19l2.22-2.22a.75.75 0 1 1 1.06 1.06Zm1.44 0a.75.75 0 0 1 1.06-1.06l2.22 2.22v-1.19a.75.75 0 0 1 1.5 0v3a.75.75 0 0 1-.75.75h-3a.75.75 0 0 1 0-1.5h1.19l-2.22-2.22Z"/></svg>';
   const CARD_RESTORE_ICON_SVG =
@@ -54,6 +59,8 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a4.75 4.75 0 1 1 0 9.5 4.75 4.75 0 0 1 0-9.5Zm0 1.5a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Zm4.9 6.83 2.13 2.14a.75.75 0 1 1-1.06 1.06l-2.14-2.13a.75.75 0 1 1 1.07-1.07Z"/></svg>';
   const CLOSE_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 1 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/></svg>';
+  const SAVE_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.75 2h7.5c.4 0 .78.16 1.06.44l1.25 1.25c.28.28.44.66.44 1.06v7.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm0 1.5a.25.25 0 0 0-.25.25v8.5c0 .14.11.25.25.25h8.5a.25.25 0 0 0 .25-.25V5.06L10.94 3.5H10.5v2.25c0 .414-.336.75-.75.75h-4.5a.75.75 0 0 1-.75-.75V3.5h-.75Zm2.25 0V5h3V3.5H6Zm-.25 5h4.5A1.75 1.75 0 0 1 12 10.25v2.25h-1.5v-2.25a.25.25 0 0 0-.25-.25h-4.5a.25.25 0 0 0-.25.25v2.25H4v-2.25C4 9.284 4.784 8.5 5.75 8.5Z"/></svg>';
   const PATCH_WRAP_ON_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 4h10.5a.75.75 0 0 1 0 1.5H5.56l1.22 1.22a.75.75 0 0 1-1.06 1.06L3.22 5.28a.75.75 0 0 1 0-1.06l2.5-2.5a.75.75 0 0 1 1.06 1.06L5.56 4H2.75Zm0 4.5h6.5a2.75 2.75 0 1 1 0 5.5H7.31l1.22 1.22a.75.75 0 1 1-1.06 1.06l-2.5-2.5a.75.75 0 0 1 0-1.06l2.5-2.5a.75.75 0 1 1 1.06 1.06L7.31 12.5h1.94a1.25 1.25 0 0 0 0-2.5h-6.5a.75.75 0 0 1 0-1.5Z"/></svg>';
   const PATCH_WRAP_OFF_ICON_SVG =
@@ -132,6 +139,7 @@
     makefile: "makefile",
   });
   const MIN_PAGE_SEARCH_WIDTH = 280;
+  const OPEN_POSITION_SAVE_DEBOUNCE_MS = 800;
 
   /** @type {any} */
   let model = null;
@@ -142,6 +150,11 @@
   let toolDisplayMode = "detailsOnly";
   let userLongMessageFolding = "off";
   let assistantLongMessageFolding = "off";
+  let imageSettings = { thumbnailSize: "medium" };
+  let panelKind = "session";
+  let chatOpenPosition = "top";
+  let debugLoggingEnabled = false;
+  let imagePreview = null;
   let showDetails = false;
   let expandedNote = false;
   let selectedMessageIndex = null;
@@ -157,6 +170,7 @@
   let activePageSearchResultIndex = -1;
   let pageSearchPanelWidth = null;
   let pageSearchResizeState = null;
+  let openPositionSaveTimer = 0;
   let toolbarCompactFrame = 0;
   let patchLayoutFrame = 0;
   let webviewState = typeof vscode.getState === "function" ? vscode.getState() || {} : {};
@@ -170,6 +184,21 @@
   if (Number.isFinite(Number(webviewState.pageSearchPanelWidth))) {
     pageSearchPanelWidth = Number(webviewState.pageSearchPanelWidth);
   }
+
+  if (scrollRootEl instanceof HTMLElement) {
+    scrollRootEl.addEventListener("scroll", schedulePersistChatOpenPosition, { passive: true });
+  }
+  window.addEventListener("blur", () => {
+    persistCurrentChatOpenPosition({ immediate: true });
+  });
+  window.addEventListener("pagehide", () => {
+    persistCurrentChatOpenPosition({ immediate: true });
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      persistCurrentChatOpenPosition({ immediate: true });
+    }
+  });
 
   // Initial button labels (overwritten after receiving sessionData).
   setToolbarButtonWithIcon(btnResumeInCodex, "Resume in Codex", RESUME_ICON_SVG);
@@ -219,7 +248,7 @@
     // Send current position to the extension so reload can preserve scroll/selection.
     vscode.postMessage({
       type: "reload",
-      scrollY: window.scrollY,
+      scrollY: getScrollTop(),
       selectedMessageIndex: typeof selectedMessageIndex === "number" ? selectedMessageIndex : undefined,
     });
   });
@@ -323,6 +352,16 @@
   });
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && isImagePreviewOpen()) {
+      event.preventDefault();
+      closeImagePreview();
+      return;
+    }
+    if (isImagePreviewOpen() && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+      event.preventDefault();
+      navigateImagePreview(event.key === "ArrowLeft" ? -1 : 1);
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
       event.preventDefault();
       openPageSearch();
@@ -346,6 +385,11 @@
       const restoreScrollY = typeof msg.restoreScrollY === "number" ? msg.restoreScrollY : undefined;
       const restoreSelectedMessageIndex =
         typeof msg.restoreSelectedMessageIndex === "number" ? msg.restoreSelectedMessageIndex : undefined;
+      const savedOpenMessageIndex =
+        typeof msg.savedOpenMessageIndex === "number" && Number.isFinite(msg.savedOpenMessageIndex)
+          ? Math.max(0, Math.floor(msg.savedOpenMessageIndex))
+          : null;
+      debugLoggingEnabled = msg.debugLoggingEnabled === true;
       const isRestore = typeof restoreScrollY === "number" || typeof restoreSelectedMessageIndex === "number";
 
       const prevShowDetails = showDetails;
@@ -353,10 +397,19 @@
       const prevExpandedMessageIndexes = new Set(expandedMessageIndexes);
       const prevExpandedPatchEntries = new Set(expandedPatchEntries);
       const prevWideTimelineCardKeys = new Set(wideTimelineCardKeys);
+      const previousModelPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
+      persistCurrentChatOpenPosition({ immediate: true });
 
       model = msg.model || null;
+      const nextModelPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
+      const sessionChanged = !!(previousModelPath && nextModelPath && previousModelPath !== nextModelPath);
+      if (sessionChanged && isImagePreviewOpen()) {
+        closeImagePreview();
+      }
       i18n = msg.i18n || {};
       dateTime = msg.dateTime || {};
+      panelKind = normalizePanelKind(msg.panelKind, msg.isPreview);
+      chatOpenPosition = normalizeChatOpenPosition(msg.chatOpenPosition);
       toolDisplayMode = msg.toolDisplayMode === "compactCards" ? "compactCards" : "detailsOnly";
       userLongMessageFolding = normalizeLongMessageFoldingMode(
         typeof msg.userLongMessageFolding === "string" ? msg.userLongMessageFolding : msg.longMessageFolding,
@@ -366,7 +419,17 @@
           ? msg.assistantLongMessageFolding
           : msg.longMessageFolding,
       );
+      imageSettings = normalizeImageSettings(msg.imageSettings);
       isPinned = !!msg.isPinned;
+      debugChatOpenPosition("sessionData", {
+        session: getDebugSessionName(nextModelPath),
+        mode: chatOpenPosition,
+        panelKind,
+        changed: sessionChanged,
+        hostIndex: savedOpenMessageIndex,
+        restore: isRestore,
+        reveal: typeof msg.revealMessageIndex === "number",
+      });
       expandedNote = false;
       selectedMessageIndex = isRestore
         ? typeof restoreSelectedMessageIndex === "number"
@@ -386,18 +449,29 @@
       showDetails = isRestore ? prevShowDetails : shouldAutoShowDetails(model, selectedMessageIndex);
       updateToolbar();
       render();
+      if (isImagePreviewOpen()) syncImagePreviewControls();
 
       if (isRestore) {
         if (typeof selectedMessageIndex === "number") restoreHighlight(selectedMessageIndex);
         if (typeof restoreScrollY === "number") restoreScroll(restoreScrollY);
       } else if (typeof msg.revealMessageIndex === "number") {
         revealMessage(msg.revealMessageIndex);
+      } else if (chatOpenPosition === "top") {
+        debugChatOpenPosition("restoreTop", { reason: "mode", session: getDebugSessionName(nextModelPath) });
+        restoreScroll(0);
+      } else {
+        const restoredIndex = restoreSavedChatOpenPosition(nextModelPath, savedOpenMessageIndex);
+        if (typeof restoredIndex === "number") {
+          selectedMessageIndex = restoredIndex;
+        }
       }
       return;
     }
     if (msg.type === "i18n") {
       i18n = msg.i18n || {};
       dateTime = msg.dateTime || dateTime || {};
+      debugLoggingEnabled = msg.debugLoggingEnabled === true;
+      chatOpenPosition = normalizeChatOpenPosition(msg.chatOpenPosition);
       if (msg.toolDisplayMode === "compactCards" || msg.toolDisplayMode === "detailsOnly") {
         toolDisplayMode = msg.toolDisplayMode;
       }
@@ -409,8 +483,10 @@
           ? msg.assistantLongMessageFolding
           : msg.longMessageFolding,
       );
+      imageSettings = normalizeImageSettings(msg.imageSettings);
       updateToolbar();
       render();
+      if (isImagePreviewOpen()) syncImagePreviewControls();
       return;
     }
     if (msg.type === "copied") {
@@ -531,9 +607,116 @@
   }
 
   function scrollToBoundary(direction) {
-    const scrollingEl = document.scrollingElement || document.documentElement;
+    const scrollingEl = getScrollRoot();
     const top = direction === "bottom" ? scrollingEl.scrollHeight : 0;
-    window.scrollTo({ top, behavior: "smooth" });
+    scrollingEl.scrollTo({ top, behavior: "smooth" });
+  }
+
+  function getScrollRoot() {
+    return scrollRootEl instanceof HTMLElement
+      ? scrollRootEl
+      : document.scrollingElement || document.documentElement;
+  }
+
+  function getScrollTop() {
+    return Math.max(0, Math.floor(Number(getScrollRoot().scrollTop) || 0));
+  }
+
+  function schedulePersistChatOpenPosition() {
+    if (openPositionSaveTimer) window.clearTimeout(openPositionSaveTimer);
+    openPositionSaveTimer = window.setTimeout(() => {
+      openPositionSaveTimer = 0;
+      persistCurrentChatOpenPosition();
+    }, OPEN_POSITION_SAVE_DEBOUNCE_MS);
+  }
+
+  function persistCurrentChatOpenPosition(options = {}) {
+    if (openPositionSaveTimer && options.immediate) {
+      window.clearTimeout(openPositionSaveTimer);
+      openPositionSaveTimer = 0;
+    }
+    if (!model || typeof model.fsPath !== "string" || !model.fsPath) {
+      debugChatOpenPosition("rememberSkip", { reason: "noModel" });
+      return;
+    }
+    const messageIndex = findTopVisibleMessageIndex();
+    if (typeof messageIndex !== "number") {
+      debugChatOpenPosition("rememberSkip", {
+        reason: "noVisibleMessage",
+        session: getDebugSessionName(model.fsPath),
+        scrollTop: getScrollTop(),
+      });
+      return;
+    }
+
+    const updatedAt = Date.now();
+    const positions =
+      webviewState && webviewState.chatOpenPositions && typeof webviewState.chatOpenPositions === "object"
+        ? { ...webviewState.chatOpenPositions }
+        : {};
+    positions[model.fsPath] = { messageIndex, updatedAt };
+    trimChatOpenPositions(positions);
+    webviewState = {
+      ...(webviewState && typeof webviewState === "object" ? webviewState : {}),
+      chatOpenPositions: positions,
+    };
+    if (typeof vscode.setState === "function") vscode.setState(webviewState);
+    vscode.postMessage({ type: "rememberOpenPosition", fsPath: model.fsPath, messageIndex });
+    debugChatOpenPosition("remember", {
+      session: getDebugSessionName(model.fsPath),
+      index: messageIndex,
+      scrollTop: getScrollTop(),
+      immediate: options.immediate === true,
+    });
+  }
+
+  function findTopVisibleMessageIndex() {
+    const root = getScrollRoot();
+    const rootRect = root.getBoundingClientRect();
+    const viewportTop = rootRect.top + 8;
+    const viewportBottom = rootRect.bottom;
+    let bestIndex = null;
+    let bestDistance = Number.POSITIVE_INFINITY;
+
+    for (const node of document.querySelectorAll("[id^='msg-']")) {
+      if (!(node instanceof HTMLElement)) continue;
+      const match = /^msg-(\d+)$/u.exec(node.id);
+      if (!match) continue;
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom < viewportTop || rect.top > viewportBottom) continue;
+      const distance = Math.abs(rect.top - viewportTop);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = Number(match[1]);
+      }
+    }
+
+    if (!Number.isFinite(bestIndex)) return null;
+    return isFirstRenderedMessageIndex(bestIndex) ? 0 : bestIndex;
+  }
+
+  function getFirstRenderedMessageIndex() {
+    if (!model || !Array.isArray(model.items)) return null;
+    for (const item of model.items) {
+      if (!canRenderMessage(item)) continue;
+      if (typeof item.messageIndex !== "number" || !Number.isFinite(item.messageIndex)) continue;
+      return Math.max(0, Math.floor(item.messageIndex));
+    }
+    return null;
+  }
+
+  function isFirstRenderedMessageIndex(messageIndex) {
+    const firstIndex = getFirstRenderedMessageIndex();
+    return typeof firstIndex === "number" && firstIndex === Math.max(0, Math.floor(Number(messageIndex) || 0));
+  }
+
+  function trimChatOpenPositions(positions) {
+    const entries = Object.entries(positions)
+      .filter(([, value]) => value && typeof value === "object" && typeof value.messageIndex === "number")
+      .sort((a, b) => Number(b[1].updatedAt || 0) - Number(a[1].updatedAt || 0));
+    for (const [key] of entries.slice(100)) {
+      delete positions[key];
+    }
   }
 
   function scheduleToolbarCompactMode() {
@@ -1106,7 +1289,8 @@
     if (role !== "assistant" && !showDetails && item.isContext) return null;
 
     const textToRender = getMessageTextToRender(item, role);
-    if (role === "user" && !showDetails && !textToRender.trim()) return null;
+    const images = getMessageImages(item);
+    if (role === "user" && !showDetails && !textToRender.trim() && images.length === 0) return null;
     if (role === "developer" && !showDetails) return null;
 
     const row = el("div", { className: `row ${role}` });
@@ -1160,21 +1344,26 @@
     }
 
     const content = el("div", { className: role === "assistant" ? "messageBodyContent markdown" : "messageBodyContent" });
-    if (role === "assistant") {
-      renderMarkdownInto(content, textToRender);
-    } else {
-      const blocks = splitFencedCode(textToRender);
-      for (const b of blocks) {
-        if (b.type === "text") {
-          const textBlock = el("div", { className: "textBlock" });
-          textBlock.textContent = b.text;
-          content.appendChild(textBlock);
-        } else if (b.type === "code") {
-          content.appendChild(renderCodeBlock(b.lang, b.code));
+    if (textToRender.trim()) {
+      if (role === "assistant") {
+        renderMarkdownInto(content, textToRender);
+      } else {
+        const blocks = splitFencedCode(textToRender);
+        for (const b of blocks) {
+          if (b.type === "text") {
+            const textBlock = el("div", { className: "textBlock" });
+            textBlock.textContent = b.text;
+            content.appendChild(textBlock);
+          } else if (b.type === "code") {
+            content.appendChild(renderCodeBlock(b.lang, b.code));
+          }
         }
       }
+      body.appendChild(content);
     }
-    body.appendChild(content);
+    if (images.length > 0) {
+      body.appendChild(renderMessageImages(images));
+    }
     if (collapseState.canCollapse && collapseState.collapsed) {
       body.appendChild(el("div", { className: "messageBodyFade", "aria-hidden": "true" }));
     }
@@ -1211,6 +1400,311 @@
 
     row.appendChild(bubble);
     return row;
+  }
+
+  function getMessageImages(item) {
+    if (!item || !Array.isArray(item.images)) return [];
+    return item.images.filter((image) => image && image.type === "image");
+  }
+
+  function renderMessageImages(images) {
+    const thumbnailSize = imageSettings.thumbnailSize || "medium";
+    const wrap = el("div", { className: `messageImages messageImages-${thumbnailSize}` });
+    const previewImages = images.filter(isPreviewableImage);
+    for (const image of images) {
+      wrap.appendChild(renderMessageImage(image, previewImages, previewImages.indexOf(image)));
+    }
+    return wrap;
+  }
+
+  function renderMessageImage(image, previewImages, previewIndex) {
+    const label = typeof image.label === "string" && image.label.trim() ? image.label.trim() : "Image attachment";
+
+    if (isPreviewableImage(image)) {
+      const frame = el("button", {
+        className: "messageImageFrame messageImageFrame-available",
+        type: "button",
+        title: i18n.imageOpenPreview || label,
+      });
+      frame.setAttribute("aria-label", i18n.imageOpenPreview || label);
+      const img = el("img", { className: "messageImage", alt: label, loading: "lazy" });
+      img.src = image.src;
+      img.title = label;
+      frame.appendChild(img);
+      frame.addEventListener("click", () => {
+        openImagePreview(previewImages, previewIndex);
+      });
+      return frame;
+    }
+
+    const frame = el("div", { className: "messageImageFrame" });
+    frame.classList.add("messageImageFrame-unavailable");
+    const title = el("div", { className: "messageImageUnavailableTitle" });
+    title.textContent = i18n.imageUnavailable || "Image unavailable";
+    frame.appendChild(title);
+
+    const reason = el("div", { className: "messageImageUnavailableReason" });
+    reason.textContent = formatImageUnavailableReason(image);
+    frame.appendChild(reason);
+    return frame;
+  }
+
+  function isSafeDataImageSrc(src) {
+    return typeof src === "string" && /^data:image\/(?:png|jpeg|gif|webp)(?:;[^,]*)?,/i.test(src.trim());
+  }
+
+  function isPreviewableImage(image) {
+    return !!(image && image.status === "available" && isSafeDataImageSrc(image.src));
+  }
+
+  function formatImageUnavailableReason(image) {
+    const reason = image && typeof image.reason === "string" ? image.reason : "";
+    if (reason === "tooLarge") return i18n.imageTooLarge || "The image is too large to display.";
+    if (reason === "unsupported") return i18n.imageUnsupported || "This image format is not supported.";
+    if (reason === "missing") return i18n.imageMissing || "The local image file could not be found.";
+    if (reason === "remote") return i18n.imageRemote || "This image requires an external file reference.";
+    if (reason === "disabled") return i18n.imageDisabled || "Image display is disabled in settings.";
+    return i18n.imageInvalid || "The image data could not be displayed.";
+  }
+
+  function openImagePreview(images, index) {
+    const previewImages = Array.isArray(images) ? images.filter(isPreviewableImage).map(toPreviewImage) : [];
+    if (previewImages.length === 0) return;
+    const safeIndex = Number.isFinite(index)
+      ? Math.min(previewImages.length - 1, Math.max(0, Math.floor(index)))
+      : 0;
+    const preview = ensureImagePreview();
+    imagePreview = {
+      images: previewImages,
+      index: safeIndex,
+      actualSize: false,
+    };
+    preview.overlay.hidden = false;
+    document.body.classList.add("imagePreviewOpen");
+    renderImagePreviewThumbnails(preview);
+    applyImagePreviewCurrentImage();
+    preview.closeButton.focus();
+  }
+
+  function closeImagePreview() {
+    const preview = ensureImagePreview();
+    preview.overlay.hidden = true;
+    preview.image.removeAttribute("src");
+    preview.thumbnailStrip.replaceChildren();
+    document.body.classList.remove("imagePreviewOpen");
+    imagePreview = null;
+  }
+
+  function isImagePreviewOpen() {
+    return !!imagePreview && !!document.querySelector(".imagePreviewOverlay:not([hidden])");
+  }
+
+  function toggleImagePreviewSize() {
+    if (!imagePreview) return;
+    imagePreview.actualSize = !imagePreview.actualSize;
+    syncImagePreviewControls();
+  }
+
+  function navigateImagePreview(delta) {
+    if (!imagePreview || !Array.isArray(imagePreview.images) || imagePreview.images.length <= 1) return;
+    const nextIndex = clampImagePreviewIndex(imagePreview.index + delta, imagePreview.images.length);
+    if (nextIndex === imagePreview.index) return;
+    imagePreview.index = nextIndex;
+    imagePreview.actualSize = false;
+    applyImagePreviewCurrentImage();
+  }
+
+  function applyImagePreviewCurrentImage() {
+    const preview = ensureImagePreview();
+    const image = getCurrentPreviewImage();
+    if (!image) {
+      closeImagePreview();
+      return;
+    }
+
+    preview.image.src = image.src;
+    preview.image.alt = image.label;
+    preview.image.title = image.label;
+    preview.saveButton.disabled = !image.imageId;
+    updateImagePreviewActiveThumbnail(preview);
+    syncImagePreviewControls();
+  }
+
+  function syncImagePreviewControls() {
+    const preview = ensureImagePreview();
+    const actualSize = !!(imagePreview && imagePreview.actualSize);
+    const hasImages = !!(imagePreview && Array.isArray(imagePreview.images) && imagePreview.images.length > 0);
+    preview.overlay.classList.toggle("imagePreviewOverlay-actual", actualSize);
+    preview.gallery.hidden = !hasImages;
+    const label = actualSize
+      ? i18n.imageFitPreview || "Fit to window"
+      : i18n.imageActualSize || "Actual size";
+    preview.sizeButton.title = label;
+    preview.sizeButton.setAttribute("aria-label", label);
+    preview.sizeButton.innerHTML = actualSize ? CARD_RESTORE_ICON_SVG : CARD_EXPAND_ICON_SVG;
+    preview.saveButton.title = i18n.imageSave || "Save image";
+    preview.saveButton.setAttribute("aria-label", i18n.imageSave || "Save image");
+    preview.closeButton.title = i18n.imageClosePreview || "Close image preview";
+    preview.closeButton.setAttribute("aria-label", i18n.imageClosePreview || "Close image preview");
+    preview.prevButton.title = i18n.imagePrevious || "Previous image";
+    preview.prevButton.setAttribute("aria-label", i18n.imagePrevious || "Previous image");
+    preview.nextButton.title = i18n.imageNext || "Next image";
+    preview.nextButton.setAttribute("aria-label", i18n.imageNext || "Next image");
+    updateImagePreviewGalleryScrollState(preview);
+  }
+
+  function saveImagePreview() {
+    const image = getCurrentPreviewImage();
+    if (!image || !image.imageId) return;
+    vscode.postMessage({ type: "saveImage", imageId: image.imageId });
+  }
+
+  function getCurrentPreviewImage() {
+    if (!imagePreview || !Array.isArray(imagePreview.images) || imagePreview.images.length === 0) return null;
+    const index = clampImagePreviewIndex(imagePreview.index, imagePreview.images.length);
+    imagePreview.index = index;
+    return imagePreview.images[index] || null;
+  }
+
+  function toPreviewImage(image) {
+    const label = typeof image.label === "string" && image.label.trim() ? image.label.trim() : "Image attachment";
+    return {
+      imageId: typeof image.id === "string" ? image.id : "",
+      src: image.src,
+      label,
+    };
+  }
+
+  function clampImagePreviewIndex(index, length) {
+    if (!Number.isFinite(index) || length <= 0) return 0;
+    return Math.min(length - 1, Math.max(0, Math.floor(index)));
+  }
+
+  function renderImagePreviewThumbnails(preview) {
+    preview.thumbnailStrip.replaceChildren();
+    if (!imagePreview || !Array.isArray(imagePreview.images) || imagePreview.images.length === 0) {
+      updateImagePreviewGalleryScrollState(preview);
+      return;
+    }
+
+    imagePreview.images.forEach((image, index) => {
+      const button = el("button", {
+        className: "imagePreviewThumb",
+        type: "button",
+        title: image.label,
+      });
+      button.dataset.previewIndex = String(index);
+      button.setAttribute("aria-label", image.label);
+      const thumb = el("img", { className: "imagePreviewThumbImage", alt: "" });
+      thumb.src = image.src;
+      button.appendChild(thumb);
+      button.addEventListener("click", () => {
+        if (!imagePreview) return;
+        imagePreview.index = index;
+        imagePreview.actualSize = false;
+        applyImagePreviewCurrentImage();
+        button.blur();
+        preview.overlay.focus({ preventScroll: true });
+      });
+      preview.thumbnailStrip.appendChild(button);
+    });
+
+    updateImagePreviewActiveThumbnail(preview);
+    requestAnimationFrame(() => updateImagePreviewGalleryScrollState(preview));
+  }
+
+  function updateImagePreviewActiveThumbnail(preview) {
+    const activeIndex = imagePreview ? imagePreview.index : -1;
+    for (const thumb of preview.thumbnailStrip.querySelectorAll(".imagePreviewThumb")) {
+      const index = Number(thumb.dataset.previewIndex);
+      const active = index === activeIndex;
+      thumb.classList.toggle("imagePreviewThumb-active", active);
+      thumb.setAttribute("aria-current", active ? "true" : "false");
+      if (active) {
+        thumb.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
+    }
+  }
+
+  function updateImagePreviewGalleryScrollState(preview) {
+    if (!preview || !preview.thumbnailStrip || !preview.prevButton || !preview.nextButton) return;
+    const imageCount = imagePreview && Array.isArray(imagePreview.images) ? imagePreview.images.length : 0;
+    const activeIndex = imagePreview ? imagePreview.index : 0;
+    const canNavigate = imageCount > 1;
+    preview.prevButton.hidden = !canNavigate;
+    preview.nextButton.hidden = !canNavigate;
+    preview.prevButton.disabled = !canNavigate || activeIndex <= 0;
+    preview.nextButton.disabled = !canNavigate || activeIndex >= imageCount - 1;
+  }
+
+  function ensureImagePreview() {
+    const existing = document.querySelector(".imagePreviewOverlay");
+    if (existing) {
+      return {
+        overlay: existing,
+        image: existing.querySelector(".imagePreviewImage"),
+        gallery: existing.querySelector(".imagePreviewGallery"),
+        thumbnailStrip: existing.querySelector(".imagePreviewThumbs"),
+        prevButton: existing.querySelector(".imagePreviewThumbScrollPrev"),
+        nextButton: existing.querySelector(".imagePreviewThumbScrollNext"),
+        saveButton: existing.querySelector(".imagePreviewSave"),
+        sizeButton: existing.querySelector(".imagePreviewSize"),
+        closeButton: existing.querySelector(".imagePreviewClose"),
+      };
+    }
+
+    const overlay = el("div", { className: "imagePreviewOverlay" });
+    overlay.hidden = true;
+    overlay.tabIndex = -1;
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+
+    const surface = el("div", { className: "imagePreviewSurface" });
+    const toolbar = el("div", { className: "imagePreviewToolbar" });
+    const gallery = el("div", { className: "imagePreviewGallery" });
+    const prevButton = el("button", { className: "imagePreviewButton imagePreviewThumbScrollPrev", type: "button" });
+    const thumbnailStrip = el("div", { className: "imagePreviewThumbs" });
+    const nextButton = el("button", { className: "imagePreviewButton imagePreviewThumbScrollNext", type: "button" });
+    const actions = el("div", { className: "imagePreviewActions" });
+    const saveButton = el("button", { className: "imagePreviewButton imagePreviewSave", type: "button" });
+    const sizeButton = el("button", { className: "imagePreviewButton imagePreviewSize", type: "button" });
+    const closeButton = el("button", { className: "imagePreviewButton imagePreviewClose", type: "button" });
+    prevButton.innerHTML = NAV_LEFT_ICON_SVG;
+    nextButton.innerHTML = NAV_RIGHT_ICON_SVG;
+    saveButton.innerHTML = SAVE_ICON_SVG;
+    sizeButton.innerHTML = CARD_EXPAND_ICON_SVG;
+    closeButton.innerHTML = CLOSE_ICON_SVG;
+    gallery.appendChild(prevButton);
+    gallery.appendChild(thumbnailStrip);
+    gallery.appendChild(nextButton);
+    actions.appendChild(saveButton);
+    actions.appendChild(sizeButton);
+    actions.appendChild(closeButton);
+    toolbar.appendChild(gallery);
+    toolbar.appendChild(actions);
+
+    const viewport = el("div", { className: "imagePreviewViewport" });
+    const image = el("img", { className: "imagePreviewImage", alt: "" });
+    viewport.appendChild(image);
+    surface.appendChild(toolbar);
+    surface.appendChild(viewport);
+    overlay.appendChild(surface);
+    document.body.appendChild(overlay);
+
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) closeImagePreview();
+    });
+    prevButton.addEventListener("click", () => navigateImagePreview(-1));
+    nextButton.addEventListener("click", () => navigateImagePreview(1));
+    thumbnailStrip.addEventListener("scroll", () => {
+      updateImagePreviewGalleryScrollState({ thumbnailStrip, prevButton, nextButton });
+    });
+    saveButton.addEventListener("click", saveImagePreview);
+    sizeButton.addEventListener("click", toggleImagePreviewSize);
+    closeButton.addEventListener("click", closeImagePreview);
+
+    syncImagePreviewControls();
+    return { overlay, image, gallery, thumbnailStrip, prevButton, nextButton, saveButton, sizeButton, closeButton };
   }
 
   function resolveMessageCollapseState(item, role, text) {
@@ -1734,6 +2228,50 @@
     return value === "always" ? "always" : value === "auto" ? "auto" : "off";
   }
 
+  function normalizeImageSettings(value) {
+    const rawSize = value && typeof value.thumbnailSize === "string" ? value.thumbnailSize : "";
+    const thumbnailSize = rawSize === "small" || rawSize === "large" ? rawSize : "medium";
+    return { thumbnailSize };
+  }
+
+  function normalizeChatOpenPosition(value) {
+    return value === "lastMessage" ? "lastMessage" : "top";
+  }
+
+  function normalizePanelKind(value, legacyIsPreview) {
+    if (value === "reusable" || value === "session") return value;
+    return legacyIsPreview === true ? "reusable" : "session";
+  }
+
+  function debugChatOpenPosition(eventName, details) {
+    if (!debugLoggingEnabled) return;
+    vscode.postMessage({
+      type: "debug",
+      event: eventName,
+      details: sanitizeDebugDetails(details),
+    });
+  }
+
+  function sanitizeDebugDetails(details) {
+    const out = {};
+    if (!details || typeof details !== "object") return out;
+    for (const [key, value] of Object.entries(details)) {
+      if (typeof value === "number") {
+        out[key] = Number.isFinite(value) ? value : null;
+      } else if (typeof value === "boolean" || value == null) {
+        out[key] = value;
+      } else {
+        out[key] = String(value).slice(0, 96);
+      }
+    }
+    return out;
+  }
+
+  function getDebugSessionName(fsPath) {
+    const text = String(fsPath || "").replace(/\\/g, "/");
+    return text.split("/").filter(Boolean).pop() || "unknown";
+  }
+
   function getToolIconSvg(toolKind) {
     return TOOL_ICON_SVGS[toolKind] || TOOL_ICON_SVGS.unknown;
   }
@@ -1992,7 +2530,7 @@
     if (role === "developer" && !showDetails) return false;
     if (role === "user" && !showDetails) {
       const text = getMessageTextToRender(item, role);
-      if (!text.trim()) return false;
+      if (!text.trim() && getMessageImages(item).length === 0) return false;
     }
     return true;
   }
@@ -2189,9 +2727,79 @@
     const y = Math.max(0, Math.floor(Number(scrollY) || 0));
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        window.scrollTo(0, y);
+        getScrollRoot().scrollTo(0, y);
       });
     });
+  }
+
+  function restoreSavedChatOpenPosition(fsPath, hostMessageIndex) {
+    if (chatOpenPosition !== "lastMessage") {
+      debugChatOpenPosition("restoreSkip", { reason: "mode", mode: chatOpenPosition });
+      return null;
+    }
+    const key = typeof fsPath === "string" ? fsPath : "";
+    if (!key) {
+      debugChatOpenPosition("restoreSkip", { reason: "noPath" });
+      return null;
+    }
+    const positions =
+      webviewState && webviewState.chatOpenPositions && typeof webviewState.chatOpenPositions === "object"
+        ? webviewState.chatOpenPositions
+        : null;
+    const saved = positions && positions[key] && typeof positions[key] === "object" ? positions[key] : null;
+    const messageIndex =
+      typeof hostMessageIndex === "number"
+        ? hostMessageIndex
+        : typeof saved?.messageIndex === "number"
+          ? saved.messageIndex
+          : null;
+    if (typeof messageIndex !== "number") {
+      debugChatOpenPosition("restoreSkip", {
+        reason: "noSavedIndex",
+        session: getDebugSessionName(key),
+        hostIndex: hostMessageIndex,
+      });
+      restoreScroll(0);
+      return null;
+    }
+    if (messageIndex <= 0 || isFirstRenderedMessageIndex(messageIndex)) {
+      debugChatOpenPosition("restoreTop", {
+        reason: messageIndex <= 0 ? "firstMessage" : "firstRenderedMessage",
+        session: getDebugSessionName(key),
+        index: messageIndex,
+        hostIndex: hostMessageIndex,
+      });
+      restoreScroll(0);
+      return null;
+    }
+    const elTarget = document.getElementById(`msg-${messageIndex}`);
+    if (!elTarget) {
+      debugChatOpenPosition("restoreMiss", {
+        session: getDebugSessionName(key),
+        index: messageIndex,
+        hostIndex: hostMessageIndex,
+      });
+      restoreScroll(0);
+      return null;
+    }
+    debugChatOpenPosition("restoreApply", {
+      session: getDebugSessionName(key),
+      index: messageIndex,
+      hostIndex: hostMessageIndex,
+      scrollTop: getScrollTop(),
+    });
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        elTarget.scrollIntoView({ block: "start" });
+        debugChatOpenPosition("restoreDone", {
+          session: getDebugSessionName(key),
+          index: messageIndex,
+          scrollTop: getScrollTop(),
+        });
+        showToast(i18n.restoredLastPosition || "Restored last viewed position.");
+      });
+    });
+    return messageIndex;
   }
 
   function clearHighlights() {

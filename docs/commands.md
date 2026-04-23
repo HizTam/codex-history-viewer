@@ -53,7 +53,7 @@ Notes:
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
-| Open Session (Chat) | `codexHistoryViewer.openSession` | Opens a selected session in the chat-style webview. |
+| Open in New Tab (Chat) | `codexHistoryViewer.openSession` | Opens a selected session in its own chat-style webview tab, or activates an existing matching chat tab. |
 | Open Session (Markdown) | `codexHistoryViewer.openSessionMarkdown` | Opens a selected session as a Markdown transcript document. |
 | Copy Prompt Excerpt | `codexHistoryViewer.copyResumePrompt` | Copies a compact handoff excerpt from the selected session. |
 | Resume in OpenAI Codex | `codexHistoryViewer.resumeSessionInCodex` | Sends the selected Codex session to the OpenAI Codex extension. |
