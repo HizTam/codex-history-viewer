@@ -4,7 +4,9 @@ out/
 .vscode-test/
 .DS_Store
 *.vsix
+*.log
 media/chatViewShiki.bundle.js
 .private-docs/
 AG*.md
 .claude
+.codex

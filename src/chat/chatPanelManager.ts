@@ -13,21 +13,40 @@ import { getConfig } from "../settings";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 import type { DebugLogger } from "../services/logger";
-import type { ChatImageAttachment, ChatSessionModel } from "./chatTypes";
+import type {
+  ChatImageAttachment,
+  ChatMessageItem,
+  ChatPatchEntry,
+  ChatPatchGroupItem,
+  ChatSessionModel,
+  ChatTimelineItem,
+  ChatToolItem,
+} from "./chatTypes";
 
 type SaveableChatImage = {
   src: string;
   mimeType: string;
   label: string;
 };
+type ChatSessionDetailMode = "summary" | "full";
 
 type MissingSessionHandler = (fsPath: string) => Promise<void> | void;
 export type ChatPanelKind = "reusable" | "session";
-type ChatPanelState = { fsPath: string; revealMessageIndex?: number; sessionCwd?: string; kind: ChatPanelKind };
+export type ChatWebviewAutoRefreshMode = "off" | "preserve" | "follow";
+type ChatPanelState = {
+  fsPath: string;
+  revealMessageIndex?: number;
+  sessionCwd?: string;
+  kind: ChatPanelKind;
+  autoRefreshMode: ChatWebviewAutoRefreshMode;
+  pendingAutoRefresh: boolean;
+};
 type ExistingChatPanel = { panel: vscode.WebviewPanel; kind: ChatPanelKind };
+const DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE: ChatWebviewAutoRefreshMode = "off";
+const DEFAULT_CHAT_SESSION_DETAIL_MODE: ChatSessionDetailMode = "summary";
 
 // Manages chat-like WebviewPanels opened in the editor area.
-export class ChatPanelManager {
+export class ChatPanelManager implements vscode.Disposable {
   private readonly extensionUri: vscode.Uri;
   private readonly historyService: HistoryService;
   private readonly annotationStore: SessionAnnotationStore;
@@ -37,12 +56,14 @@ export class ChatPanelManager {
   private readonly logger?: DebugLogger;
   private readonly codexPanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudePanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly autoRefreshConsumerVisibilityEmitter = new vscode.EventEmitter<void>();
 
   private reusablePanel: vscode.WebviewPanel | null = null;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
   private readonly stateByPanel = new WeakMap<vscode.WebviewPanel, ChatPanelState>();
   private readonly readyByPanel = new WeakMap<vscode.WebviewPanel, boolean>();
   private readonly imageDataByPanel = new WeakMap<vscode.WebviewPanel, Map<string, SaveableChatImage>>();
+  public readonly onDidChangeAutoRefreshConsumerVisibility = this.autoRefreshConsumerVisibilityEmitter.event;
 
   constructor(
     extensionUri: vscode.Uri,
@@ -70,6 +91,10 @@ export class ChatPanelManager {
     };
   }
 
+  public dispose(): void {
+    this.autoRefreshConsumerVisibilityEmitter.dispose();
+  }
+
   public refreshI18n(): void {
     const i18n = this.buildI18n();
     const dateTime = this.buildDateTime();
@@ -89,6 +114,7 @@ export class ChatPanelManager {
         assistantLongMessageFolding,
         imageSettings,
         chatOpenPosition: config.chatOpenPosition,
+        autoRefreshAvailable: config.autoRefresh.enabled,
         debugLoggingEnabled: this.logger?.isDebugEnabled() ?? false,
       });
     };
@@ -119,6 +145,41 @@ export class ChatPanelManager {
 
     if (this.reusablePanel) update(this.reusablePanel);
     for (const panel of this.panelsByKey.values()) update(panel);
+  }
+
+  public hasOpenAutoRefreshConsumer(): boolean {
+    for (const panel of this.getOpenPanels()) {
+      const state = this.stateByPanel.get(panel);
+      if (!state || state.autoRefreshMode === "off") continue;
+      return true;
+    }
+    return false;
+  }
+
+  public getAutoRefreshSessionFsPaths(): string[] {
+    const paths = new Map<string, string>();
+    for (const panel of this.getOpenPanels()) {
+      const state = this.stateByPanel.get(panel);
+      if (!state || state.autoRefreshMode === "off") continue;
+      paths.set(normalizeCacheKey(state.fsPath), state.fsPath);
+    }
+    return Array.from(paths.values());
+  }
+
+  public refreshAutoRefreshPanels(changedFsPaths: readonly string[]): void {
+    if (changedFsPaths.length === 0) return;
+    const changedKeys = new Set(changedFsPaths.map((fsPath) => normalizeCacheKey(fsPath)));
+    for (const panel of this.getOpenPanels()) {
+      const state = this.stateByPanel.get(panel);
+      if (!state || state.autoRefreshMode === "off") continue;
+      if (!changedKeys.has(normalizeCacheKey(state.fsPath))) continue;
+
+      if (!this.readyByPanel.get(panel)) {
+        this.stateByPanel.set(panel, { ...state, pendingAutoRefresh: true });
+        continue;
+      }
+      this.requestAutoRefresh(panel, state.autoRefreshMode);
+    }
   }
 
   public closeSessionsByFsPath(fsPaths: readonly string[]): void {
@@ -152,15 +213,21 @@ export class ChatPanelManager {
 
     const key = normalizeCacheKey(session.fsPath);
     const panel = options.kind === "reusable" ? this.getOrCreateReusablePanel() : this.getOrCreatePanelForKey(key);
+    const prevState = this.stateByPanel.get(panel);
+    const isSameSession = !!prevState && normalizeCacheKey(prevState.fsPath) === key;
 
     this.stateByPanel.set(panel, {
       fsPath: session.fsPath,
       revealMessageIndex: options.revealMessageIndex,
+      sessionCwd: prevState?.sessionCwd,
       kind: options.kind,
+      autoRefreshMode: isSameSession ? prevState.autoRefreshMode : DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE,
+      pendingAutoRefresh: false,
     });
     panel.title = buildPanelTitle(session);
     panel.iconPath = this.resolveSourceIconPath(session.source);
     panel.reveal(panel.viewColumn, options.kind === "reusable");
+    this.notifyAutoRefreshConsumerVisibilityChanged();
 
     // If the webview is already ready, update immediately on selection changes.
     if (this.readyByPanel.get(panel)) {
@@ -185,8 +252,9 @@ export class ChatPanelManager {
       this.promoteReusablePanelToSession(panel, state.fsPath);
     }
 
-    this.stateByPanel.set(panel, { ...state, revealMessageIndex, kind: nextKind });
+    this.stateByPanel.set(panel, { ...state, revealMessageIndex, kind: nextKind, pendingAutoRefresh: false });
     panel.reveal(panel.viewColumn, options.preserveFocus === true);
+    this.notifyAutoRefreshConsumerVisibilityChanged();
     if (this.readyByPanel.get(panel)) {
       await this.sendSessionData(panel);
     }
@@ -275,6 +343,16 @@ export class ChatPanelManager {
     panel.webview.onDidReceiveMessage(async (msg) => {
       await this.handleMessage(panel, msg);
     });
+    panel.onDidChangeViewState(() => {
+      const state = this.stateByPanel.get(panel);
+      if (state && state.pendingAutoRefresh && state.autoRefreshMode !== "off" && this.readyByPanel.get(panel)) {
+        this.requestAutoRefresh(panel, state.autoRefreshMode);
+      }
+      this.notifyAutoRefreshConsumerVisibilityChanged();
+    });
+    panel.onDidDispose(() => {
+      this.notifyAutoRefreshConsumerVisibilityChanged();
+    });
 
     return panel;
   }
@@ -326,6 +404,7 @@ export class ChatPanelManager {
     <button id="btnScrollTop" type="button" class="toolbarIconBtn"></button>
     <button id="btnScrollBottom" type="button" class="toolbarIconBtn"></button>
     <button id="btnPageSearch" type="button" class="toolbarIconBtn"></button>
+    <button id="btnAutoRefresh" type="button" class="toolbarIconBtn" hidden></button>
     <button id="btnReload" type="button" class="toolbarIconBtn"></button>
   </div>
   <div id="pageSearchBar" hidden>
@@ -423,6 +502,10 @@ export class ChatPanelManager {
         await this.saveImageFromPanel(panel, msg);
         return;
       }
+      case "requestImageData": {
+        this.sendImageDataToPanel(panel, msg);
+        return;
+      }
       case "copyResumePrompt": {
         const copied = await vscode.commands.executeCommand<boolean>("codexHistoryViewer.copyResumePrompt", {
           fsPath: state.fsPath,
@@ -476,14 +559,38 @@ export class ChatPanelManager {
       }
       case "reload": {
         // Reload rereads the session file and preserves view position (scroll).
-        const restoreScrollY = typeof msg?.scrollY === "number" && Number.isFinite(msg.scrollY) ? Math.max(0, msg.scrollY) : undefined;
+        const restoreScrollY =
+          typeof msg?.scrollY === "number" && Number.isFinite(msg.scrollY) ? Math.max(0, msg.scrollY) : undefined;
         const restoreSelectedMessageIndex =
           typeof msg?.selectedMessageIndex === "number" && Number.isFinite(msg.selectedMessageIndex)
             ? msg.selectedMessageIndex
             : undefined;
-        const sent = await this.sendSessionData(panel, { restoreScrollY, restoreSelectedMessageIndex });
+        const preserveUiState = msg?.preserveUiState === true;
+        const autoScrollToBottom = msg?.autoScrollToBottom === true;
+        const detailMode = msg?.includeDetails === true ? "full" : DEFAULT_CHAT_SESSION_DETAIL_MODE;
+        const sent = await this.sendSessionData(panel, {
+          restoreScrollY,
+          restoreSelectedMessageIndex,
+          preserveUiState,
+          autoScrollToBottom,
+          detailMode,
+        });
         if (!sent) return;
         await this.refreshPanelTitleFromFile(panel);
+        return;
+      }
+      case "setAutoRefreshMode": {
+        const autoRefreshMode = normalizeChatWebviewAutoRefreshMode(msg?.mode);
+        const nextState: ChatPanelState = {
+          ...state,
+          autoRefreshMode,
+          pendingAutoRefresh: autoRefreshMode === "off" ? false : state.pendingAutoRefresh,
+        };
+        this.stateByPanel.set(panel, nextState);
+        this.notifyAutoRefreshConsumerVisibilityChanged();
+        if (nextState.pendingAutoRefresh && nextState.autoRefreshMode !== "off" && this.readyByPanel.get(panel)) {
+          this.requestAutoRefresh(panel, nextState.autoRefreshMode);
+        }
         return;
       }
       case "filterByTag": {
@@ -511,16 +618,26 @@ export class ChatPanelManager {
 
   private async sendSessionData(
     panel: vscode.WebviewPanel,
-    options?: { restoreScrollY?: number; restoreSelectedMessageIndex?: number },
+    options?: {
+      restoreScrollY?: number;
+      restoreSelectedMessageIndex?: number;
+      preserveUiState?: boolean;
+      autoScrollToBottom?: boolean;
+      detailMode?: ChatSessionDetailMode;
+    },
   ): Promise<boolean> {
     const state = this.stateByPanel.get(panel);
     if (!state) return false;
     if (!(await this.ensurePanelSessionFile(panel, state.fsPath))) return false;
 
     const config = getConfig();
+    const detailMode = resolveSessionDetailMode(options?.detailMode, state);
     let model: Awaited<ReturnType<typeof buildChatSessionModel>>;
     try {
-      model = await buildChatSessionModel(state.fsPath, { images: config.images });
+      model = await buildChatSessionModel(state.fsPath, {
+        images: config.images,
+        includeDetails: detailMode === "full",
+      });
     } catch {
       if (!(await this.ensurePanelSessionFile(panel, state.fsPath))) return false;
       void vscode.window.showErrorMessage(t("app.openSessionFailed"));
@@ -539,10 +656,11 @@ export class ChatPanelManager {
     this.logger?.debug(
       `chatOpenPosition send session=${debugSessionName(state.fsPath)} mode=${config.chatOpenPosition} panelKind=${state.kind} saved=${savedOpenMessageIndex ?? "none"}`,
     );
+    const webviewModel = toWebviewChatSessionModel(model, detailMode);
     void panel.webview.postMessage({
       type: "sessionData",
       model: {
-        ...model,
+        ...webviewModel,
         annotation: {
           tags: annotation?.tags ? [...annotation.tags] : [],
           note: annotation?.note ?? "",
@@ -551,18 +669,24 @@ export class ChatPanelManager {
       revealMessageIndex: state.revealMessageIndex,
       restoreScrollY: options?.restoreScrollY,
       restoreSelectedMessageIndex: options?.restoreSelectedMessageIndex,
+      preserveUiState: options?.preserveUiState === true,
+      autoScrollToBottom: options?.autoScrollToBottom === true,
       panelKind: state.kind,
       isPreview: state.kind === "reusable",
       isPinned: this.pinStore.isPinned(state.fsPath),
       i18n: this.buildI18n(),
       dateTime,
       chatOpenPosition: config.chatOpenPosition,
+      autoRefreshAvailable: config.autoRefresh.enabled,
+      autoRefreshMode: state.autoRefreshMode,
       savedOpenMessageIndex,
       debugLoggingEnabled: this.logger?.isDebugEnabled() ?? false,
       toolDisplayMode: config.toolDisplayMode,
       userLongMessageFolding: config.userLongMessageFolding,
       assistantLongMessageFolding: config.assistantLongMessageFolding,
       imageSettings: this.buildImageSettings(config),
+      detailMode,
+      detailsLoaded: detailMode === "full",
     });
     return true;
   }
@@ -608,6 +732,32 @@ export class ChatPanelManager {
     }
   }
 
+  private sendImageDataToPanel(panel: vscode.WebviewPanel, msg: any): void {
+    const state = this.stateByPanel.get(panel);
+    const imageId = typeof msg?.imageId === "string" ? msg.imageId.trim() : "";
+    if (!state || !imageId || imageId.length > 160) return;
+
+    const requestedFsPath = typeof msg?.fsPath === "string" ? msg.fsPath.trim() : "";
+    if (requestedFsPath && normalizeCacheKey(requestedFsPath) !== normalizeCacheKey(state.fsPath)) {
+      return;
+    }
+
+    const image = this.imageDataByPanel.get(panel)?.get(imageId);
+    if (!image) {
+      void panel.webview.postMessage({ type: "imageDataFailed", fsPath: state.fsPath, imageId });
+      return;
+    }
+
+    void panel.webview.postMessage({
+      type: "imageData",
+      fsPath: state.fsPath,
+      imageId,
+      src: image.src,
+      mimeType: image.mimeType,
+      label: image.label,
+    });
+  }
+
   private buildI18n(): Record<string, string> {
     return {
       resumeInCodex: t("chat.button.resumeInCodex"),
@@ -629,6 +779,9 @@ export class ChatPanelManager {
       scrollTopTooltip: t("chat.tooltip.scrollTop"),
       scrollBottom: t("chat.button.scrollBottom"),
       scrollBottomTooltip: t("chat.tooltip.scrollBottom"),
+      autoRefreshOffTooltip: t("chat.tooltip.autoRefreshOff"),
+      autoRefreshPreserveTooltip: t("chat.tooltip.autoRefreshPreserve"),
+      autoRefreshFollowTooltip: t("chat.tooltip.autoRefreshFollow"),
       detailsOn: t("chat.button.detailsOn"),
       detailsOff: t("chat.button.detailsOff"),
       detailsOnTooltip: t("chat.tooltip.detailsOn"),
@@ -640,11 +793,20 @@ export class ChatPanelManager {
       pageSearchNextTooltip: t("chat.pageSearch.nextTooltip"),
       pageSearchCloseTooltip: t("chat.pageSearch.closeTooltip"),
       pageSearchNoMatches: t("chat.pageSearch.noMatches"),
+      pageSearchTypeToSearch: t("chat.pageSearch.typeToSearch"),
       copied: t("chat.toast.copied"),
       restoredLastPosition: t("chat.toast.restoredLastPosition"),
+      autoRefreshOffToast: t("chat.toast.autoRefreshOff"),
+      autoRefreshPreserveToast: t("chat.toast.autoRefreshPreserve"),
+      autoRefreshFollowToast: t("chat.toast.autoRefreshFollow"),
       tool: t("chat.label.tool"),
       arguments: t("chat.label.arguments"),
       output: t("chat.label.output"),
+      sessionInfo: t("chat.label.sessionInfo"),
+      roleUser: t("chat.role.user"),
+      roleAssistant: t("chat.role.assistant"),
+      roleDeveloper: t("chat.role.developer"),
+      roleMessage: t("chat.role.message"),
       imageUnavailable: t("chat.image.unavailable"),
       imageTooLarge: t("chat.image.tooLarge"),
       imageUnsupported: t("chat.image.unsupported"),
@@ -659,6 +821,7 @@ export class ChatPanelManager {
       imageSave: t("chat.image.save"),
       imagePrevious: t("chat.image.previous"),
       imageNext: t("chat.image.next"),
+      imageLoading: t("chat.image.loading"),
       copy: t("chat.button.copy"),
       showMore: t("chat.button.showMore"),
       showLess: t("chat.button.showLess"),
@@ -693,6 +856,7 @@ export class ChatPanelManager {
       annotationRemoveTag: t("chat.annotation.removeTag"),
       annotationShowMore: t("chat.annotation.showMore"),
       annotationShowLess: t("chat.annotation.showLess"),
+      detailsLoading: t("chat.details.loading"),
     };
   }
 
@@ -777,6 +941,17 @@ export class ChatPanelManager {
   private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {
     return source === "claude" ? this.claudePanelIconPath : this.codexPanelIconPath;
   }
+
+  private notifyAutoRefreshConsumerVisibilityChanged(): void {
+    this.autoRefreshConsumerVisibilityEmitter.fire();
+  }
+
+  private requestAutoRefresh(panel: vscode.WebviewPanel, mode: ChatWebviewAutoRefreshMode): void {
+    const state = this.stateByPanel.get(panel);
+    if (!state || state.autoRefreshMode === "off" || !this.readyByPanel.get(panel)) return;
+    this.stateByPanel.set(panel, { ...state, pendingAutoRefresh: false });
+    void panel.webview.postMessage({ type: "requestReload", mode });
+  }
 }
 
 function randomNonce(): string {
@@ -819,6 +994,127 @@ function debugSessionName(fsPath: string): string {
   const normalized = String(fsPath || "").replace(/\\/g, "/");
   const fileName = normalized.split("/").filter(Boolean).pop() ?? "unknown";
   return sanitizeDebugToken(fileName, "unknown");
+}
+
+function resolveSessionDetailMode(
+  requestedMode: ChatSessionDetailMode | undefined,
+  state: ChatPanelState,
+): ChatSessionDetailMode {
+  if (requestedMode === "full" || requestedMode === "summary") return requestedMode;
+  return typeof state.revealMessageIndex === "number" ? "full" : DEFAULT_CHAT_SESSION_DETAIL_MODE;
+}
+
+function normalizeChatWebviewAutoRefreshMode(value: unknown): ChatWebviewAutoRefreshMode {
+  return value === "preserve" || value === "follow" ? value : "off";
+}
+
+function toWebviewChatSessionModel(model: ChatSessionModel, detailMode: ChatSessionDetailMode): ChatSessionModel {
+  return detailMode === "full" ? toFullWebviewChatSessionModel(model) : toSummaryChatSessionModel(model);
+}
+
+function toFullWebviewChatSessionModel(model: ChatSessionModel): ChatSessionModel {
+  return {
+    ...model,
+    items: model.items.map((item) => toFullWebviewTimelineItem(item)),
+  };
+}
+
+function toFullWebviewTimelineItem(item: ChatTimelineItem): ChatTimelineItem {
+  if (item.type === "message") return toWebviewMessageItem(item);
+  if (item.type === "tool") return toFullToolItem(item);
+  if (item.type === "patchGroup") return toFullPatchGroupItem(item);
+  return { ...item };
+}
+
+function toSummaryChatSessionModel(model: ChatSessionModel): ChatSessionModel {
+  return {
+    ...model,
+    items: model.items.map((item) => toSummaryTimelineItem(item)),
+  };
+}
+
+function toSummaryTimelineItem(item: ChatTimelineItem): ChatTimelineItem {
+  if (item.type === "tool") return toSummaryToolItem(item);
+  if (item.type === "patchGroup") return toSummaryPatchGroupItem(item);
+  if (item.type === "message") return toWebviewMessageItem(item);
+  return { ...item };
+}
+
+function toWebviewMessageItem(item: ChatMessageItem): ChatMessageItem {
+  return {
+    ...item,
+    images: item.images?.map((image) => toWebviewImageAttachment(image)),
+  };
+}
+
+function toWebviewImageAttachment(image: ChatImageAttachment): ChatImageAttachment {
+  const webviewImage: ChatImageAttachment = { ...image };
+  if (webviewImage.status === "available" && hasNonEmptyString(webviewImage.src)) {
+    delete webviewImage.src;
+    webviewImage.dataOmitted = true;
+  }
+  return webviewImage;
+}
+
+function toFullToolItem(item: ChatToolItem): ChatToolItem {
+  return {
+    ...item,
+    presentation: item.presentation ? { ...item.presentation } : undefined,
+  };
+}
+
+function toSummaryToolItem(item: ChatToolItem): ChatToolItem {
+  const hasHeavyDetails =
+    item.detailsOmitted === true || hasNonEmptyString(item.argumentsText) || hasNonEmptyString(item.outputText);
+  return {
+    type: "tool",
+    messageIndex: item.messageIndex,
+    timestampIso: item.timestampIso,
+    name: item.name,
+    callId: item.callId,
+    presentation: item.presentation ? { ...item.presentation } : undefined,
+    ...(hasHeavyDetails ? { detailsOmitted: true } : {}),
+  };
+}
+
+function toFullPatchGroupItem(item: ChatPatchGroupItem): ChatPatchGroupItem {
+  return {
+    ...item,
+    entries: item.entries.map((entry) => toFullPatchEntry(entry)),
+  };
+}
+
+function toSummaryPatchGroupItem(item: ChatPatchGroupItem): ChatPatchGroupItem {
+  return {
+    ...item,
+    entries: item.entries.map((entry) => toSummaryPatchEntry(entry)),
+  };
+}
+
+function toFullPatchEntry(entry: ChatPatchEntry): ChatPatchEntry {
+  return {
+    ...entry,
+    hunks: Array.isArray(entry.hunks)
+      ? entry.hunks.map((hunk) => ({
+          ...hunk,
+          rows: Array.isArray(hunk.rows) ? hunk.rows.map((row) => ({ ...row })) : [],
+        }))
+      : [],
+  };
+}
+
+function toSummaryPatchEntry(entry: ChatPatchEntry): ChatPatchEntry {
+  const hunks = Array.isArray(entry.hunks) ? entry.hunks : [];
+  const hasHunkRows = hunks.some((hunk) => Array.isArray(hunk.rows) && hunk.rows.length > 0);
+  return {
+    ...entry,
+    detailsOmitted: hasHunkRows ? true : entry.detailsOmitted,
+    hunks: hasHunkRows ? [] : hunks.map((hunk) => ({ ...hunk, rows: Array.isArray(hunk.rows) ? [...hunk.rows] : [] })),
+  };
+}
+
+function hasNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
 }
 
 function collectSaveableImages(model: ChatSessionModel): Map<string, SaveableChatImage> {

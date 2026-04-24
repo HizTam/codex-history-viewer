@@ -27,6 +27,7 @@ import {
 
 export interface ChatSessionModelBuildOptions {
   images?: ImagesConfig;
+  includeDetails?: boolean;
 }
 
 // Parse a session JSONL and build a chat-view model.
@@ -90,7 +91,7 @@ async function readTimelineItems(
       ) {
         continue;
       }
-      if (indexCodexEventRecord(obj, items, pendingPatchGroups, () => messageIndex, sessionCwd)) {
+      if (indexCodexEventRecord(obj, items, pendingPatchGroups, () => messageIndex, sessionCwd, options)) {
         continue;
       }
       if (
@@ -167,13 +168,23 @@ async function indexCodexTimelineRecord(
   }
 
   if (payloadType === "function_call") {
+    const includeDetails = shouldIncludeDetails(options);
     const name = typeof obj?.payload?.name === "string" ? obj.payload.name : "function_call";
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
     const argumentsText = typeof obj?.payload?.arguments === "string" ? obj.payload.arguments : undefined;
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
     const messageIndex = currentMessageIndex();
 
-    const tool: ChatToolItem = { type: "tool", messageIndex, timestampIso: ts, name, callId, argumentsText };
+    const tool: ChatToolItem = {
+      type: "tool",
+      messageIndex,
+      timestampIso: ts,
+      name,
+      callId,
+      ...(includeDetails && argumentsText ? { argumentsText } : {}),
+      ...(!includeDetails && hasText(argumentsText) ? { detailsOmitted: true } : {}),
+    };
+    if (!includeDetails) tool.presentation = buildToolPresentation({ ...tool, argumentsText });
     items.push(tool);
     if (callId) toolByCallId.set(callId, tool);
     return true;
@@ -190,6 +201,7 @@ async function indexCodexTimelineRecord(
       fallbackMessageIndex: currentMessageIndex(),
       timestampIso: ts,
       fallbackName: "function_call_output",
+      includeDetails: shouldIncludeDetails(options),
     });
     return true;
   }
@@ -203,6 +215,7 @@ function indexCodexEventRecord(
   pendingPatchGroups: Map<string, PendingPatchGroup>,
   currentMessageIndex: () => number,
   sessionCwd?: string,
+  options: ChatSessionModelBuildOptions = {},
 ): boolean {
   if (obj?.type !== "event_msg") return false;
 
@@ -215,6 +228,7 @@ function indexCodexEventRecord(
       obj?.payload?.changes,
       sessionCwd,
       typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined,
+      shouldIncludeDetails(options),
     );
     if (entries.length === 0) return true;
 
@@ -298,6 +312,7 @@ async function indexClaudeTimelineRecord(
     });
   }
 
+  const includeDetails = shouldIncludeDetails(options);
   for (const toolCall of parsed.toolCalls) {
     const name = normalizeText(toolCall.name ?? "") || "tool_use";
     const callId = toolCall.callId;
@@ -309,8 +324,10 @@ async function indexClaudeTimelineRecord(
       timestampIso: ts,
       name,
       callId,
-      argumentsText,
+      ...(includeDetails && argumentsText ? { argumentsText } : {}),
+      ...(!includeDetails && hasText(argumentsText) ? { detailsOmitted: true } : {}),
     };
+    if (!includeDetails) tool.presentation = buildToolPresentation({ ...tool, argumentsText });
     items.push(tool);
     if (callId) toolByCallId.set(callId, tool);
   }
@@ -324,6 +341,7 @@ async function indexClaudeTimelineRecord(
       fallbackMessageIndex: currentMessageIndex(),
       timestampIso: ts,
       fallbackName: "tool_result",
+      includeDetails,
     });
   }
 
@@ -339,12 +357,14 @@ function attachOrPushToolOutput(
     fallbackMessageIndex?: number;
     timestampIso?: string;
     fallbackName: string;
+    includeDetails: boolean;
   },
 ): void {
-  const { callId, outputText, fallbackMessageIndex, timestampIso, fallbackName } = params;
+  const { callId, outputText, fallbackMessageIndex, timestampIso, fallbackName, includeDetails } = params;
   if (callId && toolByCallId.has(callId)) {
     const tool = toolByCallId.get(callId)!;
-    tool.outputText = outputText;
+    if (includeDetails) tool.outputText = outputText;
+    else if (hasText(outputText)) tool.detailsOmitted = true;
     if (!tool.timestampIso) tool.timestampIso = timestampIso;
     if (typeof tool.messageIndex !== "number" && typeof fallbackMessageIndex === "number") {
       tool.messageIndex = fallbackMessageIndex;
@@ -352,21 +372,29 @@ function attachOrPushToolOutput(
     return;
   }
 
-  items.push({
+  const tool: ChatToolItem = {
     type: "tool",
     messageIndex: fallbackMessageIndex,
     timestampIso,
     name: fallbackName,
     callId,
-    outputText,
-  });
+    ...(includeDetails && outputText ? { outputText } : {}),
+    ...(!includeDetails && hasText(outputText) ? { detailsOmitted: true } : {}),
+  };
+  if (!includeDetails) tool.presentation = buildToolPresentation(tool);
+  items.push(tool);
 }
 
 function finalizeTimelineItems(items: ChatTimelineItem[]): void {
   for (const item of items) {
     if (item.type !== "tool") continue;
+    if (item.presentation) continue;
     item.presentation = buildToolPresentation(item);
   }
+}
+
+function shouldIncludeDetails(options: ChatSessionModelBuildOptions): boolean {
+  return options.includeDetails !== false;
 }
 
 function toImageExtractionOptions(images?: ImagesConfig): { enabled: boolean; maxBytes: number } {
@@ -439,7 +467,12 @@ function buildPatchGroupKey(obj: any): string {
   return timestampIso ? `ts:${timestampIso}` : "patch";
 }
 
-function buildPatchEntries(changes: unknown, sessionCwd?: string, callId?: string): ChatPatchEntry[] {
+function buildPatchEntries(
+  changes: unknown,
+  sessionCwd?: string,
+  callId?: string,
+  includeDetails = true,
+): ChatPatchEntry[] {
   if (!changes || typeof changes !== "object" || Array.isArray(changes)) return [];
 
   const entries: ChatPatchEntry[] = [];
@@ -449,7 +482,7 @@ function buildPatchEntries(changes: unknown, sessionCwd?: string, callId?: strin
     const changeType = normalizePatchChangeType(change.type);
     const movePath = typeof change.move_path === "string" ? change.move_path : undefined;
     const unifiedDiff = typeof change.unified_diff === "string" ? change.unified_diff : "";
-    const parsed = parseUnifiedDiff(unifiedDiff);
+    const parsed = parseUnifiedDiff(unifiedDiff, includeDetails);
     const displayPath = formatPatchDisplayPath(rawPath, sessionCwd);
     const moveDisplayPath = movePath ? formatPatchDisplayPath(movePath, sessionCwd) : undefined;
 
@@ -463,6 +496,7 @@ function buildPatchEntries(changes: unknown, sessionCwd?: string, callId?: strin
       changeType,
       added: parsed.added,
       removed: parsed.removed,
+      ...(!includeDetails && hasText(unifiedDiff) ? { detailsOmitted: true } : {}),
       hunks: parsed.hunks,
     });
     index += 1;
@@ -470,7 +504,10 @@ function buildPatchEntries(changes: unknown, sessionCwd?: string, callId?: strin
   return entries;
 }
 
-function parseUnifiedDiff(diffText: string): { added: number; removed: number; hunks: ChatPatchHunk[] } {
+function parseUnifiedDiff(
+  diffText: string,
+  includeDetails = true,
+): { added: number; removed: number; hunks: ChatPatchHunk[] } {
   const lines = String(diffText ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
   const hunks: ChatPatchHunk[] = [];
   let added = 0;
@@ -484,6 +521,11 @@ function parseUnifiedDiff(diffText: string): { added: number; removed: number; h
 
   const flushPendingRows = (): void => {
     if (!currentHunk || (pendingDeletes.length === 0 && pendingAdds.length === 0)) return;
+    if (!includeDetails) {
+      pendingDeletes = [];
+      pendingAdds = [];
+      return;
+    }
     const count = Math.max(pendingDeletes.length, pendingAdds.length);
     for (let i = 0; i < count; i += 1) {
       const left = pendingDeletes[i];
@@ -508,7 +550,7 @@ function parseUnifiedDiff(diffText: string): { added: number; removed: number; h
       currentLeftLine = parsedHeader?.leftStart ?? 0;
       currentRightLine = parsedHeader?.rightStart ?? 0;
       currentHunk = { header: rawLine, rows: [] };
-      hunks.push(currentHunk);
+      if (includeDetails) hunks.push(currentHunk);
       continue;
     }
     if (!currentHunk) continue;
@@ -519,13 +561,15 @@ function parseUnifiedDiff(diffText: string): { added: number; removed: number; h
     const text = rawLine.slice(1);
     if (marker === " ") {
       flushPendingRows();
-      currentHunk.rows.push({
-        kind: "context",
-        leftLine: currentLeftLine,
-        leftText: text,
-        rightLine: currentRightLine,
-        rightText: text,
-      });
+      if (includeDetails) {
+        currentHunk.rows.push({
+          kind: "context",
+          leftLine: currentLeftLine,
+          leftText: text,
+          rightLine: currentRightLine,
+          rightText: text,
+        });
+      }
       currentLeftLine += 1;
       currentRightLine += 1;
       continue;
@@ -713,4 +757,8 @@ function safeJsonStringify(value: unknown): string {
 
 function normalizeText(s: string): string {
   return s.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+}
+
+function hasText(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
 }

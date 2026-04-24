@@ -30,6 +30,7 @@ export interface ChatImageAttachment {
   status: ChatImageAttachmentStatus;
   source: "data" | "local" | "reference";
   src?: string;
+  dataOmitted?: boolean;
   mimeType?: string;
   label?: string;
   reason?: ChatImageAttachmentReason;
@@ -56,6 +57,7 @@ export interface ChatToolItem {
   callId?: string;
   argumentsText?: string;
   outputText?: string;
+  detailsOmitted?: boolean;
   presentation?: ChatToolPresentation;
 }
 
@@ -83,6 +85,7 @@ export interface ChatPatchEntry {
   changeType: ChatPatchChangeType;
   added: number;
   removed: number;
+  detailsOmitted?: boolean;
   hunks: ChatPatchHunk[];
 }
 

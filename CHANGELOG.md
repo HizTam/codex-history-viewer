@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.1] - 2026-04-24
+
+### Added
+
+- Added a chat tab auto-refresh button in the chat header, shown when the History auto-refresh setting is enabled.
+- Added per-tab auto-refresh modes: off, preserve current view, and follow latest.
+- Added automatic refresh for open chat tabs while VS Code is focused, including background editor tabs. Only affected tabs are refreshed, and new or different sessions start with auto-refresh off.
+- Added on-demand loading for chat image data so large image attachments no longer need to be sent to the Webview during the initial session render.
+- Added card-based scroll restoration when toggling chat details on or off, including fallback to the next visible card when the previous card is hidden in summary mode.
+
+### Changed
+
+- Deferred heavy tool arguments, tool output, and patch diff rows until details are shown or a diff entry is expanded.
+
+### Fixed
+
+- Preserved chat tab UI state across reload and auto-refresh, including expanded cards/diffs, details visibility, diff wrap state, selected message, in-page search state, and scroll behavior.
+- Reset session-scoped Webview UI state when a reusable chat tab switches to a different session, including in-page search state, image preview state, and image data cache.
+
 ## [1.4.0] - 2026-04-23
 
 ### Added

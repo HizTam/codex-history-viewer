@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig } from "../settings";
@@ -10,8 +11,11 @@ interface WatchRoot {
   pattern: string;
 }
 
+type PollTargetProvider = () => readonly string[];
+
 export class AutoRefreshService implements vscode.Disposable {
-  private readonly refresh: () => Promise<void>;
+  private readonly refresh: (changedFsPaths: readonly string[]) => Promise<void>;
+  private readonly pollTargets?: PollTargetProvider;
   private readonly logger?: DebugLogger;
   private readonly watchers: vscode.Disposable[] = [];
   private debounceMs = 2000;
@@ -19,15 +23,23 @@ export class AutoRefreshService implements vscode.Disposable {
   private enabled = false;
   private visible = false;
   private focused = false;
-  private pending = false;
+  private readonly pendingFsPaths = new Set<string>();
   private refreshInFlight = false;
   private disposed = false;
   private lastRefreshAt = 0;
   private rootSignature = "";
   private timer: NodeJS.Timeout | null = null;
+  private timerDueAt = 0;
+  private pollingTimer: NodeJS.Timeout | null = null;
+  private readonly polledMtimeByKey = new Map<string, number>();
 
-  constructor(refresh: () => Promise<void>, logger?: DebugLogger) {
+  constructor(
+    refresh: (changedFsPaths: readonly string[]) => Promise<void>,
+    pollTargets?: PollTargetProvider,
+    logger?: DebugLogger,
+  ) {
     this.refresh = refresh;
+    this.pollTargets = pollTargets;
     this.logger = logger;
   }
 
@@ -41,9 +53,11 @@ export class AutoRefreshService implements vscode.Disposable {
 
     if (!config.autoRefresh.enabled) {
       this.enabled = false;
-      this.pending = false;
+      this.pendingFsPaths.clear();
       this.rootSignature = "";
       this.clearTimer();
+      this.clearPollingTimer();
+      this.polledMtimeByKey.clear();
       this.disposeWatchers();
       this.logger?.debug("autoRefresh disabled");
       return;
@@ -59,7 +73,8 @@ export class AutoRefreshService implements vscode.Disposable {
       this.rebuildWatchers(roots);
     }
 
-    if (this.pending && this.canRun()) this.schedule();
+    if (this.pendingFsPaths.size > 0 && this.canRun()) this.schedule();
+    this.ensurePolling();
   }
 
   public setVisible(visible: boolean): void {
@@ -68,10 +83,12 @@ export class AutoRefreshService implements vscode.Disposable {
 
     if (!this.canRun()) {
       this.clearTimer();
+      this.clearPollingTimer();
       return;
     }
 
-    if (this.pending) this.schedule();
+    if (this.pendingFsPaths.size > 0) this.schedule();
+    this.pollOpenTargets();
   }
 
   public setFocused(focused: boolean): void {
@@ -80,15 +97,18 @@ export class AutoRefreshService implements vscode.Disposable {
 
     if (!this.canRun()) {
       this.clearTimer();
+      this.clearPollingTimer();
       return;
     }
 
-    if (this.pending) this.schedule();
+    if (this.pendingFsPaths.size > 0) this.schedule();
+    this.pollOpenTargets();
   }
 
   public dispose(): void {
     this.disposed = true;
     this.clearTimer();
+    this.clearPollingTimer();
     this.disposeWatchers();
   }
 
@@ -121,14 +141,12 @@ export class AutoRefreshService implements vscode.Disposable {
     if (this.disposed || !this.enabled) return;
     if (!isJsonlFileUri(uri)) return;
 
-    this.pending = true;
-    this.logger?.debug(`autoRefresh event kind=${kind}`);
+    this.pendingFsPaths.add(uri.fsPath);
+    this.logger?.debug(`autoRefresh event kind=${kind} file=${path.basename(uri.fsPath)}`);
 
     if (!this.canRun()) {
       this.clearTimer();
-      this.logger?.debug(
-        this.visible ? "autoRefresh deferred while window is inactive" : "autoRefresh deferred while history view is hidden",
-      );
+      this.logger?.debug(this.visible ? "autoRefresh deferred while window is inactive" : "autoRefresh deferred while all consumers are hidden");
       return;
     }
 
@@ -136,49 +154,150 @@ export class AutoRefreshService implements vscode.Disposable {
   }
 
   private schedule(): void {
-    if (this.disposed || !this.canRun() || !this.pending) return;
+    if (this.disposed || !this.canRun() || this.pendingFsPaths.size === 0) return;
+    if (this.refreshInFlight) return;
 
-    this.clearTimer();
     const now = Date.now();
     const dueAt = Math.max(now + this.debounceMs, this.lastRefreshAt + this.minIntervalMs);
-    const delayMs = Math.max(0, dueAt - now);
+    this.scheduleAt(dueAt);
+  }
+
+  private scheduleAt(dueAt: number): void {
+    if (this.disposed || !this.canRun() || this.pendingFsPaths.size === 0) return;
+    if (this.timer && Math.abs(this.timerDueAt - dueAt) < 10) return;
+
+    this.clearTimer();
+    const delayMs = Math.max(0, Math.ceil(dueAt - Date.now()));
+    this.timerDueAt = Date.now() + delayMs;
     this.timer = setTimeout(() => {
       this.timer = null;
+      this.timerDueAt = 0;
       void this.runRefresh();
     }, delayMs);
   }
 
   private async runRefresh(): Promise<void> {
-    if (this.disposed || !this.canRun() || !this.pending) return;
+    if (this.disposed || !this.canRun() || this.pendingFsPaths.size === 0) return;
 
     if (this.refreshInFlight) {
       this.schedule();
       return;
     }
 
-    this.pending = false;
+    const quietDelayMs = this.getPendingQuietDelayMs();
+    if (quietDelayMs > 0) {
+      this.scheduleAt(Date.now() + quietDelayMs);
+      return;
+    }
+
+    const changedFsPaths = Array.from(this.pendingFsPaths);
+    this.pendingFsPaths.clear();
     this.refreshInFlight = true;
     try {
-      await this.refresh();
+      await this.refresh(changedFsPaths);
       this.lastRefreshAt = Date.now();
       this.logger?.debug("autoRefresh refreshed history");
     } catch (error) {
+      for (const fsPath of changedFsPaths) {
+        this.pendingFsPaths.add(fsPath);
+      }
       this.logger?.debug(`autoRefresh failed: ${formatError(error)}`);
     } finally {
       this.refreshInFlight = false;
     }
 
-    if (this.pending) this.schedule();
+    if (this.pendingFsPaths.size > 0) this.schedule();
   }
 
   private clearTimer(): void {
     if (!this.timer) return;
     clearTimeout(this.timer);
     this.timer = null;
+    this.timerDueAt = 0;
+  }
+
+  private ensurePolling(): void {
+    if (this.pollingTimer || this.disposed || !this.canRun() || !this.pollTargets) return;
+    this.schedulePolling(this.getPollingIntervalMs());
+  }
+
+  private schedulePolling(delayMs: number): void {
+    if (this.pollingTimer || this.disposed || !this.canRun() || !this.pollTargets) return;
+    this.pollingTimer = setTimeout(() => {
+      this.pollingTimer = null;
+      this.pollOpenTargets();
+    }, Math.max(0, Math.ceil(delayMs)));
+  }
+
+  private clearPollingTimer(): void {
+    if (!this.pollingTimer) return;
+    clearTimeout(this.pollingTimer);
+    this.pollingTimer = null;
   }
 
   private canRun(): boolean {
     return this.enabled && this.visible && this.focused;
+  }
+
+  private pollOpenTargets(): void {
+    if (this.disposed || !this.canRun() || !this.pollTargets) return;
+
+    const targets = this.pollTargets()
+      .map((fsPath) => (typeof fsPath === "string" ? fsPath.trim() : ""))
+      .filter((fsPath) => fsPath && path.extname(fsPath).toLowerCase() === ".jsonl");
+    const targetKeys = new Set<string>();
+
+    for (const fsPath of targets) {
+      const key = normalizeCacheKey(fsPath);
+      targetKeys.add(key);
+      const previousMtimeMs = this.polledMtimeByKey.get(key);
+
+      try {
+        const stat = fs.statSync(fsPath);
+        if (!stat.isFile()) continue;
+        const nextMtimeMs = stat.mtimeMs;
+        this.polledMtimeByKey.set(key, nextMtimeMs);
+        if (previousMtimeMs !== undefined && nextMtimeMs > previousMtimeMs + 1) {
+          this.pendingFsPaths.add(fsPath);
+          this.logger?.debug(`autoRefresh poll change file=${path.basename(fsPath)}`);
+          this.schedule();
+        }
+      } catch {
+        if (previousMtimeMs !== undefined) {
+          this.polledMtimeByKey.delete(key);
+          this.pendingFsPaths.add(fsPath);
+          this.logger?.debug(`autoRefresh poll missing file=${path.basename(fsPath)}`);
+          this.schedule();
+        }
+      }
+    }
+
+    for (const key of Array.from(this.polledMtimeByKey.keys())) {
+      if (!targetKeys.has(key)) this.polledMtimeByKey.delete(key);
+    }
+
+    if (targets.length > 0) this.schedulePolling(this.getPollingIntervalMs());
+  }
+
+  private getPollingIntervalMs(): number {
+    return Math.max(500, Math.min(2_000, Math.floor(this.debounceMs / 2)));
+  }
+
+  private getPendingQuietDelayMs(): number {
+    const now = Date.now();
+    let latestMtimeMs = 0;
+    for (const fsPath of this.pendingFsPaths) {
+      try {
+        const stat = fs.statSync(fsPath);
+        if (stat.isFile()) latestMtimeMs = Math.max(latestMtimeMs, stat.mtimeMs);
+      } catch {
+        // Deleted or inaccessible files should not block refresh.
+      }
+    }
+
+    if (latestMtimeMs <= 0) return 0;
+    const quietUntil = latestMtimeMs + this.debounceMs;
+    return quietUntil > now ? Math.ceil(quietUntil - now) : 0;
   }
 }
 

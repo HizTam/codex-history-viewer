@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-04-23
-- 対象バージョン: 1.4.0
+- 最終更新: 2026-04-24
+- 対象バージョン: 1.4.1
 
 ## 1. 概要
 
@@ -147,14 +147,21 @@
 
 ### 3.5 自動更新
 
-- 既定では無効 (`autoRefresh.enabled = false`)
+- 履歴の自動更新設定は既定では無効 (`codexHistoryViewer.autoRefresh.enabled = false`)
 - 有効時は Codex / Claude の履歴 `.jsonl` を監視する
 - 変更イベントは `autoRefresh.debounceMs` でまとめ、`autoRefresh.minIntervalMs` より短い間隔では refresh しない
 - 実際の refresh 実行条件:
-  - History view が表示中
+  - History view が表示中、または自動更新オンのチャットタブが開いている
   - VS Code ウィンドウがフォーカス中
-- History view 非表示中、またはウィンドウ非フォーカス中の変更は pending として保持する
-- 表示 / フォーカス復帰時に pending があれば 1 回だけ更新予約する
+- 自動更新オンのチャットタブは、エディタ上で裏タブになっていても更新対象にする
+- VS Code ウィンドウ非フォーカス中、または更新対象 consumer がない間の変更は pending として保持する
+- フォーカス復帰時、または更新対象 consumer が現れた時に pending があれば更新予約する
+- チャットヘッダーの自動更新ボタンは、履歴の自動更新設定が有効なときだけ表示する
+- チャットタブの自動更新モードは `off` / `preserve` / `follow` を持つ
+- 新規チャットタブ、または再利用タブで別セッションへ切り替わったチャットタブは `off` から開始する
+- 同じセッションの既存チャットタブを再表示する場合は、そのタブの自動更新モードを維持する
+- `preserve` は現在の表示位置と UI 状態を維持して再読み込みする
+- `follow` は UI 状態を維持し、最新の表示カードへスクロールする
 - 自動更新では Search 結果を消さない
 - 自動更新では検索インデックス再構築を行わない
 
@@ -171,6 +178,7 @@
   - セッションの CWD から解決できるローカル画像ファイル
 - `<image></image>` のような画像プレースホルダーだけが残る場合は、本文からプレースホルダーを除去し、表示不能状態の画像カードを表示する
 - remote-only / API 参照のみ / 未対応形式 / 欠損ファイル / サイズ超過 / 設定無効の場合は、画像カードに理由を表示する
+- 対応画像の実データは初回描画では Webview に送らず、表示範囲に入ったサムネイルやプレビュー要求時にオンデマンドで読み込む
 - `images.maxSizeMB` はプレビュー表示と保存のために読み込む画像サイズ上限として扱う
 - `images.thumbnailSize` はチャット本文内のサムネイルサイズだけを切り替える
 - サムネイルクリックで Webview 内の画像プレビューモーダルを開く
@@ -184,6 +192,13 @@
   - `Escape`、閉じるボタン、背景クリックで閉じる
   - 別セッションへ切り替わった場合は閉じる
 - チャットのスクロール領域は固定ヘッダーの下に分離し、スクロールバーがヘッダー横から始まらないようにする
+- チャットヘッダーには、検索ボタンと再読み込みボタンの間に自動更新ボタンを置く
+- チャットタブの自動更新ボタンは、履歴の自動更新設定が有効なときだけ表示し、`off` / `preserve` / `follow` をクリックで循環する
+- `preserve` / `follow` はボタンの背景色でオン状態を示し、`follow` はさらに別色で追従中であることを示す
+- チャットの先頭 / 末尾スクロールは、スクロールコンテナの絶対端ではなく、実際に描画されている最初 / 最後のカードを対象にする
+- `Show details` OFF で描画されないカードは、先頭 / 末尾スクロールおよび `follow` の対象に含めない
+- `Show details` OFF では tool 引数 / tool 出力 / patch diff 行などの重い詳細を省略し、必要時に full detail を再読み込みする
+- `Show details` の ON/OFF では切り替え前に見えていたカードを基準にスクロールを復元し、対象カードが非表示なら次の表示カードへ移動する
 - `chat.openPosition`:
   - `top`: 通常は先頭から開く
   - `lastMessage`: 最後に見えていたメッセージ付近を復元する
@@ -191,6 +206,9 @@
 - メニューから開くチャットはセッションタブとして扱い、別セッションを開いても差し替えない
 - 再利用タブに表示中の同じセッションをメニューから開いた場合、そのタブをセッションタブへ昇格する
 - ツリー選択 / メニュー操作のどちらでも、同じセッションのチャットタブが既に開いていれば既存タブをアクティブにする
+- Reload とチャットタブの自動更新は、表示位置、選択メッセージ、詳細表示、展開カード、展開 diff、diff 折り返し、検索サイドバー状態を維持する
+- 再利用タブで別セッションへ切り替わる場合は、検索状態、検索リサイズ状態、画像プレビュー、画像データキャッシュなどのセッション依存 UI をリセットする
+- grouped diff カードの最大幅状態は、再読み込みでカードの並び順が変わっても維持しやすいように安定キーで管理する
 
 ### 3.7 設定（`codexHistoryViewer.*`）
 
@@ -254,12 +272,23 @@
 ### 4.4 自動更新
 
 - `src/services/autoRefreshService.ts`
-  - `autoRefresh.enabled` が `true` のときだけ FileSystemWatcher を作成する
+  - 履歴の自動更新設定 (`codexHistoryViewer.autoRefresh.enabled`) が `true` のときだけ FileSystemWatcher を作成する
   - Codex は `**/rollout-*.jsonl`、Claude は `*/*.jsonl` を監視する
-  - watcher イベントは即 refresh せず、pending 状態にして debounce / min interval を適用する
-  - `History` view が非表示、または VS Code ウィンドウが非フォーカスの場合は timer を止めて pending を保持する
+  - watcher イベントは即 refresh せず、変更された `fsPath` を pending 集合に入れて debounce / min interval を適用する
+  - refresh callback には変更された `fsPath` の配列を渡す
+  - `History` view が非表示かつ自動更新オンのチャットタブが開いていない場合、または VS Code ウィンドウが非フォーカスの場合は timer を止めて pending を保持する
   - `vscode.window.state.focused` と `onDidChangeWindowState` により、フォーカス中のウィンドウだけ自動 refresh を実行する
-  - 自動 refresh は `refreshHistoryIndex(false)` と view refresh のみを行い、Search 結果のクリアや検索インデックス再構築は行わない
+  - 自動 refresh は `refreshHistoryIndex(false)`、view refresh、チャットタイトル更新、対象チャットタブ更新を行い、Search 結果のクリアや検索インデックス再構築は行わない
+- `src/extension.ts`
+  - 自動更新 consumer は `History` view が表示中、または `ChatPanelManager` に自動更新オンの開いているチャットタブがある場合に存在するとみなす
+  - `historyView.onDidChangeVisibility`、チャット consumer 変更イベント、`onDidChangeWindowState` で `AutoRefreshService` の実行条件を更新する
+- `src/chat/chatPanelManager.ts`
+  - チャットタブごとに `autoRefreshMode` と `pendingAutoRefresh` を保持する
+  - 開いているチャットタブは裏タブでも自動更新対象にする
+  - `refreshAutoRefreshPanels(changedFsPaths)` は変更されたセッションファイルに対応するチャットタブだけ再読み込みする
+  - Webview がまだ ready でない場合のみ `pendingAutoRefresh` として保持し、ready 後に 1 回反映する
+  - 新規チャットタブ、または別セッションへ差し替えた再利用チャットタブは `off` から開始する
+  - 同じセッションの既存タブは自動更新モードを維持する
 
 ### 4.5 検索インデックス
 
@@ -315,12 +344,20 @@
   - 既存タブ検索では `session` タブを優先し、なければ同じセッションを表示中の `reusable` タブを使う
   - `ChatPanelManager` は `ChatOpenPositionStore` を使い、明示的な移動先がない場合だけ最後に見えていたメッセージ付近を復元する
   - `ChatPanelManager` は保存可能な画像をパネル単位で保持し、Webview からの保存要求時に `showSaveDialog` 経由で書き出す
+  - `ChatPanelManager` は表示詳細を `summary` / `full` で管理し、`summary` では tool 引数 / tool 出力 / patch diff 行を Webview model から省略する
+  - `ChatPanelManager` は対応画像の data URI をパネル単位で保持し、Webview からの `requestImageData` に応じて必要な画像データだけ返す
   - `chatImageAttachments.ts` は Codex / Claude の画像データ、ローカル画像参照、画像プレースホルダーを正規化する
-  - 対応画像は data URI として Webview へ渡し、未対応 / 欠損 / remote-only / サイズ超過 / 設定無効は表示不能理由としてモデル化する
+  - 未対応 / 欠損 / remote-only / サイズ超過 / 設定無効の画像は表示不能理由としてモデル化する
   - `user` / `assistant` / tool / note / diff などのカードは個別に最大幅展開できる
   - grouped diff カードは前後の diff へ移動する上下ナビゲーションを持つ
   - 画像プレビューは Webview 内モーダルとして実装し、ヘッダーのサムネイル列、前後ボタン、左右キー、fit / 原寸切替、保存、閉じる操作を持つ
   - Webview のスクロール対象は `#scrollRoot` に限定し、固定ヘッダーをスクロール領域から分離する
+  - チャットヘッダーの自動更新ボタンは `btnPageSearch` と `btnReload` の間に配置する
+  - Webview 側は `requestReload` / `reload` message で自動更新時のスクロール・UI 状態保持を行う
+  - Webview 側は `Show details` 切り替え時にカード anchor を保持し、再描画後に同じカードまたは次の表示カードへ復元する
+  - Webview 側は IntersectionObserver で表示範囲付近の画像だけ data URI を要求し、セッション切替時は画像データキャッシュを破棄する
+  - `follow` モードとチャット末尾ボタンは、`#timeline` に描画済みの最後の `.row` へスクロールする
+  - patch group のカード幅保持キーは `turnId`、メッセージ index、変更ファイル情報などから安定的に作る
 - Markdown transcript: `src/transcript/*`
 - Control / Status ビュー: `src/tree/utilityTrees.ts`
 - History / Pinned / Search ツリー: `src/tree/*`
@@ -419,10 +456,21 @@ npm run package
 - Codex のみ有効 / Claude のみ有効 / 両方有効で履歴が正しく出る
 - `History` の日付 / プロジェクト / ソース / タグ絞り込みが期待どおり動く
 - `History` の表示モードを `日付別` / `最新順` で切り替えられ、選択中セッションの操作が維持される
-- `autoRefresh.enabled = true` のとき、履歴ファイル作成 / 変更 / 削除で History が自動更新される
-- `History` view が非表示のとき、自動更新は保留され、表示時に 1 回だけ反映される
+- 履歴の自動更新設定が有効なとき、履歴ファイル作成 / 変更 / 削除で History が自動更新される
+- 履歴の自動更新設定が有効なとき、チャットヘッダーに自動更新ボタンが表示される
+- 新規チャットタブ、または再利用タブで別セッションへ切り替えたチャットタブは、自動更新が `off` で始まる
+- 同じセッションの既存チャットタブを再表示した場合、自動更新モードが維持される
+- チャットタブの自動更新ボタンで `off` / `preserve` / `follow` が循環し、ボタン色と tooltip が切り替わる
+- 自動更新オンのチャットタブが開いているとき、History view が非表示でも対象チャットタブが自動更新される
+- 自動更新オンのチャットタブが裏タブでも、VS Code ウィンドウがフォーカス中なら更新される
+- History view が非表示かつ自動更新オンのチャットタブが開いていないとき、自動更新は保留される
 - VS Code ウィンドウが非フォーカスのとき、自動更新は保留され、フォーカス復帰時に 1 回だけ反映される
+- `preserve` ではスクロール位置、選択メッセージ、詳細表示、開いているカード、開いている diff、検索サイドバー状態が維持される
+- `follow` では UI 状態を維持しつつ、最新の表示カードへ移動する
 - 自動更新で Search 結果が勝手にクリアされない
+- `Show details` を ON/OFF しても、切り替え前に見ていたカードまたは次の表示カードへスクロールが復元される
+- 詳細 OFF の大型セッションで tool 詳細、patch diff 行、画像 data URI が初回描画時にまとめて読み込まれず、詳細表示・diff 展開・画像表示時に必要分が読み込まれる
+- 再利用タブで別セッションへ切り替えたとき、検索状態、画像プレビュー、画像データキャッシュが前セッションから残らない
 - `Search` が履歴側の絞り込み条件に追従する
 - `Search` のロール設定、保存済み検索、再検索、タグ絞り込みが動く
 - `Rebuild Cache` 実行前に確認が出て、履歴キャッシュと検索インデックスが再作成される
@@ -472,9 +520,12 @@ npm run package
 - 検索サイドバーがツールバー右端ボタンおよび `Ctrl+F` / `Cmd+F` で開閉する
 - 検索サイドバーの幅をドラッグで変更でき、再表示後も保持される
 - 未入力・一致なし時ともにカウントが `0/0` と表示される
-- チャットヘッダーの先頭・末尾ボタンでスクロールできる
+- チャットヘッダーの先頭・末尾ボタンで、実際に表示されている最初 / 最後のカードへスクロールできる
+- `Show details` OFF のとき、描画されていない詳細カードへ先頭 / 末尾スクロールしない
 - ヘッダー幅が狭くなるとラベルボタンが自動的にアイコンのみに切り替わる
 - Reload 後にスクロール位置と選択メッセージが復元される
+- Reload 後に開いているカード、diff 展開、diff 折り返し、検索サイドバー状態が維持される
+- diff カードを最大幅にした状態が、再読み込み後も同じ diff グループで維持される
 - ローカルファイルリンク（相対パス・行番号指定）が VS Code 内で正しく開く
 - `package.nls.*` と `l10n/bundle.l10n.*` のキー所有が混ざっていない
 - ソースコードコメントに日本語が残っていない

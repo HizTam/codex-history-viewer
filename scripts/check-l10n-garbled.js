@@ -12,8 +12,8 @@ const targets = [
 // Detect patterns that are likely mojibake.
 const suspiciousPatterns = [
   /\uFFFD/u, // replacement character
-  /窶ｦ/u,
-  /繧/u,
+  /\u7AB6\uFF66/u,
+  /\u7E67/u,
 ];
 
 let failed = false;

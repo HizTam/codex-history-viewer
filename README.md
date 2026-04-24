@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **1.4.0** (2026-04-23).
+Latest release: **1.4.1** (2026-04-24).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -18,7 +18,8 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Browse sessions in a year / month / day tree or a latest-first list
 - Search across prompts, responses, tool output, tags, and notes
 - View sessions in a chat-like UI with Markdown, code highlighting, math rendering, and file-change diffs
-- Show supported image attachments from Codex / Claude sessions, with preview and save controls
+- Keep open chat tabs up to date with header-controlled auto-refresh modes
+- Show supported image attachments from Codex / Claude sessions, with on-demand loading, preview, and save controls
 - Organize sessions with pins, tags, notes, saved searches, and filters
 - Resume past sessions through the official Codex and Claude Code VS Code extensions
 
@@ -29,25 +30,32 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - History view can switch between a year/month/day tree and a latest-first flat session list
 - History filters for date scope, project/CWD, source, and tags
 - Configurable history date basis (`started` / `lastActivity`) for the History tree and date-based search filtering
-- Optional automatic history refresh for local session file changes, with debounce and automatic refresh interval controls
+- Optional automatic refresh for local session file changes, with debounce and automatic refresh interval controls
 - One-click "Filter by Current Project" action in the History view header (toggle on/off)
 - Tag filters in **Pinned** and **Search** views (separate from History filters)
 - Session tooltips can show both **Started** and **Last activity** timestamps when they differ
 - Open any session in a chat-like viewer (Webview) with Markdown rendering, syntax-highlighted fenced code blocks (powered by Shiki), and toolbar quick actions for pin/unpin, Markdown transcript, prompt excerpt copy, and source-aware resume (**OpenAI Codex** for Codex sessions, **Claude Code** for Claude sessions)
 - Chat viewer renders inline and block equations with KaTeX-compatible math support
-- Chat viewer renders supported image attachments from data/local image references, and shows a clear unavailable state for unsupported, missing, remote-only, disabled, or oversized images
+- Chat viewer renders supported image attachments from data/local image references, loads image data on demand, and shows a clear unavailable state for unsupported, missing, remote-only, disabled, or oversized images
 - Image attachments open in an in-view preview modal with a thumbnail strip, previous/next navigation, left/right keyboard navigation, fit/original-size toggle, and save action
 - Chat viewer supports tool-specific cards with a configurable display mode (`detailsOnly` / `compactCards`)
+- Chat viewer defers heavy tool details and patch diff rows until **Show details** is enabled or a diff entry is expanded
 - Chat viewer can softly fold long `user` and `assistant` messages independently, while **Show details** always expands them fully
+- Chat viewer restores to the currently viewed card when **Show details** is toggled, falling back to the next visible card when needed
 - Chat viewer cards can be expanded individually to full width when a message, tool result, or diff needs more horizontal space
 - Chat viewer shows grouped file-change cards from patch activity, with collapsible side-by-side diffs, per-hunk wrap toggles, syntax highlighting, previous/next diff navigation, and jump-to-line actions
 - Chat viewer includes a right-side in-page search sidebar with match counts, result snippets, line hints for diffs, direct result navigation, and resizable overlay behavior
-- Chat viewer toolbar includes quick scroll actions (top / bottom) and automatically switches label buttons to icon-only mode when the header gets narrow
+- Chat viewer toolbar includes quick scroll actions (first / latest rendered card) and automatically switches label buttons to icon-only mode when the header gets narrow
+- Chat viewer toolbar can show an auto-refresh button per chat tab when the History auto-refresh setting is enabled. Modes are `off`, `on with current view preserved`, and `follow latest`.
+- Chat tab auto-refresh keeps open chat tabs up to date while VS Code is focused, including tabs that are open in the background.
+- Chat tab reload and auto-refresh preserve the current view state, including scroll position, selected message, expanded cards/diffs, details visibility, diff wrap state, and in-page search state.
+- Reusable chat tabs reset session-scoped Webview state when switching to a different session, avoiding stale search, preview, or image-cache state.
 - Selecting a session uses a reusable chat tab, while **Open in New Tab (Chat)** keeps the session in its own tab
 - If the same session is already open, selecting or opening it activates the existing chat tab instead of creating a duplicate
 - Chat sessions can reopen at the top or near the last viewed message, based on the setting
 - Chat viewer scrolling starts below the fixed toolbar so the scrollbar belongs to the scrollable content area
 - Reload in the chat viewer preserves scroll/selection and refreshes the tab title using the active history date basis
+- The chat tab "follow latest" mode and the bottom scroll action target the latest rendered card instead of the absolute bottom of the scroll container
 - Workspace-relative Markdown file links open inside VS Code from both chat sessions and Markdown transcripts
 - Chat tab icon switches by source (`Codex` / `Claude`)
 - Chat header annotation block (tags + note), including quick actions (filter/remove/edit)
@@ -118,9 +126,9 @@ For the full command list with per-command descriptions, see:
 - `codexHistoryViewer.search.maxResults`: Max number of search hits to collect
 - `codexHistoryViewer.history.dateBasis`: Which session date the History tree and date-based search filters use (`started` or `lastActivity`)
 - `codexHistoryViewer.history.titleSource`: How session titles are resolved (`generated` or `nativeWhenAvailable`)
-- `codexHistoryViewer.autoRefresh.enabled`: Automatically refresh History when local session files change. Disabled by default.
-- `codexHistoryViewer.autoRefresh.debounceMs`: Delay before automatic refresh after file changes. Multiple events in this window are merged.
-- `codexHistoryViewer.autoRefresh.minIntervalMs`: Minimum automatic refresh interval
+- `codexHistoryViewer.autoRefresh.enabled`: Automatically refresh History and opt-in chat tabs when local session files change. Disabled by default.
+- `codexHistoryViewer.autoRefresh.debounceMs`: Delay before automatic refresh after a local session file change. Multiple nearby events are merged.
+- `codexHistoryViewer.autoRefresh.minIntervalMs`: Minimum automatic refresh interval. Higher values reduce refresh frequency during active writes.
 - `codexHistoryViewer.chat.openPosition`: Where a chat session opens when returning to a previously viewed session (`top` or `lastMessage`)
 - `codexHistoryViewer.chat.toolDisplayMode`: How tool activity appears in the chat viewer (`detailsOnly` or `compactCards`)
 - `codexHistoryViewer.chat.userLongMessageFolding`: How long `user` messages are folded in the chat viewer (`off`, `auto`, or `always`)
@@ -142,7 +150,9 @@ For the full command list with per-command descriptions, see:
 ### Maintenance Tip (All Sources)
 
 - If history or search results look incorrect or stale, run **Control > Rebuild Cache**. It recreates both the history cache and the search index after confirmation.
-- If you want new or updated local sessions to appear without manual refresh, enable `codexHistoryViewer.autoRefresh.enabled`. Automatic refresh runs only while the History view is visible and the VS Code window is focused.
+- If you want new or updated local sessions to appear without manual refresh, enable the History auto-refresh setting. Automatic refresh runs while the History view is visible or an auto-refresh-enabled chat tab is open, and only while the VS Code window is focused.
+- Auto-refresh reacts to local session file changes. For Codex sessions, assistant output may be written to `rollout-*.jsonl` only after a response or turn is complete, so chat tabs may not update token-by-token while the answer is still streaming.
+- If chat tab auto-refresh still feels delayed after the session file changes, try lowering `codexHistoryViewer.autoRefresh.debounceMs` and/or `codexHistoryViewer.autoRefresh.minIntervalMs`. Lower values feel more live but can increase CPU and disk activity.
 - To prevent the cache folder from growing over time, regularly run **Control > Empty Trash**. Trash files are not deleted automatically, and this also removes legacy cache/index generations.
 - For performance troubleshooting, enable `codexHistoryViewer.debug.logging.enabled` in `settings.json`, then inspect **Output > Codex History Viewer**. Logs include counts and timings, not session paths or message content.
 
@@ -153,6 +163,7 @@ For the full command list with per-command descriptions, see:
 - If you click **Cancel**, resume will not proceed. Click **Open** to allow the handoff.
 - If you check "Do not ask me again for this extension", future resumes will not show the same prompt.
 - You can manage previously authorized extension URIs from Command Palette: `Extensions: Manage Authorized Extension URIs...`
+- If the official Codex extension stops reopening a conversation, try these VS Code commands before reloading the whole window: `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 
 ## Import/Export behavior
 
@@ -162,16 +173,17 @@ For the full command list with per-command descriptions, see:
 - Import recursively scans the selected source folder for `.jsonl` files.
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 
-## What's New in 1.4.0
+## What's New in 1.4.1
 
-- Added a History view mode switch between date-grouped history and a latest-first flat session list.
-- Added opt-in automatic history refresh for local session file changes, with debounce delay and refresh interval settings.
-- Automatic refresh is deferred while the History view is hidden or the VS Code window is not focused.
-- Added image attachment rendering in the chat viewer for supported Codex / Claude image data and local image references.
-- Added an option to open chat sessions from the top or restore near the last viewed message.
-- Changed chat opening so selecting or opening a session activates an existing matching chat tab when possible.
-- Changed the chat viewer scroll area so the fixed toolbar stays outside the scrollable content.
-- Changed the settings display order.
+- Added a chat tab auto-refresh button in the chat header with `off`, `preserve view`, and `follow latest` modes.
+- Open chat tabs can now auto-refresh while VS Code is focused, including background editor tabs.
+- New chat tabs and tabs switched to a different session now start with auto-refresh off; existing tabs keep their own mode.
+- Chat tab auto-refresh preserves expanded cards/diffs, details visibility, diff wrap state, selected message, in-page search state, and scroll behavior.
+- Reusable chat tabs now reset session-scoped Webview state when switching to a different session.
+- Large chat sessions now load lighter by deferring heavy details, patch diff rows, and image data until needed.
+- Toggling **Show details** now restores the scroll position by timeline card instead of raw pixel offset.
+- Follow/latest scrolling now targets the latest rendered card instead of the absolute bottom of the scroll container.
+- Stabilized diff card width state across chat reloads.
 
 ## Changelog
 

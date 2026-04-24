@@ -3,6 +3,7 @@
 **/node_modules/**
 **/out/**
 **/*.map
+**/*.log
 **/*.ts
 **/tsconfig.json
 **/.gitignore
@@ -15,6 +16,8 @@ scripts/**
 DEVELOPMENT.ja.md
 .private-docs/**
 AG*.md
+.claude
+.codex
 
 # The chat view uses markdown-it for Markdown rendering, so include only the minimal runtime files
 !node_modules/markdown-it/

@@ -464,6 +464,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     pinnedView,
     historyView,
     searchView,
+    chatPanels,
   );
 
   const ensureAlwaysShowHeaderActions = async (): Promise<void> => {
@@ -745,7 +746,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       updatePinnedViewDescription();
       updateHistoryViewDescription();
       updateSearchViewDescription();
-      void autoRefreshService?.configure(getConfig(), historyView.visible, vscode.window.state.focused);
+      void autoRefreshService?.configure(getConfig(), computeAutoRefreshConsumerVisible(), vscode.window.state.focused);
       if (uiLanguageChanged || toolDisplayModeChanged || longMessageFoldingChanged || imagesChanged) chatPanels.refreshPanels();
       else chatPanels.refreshI18n();
       void ensureAlwaysShowHeaderActions();
@@ -1041,18 +1042,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusProvider.refresh();
   };
 
+  const computeAutoRefreshConsumerVisible = (): boolean =>
+    historyView.visible || chatPanels.hasOpenAutoRefreshConsumer();
+
   autoRefreshService = new AutoRefreshService(
-    async () => {
+    async (changedFsPaths) => {
       await refreshHistoryIndex(false);
       refreshViews();
       chatPanels.refreshTitles();
+      chatPanels.refreshAutoRefreshPanels(changedFsPaths);
     },
+    () => chatPanels.getAutoRefreshSessionFsPaths(),
     logger,
   );
   context.subscriptions.push(
     autoRefreshService,
     historyView.onDidChangeVisibility((e) => {
-      autoRefreshService?.setVisible(e.visible);
+      autoRefreshService?.setVisible(computeAutoRefreshConsumerVisible());
+    }),
+    chatPanels.onDidChangeAutoRefreshConsumerVisibility(() => {
+      autoRefreshService?.setVisible(computeAutoRefreshConsumerVisible());
     }),
     vscode.window.onDidChangeWindowState((e) => {
       autoRefreshService?.setFocused(e.focused);
@@ -2651,7 +2660,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   refreshViews();
   controlProvider.refresh();
-  await autoRefreshService.configure(getConfig(), historyView.visible, vscode.window.state.focused);
+  await autoRefreshService.configure(getConfig(), computeAutoRefreshConsumerVisible(), vscode.window.state.focused);
 }
 
 function sanitizeProjectCwd(value: unknown): string | null {

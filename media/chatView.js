@@ -14,8 +14,9 @@
   const btnToggleDetails = document.getElementById("btnToggleDetails");
   const btnScrollTop = document.getElementById("btnScrollTop");
   const btnScrollBottom = document.getElementById("btnScrollBottom");
-  const btnReload = document.getElementById("btnReload");
   const btnPageSearch = document.getElementById("btnPageSearch");
+  const btnAutoRefresh = document.getElementById("btnAutoRefresh");
+  const btnReload = document.getElementById("btnReload");
   const pageSearchBarEl = document.getElementById("pageSearchBar");
   const pageSearchResizeHandleEl = document.getElementById("pageSearchResizeHandle");
   const pageSearchTitleEl = document.getElementById("pageSearchTitle");
@@ -57,6 +58,8 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 2h9.5A1.75 1.75 0 0 1 14.5 3.75v8.5A1.75 1.75 0 0 1 12.75 14h-9.5A1.75 1.75 0 0 1 1.5 12.25v-8.5A1.75 1.75 0 0 1 3.25 2Zm0 1.5a.25.25 0 0 0-.25.25v8.5c0 .14.11.25.25.25h9.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25h-9.5Zm1.5 1.75h1.5l1.25 1.88 1.25-1.88h1.5v5.5H9V7.55L7.5 9.75 6 7.55v3.2H4.75v-5.5Zm6.5 3h1.25l-1.88 2.5-1.87-2.5h1.25V5.25h1.25v3Z"/></svg>';
   const SEARCH_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a4.75 4.75 0 1 1 0 9.5 4.75 4.75 0 0 1 0-9.5Zm0 1.5a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Zm4.9 6.83 2.13 2.14a.75.75 0 1 1-1.06 1.06l-2.14-2.13a.75.75 0 1 1 1.07-1.07Z"/></svg>';
+  const AUTO_REFRESH_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><g fill="none"><path d="M5.2 2.6A5.2 5.2 0 0 1 13 7"/><path d="M13 7l1.15-1.55M13 7l-1.55-1.15"/><path d="M10.8 13.4A5.2 5.2 0 0 1 3 9"/><path d="M3 9l-1.15 1.55M3 9l1.55 1.15"/><circle cx="8" cy="8" r="2.25"/><path d="M8 6.75v1.45l1.05.65"/></g></svg>';
   const CLOSE_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 1 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/></svg>';
   const SAVE_ICON_SVG =
@@ -140,6 +143,7 @@
   });
   const MIN_PAGE_SEARCH_WIDTH = 280;
   const OPEN_POSITION_SAVE_DEBOUNCE_MS = 800;
+  const MAX_CACHED_IMAGE_DATA = 64;
 
   /** @type {any} */
   let model = null;
@@ -153,11 +157,19 @@
   let imageSettings = { thumbnailSize: "medium" };
   let panelKind = "session";
   let chatOpenPosition = "top";
+  let autoRefreshAvailable = false;
+  let autoRefreshMode = "off";
   let debugLoggingEnabled = false;
   let imagePreview = null;
+  const imageDataById = new Map();
+  const pendingImageIds = new Set();
+  const failedImageIds = new Set();
   let showDetails = false;
+  let detailsLoaded = false;
+  let detailReloadPending = false;
   let expandedNote = false;
   let selectedMessageIndex = null;
+  let pendingDetailScrollAnchor = null;
   let messageNavMap = new Map();
   let patchGroupNavMap = new Map();
   let expandedMessageIndexes = new Set();
@@ -174,6 +186,23 @@
   let toolbarCompactFrame = 0;
   let patchLayoutFrame = 0;
   let webviewState = typeof vscode.getState === "function" ? vscode.getState() || {} : {};
+  const lazyImageObserver =
+    typeof IntersectionObserver === "function"
+      ? new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting) continue;
+              if (!(entry.target instanceof HTMLElement)) continue;
+              lazyImageObserver.unobserve(entry.target);
+              requestImageData(entry.target.dataset.imageId);
+            }
+          },
+          {
+            root: scrollRootEl instanceof Element ? scrollRootEl : null,
+            rootMargin: "720px 0px",
+          },
+        )
+      : null;
   const toolbarResizeObserver =
     typeof ResizeObserver === "function" && toolbarEl instanceof HTMLElement
       ? new ResizeObserver(() => {
@@ -209,6 +238,7 @@
   if (btnScrollTop instanceof HTMLElement) btnScrollTop.innerHTML = SCROLL_TOP_ICON_SVG;
   if (btnScrollBottom instanceof HTMLElement) btnScrollBottom.innerHTML = SCROLL_BOTTOM_ICON_SVG;
   if (btnPageSearch instanceof HTMLElement) btnPageSearch.innerHTML = SEARCH_ICON_SVG;
+  if (btnAutoRefresh instanceof HTMLElement) btnAutoRefresh.innerHTML = AUTO_REFRESH_ICON_SVG;
   // Reload is icon-only (tooltip is set via i18n).
   btnReload.innerHTML = RELOAD_ICON_SVG;
   setToolbarButtonWithIcon(btnToggleDetails, "Details", DETAILS_OFF_ICON_SVG);
@@ -223,7 +253,7 @@
     vscode.postMessage({ type: "togglePin" });
   });
   btnPageSearch.addEventListener("click", () => {
-    openPageSearch();
+    togglePageSearch();
   });
 
   btnMarkdown.addEventListener("click", () => {
@@ -244,19 +274,35 @@
     scrollToBoundary("bottom");
   });
 
+  btnAutoRefresh.addEventListener("click", () => {
+    if (!autoRefreshAvailable) return;
+    autoRefreshMode = cycleAutoRefreshMode(autoRefreshMode);
+    updateToolbar();
+    vscode.postMessage({ type: "setAutoRefreshMode", mode: autoRefreshMode });
+    showToast(getAutoRefreshToast(autoRefreshMode));
+  });
+
   btnReload.addEventListener("click", () => {
-    // Send current position to the extension so reload can preserve scroll/selection.
-    vscode.postMessage({
-      type: "reload",
-      scrollY: getScrollTop(),
-      selectedMessageIndex: typeof selectedMessageIndex === "number" ? selectedMessageIndex : undefined,
-    });
+    requestReload();
   });
 
   btnToggleDetails.addEventListener("click", () => {
-    showDetails = !showDetails;
+    const nextShowDetails = !showDetails;
+    const anchor = captureTimelineScrollAnchor();
+    const expectsSessionData = nextShowDetails ? !detailsLoaded : true;
+    pendingDetailScrollAnchor = anchor
+      ? {
+          ...anchor,
+          targetShowDetails: nextShowDetails,
+        }
+      : null;
+
+    showDetails = nextShowDetails;
     updateToolbar();
+    if (showDetails) requestFullDetailsIfNeeded({ restoreByCard: true });
+    else requestReload({ includeDetails: false, preserveUiState: true, restoreByCard: true });
     render();
+    restorePendingDetailScrollAnchorAfterRender({ clear: !expectsSessionData });
   });
   btnPageSearchPrev.addEventListener("click", () => {
     navigatePageSearchResults(-1);
@@ -385,31 +431,41 @@
       const restoreScrollY = typeof msg.restoreScrollY === "number" ? msg.restoreScrollY : undefined;
       const restoreSelectedMessageIndex =
         typeof msg.restoreSelectedMessageIndex === "number" ? msg.restoreSelectedMessageIndex : undefined;
+      const preserveUiState = msg.preserveUiState === true;
+      const autoScrollToBottom = msg.autoScrollToBottom === true;
       const savedOpenMessageIndex =
         typeof msg.savedOpenMessageIndex === "number" && Number.isFinite(msg.savedOpenMessageIndex)
           ? Math.max(0, Math.floor(msg.savedOpenMessageIndex))
           : null;
       debugLoggingEnabled = msg.debugLoggingEnabled === true;
       const isRestore = typeof restoreScrollY === "number" || typeof restoreSelectedMessageIndex === "number";
+      let shouldPreserveUiState = preserveUiState || isRestore;
 
       const prevShowDetails = showDetails;
+      const prevExpandedNote = expandedNote;
       const prevSelectedMessageIndex = selectedMessageIndex;
       const prevExpandedMessageIndexes = new Set(expandedMessageIndexes);
       const prevExpandedPatchEntries = new Set(expandedPatchEntries);
       const prevWideTimelineCardKeys = new Set(wideTimelineCardKeys);
+      const prevWrappedPatchHunkKeys = new Set(wrappedPatchHunkKeys);
       const previousModelPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
       persistCurrentChatOpenPosition({ immediate: true });
 
-      model = msg.model || null;
-      const nextModelPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
+      const incomingModel = msg.model || null;
+      const nextModelPath = incomingModel && typeof incomingModel.fsPath === "string" ? incomingModel.fsPath : "";
       const sessionChanged = !!(previousModelPath && nextModelPath && previousModelPath !== nextModelPath);
-      if (sessionChanged && isImagePreviewOpen()) {
-        closeImagePreview();
+      if (sessionChanged) {
+        resetSessionScopedUiState();
+        pendingDetailScrollAnchor = null;
+        shouldPreserveUiState = false;
       }
+      model = incomingModel;
       i18n = msg.i18n || {};
       dateTime = msg.dateTime || {};
       panelKind = normalizePanelKind(msg.panelKind, msg.isPreview);
       chatOpenPosition = normalizeChatOpenPosition(msg.chatOpenPosition);
+      autoRefreshAvailable = msg.autoRefreshAvailable === true;
+      autoRefreshMode = normalizeAutoRefreshMode(msg.autoRefreshMode);
       toolDisplayMode = msg.toolDisplayMode === "compactCards" ? "compactCards" : "detailsOnly";
       userLongMessageFolding = normalizeLongMessageFoldingMode(
         typeof msg.userLongMessageFolding === "string" ? msg.userLongMessageFolding : msg.longMessageFolding,
@@ -421,6 +477,8 @@
       );
       imageSettings = normalizeImageSettings(msg.imageSettings);
       isPinned = !!msg.isPinned;
+      detailsLoaded = msg.detailsLoaded === true || msg.detailMode === "full";
+      detailReloadPending = false;
       debugChatOpenPosition("sessionData", {
         session: getDebugSessionName(nextModelPath),
         mode: chatOpenPosition,
@@ -428,32 +486,39 @@
         changed: sessionChanged,
         hostIndex: savedOpenMessageIndex,
         restore: isRestore,
+        preserveUiState: shouldPreserveUiState,
+        autoScrollToBottom,
         reveal: typeof msg.revealMessageIndex === "number",
       });
-      expandedNote = false;
-      selectedMessageIndex = isRestore
+      expandedNote = shouldPreserveUiState ? prevExpandedNote : false;
+      selectedMessageIndex = shouldPreserveUiState
         ? typeof restoreSelectedMessageIndex === "number"
           ? restoreSelectedMessageIndex
           : prevSelectedMessageIndex
         : typeof msg.revealMessageIndex === "number"
           ? msg.revealMessageIndex
           : null;
-      expandedMessageIndexes = isRestore ? prevExpandedMessageIndexes : new Set();
-      expandedPatchEntries = isRestore ? prevExpandedPatchEntries : new Set();
-      wideTimelineCardKeys = isRestore ? prevWideTimelineCardKeys : new Set();
-      if (!isRestore && typeof msg.revealMessageIndex === "number") {
+      expandedMessageIndexes = shouldPreserveUiState ? prevExpandedMessageIndexes : new Set();
+      expandedPatchEntries = shouldPreserveUiState ? prevExpandedPatchEntries : new Set();
+      wideTimelineCardKeys = shouldPreserveUiState ? prevWideTimelineCardKeys : new Set();
+      wrappedPatchHunkKeys = shouldPreserveUiState ? prevWrappedPatchHunkKeys : new Set();
+      if (!shouldPreserveUiState && typeof msg.revealMessageIndex === "number") {
         expandedMessageIndexes.add(msg.revealMessageIndex);
       }
 
       // On reload, preserve the current UI state (details visibility); on normal render, auto-determine as before.
-      showDetails = isRestore ? prevShowDetails : shouldAutoShowDetails(model, selectedMessageIndex);
+      showDetails = shouldPreserveUiState ? prevShowDetails : shouldAutoShowDetails(model, selectedMessageIndex);
       updateToolbar();
       render();
+      const restoredDetailAnchor = restorePendingDetailScrollAnchorAfterRender({ clear: true });
       if (isImagePreviewOpen()) syncImagePreviewControls();
 
-      if (isRestore) {
+      if (shouldPreserveUiState) {
         if (typeof selectedMessageIndex === "number") restoreHighlight(selectedMessageIndex);
-        if (typeof restoreScrollY === "number") restoreScroll(restoreScrollY);
+        if (!restoredDetailAnchor) {
+          if (typeof restoreScrollY === "number") restoreScroll(restoreScrollY);
+          else if (autoScrollToBottom) restoreScrollToBottom();
+        }
       } else if (typeof msg.revealMessageIndex === "number") {
         revealMessage(msg.revealMessageIndex);
       } else if (chatOpenPosition === "top") {
@@ -472,6 +537,7 @@
       dateTime = msg.dateTime || dateTime || {};
       debugLoggingEnabled = msg.debugLoggingEnabled === true;
       chatOpenPosition = normalizeChatOpenPosition(msg.chatOpenPosition);
+      autoRefreshAvailable = msg.autoRefreshAvailable === true;
       if (msg.toolDisplayMode === "compactCards" || msg.toolDisplayMode === "detailsOnly") {
         toolDisplayMode = msg.toolDisplayMode;
       }
@@ -489,26 +555,39 @@
       if (isImagePreviewOpen()) syncImagePreviewControls();
       return;
     }
+    if (msg.type === "requestReload") {
+      requestReload({ followLatest: msg.mode === "follow" });
+      return;
+    }
     if (msg.type === "copied") {
       showToast(i18n.copied || "Copied.");
+      return;
+    }
+    if (msg.type === "imageData") {
+      handleImageDataMessage(msg);
+      return;
+    }
+    if (msg.type === "imageDataFailed") {
+      handleImageDataFailedMessage(msg);
       return;
     }
   });
 
   vscode.postMessage({ type: "ready" });
 
-  function isJapaneseUi() {
-    return typeof navigator.language === "string" && navigator.language.toLowerCase().startsWith("ja");
-  }
-
   function looksLikeMojibake(text) {
-    return typeof text === "string" && /(縺|繧|繝|荳|螟|髟|谺|蜑|隧|邱|讀|蟾|蛻|遘|貞|髮)/u.test(text);
+    return (
+      typeof text === "string" &&
+      /(?:\u7e3a|\u7e67|\u7e5d|\u8373|\u879f|\u9adf|\u8c3a|\u8711|\u96a7|\u90b1|\u8b80|\u87fe|\u86fb|\u9058|\u8c9e|\u9aee)/u.test(
+        text,
+      )
+    );
   }
 
-  function getSafeUiText(value, jaFallback, enFallback) {
+  function getSafeUiText(value, fallback) {
     const text = typeof value === "string" ? value.trim() : "";
     if (text && !looksLikeMojibake(text)) return text;
-    return isJapaneseUi() ? jaFallback : enFallback;
+    return fallback;
   }
 
   function updateToolbar() {
@@ -532,11 +611,20 @@
     btnPinToggle.title = pinTooltip;
     btnPinToggle.setAttribute("aria-label", pinTooltip);
 
-    const pageSearchLabel = getSafeUiText(i18n.pageSearch, "検索", "Find");
-    const pageSearchTooltip = getSafeUiText(i18n.pageSearchTooltip, "ページ内検索を開く", "Open in-page search");
+    const pageSearchLabel = getSafeUiText(i18n.pageSearch, "Find");
+    const pageSearchTooltip = getSafeUiText(i18n.pageSearchTooltip, "Toggle in-page search");
     btnPageSearch.innerHTML = SEARCH_ICON_SVG;
     btnPageSearch.title = pageSearchTooltip;
     btnPageSearch.setAttribute("aria-label", pageSearchTooltip);
+    if (btnAutoRefresh instanceof HTMLElement) {
+      const autoRefreshTooltip = getAutoRefreshTooltip(autoRefreshMode);
+      btnAutoRefresh.hidden = !autoRefreshAvailable;
+      btnAutoRefresh.innerHTML = AUTO_REFRESH_ICON_SVG;
+      btnAutoRefresh.dataset.mode = autoRefreshMode;
+      btnAutoRefresh.title = autoRefreshTooltip;
+      btnAutoRefresh.setAttribute("aria-label", autoRefreshTooltip);
+      btnAutoRefresh.setAttribute("aria-pressed", autoRefreshMode === "off" ? "false" : "true");
+    }
 
     const markdownLabel = i18n.markdown || "Markdown";
     const markdownTooltip = i18n.markdownTooltip || markdownLabel;
@@ -572,16 +660,16 @@
     btnToggleDetails.title = detailsTooltip;
     btnToggleDetails.setAttribute("aria-label", detailsTooltip);
     if (pageSearchInputEl instanceof HTMLInputElement) {
-      const searchPlaceholder = getSafeUiText(i18n.pageSearchPlaceholder, "このビュー内を検索", "Find in this view");
+      const searchPlaceholder = getSafeUiText(i18n.pageSearchPlaceholder, "Find in this view");
       pageSearchInputEl.placeholder = searchPlaceholder;
       pageSearchInputEl.setAttribute("aria-label", searchPlaceholder);
     }
     if (pageSearchTitleEl instanceof HTMLElement) {
       pageSearchTitleEl.textContent = pageSearchLabel;
     }
-    const prevTooltip = getSafeUiText(i18n.pageSearchPrevTooltip, "前の一致へ移動", "Previous match");
-    const nextTooltip = getSafeUiText(i18n.pageSearchNextTooltip, "次の一致へ移動", "Next match");
-    const closeTooltip = getSafeUiText(i18n.pageSearchCloseTooltip, "検索を閉じる", "Close search");
+    const prevTooltip = getSafeUiText(i18n.pageSearchPrevTooltip, "Previous match");
+    const nextTooltip = getSafeUiText(i18n.pageSearchNextTooltip, "Next match");
+    const closeTooltip = getSafeUiText(i18n.pageSearchCloseTooltip, "Close search");
     btnPageSearchPrev.title = prevTooltip;
     btnPageSearchPrev.setAttribute("aria-label", prevTooltip);
     btnPageSearchNext.title = nextTooltip;
@@ -607,9 +695,55 @@
   }
 
   function scrollToBoundary(direction) {
+    const target = getTimelineBoundaryCard(direction);
+    if (target) {
+      scrollElementIntoRootView(target, { behavior: "smooth", block: "start" });
+      return;
+    }
+
     const scrollingEl = getScrollRoot();
     const top = direction === "bottom" ? scrollingEl.scrollHeight : 0;
     scrollingEl.scrollTo({ top, behavior: "smooth" });
+  }
+
+  function requestReload(options = {}) {
+    const followLatest = options.followLatest === true;
+    const restoreByCard = options.restoreByCard === true;
+    const includeDetails =
+      options.includeDetails === true
+        ? true
+        : options.includeDetails === false
+          ? false
+          : shouldRequestFullDetailsOnReload();
+    const message = {
+      type: "reload",
+      preserveUiState: true,
+      autoScrollToBottom: followLatest,
+      includeDetails,
+    };
+    detailReloadPending = includeDetails && !detailsLoaded;
+    if (!followLatest && !restoreByCard) {
+      message.scrollY = getScrollTop();
+    }
+    if (!followLatest) {
+      if (typeof selectedMessageIndex === "number") {
+        message.selectedMessageIndex = selectedMessageIndex;
+      }
+    }
+    vscode.postMessage(message);
+  }
+
+  function shouldRequestFullDetailsOnReload() {
+    return showDetails || expandedPatchEntries.size > 0;
+  }
+
+  function requestFullDetailsIfNeeded(options = {}) {
+    if (detailsLoaded || detailReloadPending) return;
+    requestReload({
+      includeDetails: true,
+      preserveUiState: true,
+      restoreByCard: options.restoreByCard === true,
+    });
   }
 
   function getScrollRoot() {
@@ -695,6 +829,97 @@
     return isFirstRenderedMessageIndex(bestIndex) ? 0 : bestIndex;
   }
 
+  function captureTimelineScrollAnchor() {
+    const rows = getRenderedTimelineRows();
+    if (rows.length === 0) return null;
+
+    const root = getScrollRoot();
+    const rootRect = root.getBoundingClientRect();
+    const viewportTop = rootRect.top + 8;
+    const viewportBottom = rootRect.bottom;
+    let best = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (const row of rows) {
+      const rect = row.getBoundingClientRect();
+      if (rect.bottom < viewportTop || rect.top > viewportBottom) continue;
+      const score = rect.top <= viewportTop && rect.bottom >= viewportTop ? 0 : Math.abs(rect.top - viewportTop) + 1;
+      if (score < bestScore) {
+        bestScore = score;
+        best = row;
+      }
+    }
+
+    if (!best) best = rows[0];
+    const itemIndex = Number(best.dataset.itemIndex);
+    return {
+      fsPath: model && typeof model.fsPath === "string" ? model.fsPath : "",
+      cardKey: typeof best.dataset.cardKey === "string" ? best.dataset.cardKey : "",
+      itemIndex: Number.isFinite(itemIndex) ? Math.max(0, Math.floor(itemIndex)) : 0,
+    };
+  }
+
+  function getRenderedTimelineRows() {
+    if (!(timelineEl instanceof HTMLElement)) return [];
+    return Array.from(timelineEl.querySelectorAll(":scope > .row")).filter(
+      (element) => element instanceof HTMLElement && element.offsetParent !== null,
+    );
+  }
+
+  function restorePendingDetailScrollAnchorAfterRender(options = {}) {
+    const anchor = pendingDetailScrollAnchor;
+    if (!anchor) return false;
+    restoreTimelineScrollAnchorAfterLayout(anchor);
+    if (options.clear === true) pendingDetailScrollAnchor = null;
+    return true;
+  }
+
+  function restoreTimelineScrollAnchorAfterLayout(anchor) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        restoreTimelineScrollAnchor(anchor);
+      });
+    });
+  }
+
+  function restoreTimelineScrollAnchor(anchor) {
+    if (!anchor || typeof anchor !== "object") return false;
+    const currentPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
+    if (anchor.fsPath && currentPath && anchor.fsPath !== currentPath) return false;
+
+    const target = findTimelineRowForAnchor(anchor);
+    if (target) {
+      scrollElementIntoRootView(target, { behavior: "auto", block: "start" });
+      return true;
+    }
+
+    restoreScroll(0);
+    return false;
+  }
+
+  function findTimelineRowForAnchor(anchor) {
+    const rows = getRenderedTimelineRows();
+    if (rows.length === 0) return null;
+
+    const cardKey = typeof anchor.cardKey === "string" ? anchor.cardKey : "";
+    if (cardKey) {
+      const exact = rows.find((row) => row.dataset.cardKey === cardKey);
+      if (exact) return exact;
+    }
+
+    const itemIndex = Number(anchor.itemIndex);
+    const safeItemIndex = Number.isFinite(itemIndex) ? Math.max(0, Math.floor(itemIndex)) : 0;
+    const indexedRows = rows
+      .map((row) => ({ row, itemIndex: Number(row.dataset.itemIndex) }))
+      .filter((entry) => Number.isFinite(entry.itemIndex))
+      .sort((a, b) => a.itemIndex - b.itemIndex);
+    return (
+      indexedRows.find((entry) => entry.itemIndex > safeItemIndex)?.row ??
+      [...indexedRows].reverse().find((entry) => entry.itemIndex < safeItemIndex)?.row ??
+      rows[0]
+    );
+  }
+
   function getFirstRenderedMessageIndex() {
     if (!model || !Array.isArray(model.items)) return null;
     for (const item of model.items) {
@@ -767,12 +992,92 @@
     return pageSearchBarEl instanceof HTMLElement && !pageSearchBarEl.hidden;
   }
 
+  function normalizeAutoRefreshMode(value) {
+    return value === "preserve" || value === "follow" ? value : "off";
+  }
+
+  function cycleAutoRefreshMode(mode) {
+    if (mode === "off") return "preserve";
+    if (mode === "preserve") return "follow";
+    return "off";
+  }
+
+  function getAutoRefreshTooltip(mode) {
+    if (mode === "follow") {
+      return getSafeUiText(
+        i18n.autoRefreshFollowTooltip,
+        "Chat auto-refresh is on (follow latest).",
+      );
+    }
+    if (mode === "off") {
+      return getSafeUiText(i18n.autoRefreshOffTooltip, "Chat auto-refresh is off.");
+    }
+    return getSafeUiText(
+      i18n.autoRefreshPreserveTooltip,
+      "Chat auto-refresh is on (preserve view).",
+    );
+  }
+
+  function getAutoRefreshToast(mode) {
+    if (mode === "follow") {
+      return getSafeUiText(
+        i18n.autoRefreshFollowToast,
+        "Auto-refresh turned on (follow latest).",
+      );
+    }
+    if (mode === "off") {
+      return getSafeUiText(i18n.autoRefreshOffToast, "Auto-refresh turned off.");
+    }
+    return getSafeUiText(
+      i18n.autoRefreshPreserveToast,
+      "Auto-refresh turned on (preserve view).",
+    );
+  }
+
   function isTextInputElement(element) {
     return (
       element instanceof HTMLInputElement ||
       element instanceof HTMLTextAreaElement ||
       (element instanceof HTMLElement && element.isContentEditable)
     );
+  }
+
+  function togglePageSearch() {
+    if (isPageSearchOpen()) {
+      closePageSearch();
+      return;
+    }
+    openPageSearch();
+  }
+
+  function resetSessionScopedUiState() {
+    resetPageSearchState();
+    if (imagePreview || isImagePreviewOpen()) closeImagePreview();
+    resetImageDataCache();
+    pendingDetailScrollAnchor = null;
+  }
+
+  function resetPageSearchState() {
+    cancelPageSearchResize();
+    if (pageSearchBarEl instanceof HTMLElement) pageSearchBarEl.hidden = true;
+    document.body.classList.remove("pageSearchOpen");
+    if (pageSearchInputEl instanceof HTMLInputElement) pageSearchInputEl.value = "";
+    clearPageSearchHighlights();
+    renderPageSearchResults();
+    updatePageSearchStatus();
+  }
+
+  function cancelPageSearchResize() {
+    const resizeState = pageSearchResizeState;
+    pageSearchResizeState = null;
+    document.body.classList.remove("pageSearchResizing");
+    if (
+      resizeState &&
+      pageSearchResizeHandleEl instanceof HTMLElement &&
+      pageSearchResizeHandleEl.hasPointerCapture(resizeState.pointerId)
+    ) {
+      pageSearchResizeHandleEl.releasePointerCapture(resizeState.pointerId);
+    }
   }
 
   function openPageSearch() {
@@ -794,7 +1099,7 @@
     if (!(pageSearchBarEl instanceof HTMLElement)) return;
     pageSearchBarEl.hidden = true;
     document.body.classList.remove("pageSearchOpen");
-    document.body.classList.remove("pageSearchResizing");
+    cancelPageSearchResize();
     clearPageSearchHighlights();
     renderPageSearchResults();
     updatePageSearchStatus();
@@ -982,7 +1287,7 @@
     if (patchSummary instanceof HTMLElement) {
       const filePath = patchSummary.querySelector(".patchEntryPath");
       return {
-        title: getElementText(filePath) || getSafeUiText(i18n.patchGroupTitle, "変更差分", "Changes"),
+        title: getElementText(filePath) || getSafeUiText(i18n.patchGroupTitle, "Changes"),
         meta: "",
         lineNumber: "",
       };
@@ -997,8 +1302,8 @@
       const inTags = !!mark.closest(".sessionTagList");
       return {
         title: inTags
-          ? getSafeUiText(i18n.annotationTags, "タグ", "Tags")
-          : getSafeUiText(i18n.annotationNote, "メモ", "Note"),
+          ? getSafeUiText(i18n.annotationTags, "Tags")
+          : getSafeUiText(i18n.annotationNote, "Note"),
         meta: "",
         lineNumber: "",
       };
@@ -1006,14 +1311,14 @@
 
     if (mark instanceof HTMLElement && mark.closest("#meta")) {
       return {
-        title: getSafeUiText("", "セッション情報", "Session info"),
+        title: getSafeUiText(i18n.sessionInfo, "Session info"),
         meta: "",
         lineNumber: "",
       };
     }
 
     return {
-      title: getSafeUiText(i18n.pageSearch, "検索", "Find"),
+      title: getSafeUiText(i18n.pageSearch, "Find"),
       meta: "",
       lineNumber: "",
     };
@@ -1025,11 +1330,11 @@
     const filePath = getElementText(patchEntry && patchEntry.querySelector(".patchEntryPath"));
     const hunkHeader = getElementText(patchHunk && patchHunk.querySelector(".patchHunkHeaderText"));
     const sideLabel = cell.classList.contains("patchDiffText-right")
-      ? getSafeUiText(i18n.patchAfter, "変更後", "After")
-      : getSafeUiText(i18n.patchBefore, "変更前", "Before");
+      ? getSafeUiText(i18n.patchAfter, "After")
+      : getSafeUiText(i18n.patchBefore, "Before");
     const lineNumber = resolvePatchSearchLineNumber(cell);
     return {
-      title: filePath || getSafeUiText(i18n.patchGroupTitle, "変更差分", "Changes"),
+      title: filePath || getSafeUiText(i18n.patchGroupTitle, "Changes"),
       meta: [sideLabel, hunkHeader].filter(Boolean).join(" · "),
       lineNumber,
     };
@@ -1037,12 +1342,12 @@
 
   function describeBubbleSearchContext(bubble) {
     const roleLabel = bubble.classList.contains("user")
-      ? getSafeUiText("", "ユーザー", "User")
+      ? getSafeUiText(i18n.roleUser, "User")
       : bubble.classList.contains("assistant")
-        ? getSafeUiText("", "Assistant", "Assistant")
+        ? getSafeUiText(i18n.roleAssistant, "Assistant")
         : bubble.classList.contains("developer")
-          ? getSafeUiText("", "Developer", "Developer")
-          : getSafeUiText("", "メッセージ", "Message");
+          ? getSafeUiText(i18n.roleDeveloper, "Developer")
+          : getSafeUiText(i18n.roleMessage, "Message");
     const messageIndex = bubble.dataset.messageIndex ? `#${bubble.dataset.messageIndex}` : "";
     const metaText = getElementText(bubble.querySelector(".metaLine"));
     return {
@@ -1074,14 +1379,14 @@
     const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
     if (!query) {
       const empty = el("div", { className: "pageSearchEmpty" });
-      empty.textContent = getSafeUiText("", "検索語を入力してください", "Type to search");
+      empty.textContent = getSafeUiText(i18n.pageSearchTypeToSearch, "Type to search");
       pageSearchResultsEl.appendChild(empty);
       return;
     }
 
     if (pageSearchResults.length === 0) {
       const empty = el("div", { className: "pageSearchEmpty" });
-      empty.textContent = getSafeUiText(i18n.pageSearchNoMatches, "一致なし", "No matches");
+      empty.textContent = getSafeUiText(i18n.pageSearchNoMatches, "No matches");
       pageSearchResultsEl.appendChild(empty);
       return;
     }
@@ -1103,7 +1408,7 @@
 
       const headerText = el("div", { className: "pageSearchResultHeaderText" });
       const title = el("div", { className: "pageSearchResultTitle" });
-      title.textContent = result.title || getSafeUiText(i18n.pageSearch, "検索", "Find");
+      title.textContent = result.title || getSafeUiText(i18n.pageSearch, "Find");
       headerText.appendChild(title);
       if (result.meta) {
         const meta = el("div", { className: "pageSearchResultMeta" });
@@ -1143,6 +1448,7 @@
   }
 
   function render() {
+    if (lazyImageObserver) lazyImageObserver.disconnect();
     if (annotationEl) annotationEl.textContent = "";
     metaEl.textContent = "";
     timelineEl.textContent = "";
@@ -1278,10 +1584,17 @@
 
   function renderItem(item, itemIndex) {
     const cardKey = buildTimelineCardKey(item, itemIndex);
-    if (item.type === "message") return renderMessage(item, cardKey);
-    if (item.type === "patchGroup") return renderPatchGroup(item, itemIndex, cardKey);
-    if (item.type === "tool") return shouldRenderToolCard() ? renderTool(item, cardKey) : null;
-    return showDetails ? renderNote(item, cardKey) : null;
+    let rendered = null;
+    if (item.type === "message") rendered = renderMessage(item, cardKey);
+    else if (item.type === "patchGroup") rendered = renderPatchGroup(item, itemIndex, cardKey);
+    else if (item.type === "tool") rendered = shouldRenderToolCard() ? renderTool(item, cardKey) : null;
+    else rendered = showDetails ? renderNote(item, cardKey) : null;
+
+    if (rendered instanceof HTMLElement) {
+      rendered.dataset.cardKey = cardKey;
+      rendered.dataset.itemIndex = String(itemIndex);
+    }
+    return rendered;
   }
 
   function renderMessage(item, cardKey) {
@@ -1410,7 +1723,7 @@
   function renderMessageImages(images) {
     const thumbnailSize = imageSettings.thumbnailSize || "medium";
     const wrap = el("div", { className: `messageImages messageImages-${thumbnailSize}` });
-    const previewImages = images.filter(isPreviewableImage);
+    const previewImages = images.filter(canPreviewImage);
     for (const image of images) {
       wrap.appendChild(renderMessageImage(image, previewImages, previewImages.indexOf(image)));
     }
@@ -1419,8 +1732,10 @@
 
   function renderMessageImage(image, previewImages, previewIndex) {
     const label = typeof image.label === "string" && image.label.trim() ? image.label.trim() : "Image attachment";
+    const imageId = getImageId(image);
+    const src = getImageSrc(image);
 
-    if (isPreviewableImage(image)) {
+    if (isSafeDataImageSrc(src)) {
       const frame = el("button", {
         className: "messageImageFrame messageImageFrame-available",
         type: "button",
@@ -1428,12 +1743,30 @@
       });
       frame.setAttribute("aria-label", i18n.imageOpenPreview || label);
       const img = el("img", { className: "messageImage", alt: label, loading: "lazy" });
-      img.src = image.src;
+      img.src = src;
       img.title = label;
       frame.appendChild(img);
       frame.addEventListener("click", () => {
         openImagePreview(previewImages, previewIndex);
       });
+      return frame;
+    }
+
+    if (canRequestImageData(image)) {
+      const frame = el("button", {
+        className: "messageImageFrame messageImageFrame-available messageImageFrame-loading",
+        type: "button",
+        title: getImageLoadingText(),
+      });
+      frame.dataset.imageId = imageId;
+      frame.dataset.imageLabel = label;
+      frame.setAttribute("aria-label", label);
+      frame.appendChild(renderImageLoadingContent());
+      frame.addEventListener("click", () => {
+        requestImageData(imageId);
+        openImagePreview(previewImages, previewIndex);
+      });
+      observeLazyImageFrame(frame);
       return frame;
     }
 
@@ -1454,7 +1787,185 @@
   }
 
   function isPreviewableImage(image) {
-    return !!(image && image.status === "available" && isSafeDataImageSrc(image.src));
+    return !!(image && image.status === "available" && isSafeDataImageSrc(getImageSrc(image)));
+  }
+
+  function canPreviewImage(image) {
+    return isPreviewableImage(image) || canRequestImageData(image);
+  }
+
+  function canRequestImageData(image) {
+    return !!(
+      image &&
+      image.status === "available" &&
+      image.dataOmitted === true &&
+      getImageId(image) &&
+      !failedImageIds.has(getImageId(image))
+    );
+  }
+
+  function getImageId(image) {
+    return image && typeof image.id === "string" ? image.id.trim() : "";
+  }
+
+  function getImageSrc(image) {
+    const directSrc = image && typeof image.src === "string" ? image.src.trim() : "";
+    if (isSafeDataImageSrc(directSrc)) return directSrc;
+    const cached = imageDataById.get(getImageId(image));
+    const cachedSrc = cached && typeof cached.src === "string" ? cached.src.trim() : "";
+    return isSafeDataImageSrc(cachedSrc) ? cachedSrc : "";
+  }
+
+  function getImageLoadingText() {
+    return getSafeUiText(i18n.imageLoading, "Loading image...");
+  }
+
+  function renderImageLoadingContent() {
+    const text = el("div", { className: "messageImageLoadingText" });
+    text.textContent = getImageLoadingText();
+    return text;
+  }
+
+  function observeLazyImageFrame(frame) {
+    if (!(frame instanceof HTMLElement)) return;
+    const imageId = typeof frame.dataset.imageId === "string" ? frame.dataset.imageId : "";
+    if (!imageId) return;
+    if (imageDataById.has(imageId)) {
+      applyImageDataToFrame(frame, imageId);
+      return;
+    }
+    if (lazyImageObserver) {
+      lazyImageObserver.observe(frame);
+      return;
+    }
+    requestImageData(imageId);
+  }
+
+  function resetImageDataCache() {
+    imageDataById.clear();
+    pendingImageIds.clear();
+    failedImageIds.clear();
+    if (lazyImageObserver) lazyImageObserver.disconnect();
+  }
+
+  function requestImageData(imageId) {
+    const safeImageId = typeof imageId === "string" ? imageId.trim() : "";
+    if (!safeImageId || safeImageId.length > 160) return;
+    if (imageDataById.has(safeImageId) || pendingImageIds.has(safeImageId) || failedImageIds.has(safeImageId)) return;
+    pendingImageIds.add(safeImageId);
+    vscode.postMessage({
+      type: "requestImageData",
+      fsPath: model && typeof model.fsPath === "string" ? model.fsPath : "",
+      imageId: safeImageId,
+    });
+  }
+
+  function handleImageDataMessage(msg) {
+    const imageId = typeof msg.imageId === "string" ? msg.imageId.trim() : "";
+    if (!imageId) return;
+    if (!isCurrentModelMessage(msg)) return;
+
+    pendingImageIds.delete(imageId);
+    const src = typeof msg.src === "string" ? msg.src.trim() : "";
+    if (!isSafeDataImageSrc(src)) {
+      failedImageIds.add(imageId);
+      updateImageFailureElements(imageId);
+      return;
+    }
+
+    failedImageIds.delete(imageId);
+    imageDataById.set(imageId, {
+      src,
+      mimeType: typeof msg.mimeType === "string" ? msg.mimeType : "",
+      label: typeof msg.label === "string" ? msg.label : "",
+    });
+    trimCachedImageData();
+    updateLoadedImageElements(imageId);
+    syncOpenImagePreviewAfterImageLoad(imageId);
+  }
+
+  function handleImageDataFailedMessage(msg) {
+    const imageId = typeof msg.imageId === "string" ? msg.imageId.trim() : "";
+    if (!imageId) return;
+    if (!isCurrentModelMessage(msg)) return;
+    pendingImageIds.delete(imageId);
+    failedImageIds.add(imageId);
+    updateImageFailureElements(imageId);
+  }
+
+  function isCurrentModelMessage(msg) {
+    const messagePath = typeof msg.fsPath === "string" ? msg.fsPath : "";
+    const modelPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
+    return !messagePath || !modelPath || messagePath === modelPath;
+  }
+
+  function trimCachedImageData() {
+    while (imageDataById.size > MAX_CACHED_IMAGE_DATA) {
+      const firstKey = imageDataById.keys().next().value;
+      if (typeof firstKey !== "string") return;
+      imageDataById.delete(firstKey);
+    }
+  }
+
+  function updateLoadedImageElements(imageId) {
+    for (const frame of document.querySelectorAll(".messageImageFrame[data-image-id]")) {
+      if (!(frame instanceof HTMLElement) || frame.dataset.imageId !== imageId) continue;
+      applyImageDataToFrame(frame, imageId);
+    }
+  }
+
+  function applyImageDataToFrame(frame, imageId) {
+    const cached = imageDataById.get(imageId);
+    if (!cached || !isSafeDataImageSrc(cached.src)) return;
+    if (lazyImageObserver) lazyImageObserver.unobserve(frame);
+
+    const label = frame.dataset.imageLabel || cached.label || "Image attachment";
+    const img = el("img", { className: "messageImage", alt: label, loading: "lazy" });
+    img.src = cached.src;
+    img.title = label;
+    frame.classList.remove("messageImageFrame-loading");
+    frame.classList.add("messageImageFrame-available");
+    frame.title = i18n.imageOpenPreview || label;
+    frame.setAttribute("aria-label", i18n.imageOpenPreview || label);
+    frame.replaceChildren(img);
+  }
+
+  function updateImageFailureElements(imageId) {
+    for (const frame of document.querySelectorAll(".messageImageFrame[data-image-id]")) {
+      if (!(frame instanceof HTMLElement) || frame.dataset.imageId !== imageId) continue;
+      if (lazyImageObserver) lazyImageObserver.unobserve(frame);
+      frame.className = "messageImageFrame messageImageFrame-unavailable";
+      frame.removeAttribute("data-image-id");
+      frame.replaceChildren();
+      const title = el("div", { className: "messageImageUnavailableTitle" });
+      title.textContent = i18n.imageUnavailable || "Image unavailable";
+      const reason = el("div", { className: "messageImageUnavailableReason" });
+      reason.textContent = i18n.imageInvalid || "The image data could not be displayed.";
+      frame.appendChild(title);
+      frame.appendChild(reason);
+      if (frame instanceof HTMLButtonElement) frame.disabled = true;
+    }
+  }
+
+  function syncOpenImagePreviewAfterImageLoad(imageId) {
+    if (!imagePreview || !Array.isArray(imagePreview.images)) return;
+    const cached = imageDataById.get(imageId);
+    if (!cached || !isSafeDataImageSrc(cached.src)) return;
+
+    let changed = false;
+    for (const image of imagePreview.images) {
+      if (!image || image.imageId !== imageId) continue;
+      image.src = cached.src;
+      changed = true;
+    }
+    if (!changed) return;
+
+    const preview = ensureImagePreview();
+    const current = getCurrentPreviewImage();
+    if (current && current.imageId === imageId) {
+      applyImagePreviewCurrentImage();
+    }
+    renderImagePreviewThumbnails(preview);
   }
 
   function formatImageUnavailableReason(image) {
@@ -1468,7 +1979,7 @@
   }
 
   function openImagePreview(images, index) {
-    const previewImages = Array.isArray(images) ? images.filter(isPreviewableImage).map(toPreviewImage) : [];
+    const previewImages = Array.isArray(images) ? images.filter(canPreviewImage).map(toPreviewImage) : [];
     if (previewImages.length === 0) return;
     const safeIndex = Number.isFinite(index)
       ? Math.min(previewImages.length - 1, Math.max(0, Math.floor(index)))
@@ -1522,10 +2033,18 @@
       return;
     }
 
-    preview.image.src = image.src;
+    const src = getPreviewImageSrc(image);
+    if (isSafeDataImageSrc(src)) {
+      preview.image.src = src;
+      preview.image.classList.remove("imagePreviewImage-loading");
+    } else {
+      preview.image.removeAttribute("src");
+      preview.image.classList.add("imagePreviewImage-loading");
+      requestImageData(image.imageId);
+    }
     preview.image.alt = image.label;
     preview.image.title = image.label;
-    preview.saveButton.disabled = !image.imageId;
+    preview.saveButton.disabled = !image.imageId || !isSafeDataImageSrc(src);
     updateImagePreviewActiveThumbnail(preview);
     syncImagePreviewControls();
   }
@@ -1568,11 +2087,21 @@
 
   function toPreviewImage(image) {
     const label = typeof image.label === "string" && image.label.trim() ? image.label.trim() : "Image attachment";
+    const imageId = getImageId(image);
     return {
-      imageId: typeof image.id === "string" ? image.id : "",
-      src: image.src,
+      imageId,
+      src: getImageSrc(image),
       label,
     };
+  }
+
+  function getPreviewImageSrc(image) {
+    if (!image) return "";
+    const directSrc = typeof image.src === "string" ? image.src.trim() : "";
+    if (isSafeDataImageSrc(directSrc)) return directSrc;
+    const cached = imageDataById.get(typeof image.imageId === "string" ? image.imageId : "");
+    const cachedSrc = cached && typeof cached.src === "string" ? cached.src.trim() : "";
+    return isSafeDataImageSrc(cachedSrc) ? cachedSrc : "";
   }
 
   function clampImagePreviewIndex(index, length) {
@@ -1595,9 +2124,14 @@
       });
       button.dataset.previewIndex = String(index);
       button.setAttribute("aria-label", image.label);
-      const thumb = el("img", { className: "imagePreviewThumbImage", alt: "" });
-      thumb.src = image.src;
-      button.appendChild(thumb);
+      const src = getPreviewImageSrc(image);
+      if (isSafeDataImageSrc(src)) {
+        const thumb = el("img", { className: "imagePreviewThumbImage", alt: "" });
+        thumb.src = src;
+        button.appendChild(thumb);
+      } else {
+        button.classList.add("imagePreviewThumb-loading");
+      }
       button.addEventListener("click", () => {
         if (!imagePreview) return;
         imagePreview.index = index;
@@ -1842,6 +2376,9 @@
     details.addEventListener("toggle", () => {
       if (details.open) expandedPatchEntries.add(entry.id);
       else expandedPatchEntries.delete(entry.id);
+      if (details.open && entry.detailsOmitted) {
+        requestFullDetailsIfNeeded();
+      }
       if (details.open) ensurePatchBody();
       applyPatchToggleLabel();
     });
@@ -1870,6 +2407,11 @@
 
   function populatePatchEntryBody(body, entry, entryLanguage) {
     if (!(body instanceof HTMLElement)) return;
+
+    if (entry && entry.detailsOmitted) {
+      body.appendChild(renderLazyDetailsPlaceholder());
+      return;
+    }
 
     if (entry.moveDisplayPath && entry.moveDisplayPath !== entry.displayPath) {
       const movedTo = el("div", { className: "patchEntryMove" });
@@ -2212,8 +2754,13 @@
     }
 
     if (showDetails) {
-      appendToolDetailsBlock(bubble, i18n.arguments || "Arguments", "json", item.argumentsText);
-      appendToolDetailsBlock(bubble, i18n.output || "Output", "", item.outputText);
+      if (item.detailsOmitted) {
+        bubble.appendChild(renderLazyDetailsPlaceholder());
+        requestFullDetailsIfNeeded();
+      } else {
+        appendToolDetailsBlock(bubble, i18n.arguments || "Arguments", "json", item.argumentsText);
+        appendToolDetailsBlock(bubble, i18n.output || "Output", "", item.outputText);
+      }
     }
 
     row.appendChild(bubble);
@@ -2333,6 +2880,12 @@
     details.appendChild(summary);
     details.appendChild(renderCodeBlock(lang, text, { copyIcon: true }));
     container.appendChild(details);
+  }
+
+  function renderLazyDetailsPlaceholder() {
+    const placeholder = el("div", { className: "toolCardSecondary" });
+    placeholder.textContent = getSafeUiText(i18n.detailsLoading, "Loading details...");
+    return placeholder;
   }
 
   function renderNote(item, cardKey) {
@@ -2539,12 +3092,62 @@
     const type = item && typeof item.type === "string" && item.type.trim() ? item.type.trim() : "item";
     const safeIndex = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex : 0;
     if (type === "message" && item && typeof item.messageIndex === "number") return `message:${item.messageIndex}`;
-    if (type === "patchGroup") return `patchGroup:${safeIndex}`;
+    if (type === "patchGroup") return buildPatchGroupCardKey(item, safeIndex);
     if (type === "tool") {
       const callId = item && typeof item.callId === "string" && item.callId.trim() ? item.callId.trim() : "";
       if (callId) return `tool:${callId}`;
     }
     return `${type}:${safeIndex}`;
+  }
+
+  function buildPatchGroupCardKey(item, safeIndex) {
+    const turnId = normalizePatchGroupKeyPart(item && item.turnId);
+    if (turnId) return `patchGroup:turn:${stableStringHash(turnId)}`;
+
+    const entrySignature = buildPatchGroupEntrySignature(item);
+    const messageIndex =
+      item && typeof item.messageIndex === "number" && Number.isFinite(item.messageIndex)
+        ? Math.max(0, Math.floor(item.messageIndex))
+        : 0;
+    if (messageIndex > 0 && entrySignature) return `patchGroup:message:${messageIndex}:${entrySignature}`;
+    if (entrySignature) return `patchGroup:entries:${entrySignature}`;
+
+    const timestampIso = normalizePatchGroupKeyPart(item && item.timestampIso);
+    if (timestampIso) return `patchGroup:time:${stableStringHash(timestampIso)}`;
+    return `patchGroup:${safeIndex}`;
+  }
+
+  function buildPatchGroupEntrySignature(item) {
+    const entries = item && Array.isArray(item.entries) ? item.entries : [];
+    if (entries.length === 0) return "";
+    const parts = entries
+      .map((entry) =>
+        [
+          normalizePatchGroupKeyPart(entry && entry.callId),
+          normalizePatchGroupKeyPart(entry && entry.path),
+          normalizePatchGroupKeyPart(entry && entry.movePath),
+          normalizePatchGroupKeyPart(entry && entry.displayPath),
+          normalizePatchGroupKeyPart(entry && entry.moveDisplayPath),
+          normalizePatchGroupKeyPart(entry && entry.changeType),
+        ].join(">"),
+      )
+      .filter((part) => part.replace(/>/g, "").length > 0)
+      .sort();
+    return parts.length > 0 ? stableStringHash(parts.join("|")) : "";
+  }
+
+  function normalizePatchGroupKeyPart(value) {
+    return typeof value === "string" ? value.trim().replace(/\\/g, "/") : "";
+  }
+
+  function stableStringHash(value) {
+    const text = String(value || "");
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i += 1) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
   }
 
   function applyTimelineCardWidthState(bubble, cardKey) {
@@ -2576,8 +3179,8 @@
     if (!(button instanceof HTMLButtonElement)) return;
     button.innerHTML = expanded ? CARD_RESTORE_ICON_SVG : CARD_EXPAND_ICON_SVG;
     const label = expanded
-      ? getSafeUiText(i18n.restoreCardWidthTooltip, "元の幅に戻す", "Restore card width")
-      : getSafeUiText(i18n.expandCardWidthTooltip, "カードを最大幅に広げる", "Expand card to full width");
+      ? getSafeUiText(i18n.restoreCardWidthTooltip, "Restore card width")
+      : getSafeUiText(i18n.expandCardWidthTooltip, "Expand card to full width");
     button.title = label;
     button.setAttribute("aria-label", label);
     button.setAttribute("aria-pressed", expanded ? "true" : "false");
@@ -2653,8 +3256,8 @@
     const btn = el("button", { type: "button", className: "iconBtn navBtn" });
     const label =
       direction === "prev"
-        ? getSafeUiText(i18n.jumpPrevDiff, "前の差分へ移動", "Jump to previous diff")
-        : getSafeUiText(i18n.jumpNextDiff, "次の差分へ移動", "Jump to next diff");
+        ? getSafeUiText(i18n.jumpPrevDiff, "Jump to previous diff")
+        : getSafeUiText(i18n.jumpNextDiff, "Jump to next diff");
     btn.title = label;
     btn.setAttribute("aria-label", label);
     btn.innerHTML = direction === "prev" ? NAV_UP_ICON_SVG : NAV_DOWN_ICON_SVG;
@@ -2730,6 +3333,47 @@
         getScrollRoot().scrollTo(0, y);
       });
     });
+  }
+
+  function restoreScrollToBottom() {
+    // Follow the latest rendered card after DOM updates finish.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const target = getTimelineBoundaryCard("bottom");
+        if (target) {
+          scrollElementIntoRootView(target, { behavior: "auto", block: "start" });
+          return;
+        }
+        const root = getScrollRoot();
+        root.scrollTo(0, root.scrollHeight);
+      });
+    });
+  }
+
+  function getTimelineBoundaryCard(direction) {
+    const cards = getRenderedTimelineRows();
+    if (cards.length === 0) return null;
+    return direction === "bottom" ? cards[cards.length - 1] : cards[0];
+  }
+
+  function scrollElementIntoRootView(element, options = {}) {
+    if (!(element instanceof HTMLElement)) return;
+    const root = getScrollRoot();
+    const behavior = options.behavior === "smooth" ? "smooth" : "auto";
+    const block = options.block === "end" ? "end" : "start";
+
+    if (!(root instanceof HTMLElement)) {
+      element.scrollIntoView({ behavior, block, inline: "nearest" });
+      return;
+    }
+
+    const rootRect = root.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    const nextTop =
+      block === "end"
+        ? root.scrollTop + elementRect.bottom - rootRect.bottom
+        : root.scrollTop + elementRect.top - rootRect.top;
+    root.scrollTo({ top: Math.max(0, Math.floor(nextTop)), behavior });
   }
 
   function restoreSavedChatOpenPosition(fsPath, hostMessageIndex) {
