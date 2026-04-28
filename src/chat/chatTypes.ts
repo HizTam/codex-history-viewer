@@ -19,7 +19,13 @@ export interface ChatSessionAnnotation {
   note: string;
 }
 
-export type ChatTimelineItem = ChatMessageItem | ChatToolItem | ChatPatchGroupItem | ChatNoteItem;
+export type ChatTimelineItem =
+  | ChatMessageItem
+  | ChatToolItem
+  | ChatUsageItem
+  | ChatEnvironmentItem
+  | ChatPatchGroupItem
+  | ChatNoteItem;
 
 export type ChatImageAttachmentStatus = "available" | "unavailable";
 export type ChatImageAttachmentReason = "unsupported" | "missing" | "tooLarge" | "invalid" | "remote" | "disabled";
@@ -42,6 +48,8 @@ export interface ChatMessageItem {
   // 1-based display order for user/assistant (used for search jump). developer is undefined.
   messageIndex?: number;
   timestampIso?: string;
+  model?: string;
+  effort?: string;
   text: string;
   requestText?: string;
   images?: ChatImageAttachment[];
@@ -58,7 +66,66 @@ export interface ChatToolItem {
   argumentsText?: string;
   outputText?: string;
   detailsOmitted?: boolean;
+  execution?: ChatToolExecution;
   presentation?: ChatToolPresentation;
+}
+
+export interface ChatToolExecution {
+  status?: string;
+  exitCode?: number;
+  durationMs?: number;
+  error?: string;
+}
+
+export interface ChatTokenUsage {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  cacheReadInputTokens?: number;
+  cacheCreationInputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+}
+
+export interface ChatUsageItem {
+  type: "usage";
+  messageIndex?: number;
+  timestampIso?: string;
+  model?: string;
+  effort?: string;
+  usage: ChatTokenUsage;
+  totalUsage?: ChatTokenUsage;
+  modelContextWindow?: number;
+  serviceTier?: string;
+  speed?: string;
+  stopReason?: string;
+  rateLimits?: ChatRateLimits;
+}
+
+export interface ChatRateLimit {
+  usedPercent?: number;
+  windowMinutes?: number;
+  resetsAt?: number;
+  resetsInSeconds?: number;
+}
+
+export interface ChatRateLimits {
+  primary?: ChatRateLimit;
+  secondary?: ChatRateLimit;
+  limitId?: string;
+  limitName?: string;
+  planType?: string;
+  reachedType?: string;
+}
+
+export interface ChatEnvironmentItem {
+  type: "environment";
+  messageIndex?: number;
+  timestampIso?: string;
+  cwd?: string;
+  gitBranch?: string;
+  gitCommit?: string;
+  gitDirty?: boolean;
 }
 
 export type ChatPatchChangeType = "create" | "delete" | "move" | "rename" | "update" | "unknown";

@@ -13,6 +13,7 @@ export type TreeNode =
   | SearchSessionNode
   | SearchHitNode
   | SearchHelpNode
+  | HistoryEmptyNode
   | MissingPinnedNode
   | PinnedDropHintNode;
 
@@ -127,6 +128,17 @@ export class SearchHelpNode {
   public readonly kind = "searchHelp";
 }
 
+export class HistoryEmptyNode {
+  public readonly kind = "historyEmpty";
+  public readonly label: string;
+  public readonly iconId: string;
+
+  constructor(label: string, iconId = "info") {
+    this.label = label;
+    this.iconId = iconId;
+  }
+}
+
 export function isSessionNode(element: unknown): element is SessionNode | SearchSessionNode | SearchHitNode {
   if (!element || typeof element !== "object") return false;
   const maybe = element as any;
@@ -158,6 +170,8 @@ export function toTreeItemContextValue(node: TreeNode): string {
       return `codexHistoryViewer.searchHit.${node.session.source}`;
     case "searchHelp":
       return "codexHistoryViewer.searchHelp";
+    case "historyEmpty":
+      return "codexHistoryViewer.historyEmpty";
     default:
       return "codexHistoryViewer.unknown";
   }

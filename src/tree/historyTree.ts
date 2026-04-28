@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
-import { SessionNode, DayNode, MonthNode, TreeNode, YearNode, toTreeItemContextValue } from "./treeNodes";
+import { HistoryEmptyNode, SessionNode, DayNode, MonthNode, TreeNode, YearNode, toTreeItemContextValue } from "./treeNodes";
 import type { SessionSource, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
 import type { DateScope } from "../types/dateScope";
 import { getConfig } from "../settings";
@@ -140,6 +140,39 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     return session.source === this.sourceFilter;
   }
 
+  private buildNoHistoryNodes(): HistoryEmptyNode[] {
+    const config = getConfig();
+    const nodes = [new HistoryEmptyNode(t("history.empty.noHistory.title"), "info")];
+
+    if (config.enableCodexSource && config.enableClaudeSource) {
+      nodes.push(new HistoryEmptyNode(t("history.empty.noHistory.enabledRootsHint"), "folder-opened"));
+    } else if (config.enableClaudeSource) {
+      nodes.push(new HistoryEmptyNode(t("history.empty.noHistory.claudeHint"), "folder-opened"));
+    } else {
+      nodes.push(new HistoryEmptyNode(t("history.empty.noHistory.codexHint"), "folder-opened"));
+    }
+
+    nodes.push(new HistoryEmptyNode(t("history.empty.noHistory.refreshHint"), "refresh"));
+
+    if (!config.enableClaudeSource) {
+      nodes.push(new HistoryEmptyNode(t("history.empty.noHistory.claudeDisabled"), "settings-gear"));
+    }
+
+    return nodes;
+  }
+
+  private buildFilteredEmptyNodes(): HistoryEmptyNode[] {
+    return [
+      new HistoryEmptyNode(t("history.empty.filtered.title"), "filter"),
+      new HistoryEmptyNode(t("history.empty.filtered.hint"), "info"),
+    ];
+  }
+
+  private withFilteredEmptyFallback(nodes: TreeNode[], shouldFilterSessions: boolean): TreeNode[] {
+    if (nodes.length > 0) return nodes;
+    return shouldFilterSessions ? this.buildFilteredEmptyNodes() : nodes;
+  }
+
   public getTreeItem(element: TreeNode): vscode.TreeItem {
     if (element instanceof YearNode) {
       const item = new vscode.TreeItem(element.year, vscode.TreeItemCollapsibleState.Collapsed);
@@ -162,6 +195,13 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     }
     if (element instanceof SessionNode) {
       return this.sessionToTreeItem(element.session, element.pinned);
+    }
+    if (element instanceof HistoryEmptyNode) {
+      const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None);
+      item.contextValue = toTreeItemContextValue(element);
+      item.iconPath = new vscode.ThemeIcon(element.iconId);
+      item.tooltip = element.label;
+      return item;
     }
     // Search nodes are not used in this view.
     return new vscode.TreeItem("?");
@@ -216,13 +256,16 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
     const idx = this.historyService.getIndex();
+    if (!element && idx.sessions.length === 0) return this.buildNoHistoryNodes();
+
     const shouldFilterSessions =
       this.filter.kind !== "all" || !!this.projectCwd || this.sourceFilter !== "all" || this.tagFilter.length > 0;
     if (this.viewMode === "latest") {
       if (element) return [];
-      return idx.sessions
+      const nodes = idx.sessions
         .filter((s) => this.matchesSession(s))
         .map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+      return this.withFilteredEmptyFallback(nodes, shouldFilterSessions);
     }
 
     if (!element) {
@@ -249,13 +292,13 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
             }
             if (has) out.push(new YearNode(y));
           }
-          return out;
+          return this.withFilteredEmptyFallback(out, shouldFilterSessions);
         }
         case "year": {
           const months = idx.byY.get(filter.yyyy);
-          if (!months) return [];
+          if (!months) return this.buildFilteredEmptyNodes();
           const keys = Array.from(months.keys()).sort((a, b) => (a < b ? 1 : -1));
-          if (!shouldFilterSessions) return keys.map((m) => new MonthNode(filter.yyyy, m));
+          if (!shouldFilterSessions) return this.withFilteredEmptyFallback(keys.map((m) => new MonthNode(filter.yyyy, m)), true);
 
           // When filtering is active, show only months that contain matching sessions.
           const out: MonthNode[] = [];
@@ -271,15 +314,15 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
             }
             if (has) out.push(new MonthNode(filter.yyyy, m));
           }
-          return out;
+          return this.withFilteredEmptyFallback(out, shouldFilterSessions);
         }
         case "month": {
           const [yyyy, mm] = filter.ym.split("-");
           if (!yyyy || !mm) return [];
           const days = idx.byY.get(yyyy)?.get(mm);
-          if (!days) return [];
+          if (!days) return this.buildFilteredEmptyNodes();
           const keys = Array.from(days.keys()).sort((a, b) => (a < b ? 1 : -1));
-          if (!shouldFilterSessions) return keys.map((d) => new DayNode(yyyy, mm, d));
+          if (!shouldFilterSessions) return this.withFilteredEmptyFallback(keys.map((d) => new DayNode(yyyy, mm, d)), true);
 
           // When filtering is active, show only days that contain matching sessions.
           const out: DayNode[] = [];
@@ -287,14 +330,17 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
             const sessions = days.get(d) ?? [];
             if (sessions.some((s) => this.matchesSession(s))) out.push(new DayNode(yyyy, mm, d));
           }
-          return out;
+          return this.withFilteredEmptyFallback(out, shouldFilterSessions);
         }
         case "day": {
           const [yyyy, mm, dd] = filter.ymd.split("-");
           if (!yyyy || !mm || !dd) return [];
           const sessions = idx.byY.get(yyyy)?.get(mm)?.get(dd) ?? [];
           const filtered = sessions.filter((s) => this.matchesSession(s));
-          return filtered.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+          return this.withFilteredEmptyFallback(
+            filtered.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath))),
+            true,
+          );
         }
         default:
           return [];

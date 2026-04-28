@@ -640,6 +640,15 @@ mark.pageSearchMatch-active {
   justify-content: flex-start;
 }
 
+.row.usage {
+  justify-content: flex-start;
+  margin-top: -8px;
+}
+
+.row.environment {
+  justify-content: flex-start;
+}
+
 .bubble {
   max-width: min(900px, 92%);
   box-sizing: border-box;
@@ -1659,7 +1668,9 @@ body.vscode-high-contrast-light .imagePreviewOverlay {
 
 .bubbleActions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 8px;
   margin-top: 8px;
 }
 
@@ -1688,6 +1699,130 @@ body.vscode-high-contrast-light .imagePreviewOverlay {
   width: 14px;
   height: 14px;
   fill: currentColor;
+}
+
+.usageCard {
+  max-width: min(900px, 92%);
+  box-sizing: border-box;
+  width: auto;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 72%, transparent 28%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--chv-tool-bg) 48%, transparent 52%);
+  color: var(--chv-muted);
+  padding: 4px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.usageCard:hover {
+  border-color: var(--chv-accent);
+}
+
+.usageSummary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.usageTitle {
+  color: var(--chv-fg);
+  font-weight: 600;
+}
+
+.usageModel,
+.usageTokens {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usageDetails {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--chv-border) 70%, transparent 30%);
+  font-size: 11px;
+  max-width: 100%;
+}
+
+.usageDetailItem {
+  display: grid;
+  grid-template-columns: minmax(112px, 0.36fr) minmax(0, 1fr);
+  gap: 8px 12px;
+  align-items: start;
+  min-width: 0;
+}
+
+.usageDetailLabel {
+  color: var(--chv-muted);
+  overflow: visible;
+  white-space: normal;
+}
+
+.usageDetailValue {
+  color: var(--chv-fg);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.environmentCard {
+  max-width: min(900px, 92%);
+  box-sizing: border-box;
+  width: auto;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 72%, transparent 28%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--chv-tool-bg) 42%, transparent 58%);
+  color: var(--chv-muted);
+  padding: 5px 8px;
+}
+
+.environmentSummary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.environmentTitle {
+  color: var(--chv-fg);
+  font-weight: 600;
+}
+
+.environmentMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.environmentMeta.mono {
+  font-family: var(--vscode-editor-font-family);
+}
+
+.environmentDetails {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 4px 14px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--chv-border) 70%, transparent 30%);
+  font-size: 11px;
+}
+
+.environmentDetails .usageDetailValue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .markdown {
@@ -1955,5 +2090,10 @@ details > summary {
   .toolCardHeaderActions,
   .patchGroupHeaderActions {
     max-width: 100%;
+  }
+
+  .usageDetailItem {
+    grid-template-columns: 1fr;
+    gap: 1px;
   }
 }

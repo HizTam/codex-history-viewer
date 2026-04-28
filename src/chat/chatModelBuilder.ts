@@ -2,17 +2,23 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import type {
+  ChatEnvironmentItem,
   ChatImageAttachment,
   ChatPatchChangeType,
   ChatPatchEntry,
   ChatPatchGroupItem,
   ChatPatchHunk,
+  ChatRateLimit,
+  ChatRateLimits,
   ChatPatchRow,
   ChatRole,
   ChatSessionMeta,
   ChatSessionModel,
   ChatTimelineItem,
+  ChatTokenUsage,
+  ChatToolExecution,
   ChatToolItem,
+  ChatUsageItem,
 } from "./chatTypes";
 import type { ImagesConfig } from "../settings";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
@@ -66,6 +72,9 @@ async function readTimelineItems(
   const items: ChatTimelineItem[] = [];
   const toolByCallId = new Map<string, ChatToolItem>();
   const pendingPatchGroups = new Map<string, PendingPatchGroup>();
+  const codexTurnMeta: ChatMessageModelMeta = {};
+  const usageState: UsageBuildState = {};
+  const environmentState: EnvironmentBuildState = {};
   let messageIndex = 0;
 
   try {
@@ -78,6 +87,11 @@ async function readTimelineItems(
         continue;
       }
 
+      flushPendingClaudeUsageIfNeeded(obj, items, usageState);
+      appendEnvironmentSnapshotIfChanged(obj, items, environmentState, () => messageIndex);
+      if (updateCodexTurnMeta(obj, codexTurnMeta)) {
+        continue;
+      }
       if (
         await indexCodexTimelineRecord(
           obj,
@@ -85,13 +99,26 @@ async function readTimelineItems(
           toolByCallId,
           () => (messageIndex += 1),
           () => messageIndex,
+          codexTurnMeta,
           sessionCwd,
           options,
         )
       ) {
         continue;
       }
-      if (indexCodexEventRecord(obj, items, pendingPatchGroups, () => messageIndex, sessionCwd, options)) {
+      if (
+        indexCodexEventRecord(
+          obj,
+          items,
+          toolByCallId,
+          pendingPatchGroups,
+          () => messageIndex,
+          codexTurnMeta,
+          usageState,
+          sessionCwd,
+          options,
+        )
+      ) {
         continue;
       }
       if (
@@ -101,6 +128,7 @@ async function readTimelineItems(
           toolByCallId,
           () => (messageIndex += 1),
           () => messageIndex,
+          usageState,
           sessionCwd,
           options,
         )
@@ -114,6 +142,7 @@ async function readTimelineItems(
   }
 
   flushPendingPatchGroups(items, pendingPatchGroups);
+  flushPendingClaudeUsage(items, usageState);
   finalizeTimelineItems(items);
   return items;
 }
@@ -124,6 +153,7 @@ async function indexCodexTimelineRecord(
   toolByCallId: Map<string, ChatToolItem>,
   nextMessageIndex: () => number,
   currentMessageIndex: () => number,
+  codexTurnMeta: ChatMessageModelMeta,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
 ): Promise<boolean> {
@@ -159,6 +189,7 @@ async function indexCodexTimelineRecord(
       role,
       messageIndex: idx,
       timestampIso: ts,
+      ...(role === "assistant" ? toMessageModelMeta(codexTurnMeta) : {}),
       text,
       requestText,
       ...(images.length > 0 ? { images } : {}),
@@ -167,11 +198,11 @@ async function indexCodexTimelineRecord(
     return true;
   }
 
-  if (payloadType === "function_call") {
+  if (payloadType === "function_call" || payloadType === "custom_tool_call") {
     const includeDetails = shouldIncludeDetails(options);
-    const name = typeof obj?.payload?.name === "string" ? obj.payload.name : "function_call";
+    const name = typeof obj?.payload?.name === "string" ? obj.payload.name : payloadType;
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-    const argumentsText = typeof obj?.payload?.arguments === "string" ? obj.payload.arguments : undefined;
+    const argumentsText = stringifyToolPayload(obj?.payload?.arguments ?? obj?.payload?.input);
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
     const messageIndex = currentMessageIndex();
 
@@ -190,18 +221,20 @@ async function indexCodexTimelineRecord(
     return true;
   }
 
-  if (payloadType === "function_call_output") {
+  if (payloadType === "function_call_output" || payloadType === "custom_tool_call_output") {
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
     const outputText = typeof obj?.payload?.output === "string" ? obj.payload.output : undefined;
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    const execution = extractToolExecutionFromText(outputText);
 
     attachOrPushToolOutput(items, toolByCallId, {
       callId,
       outputText,
       fallbackMessageIndex: currentMessageIndex(),
       timestampIso: ts,
-      fallbackName: "function_call_output",
+      fallbackName: payloadType,
       includeDetails: shouldIncludeDetails(options),
+      execution,
     });
     return true;
   }
@@ -212,14 +245,30 @@ async function indexCodexTimelineRecord(
 function indexCodexEventRecord(
   obj: any,
   items: ChatTimelineItem[],
+  toolByCallId: Map<string, ChatToolItem>,
   pendingPatchGroups: Map<string, PendingPatchGroup>,
   currentMessageIndex: () => number,
+  codexTurnMeta: ChatMessageModelMeta,
+  usageState: UsageBuildState,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
 ): boolean {
   if (obj?.type !== "event_msg") return false;
 
   const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
+  if (payloadType === "token_count") {
+    const usageItem = buildCodexUsageItem(obj, currentMessageIndex(), codexTurnMeta);
+    if (usageItem && shouldAppendCodexUsage(usageItem, usageState)) items.push(usageItem);
+    return true;
+  }
+
+  if (payloadType === "exec_command_end") {
+    const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
+    const execution = extractToolExecutionFromCodexEvent(obj?.payload);
+    if (callId && execution) attachToolExecution(toolByCallId, callId, execution);
+    return true;
+  }
+
   if (payloadType === "patch_apply_end") {
     const key = buildPatchGroupKey(obj);
     const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id : undefined;
@@ -278,6 +327,7 @@ async function indexClaudeTimelineRecord(
   toolByCallId: Map<string, ChatToolItem>,
   nextMessageIndex: () => number,
   currentMessageIndex: () => number,
+  usageState: UsageBuildState,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
 ): Promise<boolean> {
@@ -299,12 +349,14 @@ async function indexClaudeTimelineRecord(
     const isContext = role === "user" ? !compactUserText && images.length === 0 : false;
     const idx = nextMessageIndex();
     assignImageIds(images, `m${idx}`);
+    const modelMeta = role === "assistant" ? extractClaudeMessageModelMeta(obj) : {};
 
     items.push({
       type: "message",
       role,
       messageIndex: idx,
       timestampIso: ts,
+      ...modelMeta,
       text,
       requestText,
       ...(images.length > 0 ? { images } : {}),
@@ -335,6 +387,7 @@ async function indexClaudeTimelineRecord(
   for (const toolResult of parsed.toolResults) {
     const outputText = normalizeText(toolResult.outputText ?? "");
     if (!outputText) continue;
+    const execution = buildClaudeToolExecution(obj, toolResult.isError);
     attachOrPushToolOutput(items, toolByCallId, {
       callId: toolResult.callId,
       outputText,
@@ -342,10 +395,494 @@ async function indexClaudeTimelineRecord(
       timestampIso: ts,
       fallbackName: "tool_result",
       includeDetails,
+      execution,
     });
   }
 
+  if (role === "assistant") {
+    const usageItem = buildClaudeUsageItem(obj, currentMessageIndex(), ts);
+    if (usageItem) {
+      usageState.pendingClaudeUsage = {
+        sourceId: getClaudeMessageId(obj),
+        item: usageItem,
+      };
+    }
+  }
+
   return true;
+}
+
+interface ChatMessageModelMeta {
+  model?: string;
+  effort?: string;
+}
+
+interface UsageBuildState {
+  lastCodexUsageSignature?: string;
+  lastClaudeUsageSignature?: string;
+  pendingClaudeUsage?: {
+    sourceId?: string;
+    item: ChatUsageItem;
+  };
+}
+
+interface EnvironmentBuildState {
+  lastSignature?: string;
+}
+
+function updateCodexTurnMeta(obj: any, meta: ChatMessageModelMeta): boolean {
+  if (obj?.type !== "turn_context" || !obj?.payload || typeof obj.payload !== "object") return false;
+
+  const model = normalizeModelMetaValue(obj.payload.model);
+  const effort = normalizeModelMetaValue(obj.payload.effort);
+  meta.model = model;
+  meta.effort = effort;
+  return true;
+}
+
+function toMessageModelMeta(meta: ChatMessageModelMeta): ChatMessageModelMeta {
+  return {
+    ...(meta.model ? { model: meta.model } : {}),
+    ...(meta.effort ? { effort: meta.effort } : {}),
+  };
+}
+
+function extractClaudeMessageModelMeta(obj: any): ChatMessageModelMeta {
+  const model = normalizeModelMetaValue(obj?.message?.model ?? obj?.model);
+  return model ? { model } : {};
+}
+
+function normalizeModelMetaValue(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, 80) : undefined;
+}
+
+function appendEnvironmentSnapshotIfChanged(
+  obj: any,
+  items: ChatTimelineItem[],
+  state: EnvironmentBuildState,
+  currentMessageIndex: () => number,
+): void {
+  const snapshot = extractEnvironmentSnapshot(obj);
+  if (!snapshot) return;
+
+  const signature = buildEnvironmentSignature(snapshot);
+  if (!signature || signature === state.lastSignature) return;
+  state.lastSignature = signature;
+  items.push({
+    type: "environment",
+    messageIndex: currentMessageIndex() > 0 ? currentMessageIndex() : undefined,
+    ...snapshot,
+  });
+}
+
+function extractEnvironmentSnapshot(obj: any): Omit<ChatEnvironmentItem, "type" | "messageIndex"> | null {
+  if (!obj || typeof obj !== "object") return null;
+
+  if (obj.type === "session_meta" && obj.payload && typeof obj.payload === "object") {
+    const git = obj.payload.git && typeof obj.payload.git === "object" ? obj.payload.git : {};
+    return buildEnvironmentSnapshot({
+      timestampIso: obj.timestamp,
+      cwd: obj.payload.cwd,
+      gitBranch: (git as Record<string, unknown>).branch,
+      gitCommit:
+        (git as Record<string, unknown>).commit_hash ??
+        (git as Record<string, unknown>).commitHash ??
+        (git as Record<string, unknown>).commit,
+      gitDirty:
+        (git as Record<string, unknown>).dirty ??
+        (git as Record<string, unknown>).is_dirty ??
+        (git as Record<string, unknown>).has_uncommitted_changes,
+    });
+  }
+
+  return buildEnvironmentSnapshot({
+    timestampIso: obj.timestamp,
+    cwd: obj.cwd,
+    gitBranch: obj.gitBranch ?? obj.git_branch,
+    gitCommit: obj.gitCommit ?? obj.git_commit ?? obj.commit,
+    gitDirty: obj.gitDirty ?? obj.git_dirty,
+  });
+}
+
+function buildEnvironmentSnapshot(params: {
+  timestampIso?: unknown;
+  cwd?: unknown;
+  gitBranch?: unknown;
+  gitCommit?: unknown;
+  gitDirty?: unknown;
+}): Omit<ChatEnvironmentItem, "type" | "messageIndex"> | null {
+  const cwd = normalizeEnvironmentText(params.cwd, 260);
+  const gitBranch = normalizeEnvironmentText(params.gitBranch, 120);
+  const gitCommit = normalizeGitCommit(params.gitCommit);
+  const gitDirty = typeof params.gitDirty === "boolean" ? params.gitDirty : undefined;
+  if (!gitBranch && !gitCommit && typeof gitDirty !== "boolean") return null;
+
+  const timestampIso = normalizeTimestampIso(params.timestampIso);
+  return {
+    ...(timestampIso ? { timestampIso } : {}),
+    ...(cwd ? { cwd } : {}),
+    ...(gitBranch ? { gitBranch } : {}),
+    ...(gitCommit ? { gitCommit } : {}),
+    ...(typeof gitDirty === "boolean" ? { gitDirty } : {}),
+  };
+}
+
+function buildEnvironmentSignature(item: Omit<ChatEnvironmentItem, "type" | "messageIndex">): string {
+  return JSON.stringify({
+    cwd: normalizeEnvironmentSignaturePath(item.cwd),
+    gitBranch: item.gitBranch,
+    gitCommit: item.gitCommit,
+    gitDirty: item.gitDirty,
+  });
+}
+
+function normalizeEnvironmentSignaturePath(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.replace(/\\/g, "/").toLowerCase() : undefined;
+}
+
+function normalizeEnvironmentText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.slice(0, maxLength) : undefined;
+}
+
+function normalizeGitCommit(value: unknown): string | undefined {
+  const text = normalizeEnvironmentText(value, 80);
+  if (!text) return undefined;
+  return /^[0-9a-f]{7,64}$/iu.test(text) ? text : text.slice(0, 80);
+}
+
+function normalizeTimestampIso(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return Number.isFinite(Date.parse(trimmed)) ? trimmed : undefined;
+}
+
+function flushPendingClaudeUsageIfNeeded(obj: any, items: ChatTimelineItem[], state: UsageBuildState): void {
+  const pending = state.pendingClaudeUsage;
+  if (!pending) return;
+
+  const role = detectClaudeMessageRole(obj);
+  const sourceId = getClaudeMessageId(obj);
+  if (role === "assistant" && sourceId && sourceId === pending.sourceId) return;
+
+  flushPendingClaudeUsage(items, state);
+}
+
+function flushPendingClaudeUsage(items: ChatTimelineItem[], state: UsageBuildState): void {
+  const pending = state.pendingClaudeUsage;
+  if (!pending) return;
+  const signature = buildUsageSignature(pending.item);
+  if (signature !== state.lastClaudeUsageSignature) {
+    items.push(pending.item);
+    state.lastClaudeUsageSignature = signature;
+  }
+  state.pendingClaudeUsage = undefined;
+}
+
+function buildCodexUsageItem(obj: any, messageIndex: number, meta: ChatMessageModelMeta): ChatUsageItem | null {
+  const info = obj?.payload?.info;
+  if (!info || typeof info !== "object") return null;
+
+  const usage = extractTokenUsage(info.last_token_usage);
+  if (!usage) return null;
+
+  const totalUsage = extractTokenUsage(info.total_token_usage);
+  const modelContextWindow = normalizeOptionalInteger(info.model_context_window);
+  const rateLimits = extractRateLimits(obj?.payload?.rate_limits);
+  const timestampIso = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+  return {
+    type: "usage",
+    messageIndex: messageIndex > 0 ? messageIndex : undefined,
+    timestampIso,
+    ...toMessageModelMeta(meta),
+    usage,
+    ...(totalUsage ? { totalUsage } : {}),
+    ...(typeof modelContextWindow === "number" ? { modelContextWindow } : {}),
+    ...(rateLimits ? { rateLimits } : {}),
+  };
+}
+
+function shouldAppendCodexUsage(item: ChatUsageItem, state: UsageBuildState): boolean {
+  const signature = buildUsageSignature(item);
+  if (signature === state.lastCodexUsageSignature) return false;
+  state.lastCodexUsageSignature = signature;
+  return true;
+}
+
+function buildUsageSignature(item: ChatUsageItem): string {
+  return JSON.stringify({
+    messageIndex: item.messageIndex,
+    model: item.model,
+    effort: item.effort,
+    usage: item.usage,
+    totalUsage: item.totalUsage,
+    stopReason: item.stopReason,
+    rateLimits: item.rateLimits,
+  });
+}
+
+function buildClaudeUsageItem(obj: any, messageIndex: number, timestampIso?: string): ChatUsageItem | null {
+  const rawUsage = obj?.message?.usage;
+  if (!rawUsage || typeof rawUsage !== "object") return null;
+
+  const usage = extractTokenUsage(rawUsage);
+  if (!usage) return null;
+
+  const modelMeta = extractClaudeMessageModelMeta(obj);
+  const serviceTier = normalizeModelMetaValue(rawUsage.service_tier);
+  const speed = normalizeModelMetaValue(rawUsage.speed);
+  const stopReason = normalizeModelMetaValue(obj?.message?.stop_reason);
+  return {
+    type: "usage",
+    messageIndex: messageIndex > 0 ? messageIndex : undefined,
+    timestampIso,
+    ...modelMeta,
+    usage,
+    ...(serviceTier ? { serviceTier } : {}),
+    ...(speed ? { speed } : {}),
+    ...(stopReason ? { stopReason } : {}),
+  };
+}
+
+function extractTokenUsage(value: unknown): ChatTokenUsage | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const usage: ChatTokenUsage = {
+    ...toOptionalTokenField("inputTokens", raw.input_tokens),
+    ...toOptionalTokenField("cachedInputTokens", raw.cached_input_tokens),
+    ...toOptionalTokenField("cacheReadInputTokens", raw.cache_read_input_tokens),
+    ...toOptionalTokenField("cacheCreationInputTokens", raw.cache_creation_input_tokens),
+    ...toOptionalTokenField("outputTokens", raw.output_tokens),
+    ...toOptionalTokenField("reasoningOutputTokens", raw.reasoning_output_tokens),
+    ...toOptionalTokenField("totalTokens", raw.total_tokens),
+  };
+  return Object.keys(usage).length > 0 ? usage : null;
+}
+
+function toOptionalTokenField<K extends keyof ChatTokenUsage>(key: K, value: unknown): Pick<ChatTokenUsage, K> | {} {
+  const n = normalizeOptionalInteger(value);
+  return typeof n === "number" ? { [key]: n } as Pick<ChatTokenUsage, K> : {};
+}
+
+function normalizeOptionalInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const n = Math.max(0, Math.floor(value));
+  return Number.isSafeInteger(n) ? n : undefined;
+}
+
+function normalizeOptionalNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return value >= 0 ? value : undefined;
+}
+
+function extractRateLimits(value: unknown): ChatRateLimits | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const primary = extractRateLimit(raw.primary);
+  const secondary = extractRateLimit(raw.secondary);
+  const limitId = normalizeModelMetaValue(raw.limit_id);
+  const limitName = normalizeModelMetaValue(raw.limit_name);
+  const planType = normalizeModelMetaValue(raw.plan_type);
+  const reachedType = normalizeModelMetaValue(raw.rate_limit_reached_type);
+  const limits: ChatRateLimits = {
+    ...(primary ? { primary } : {}),
+    ...(secondary ? { secondary } : {}),
+    ...(limitId ? { limitId } : {}),
+    ...(limitName ? { limitName } : {}),
+    ...(planType ? { planType } : {}),
+    ...(reachedType ? { reachedType } : {}),
+  };
+  return Object.keys(limits).length > 0 ? limits : undefined;
+}
+
+function extractRateLimit(value: unknown): ChatRateLimit | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const limit: ChatRateLimit = {
+    ...toOptionalNumberField("usedPercent", raw.used_percent),
+    ...toOptionalNumberField("windowMinutes", raw.window_minutes),
+    ...toOptionalNumberField("resetsAt", raw.resets_at),
+    ...toOptionalNumberField("resetsInSeconds", raw.resets_in_seconds),
+  };
+  return Object.keys(limit).length > 0 ? limit : undefined;
+}
+
+function toOptionalNumberField<K extends keyof ChatRateLimit>(key: K, value: unknown): Pick<ChatRateLimit, K> | {} {
+  const n = normalizeOptionalNumber(value);
+  return typeof n === "number" ? { [key]: n } as Pick<ChatRateLimit, K> : {};
+}
+
+function getClaudeMessageId(obj: any): string | undefined {
+  return normalizeModelMetaValue(obj?.message?.id ?? obj?.requestId ?? obj?.uuid);
+}
+
+function stringifyToolPayload(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (value === undefined || value === null) return undefined;
+  return safeJsonStringify(value);
+}
+
+function attachToolExecution(
+  toolByCallId: Map<string, ChatToolItem>,
+  callId: string,
+  execution: ChatToolExecution,
+): void {
+  const tool = toolByCallId.get(callId);
+  if (!tool) return;
+  mergeToolExecutionIntoItem(tool, execution);
+}
+
+function mergeToolExecutionIntoItem(tool: ChatToolItem, execution: ChatToolExecution | null | undefined): void {
+  if (!execution || Object.keys(execution).length === 0) return;
+  tool.execution = mergeToolExecution(tool.execution, execution);
+}
+
+function mergeToolExecution(
+  current: ChatToolExecution | undefined,
+  next: ChatToolExecution,
+): ChatToolExecution {
+  return {
+    ...(current ?? {}),
+    ...next,
+    ...(typeof next.exitCode === "number" ? { exitCode: next.exitCode } : {}),
+    ...(typeof next.durationMs === "number" ? { durationMs: next.durationMs } : {}),
+  };
+}
+
+function buildClaudeToolExecution(obj: any, isError?: boolean): ChatToolExecution | undefined {
+  const result = obj?.toolUseResult;
+  const interrupted = result && typeof result === "object" && (result as Record<string, unknown>).interrupted === true;
+  const errorText = isError ? normalizeToolMetaText(result) : undefined;
+  const execution: ChatToolExecution = {
+    ...(interrupted ? { status: "interrupted" } : isError === true ? { status: "error" } : { status: "success" }),
+    ...(errorText ? { error: errorText } : {}),
+  };
+  return execution;
+}
+
+function extractToolExecutionFromCodexEvent(payload: unknown): ChatToolExecution | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const raw = payload as Record<string, unknown>;
+  const duration = raw.duration;
+  const durationMs =
+    duration && typeof duration === "object"
+      ? durationPartsToMs((duration as Record<string, unknown>).secs, (duration as Record<string, unknown>).nanos)
+      : undefined;
+  const execution: ChatToolExecution = {
+    ...toOptionalExecutionStatus(raw.status),
+    ...toOptionalExitCode(raw.exit_code ?? raw.exitCode ?? raw.code),
+    ...(typeof durationMs === "number" ? { durationMs } : {}),
+  };
+  return Object.keys(execution).length > 0 ? execution : undefined;
+}
+
+function extractToolExecutionFromText(outputText: unknown): ChatToolExecution | undefined {
+  if (typeof outputText !== "string" || outputText.trim().length === 0) return undefined;
+  const trimmed = outputText.trim();
+  const parsed = parseJsonObject(trimmed);
+  const metadata = parsed?.metadata && typeof parsed.metadata === "object" ? parsed.metadata as Record<string, unknown> : null;
+  const source = metadata ?? parsed;
+
+  const execution: ChatToolExecution = {};
+  if (source) {
+    Object.assign(
+      execution,
+      toOptionalExecutionStatus(source.status),
+      toOptionalExitCode(source.exit_code ?? source.exitCode ?? source.code),
+      toOptionalDurationMs(source.duration_ms ?? source.durationMs),
+      toOptionalDurationSeconds(source.duration_seconds ?? source.durationSeconds),
+    );
+  }
+
+  const plainExit = outputText.match(/\bExit code:\s*(-?\d+)\b/u);
+  if (plainExit && typeof execution.exitCode !== "number") execution.exitCode = Number(plainExit[1]);
+
+  const plainWallTime = outputText.match(/\bWall time:\s*([0-9]+(?:\.[0-9]+)?)\s*seconds\b/iu);
+  if (plainWallTime && typeof execution.durationMs !== "number") {
+    execution.durationMs = Math.round(Number(plainWallTime[1]) * 1000);
+  }
+
+  const timedOut = outputText.match(/\bcommand timed out after\s+(\d+)\s+milliseconds\b/iu);
+  if (timedOut) {
+    execution.status = "timeout";
+    if (typeof execution.durationMs !== "number") execution.durationMs = Number(timedOut[1]);
+  }
+
+  return Object.keys(execution).length > 0 ? execution : undefined;
+}
+
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  if (!text.startsWith("{") || !text.endsWith("}")) return null;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function toOptionalExecutionStatus(value: unknown): Pick<ChatToolExecution, "status"> | {} {
+  const status = normalizeToolMetaText(value);
+  return status ? { status } : {};
+}
+
+function toOptionalExitCode(value: unknown): Pick<ChatToolExecution, "exitCode"> | {} {
+  const n = normalizeIntegerLike(value);
+  return typeof n === "number" ? { exitCode: n } : {};
+}
+
+function toOptionalDurationMs(value: unknown): Pick<ChatToolExecution, "durationMs"> | {} {
+  const n = normalizeNonNegativeNumberLike(value);
+  return typeof n === "number" ? { durationMs: Math.round(n) } : {};
+}
+
+function toOptionalDurationSeconds(value: unknown): Pick<ChatToolExecution, "durationMs"> | {} {
+  const n = normalizeNonNegativeNumberLike(value);
+  return typeof n === "number" ? { durationMs: Math.round(n * 1000) } : {};
+}
+
+function durationPartsToMs(secs: unknown, nanos: unknown): number | undefined {
+  const secValue = normalizeNonNegativeNumberLike(secs) ?? 0;
+  const nanoValue = normalizeNonNegativeNumberLike(nanos) ?? 0;
+  const ms = Math.round(secValue * 1000 + nanoValue / 1_000_000);
+  return Number.isSafeInteger(ms) ? ms : undefined;
+}
+
+function normalizeIntegerLike(value: unknown): number | undefined {
+  const n =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^-?\d+$/u.test(value.trim())
+        ? Number(value.trim())
+        : NaN;
+  if (!Number.isFinite(n)) return undefined;
+  const int = Math.trunc(n);
+  return Number.isSafeInteger(int) ? int : undefined;
+}
+
+function normalizeNonNegativeNumberLike(value: unknown): number | undefined {
+  const n =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^[0-9]+(?:\.[0-9]+)?$/u.test(value.trim())
+        ? Number(value.trim())
+        : NaN;
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+
+function normalizeToolMetaText(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const text = value.trim().replace(/\s+/gu, " ");
+    return text ? text.slice(0, 160) : undefined;
+  }
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return undefined;
 }
 
 function attachOrPushToolOutput(
@@ -358,13 +895,15 @@ function attachOrPushToolOutput(
     timestampIso?: string;
     fallbackName: string;
     includeDetails: boolean;
+    execution?: ChatToolExecution;
   },
 ): void {
-  const { callId, outputText, fallbackMessageIndex, timestampIso, fallbackName, includeDetails } = params;
+  const { callId, outputText, fallbackMessageIndex, timestampIso, fallbackName, includeDetails, execution } = params;
   if (callId && toolByCallId.has(callId)) {
     const tool = toolByCallId.get(callId)!;
     if (includeDetails) tool.outputText = outputText;
     else if (hasText(outputText)) tool.detailsOmitted = true;
+    mergeToolExecutionIntoItem(tool, execution ?? extractToolExecutionFromText(outputText));
     if (!tool.timestampIso) tool.timestampIso = timestampIso;
     if (typeof tool.messageIndex !== "number" && typeof fallbackMessageIndex === "number") {
       tool.messageIndex = fallbackMessageIndex;
@@ -372,6 +911,7 @@ function attachOrPushToolOutput(
     return;
   }
 
+  const resolvedExecution = execution ?? extractToolExecutionFromText(outputText);
   const tool: ChatToolItem = {
     type: "tool",
     messageIndex: fallbackMessageIndex,
@@ -380,6 +920,7 @@ function attachOrPushToolOutput(
     callId,
     ...(includeDetails && outputText ? { outputText } : {}),
     ...(!includeDetails && hasText(outputText) ? { detailsOmitted: true } : {}),
+    ...(resolvedExecution ? { execution: resolvedExecution } : {}),
   };
   if (!includeDetails) tool.presentation = buildToolPresentation(tool);
   items.push(tool);
@@ -388,6 +929,7 @@ function attachOrPushToolOutput(
 function finalizeTimelineItems(items: ChatTimelineItem[]): void {
   for (const item of items) {
     if (item.type !== "tool") continue;
+    mergeToolExecutionIntoItem(item, extractToolExecutionFromText(item.outputText));
     if (item.presentation) continue;
     item.presentation = buildToolPresentation(item);
   }
@@ -634,7 +1176,7 @@ function formatPatchDisplayPath(fsPath: string, sessionCwd?: string): string {
 function parseClaudeMessageContent(content: unknown): {
   messageText: string;
   toolCalls: Array<{ callId?: string; name?: string; argumentsText?: string }>;
-  toolResults: Array<{ callId?: string; outputText?: string }>;
+  toolResults: Array<{ callId?: string; outputText?: string; isError?: boolean }>;
 } {
   if (typeof content === "string") {
     return { messageText: content, toolCalls: [], toolResults: [] };
@@ -646,7 +1188,7 @@ function parseClaudeMessageContent(content: unknown): {
 
   const messageTexts: string[] = [];
   const toolCalls: Array<{ callId?: string; name?: string; argumentsText?: string }> = [];
-  const toolResults: Array<{ callId?: string; outputText?: string }> = [];
+  const toolResults: Array<{ callId?: string; outputText?: string; isError?: boolean }> = [];
 
   for (const item of items) {
     if (!item || typeof item !== "object") continue;
@@ -681,7 +1223,8 @@ function parseClaudeMessageContent(content: unknown): {
             ? (item as { id: string }).id
             : undefined;
       const outputText = extractClaudeToolResultText((item as { content?: unknown }).content);
-      toolResults.push({ callId, outputText });
+      const isError = (item as { is_error?: unknown }).is_error === true;
+      toolResults.push({ callId, outputText, ...(isError ? { isError } : {}) });
       continue;
     }
 

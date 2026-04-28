@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.2] - 2026-04-28
+
+### Added
+
+- Added collapsible assistant usage rows in the chat viewer when **Show details** is enabled.
+- Added helpful History empty-state rows for no-history and no-filter-match states.
+
 ## [1.4.1] - 2026-04-24
 
 ### Added

@@ -174,6 +174,7 @@
   let patchGroupNavMap = new Map();
   let expandedMessageIndexes = new Set();
   let expandedPatchEntries = new Set();
+  let expandedUsageCardKeys = new Set();
   let wideTimelineCardKeys = new Set();
   let wrappedPatchHunkKeys = new Set();
   let isPinned = false;
@@ -446,6 +447,7 @@
       const prevSelectedMessageIndex = selectedMessageIndex;
       const prevExpandedMessageIndexes = new Set(expandedMessageIndexes);
       const prevExpandedPatchEntries = new Set(expandedPatchEntries);
+      const prevExpandedUsageCardKeys = new Set(expandedUsageCardKeys);
       const prevWideTimelineCardKeys = new Set(wideTimelineCardKeys);
       const prevWrappedPatchHunkKeys = new Set(wrappedPatchHunkKeys);
       const previousModelPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
@@ -500,6 +502,7 @@
           : null;
       expandedMessageIndexes = shouldPreserveUiState ? prevExpandedMessageIndexes : new Set();
       expandedPatchEntries = shouldPreserveUiState ? prevExpandedPatchEntries : new Set();
+      expandedUsageCardKeys = shouldPreserveUiState ? prevExpandedUsageCardKeys : new Set();
       wideTimelineCardKeys = shouldPreserveUiState ? prevWideTimelineCardKeys : new Set();
       wrappedPatchHunkKeys = shouldPreserveUiState ? prevWrappedPatchHunkKeys : new Set();
       if (!shouldPreserveUiState && typeof msg.revealMessageIndex === "number") {
@@ -1588,6 +1591,8 @@
     if (item.type === "message") rendered = renderMessage(item, cardKey);
     else if (item.type === "patchGroup") rendered = renderPatchGroup(item, itemIndex, cardKey);
     else if (item.type === "tool") rendered = shouldRenderToolCard() ? renderTool(item, cardKey) : null;
+    else if (item.type === "usage") rendered = showDetails ? renderUsage(item, cardKey) : null;
+    else if (item.type === "environment") rendered = showDetails ? renderEnvironment(item, cardKey) : null;
     else rendered = showDetails ? renderNote(item, cardKey) : null;
 
     if (rendered instanceof HTMLElement) {
@@ -1713,6 +1718,248 @@
 
     row.appendChild(bubble);
     return row;
+  }
+
+  function getMessageModelMetaText(item) {
+    if (!item || typeof item !== "object") return "";
+    const modelText = typeof item.model === "string" ? item.model.trim() : "";
+    if (!modelText) return "";
+    const effortText = typeof item.effort === "string" ? item.effort.trim() : "";
+    return effortText ? `${modelText} : ${effortText}` : modelText;
+  }
+
+  function renderUsage(item, cardKey) {
+    const key = typeof cardKey === "string" ? cardKey : "";
+    const expanded = key.length > 0 && expandedUsageCardKeys.has(key);
+    const row = el("div", { className: "row usage" });
+    if (typeof item.messageIndex === "number") row.dataset.messageIndex = String(item.messageIndex);
+
+    const card = el("button", {
+      type: "button",
+      className: `usageCard${expanded ? " usageCard-expanded" : ""}`,
+    });
+    card.setAttribute("aria-expanded", expanded ? "true" : "false");
+    card.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!key) return;
+      if (expandedUsageCardKeys.has(key)) expandedUsageCardKeys.delete(key);
+      else expandedUsageCardKeys.add(key);
+      render();
+    });
+
+    const summary = el("div", { className: "usageSummary" });
+    summary.appendChild(el("span", { className: "usageTitle", textContent: getSafeUiText(i18n.usage, "Usage") }));
+    const modelText = getMessageModelMetaText(item);
+    if (modelText) summary.appendChild(el("span", { className: "usageModel", textContent: modelText }));
+    const tokenText = formatUsageTokenSummary(item && item.usage);
+    if (tokenText) summary.appendChild(el("span", { className: "usageTokens", textContent: tokenText }));
+    card.appendChild(summary);
+
+    if (expanded) {
+      const details = el("div", { className: "usageDetails" });
+      appendUsageDetail(details, i18n.usageInput || "Input", getUsageNumber(item?.usage?.inputTokens));
+      appendUsageDetail(details, i18n.usageOutput || "Output", getUsageNumber(item?.usage?.outputTokens));
+      appendUsageDetail(details, i18n.usageCachedInput || "Cached input", getUsageNumber(item?.usage?.cachedInputTokens));
+      appendUsageDetail(details, i18n.usageCacheRead || "Cache read", getUsageNumber(item?.usage?.cacheReadInputTokens));
+      appendUsageDetail(details, i18n.usageCacheWrite || "Cache write", getUsageNumber(item?.usage?.cacheCreationInputTokens));
+      appendUsageDetail(details, i18n.usageReasoning || "Reasoning", getUsageNumber(item?.usage?.reasoningOutputTokens));
+      appendUsageDetail(details, i18n.usageTotal || "Total", getUsageNumber(item?.usage?.totalTokens));
+      const contextUsed = formatUsageContextUsed(item);
+      if (contextUsed) appendUsageDetail(details, i18n.usageContextUsed || "Context", contextUsed);
+      else appendUsageDetail(details, i18n.usageContextWindow || "Context window", getUsageNumber(item?.modelContextWindow));
+      appendUsageDetail(details, i18n.usageServiceTier || "Service tier", normalizeUsageText(item?.serviceTier));
+      appendUsageDetail(details, i18n.usageSpeed || "Speed", normalizeUsageText(item?.speed));
+      appendUsageDetail(details, i18n.usageStopReason || "Stop reason", normalizeUsageText(item?.stopReason));
+      appendRateLimitDetails(details, item && item.rateLimits);
+      appendTotalUsageDetails(details, item && item.totalUsage);
+      if (details.childElementCount > 0) card.appendChild(details);
+    }
+
+    row.appendChild(card);
+    return row;
+  }
+
+  function formatUsageTokenSummary(usage) {
+    const input = getUsageNumber(usage && usage.inputTokens);
+    const output = getUsageNumber(usage && usage.outputTokens);
+    if (input && output) return formatTemplate(getSafeUiText(i18n.usageTokensInOut, "{0} in / {1} out"), input, output);
+    if (input) return formatTemplate(getSafeUiText(i18n.usageTokensIn, "{0} in"), input);
+    if (output) return formatTemplate(getSafeUiText(i18n.usageTokensOut, "{0} out"), output);
+    return "";
+  }
+
+  function formatUsageContextUsed(item) {
+    const inputTokens = item && item.usage && typeof item.usage.inputTokens === "number" ? item.usage.inputTokens : NaN;
+    const contextWindow = item && typeof item.modelContextWindow === "number" ? item.modelContextWindow : NaN;
+    if (!Number.isFinite(inputTokens) || !Number.isFinite(contextWindow) || contextWindow <= 0) return "";
+    const percent = (Math.max(0, inputTokens) / contextWindow) * 100;
+    return formatTemplate(
+      getSafeUiText(i18n.usageContextUsedValue, "input {0} / window {1} ({2})"),
+      getUsageNumber(inputTokens),
+      getUsageNumber(contextWindow),
+      formatPercent(percent),
+    );
+  }
+
+  function appendRateLimitDetails(container, rateLimits) {
+    if (!rateLimits || typeof rateLimits !== "object") return;
+    appendUsageDetail(container, i18n.usageRateLimitPrimary || "Short-term rate limit", formatRateLimit(rateLimits.primary, "hours"));
+    appendUsageDetail(container, i18n.usageRateLimitSecondary || "Long-term rate limit", formatRateLimit(rateLimits.secondary, "days"));
+    appendUsageDetail(container, i18n.usageRateLimitPlan || "Plan", normalizeUsageText(rateLimits.planType));
+    appendUsageDetail(container, i18n.usageRateLimitReached || "Rate limit reached", normalizeUsageText(rateLimits.reachedType));
+  }
+
+  function formatRateLimit(limit, windowUnit) {
+    if (!limit || typeof limit !== "object") return "";
+    const parts = [];
+    if (typeof limit.usedPercent === "number" && Number.isFinite(limit.usedPercent)) {
+      parts.push(formatTemplate(getSafeUiText(i18n.usageRateLimitUsed, "usage {0}"), formatPercent(limit.usedPercent)));
+    }
+    if (typeof limit.windowMinutes === "number" && Number.isFinite(limit.windowMinutes)) {
+      const windowText = formatRateLimitWindow(limit.windowMinutes, windowUnit);
+      if (windowText) parts.push(windowText);
+    }
+    if (typeof limit.resetsAt === "number" && Number.isFinite(limit.resetsAt)) {
+      const resetAt = formatUnixSeconds(limit.resetsAt);
+      if (resetAt) parts.push(formatTemplate(getSafeUiText(i18n.usageRateLimitResetAt, "reset {0}"), resetAt));
+    } else if (typeof limit.resetsInSeconds === "number" && Number.isFinite(limit.resetsInSeconds)) {
+      parts.push(
+        formatTemplate(
+          getSafeUiText(i18n.usageRateLimitResetIn, "reset in {0}"),
+          formatDurationSeconds(limit.resetsInSeconds),
+        ),
+      );
+    }
+    return parts.join(" / ");
+  }
+
+  function formatRateLimitWindow(windowMinutes, unit) {
+    if (typeof windowMinutes !== "number" || !Number.isFinite(windowMinutes)) return "";
+    if (unit === "hours") {
+      return formatTemplate(
+        getSafeUiText(i18n.usageRateLimitWindowHours, "window {0} h"),
+        formatUsageDecimalNumber(windowMinutes / 60),
+      );
+    }
+    if (unit === "days") {
+      return formatTemplate(
+        getSafeUiText(i18n.usageRateLimitWindowDays, "window {0} d"),
+        formatUsageDecimalNumber(windowMinutes / 1440),
+      );
+    }
+    return formatTemplate(getSafeUiText(i18n.usageRateLimitWindow, "window {0} min"), getUsageNumber(windowMinutes));
+  }
+
+  function appendUsageDetail(container, label, value) {
+    if (!(container instanceof HTMLElement)) return;
+    const safeLabel = normalizeUsageText(label);
+    const safeValue = normalizeUsageText(value);
+    if (!safeLabel || !safeValue) return;
+    const item = el("div", { className: "usageDetailItem" });
+    item.appendChild(el("span", { className: "usageDetailLabel", textContent: safeLabel }));
+    item.appendChild(el("span", { className: "usageDetailValue", textContent: safeValue }));
+    container.appendChild(item);
+  }
+
+  function appendTotalUsageDetails(container, totalUsage) {
+    if (!totalUsage || typeof totalUsage !== "object") return;
+    const totalLabel = getSafeUiText(i18n.usageCumulative, "Cumulative tokens");
+    const input = getUsageNumber(totalUsage.inputTokens);
+    const output = getUsageNumber(totalUsage.outputTokens);
+    const total = getUsageNumber(totalUsage.totalTokens);
+    const parts = [];
+    if (input) parts.push(`${getSafeUiText(i18n.usageInput, "Input")} ${input}`);
+    if (output) parts.push(`${getSafeUiText(i18n.usageOutput, "Output")} ${output}`);
+    if (total) parts.push(`${getSafeUiText(i18n.usageTotal, "Total")} ${total}`);
+    if (parts.length > 0) appendUsageDetail(container, totalLabel, parts.join(" / "));
+  }
+
+  function getUsageNumber(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return "";
+    return Math.max(0, Math.floor(value)).toLocaleString();
+  }
+
+  function formatUsageDecimalNumber(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return "";
+    const safe = Math.max(0, value);
+    if (Number.isInteger(safe)) return safe.toLocaleString();
+    return safe.toLocaleString(undefined, { maximumFractionDigits: 1 });
+  }
+
+  function formatPercent(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return "";
+    const safe = Math.max(0, value);
+    const digits = safe >= 10 || Number.isInteger(safe) ? 0 : 1;
+    return `${safe.toFixed(digits)}%`;
+  }
+
+  function formatUnixSeconds(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return "";
+    const ms = value * 1000;
+    if (!Number.isFinite(ms)) return "";
+    return formatIsoYmdHms(new Date(ms).toISOString());
+  }
+
+  function formatDurationSeconds(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return "";
+    let seconds = Math.max(0, Math.floor(value));
+    const hours = Math.floor(seconds / 3600);
+    seconds -= hours * 3600;
+    const minutes = Math.floor(seconds / 60);
+    seconds -= minutes * 60;
+    const parts = [];
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+    return parts.join(" ");
+  }
+
+  function normalizeUsageText(value) {
+    return typeof value === "string" ? value.trim() : "";
+  }
+
+  function renderEnvironment(item, cardKey) {
+    const row = el("div", { className: "row environment" });
+    if (typeof item.messageIndex === "number") row.dataset.messageIndex = String(item.messageIndex);
+
+    const card = el("div", { className: "environmentCard" });
+    applyTimelineCardWidthState(card, cardKey);
+
+    const summary = el("div", { className: "environmentSummary" });
+    summary.appendChild(el("span", { className: "environmentTitle", textContent: getSafeUiText(i18n.environment, "Environment") }));
+    const branch = normalizeUsageText(item && item.gitBranch);
+    if (branch) summary.appendChild(el("span", { className: "environmentMeta", textContent: branch }));
+    const commit = normalizeGitCommitDisplay(item && item.gitCommit);
+    if (commit) summary.appendChild(el("span", { className: "environmentMeta mono", textContent: commit }));
+    if (typeof item.gitDirty === "boolean") {
+      summary.appendChild(
+        el("span", {
+          className: "environmentMeta",
+          textContent: item.gitDirty ? getSafeUiText(i18n.environmentDirty, "dirty") : getSafeUiText(i18n.environmentClean, "clean"),
+        }),
+      );
+    }
+    if (typeof item.timestampIso === "string") {
+      const timestamp = el("span", { className: "environmentMeta", textContent: formatIsoYmdHms(item.timestampIso) });
+      timestamp.title = item.timestampIso;
+      summary.appendChild(timestamp);
+    }
+    card.appendChild(summary);
+
+    const details = el("div", { className: "environmentDetails" });
+    appendUsageDetail(details, i18n.environmentCwd || "CWD", normalizeUsageText(item && item.cwd));
+    appendUsageDetail(details, i18n.environmentBranch || "Branch", branch);
+    appendUsageDetail(details, i18n.environmentCommit || "Commit", normalizeUsageText(item && item.gitCommit));
+    if (details.childElementCount > 0) card.appendChild(details);
+
+    row.appendChild(card);
+    return row;
+  }
+
+  function normalizeGitCommitDisplay(value) {
+    const text = normalizeUsageText(value);
+    return text.length > 12 ? text.slice(0, 12) : text;
   }
 
   function getMessageImages(item) {
@@ -2748,6 +2995,7 @@
     if (typeof item.timestampIso === "string") {
       appendToolMetaTag(metaTags, formatIsoYmdHms(item.timestampIso), item.timestampIso);
     }
+    if (showDetails) appendToolExecutionMetaTags(metaTags, item && item.execution);
     if (metaTags.childElementCount > 0) {
       metaLine.appendChild(metaTags);
       bubble.appendChild(metaLine);
@@ -2769,6 +3017,43 @@
 
   function shouldRenderToolCard() {
     return toolDisplayMode === "compactCards" || showDetails;
+  }
+
+  function appendToolExecutionMetaTags(container, execution) {
+    if (!execution || typeof execution !== "object") return;
+    const status = normalizeToolStatus(execution.status);
+    if (status) appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolStatus, "Status: {0}"), status));
+    if (typeof execution.exitCode === "number" && Number.isFinite(execution.exitCode)) {
+      appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolExitCode, "Exit: {0}"), String(Math.trunc(execution.exitCode))));
+    }
+    if (typeof execution.durationMs === "number" && Number.isFinite(execution.durationMs)) {
+      appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolDuration, "Duration: {0}"), formatDurationMs(execution.durationMs)));
+    }
+    const errorText = typeof execution.error === "string" ? execution.error.trim() : "";
+    if (errorText) appendToolMetaTag(container, errorText, errorText);
+  }
+
+  function normalizeToolStatus(value) {
+    const status = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (!status) return "";
+    if (status === "success") return getSafeUiText(i18n.toolStatusSuccess, "success");
+    if (status === "completed") return getSafeUiText(i18n.toolStatusCompleted, "completed");
+    if (status === "error" || status === "failed") return getSafeUiText(i18n.toolStatusError, "error");
+    if (status === "timeout" || status === "timed_out") return getSafeUiText(i18n.toolStatusTimeout, "timeout");
+    if (status === "interrupted") return getSafeUiText(i18n.toolStatusInterrupted, "interrupted");
+    if (status === "cancelled" || status === "canceled") return getSafeUiText(i18n.toolStatusCancelled, "cancelled");
+    return status;
+  }
+
+  function formatDurationMs(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return "";
+    const ms = Math.max(0, Math.round(value));
+    if (ms < 1000) return `${ms}ms`;
+    const seconds = ms / 1000;
+    if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/\.?0+$/u, "")}s`;
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = Math.round(seconds - minutes * 60);
+    return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
   }
 
   function normalizeLongMessageFoldingMode(value) {
@@ -3092,6 +3377,29 @@
     const type = item && typeof item.type === "string" && item.type.trim() ? item.type.trim() : "item";
     const safeIndex = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex : 0;
     if (type === "message" && item && typeof item.messageIndex === "number") return `message:${item.messageIndex}`;
+    if (type === "usage") {
+      const messageIndex =
+        item && typeof item.messageIndex === "number" && Number.isFinite(item.messageIndex)
+          ? Math.max(0, Math.floor(item.messageIndex))
+          : 0;
+      const timestampIso = normalizePatchGroupKeyPart(item && item.timestampIso);
+      const usageSignature = stableStringHash(JSON.stringify((item && item.usage) || {}));
+      if (messageIndex > 0) return `usage:${messageIndex}:${usageSignature}`;
+      if (timestampIso) return `usage:time:${stableStringHash(timestampIso)}:${usageSignature}`;
+    }
+    if (type === "environment") {
+      const timestampIso = normalizePatchGroupKeyPart(item && item.timestampIso);
+      const envSignature = stableStringHash(
+        JSON.stringify({
+          cwd: item && item.cwd,
+          branch: item && item.gitBranch,
+          commit: item && item.gitCommit,
+          dirty: item && item.gitDirty,
+        }),
+      );
+      if (timestampIso) return `environment:time:${stableStringHash(timestampIso)}:${envSignature}`;
+      return `environment:${envSignature}`;
+    }
     if (type === "patchGroup") return buildPatchGroupCardKey(item, safeIndex);
     if (type === "tool") {
       const callId = item && typeof item.callId === "string" && item.callId.trim() ? item.callId.trim() : "";

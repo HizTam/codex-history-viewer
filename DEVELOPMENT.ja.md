@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-04-24
-- 対象バージョン: 1.4.1
+- 最終更新: 2026-04-28
+- 対象バージョン: 1.4.2
 
 ## 1. 概要
 
@@ -46,6 +46,8 @@
   - 絞り込み: 日付スコープ / プロジェクト (`cwd`) / ソース / タグ
   - ヘッダー操作: 再読み込み、表示モード切替、絞り込み、現在のプロジェクトで絞り込み、ソース切替、絞り込み解除など
   - 複数選択で開く / エクスポート / Promote / Delete が可能
+  - 履歴が 0 件の場合は、履歴保存先確認・再読み込み・Claude 有効化に関する案内ノードを表示する
+  - 絞り込み適用後に一致する履歴がない場合は、絞り込み条件の変更 / 解除を促す案内ノードを表示する
 - **Search**: 検索結果ツリー
   - 表示構造: セッション -> ヒット一覧
   - ヘッダー操作: `Search...`、`Rerun Search`、`Clear Results`、タグ絞り込み、保存済み検索、既定ロール設定
@@ -198,6 +200,10 @@
 - チャットの先頭 / 末尾スクロールは、スクロールコンテナの絶対端ではなく、実際に描画されている最初 / 最後のカードを対象にする
 - `Show details` OFF で描画されないカードは、先頭 / 末尾スクロールおよび `follow` の対象に含めない
 - `Show details` OFF では tool 引数 / tool 出力 / patch diff 行などの重い詳細を省略し、必要時に full detail を再読み込みする
+- assistant の model / effort / token usage は `Show details` ON のときだけ、assistant 応答後の細い usage 行として表示する
+- usage 行は初期状態では 1 行表示とし、クリックすると入力 / 出力 / キャッシュ / 推論 / 累計 / context window / rate limit / service tier など取得できた項目だけを展開表示する
+- CWD / Git ブランチ / Git コミット / dirty 状態が取得できた場合は、`Show details` ON のときだけ environment 行として表示する
+- tool の status / exit code / duration / interruption / error が取得できた場合は、`Show details` ON の tool カードにメタ情報として表示する
 - `Show details` の ON/OFF では切り替え前に見えていたカードを基準にスクロールを復元し、対象カードが非表示なら次の表示カードへ移動する
 - `chat.openPosition`:
   - `top`: 通常は先頭から開く
@@ -346,6 +352,13 @@
   - `ChatPanelManager` は保存可能な画像をパネル単位で保持し、Webview からの保存要求時に `showSaveDialog` 経由で書き出す
   - `ChatPanelManager` は表示詳細を `summary` / `full` で管理し、`summary` では tool 引数 / tool 出力 / patch diff 行を Webview model から省略する
   - `ChatPanelManager` は対応画像の data URI をパネル単位で保持し、Webview からの `requestImageData` に応じて必要な画像データだけ返す
+  - `ChatPanelManager` は usage 行のラベルを Webview i18n として渡し、表示文字列を `l10n/bundle.l10n.*` で管理する
+  - `chatModelBuilder.ts` は Codex の `turn_context.payload.model` / `effort` を assistant メッセージと usage 行へ付与する
+  - `chatModelBuilder.ts` は Codex の `event_msg.payload.type = token_count` から `last_token_usage` / `total_token_usage` / `model_context_window` / `rate_limits` を usage 行に変換する
+  - `chatModelBuilder.ts` は Claude の `message.model` / `message.usage` から usage 行を生成し、連続する同一 usage の重複表示を抑制する
+  - `chatModelBuilder.ts` は `session_meta` などから CWD / Git ブランチ / Git コミット / dirty 状態を environment 行に変換し、同一 snapshot の重複表示を抑制する
+  - `chatModelBuilder.ts` は Codex の `custom_tool_call` / `custom_tool_call_output` も tool カードとして扱う
+  - `chatModelBuilder.ts` は Codex の `exec_command_end`、tool output の JSON / plain text、Claude の tool result から tool 実行メタ情報を抽出する
   - `chatImageAttachments.ts` は Codex / Claude の画像データ、ローカル画像参照、画像プレースホルダーを正規化する
   - 未対応 / 欠損 / remote-only / サイズ超過 / 設定無効の画像は表示不能理由としてモデル化する
   - `user` / `assistant` / tool / note / diff などのカードは個別に最大幅展開できる
@@ -355,6 +368,9 @@
   - チャットヘッダーの自動更新ボタンは `btnPageSearch` と `btnReload` の間に配置する
   - Webview 側は `requestReload` / `reload` message で自動更新時のスクロール・UI 状態保持を行う
   - Webview 側は `Show details` 切り替え時にカード anchor を保持し、再描画後に同じカードまたは次の表示カードへ復元する
+  - Webview 側は usage 行を折りたたみ可能カードとして描画し、展開状態を同一セッション reload 中は保持する
+  - Webview 側は environment 行を軽量メタカードとして描画し、CWD など長い値は表示崩れしないよう省略 / 折り返しする
+  - Webview 側は tool 実行メタ情報を tool カードの meta tag として表示し、status はローカライズ済みラベルへ正規化する
   - Webview 側は IntersectionObserver で表示範囲付近の画像だけ data URI を要求し、セッション切替時は画像データキャッシュを破棄する
   - `follow` モードとチャット末尾ボタンは、`#timeline` に描画済みの最後の `.row` へスクロールする
   - patch group のカード幅保持キーは `turnId`、メッセージ index、変更ファイル情報などから安定的に作る
@@ -465,6 +481,8 @@ npm run package
 - 自動更新オンのチャットタブが裏タブでも、VS Code ウィンドウがフォーカス中なら更新される
 - History view が非表示かつ自動更新オンのチャットタブが開いていないとき、自動更新は保留される
 - VS Code ウィンドウが非フォーカスのとき、自動更新は保留され、フォーカス復帰時に 1 回だけ反映される
+- 履歴が 0 件の場合、History に履歴保存先確認・再読み込み・Claude 有効化に関する案内ノードが表示される
+- 履歴絞り込みで一致件数が 0 件になった場合、History に絞り込み変更 / 解除を促す案内ノードが表示される
 - `preserve` ではスクロール位置、選択メッセージ、詳細表示、開いているカード、開いている diff、検索サイドバー状態が維持される
 - `follow` では UI 状態を維持しつつ、最新の表示カードへ移動する
 - 自動更新で Search 結果が勝手にクリアされない
@@ -498,6 +516,12 @@ npm run package
 - チャット表示で `toolDisplayMode` を `detailsOnly` / `compactCards` で切り替えるとツール行の表示が変わる
 - `userLongMessageFolding` / `assistantLongMessageFolding` が `off` / `auto` / `always` で期待どおり折りたたみ動作する
 - `Show details` ON 時は長文メッセージが常に全文表示になる
+- `Show details` OFF 時は usage 行が表示されない
+- `Show details` ON 時は Codex / Claude の assistant 応答後に usage 行が表示され、クリックで詳細が展開 / 折りたたみされる
+- Codex の usage 行には取得できる場合、model / effort / in-out token / cached input / reasoning / cumulative / context window / rate limit が表示される
+- Claude の usage 行には取得できる場合、model / in-out token / cache read-write / service tier / speed が表示される
+- `Show details` ON 時は、取得できる場合に environment 行として CWD / Git branch / Git commit / dirty 状態が表示される
+- `Show details` ON 時は、tool カードに取得できる場合の status / exit code / duration / interruption / error が表示される
 - チャットのスクロールバーが固定ヘッダーの横ではなく、ヘッダー下のスクロール領域から始まる
 - Codex / Claude の画像付きセッションで、対応画像がサムネイル表示される
 - `<image></image>` だけが残るセッションで、プレースホルダー文字列が本文に残らず、表示不能状態の画像カードが出る

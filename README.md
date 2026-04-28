@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **1.4.1** (2026-04-24).
+Latest release: **1.4.2** (2026-04-28).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -40,6 +40,8 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Image attachments open in an in-view preview modal with a thumbnail strip, previous/next navigation, left/right keyboard navigation, fit/original-size toggle, and save action
 - Chat viewer supports tool-specific cards with a configurable display mode (`detailsOnly` / `compactCards`)
 - Chat viewer defers heavy tool details and patch diff rows until **Show details** is enabled or a diff entry is expanded
+- Chat viewer shows assistant model, token usage, and related runtime metadata for Codex / Claude sessions only when **Show details** is enabled
+- Chat viewer can show environment snapshots and tool execution metadata when the session file contains CWD, Git, status, exit code, or duration details
 - Chat viewer can softly fold long `user` and `assistant` messages independently, while **Show details** always expands them fully
 - Chat viewer restores to the currently viewed card when **Show details** is toggled, falling back to the next visible card when needed
 - Chat viewer cards can be expanded individually to full width when a message, tool result, or diff needs more horizontal space
@@ -79,6 +81,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Import/Export sessions: export raw JSONL or sanitized Markdown transcripts, and import with duplicate session ID handling (skip or overwrite)
 - Control view for settings, import, rebuild cache, empty trash, bulk tag maintenance, and undo
 - Dedicated refresh actions for **Pinned**, **History**, and **Status**, plus global refresh from the Control view
+- History view shows helpful empty-state guidance when no sessions are found or active filters match nothing
 - Manual trash cleanup: **Empty Trash** clears internal trash/quarantine files and legacy cache/index generations on demand
 - Undo last action (pin/unpin/promote/delete/annotation/tag operations)
 - Status view metrics, including current filters/roles/tags, total tag count, cache folder size, trash file count, and copyable paths for the current project and session roots
@@ -173,17 +176,10 @@ For the full command list with per-command descriptions, see:
 - Import recursively scans the selected source folder for `.jsonl` files.
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 
-## What's New in 1.4.1
+## What's New in 1.4.2
 
-- Added a chat tab auto-refresh button in the chat header with `off`, `preserve view`, and `follow latest` modes.
-- Open chat tabs can now auto-refresh while VS Code is focused, including background editor tabs.
-- New chat tabs and tabs switched to a different session now start with auto-refresh off; existing tabs keep their own mode.
-- Chat tab auto-refresh preserves expanded cards/diffs, details visibility, diff wrap state, selected message, in-page search state, and scroll behavior.
-- Reusable chat tabs now reset session-scoped Webview state when switching to a different session.
-- Large chat sessions now load lighter by deferring heavy details, patch diff rows, and image data until needed.
-- Toggling **Show details** now restores the scroll position by timeline card instead of raw pixel offset.
-- Follow/latest scrolling now targets the latest rendered card instead of the absolute bottom of the scroll container.
-- Stabilized diff card width state across chat reloads.
+- Added collapsible assistant usage rows in the chat viewer when **Show details** is enabled.
+- Improved History empty-state guidance when no sessions are found or filters match nothing.
 
 ## Changelog
 
