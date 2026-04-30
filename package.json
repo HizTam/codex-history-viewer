@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",

@@ -4,7 +4,15 @@ import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { SessionSource, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
-import { MissingPinnedNode, PinnedDropHintNode, SessionNode, TreeNode, missingPinnedLabel, toTreeItemContextValue } from "./treeNodes";
+import {
+  HistoryEmptyNode,
+  MissingPinnedNode,
+  PinnedDropHintNode,
+  SessionNode,
+  TreeNode,
+  missingPinnedLabel,
+  toTreeItemContextValue,
+} from "./treeNodes";
 import { getConfig } from "../settings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
@@ -20,6 +28,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
+  private initialLoadComplete = false;
   public readonly onDidChangeTreeData = this.emitter.event;
 
   constructor(
@@ -47,6 +56,12 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 
   public refresh(): void {
     this.emitter.fire();
+  }
+
+  public markInitialLoadComplete(): void {
+    if (this.initialLoadComplete) return;
+    this.initialLoadComplete = true;
+    this.refresh();
   }
 
   public setTagFilter(tags: readonly string[]): void {
@@ -127,6 +142,13 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       item.tooltip = t("tree.tooltip.missingPinned", element.fsPath);
       return item;
     }
+    if (element instanceof HistoryEmptyNode) {
+      const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None);
+      item.contextValue = toTreeItemContextValue(element);
+      item.iconPath = new vscode.ThemeIcon(element.iconId);
+      item.tooltip = element.label;
+      return item;
+    }
     if (element instanceof PinnedDropHintNode) {
       const item = new vscode.TreeItem(t("tree.pinned.dropHint"), vscode.TreeItemCollapsibleState.None);
       item.description = t("tree.pinned.dropHintDescription");
@@ -140,6 +162,10 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
     if (element) return [];
+    if (!this.initialLoadComplete) {
+      return [new HistoryEmptyNode(t("history.empty.loading"), "sync~spin")];
+    }
+
     const pins = this.pinStore.getAll().sort((a, b) => b.pinnedAt - a.pinnedAt);
     const nodes: TreeNode[] = [];
     for (const p of pins) {

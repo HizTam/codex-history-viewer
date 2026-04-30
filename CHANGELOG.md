@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.3] - 2026-04-30
+
+### Added
+
+- Added `SECURITY.md` with the current security policy and guidance for the `markdown-it` GHSA-38c4-r59v-3vqw / CVE-2026-2327 advisory.
+- Added localized initial-loading rows to the History and Pinned views while the first history refresh is still running.
+
 ## [1.4.2] - 2026-04-28
 
 ### Added

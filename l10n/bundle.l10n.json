@@ -39,6 +39,7 @@
   "history.filter.source.all": "All sources",
   "history.filter.source.codex": "Codex",
   "history.filter.source.claude": "Claude",
+  "history.empty.loading": "Loading history...",
   "history.empty.noHistory.title": "No history found",
   "history.empty.noHistory.codexHint": "Check the Codex history location.",
   "history.empty.noHistory.claudeHint": "Check the Claude Code history location.",

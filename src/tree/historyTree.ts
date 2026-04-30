@@ -23,6 +23,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private projectCwd: string | null;
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
+  private initialLoadComplete = false;
   private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
@@ -59,6 +60,12 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public refresh(): void {
     this.emitter.fire();
+  }
+
+  public markInitialLoadComplete(): void {
+    if (this.initialLoadComplete) return;
+    this.initialLoadComplete = true;
+    this.refresh();
   }
 
   public setFilter(filter: DateScope): void {
@@ -255,6 +262,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
+    if (!element && !this.initialLoadComplete) {
+      return [new HistoryEmptyNode(t("history.empty.loading"), "sync~spin")];
+    }
+
     const idx = this.historyService.getIndex();
     if (!element && idx.sessions.length === 0) return this.buildNoHistoryNodes();
 

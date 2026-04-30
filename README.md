@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **1.4.2** (2026-04-28).
+Latest release: **1.4.3** (2026-04-30).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -81,7 +81,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Import/Export sessions: export raw JSONL or sanitized Markdown transcripts, and import with duplicate session ID handling (skip or overwrite)
 - Control view for settings, import, rebuild cache, empty trash, bulk tag maintenance, and undo
 - Dedicated refresh actions for **Pinned**, **History**, and **Status**, plus global refresh from the Control view
-- History view shows helpful empty-state guidance when no sessions are found or active filters match nothing
+- History view shows a localized loading row during initial startup and helpful empty-state guidance when no sessions are found or active filters match nothing
 - Manual trash cleanup: **Empty Trash** clears internal trash/quarantine files and legacy cache/index generations on demand
 - Undo last action (pin/unpin/promote/delete/annotation/tag operations)
 - Status view metrics, including current filters/roles/tags, total tag count, cache folder size, trash file count, and copyable paths for the current project and session roots
@@ -176,14 +176,18 @@ For the full command list with per-command descriptions, see:
 - Import recursively scans the selected source folder for `.jsonl` files.
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 
-## What's New in 1.4.2
+## What's New in 1.4.3
 
-- Added collapsible assistant usage rows in the chat viewer when **Show details** is enabled.
-- Improved History empty-state guidance when no sessions are found or filters match nothing.
+- Added `SECURITY.md` with guidance for the `markdown-it` GHSA-38c4-r59v-3vqw / CVE-2026-2327 advisory.
+- Improved startup loading states so the History and Pinned views show localized loading rows before empty or missing-item messages.
 
 ## Changelog
 
 See [CHANGELOG](CHANGELOG.md).
+
+## Security
+
+See [SECURITY](SECURITY.md). Use the latest release whenever possible; do not install or redistribute v1.2.1 or earlier VSIX files.
 
 ## Privacy
 

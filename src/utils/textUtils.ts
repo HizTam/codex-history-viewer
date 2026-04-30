@@ -121,11 +121,11 @@ export function isBoilerplateUserMessageText(text: string): boolean {
 export function stripTransportMetaTags(text: string): string {
   const normalized = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   let out = normalized;
-  // ?????????????????
+  // Remove full-line transport metadata blocks.
   out = out.replace(/^[ \t]*<ide_opened_file>[\s\S]*?<\/ide_opened_file>[ \t]*(?:\n|$)/gim, "");
   out = out.replace(/^[ \t]*<local-command-caveat>[\s\S]*?<\/local-command-caveat>[ \t]*(?:\n|$)/gim, "");
   out = out.replace(/^[ \t]*<(command-name|command-message|command-args)>[\s\S]*?<\/\1>[ \t]*(?:\n|$)/gim, "");
-  // ???????????????????
+  // Keep adjacent closing tags from merging with user-visible text.
   out = out.replace(
     /(<\/(?:ide_opened_file|local-command-caveat|command-name|command-message|command-args)>)(?![ \t]*\n)/gi,
     "$1\n",
@@ -137,10 +137,10 @@ export function extractCompactUserText(text: string): string | null {
   const normalized = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
   if (!normalized) return null;
 
-  // ??/???????? Task/Request ?????????????
+  // Prefer explicit Task/Request sections when present.
   const base = extractTaskSectionText(normalized) ?? extractUserRequestText(normalized) ?? normalized;
   const compact = stripTransportMetaTags(base);
-  // AGENTS / environment_context ??????????????????
+  // Suppress boilerplate-only user messages after metadata cleanup.
   if (isBoilerplateUserMessageText(compact)) return null;
   return compact.length > 0 ? compact : null;
 }

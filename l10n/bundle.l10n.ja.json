@@ -39,6 +39,7 @@
   "history.filter.source.all": "すべてのソース",
   "history.filter.source.codex": "Codex",
   "history.filter.source.claude": "Claude",
+  "history.empty.loading": "履歴を読み込んでいます...",
   "history.empty.noHistory.title": "履歴が見つかりません",
   "history.empty.noHistory.codexHint": "Codex の履歴保存先を確認してください。",
   "history.empty.noHistory.claudeHint": "Claude Code の履歴保存先を確認してください。",

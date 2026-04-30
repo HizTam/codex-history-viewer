@@ -63,9 +63,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
   updateUiLanguageContext();
 
-  // Ensure the global storage directory exists (cache / temp files).
-  await vscode.workspace.fs.createDirectory(context.globalStorageUri);
-
   const pinStore = new PinStore(context.globalState);
   const annotationStore = new SessionAnnotationStore(context.globalState);
   const searchPresetStore = new SearchPresetStore(context.globalState);
@@ -466,6 +463,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     searchView,
     chatPanels,
   );
+
+  // Ensure the global storage directory exists before cache/index operations.
+  await vscode.workspace.fs.createDirectory(context.globalStorageUri);
 
   const ensureAlwaysShowHeaderActions = async (): Promise<void> => {
     // Enable VS Code setting to always show header actions (top-right view icons).
@@ -2652,12 +2652,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.undoLastAction", "codexHistoryViewer.undoLastAction");
 
   // Initial load on activation.
-  await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
-    async () => {
-      await refreshHistoryIndex(false);
-    },
-  );
+  try {
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
+      async () => {
+        await refreshHistoryIndex(false);
+      },
+    );
+  } finally {
+    historyProvider.markInitialLoadComplete();
+    pinnedProvider.markInitialLoadComplete();
+  }
   refreshViews();
   controlProvider.refresh();
   await autoRefreshService.configure(getConfig(), computeAutoRefreshConsumerVisible(), vscode.window.state.focused);
