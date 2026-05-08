@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-05-07
-- 対象バージョン: 1.5.0
+- 最終更新: 2026-05-08
+- 対象バージョン: 1.5.1
 
 ## 1. 概要
 
@@ -142,6 +142,9 @@
     - `conversationOnly`: 会話本文とタイトル / 注釈だけを保存する
     - `toolCalls`: 会話本文に加えてツール名 / 引数を保存する
     - `toolCallsAndOutputs`: 会話本文、ツール名 / 引数、ツール出力を保存する（互換性維持の既定値）
+  - Codex の `custom_tool_call` は `toolCalls` / `toolCallsAndOutputs` のとき、tool 名、action、command、files、paths などの軽量メタだけを保存する
+  - `custom_tool_call` の patch / diff 本文、巨大 JSON、base64 / data URI、secret / token / password 系キーの値は保存しない
+  - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ、取得できる場合に status / exitCode / durationMs / success / error などの短い実行メタだけを保存する
   - 保存形式: 整形なし JSON（サイズ削減のため）
 - `Rebuild Cache`:
   - 実行前に確認ダイアログを出す
@@ -182,7 +185,7 @@
 - 新規チャットタブ、または再利用タブで別セッションへ切り替わったチャットタブは `off` から開始する
 - 同じセッションの既存チャットタブを再表示する場合は、そのタブの自動更新モードを維持する
 - `preserve` は現在の表示位置と UI 状態を維持して再読み込みする
-- `follow` は UI 状態を維持し、最新の表示カードへスクロールする
+- `follow` は UI 状態を維持し、最新の表示カードへスクロールする。ただし末尾が grouped diff カードの場合は、直前の非 diff 表示カードを優先する
 - 自動更新では Search 結果を消さない
 - 自動更新では検索インデックス再構築を行わない
 
@@ -217,6 +220,7 @@
 - チャットタブの自動更新ボタンは、履歴の自動更新設定が有効なときだけ表示し、`off` / `preserve` / `follow` をクリックで循環する
 - `preserve` / `follow` はボタンの背景色でオン状態を示し、`follow` はさらに別色で追従中であることを示す
 - チャットの先頭 / 末尾スクロールは、スクロールコンテナの絶対端ではなく、実際に描画されている最初 / 最後のカードを対象にする
+- 自動更新 `follow` は、末尾が grouped diff カードの場合に直前の非 diff カードへ追従する。非 diff カードがない場合は最後の diff カードへフォールバックする
 - `Show details` OFF で描画されないカードは、先頭 / 末尾スクロールおよび `follow` の対象に含めない
 - `Show details` OFF では tool 引数 / tool 出力 / patch diff 行などの重い詳細を省略し、必要時に full detail を再読み込みする
 - assistant の model / effort / token usage は `Show details` ON のときだけ、assistant 応答後の細い usage 行として表示する
@@ -227,6 +231,10 @@
 - `chat.openPosition`:
   - `top`: 通常は先頭から開く
   - `lastMessage`: 最後に見えていたメッセージ付近を復元する
+  - 保存 / 復元の単位は本文メッセージの `msg-*` アンカーとする
+  - 保存時に画面内の本文メッセージがない場合は、直前の描画済み本文メッセージを保存し、直前もなければ先頭扱いにする
+  - 復元対象の本文メッセージが描画されていない場合は、直前の描画済み本文メッセージへフォールバックし、直前もなければ先頭へ戻す
+  - 復元フォールバックでは直後の本文メッセージへは進めない
 - ツリー選択で開くチャットは再利用タブとして扱い、次のツリー選択で中身を差し替える
 - メニューから開くチャットはセッションタブとして扱い、別セッションを開いても差し替えない
 - 再利用タブに表示中の同じセッションをメニューから開いた場合、そのタブをセッションタブへ昇格する
@@ -326,9 +334,13 @@
 
 - `src/services/searchIndexService.ts`
   - `search-index.v2.json` を管理する
+  - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
   - JSONL をストリーミングで読み、検索対象メッセージ列を構築する
   - `search.indexToolContent` に応じてツール名 / 引数 / 出力を検索インデックスへ入れる範囲を変える
+  - Codex の `custom_tool_call` は既存 tool 検索と同じ `role: tool` / `source: toolArguments` 粒度で、軽量メタだけを入れる
+  - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ `role: tool` / `source: toolOutput` として短い実行メタを入れる
+  - `conversationOnly` のときは `custom_tool_call` の callId 紐付けだけを維持し、検索用メタ生成は行わない
   - 旧キャッシュに `indexToolContent` がない場合は `toolCallsAndOutputs` とみなし、既定設定のままなら不要な再作成を避ける
   - `cleanupOrphanEntries()` で現在の履歴に存在しない cacheKey を削除する
   - 実ファイルが消えている場合は `stat` 失敗時に該当エントリを削除する
@@ -396,11 +408,13 @@
   - チャットヘッダーの自動更新ボタンは `btnPageSearch` と `btnReload` の間に配置する
   - Webview 側は `requestReload` / `reload` message で自動更新時のスクロール・UI 状態保持を行う
   - Webview 側は `Show details` 切り替え時にカード anchor を保持し、再描画後に同じカードまたは次の表示カードへ復元する
+  - Webview 側は `lastMessage` の保存 / 復元を本文 `msg-*` アンカー単位で行い、対象が表示されていない場合は直前の描画済み本文メッセージ、なければ先頭へフォールバックする
   - Webview 側は usage 行を折りたたみ可能カードとして描画し、展開状態を同一セッション reload 中は保持する
   - Webview 側は environment 行を軽量メタカードとして描画し、CWD など長い値は表示崩れしないよう省略 / 折り返しする
   - Webview 側は tool 実行メタ情報を tool カードの meta tag として表示し、status はローカライズ済みラベルへ正規化する
   - Webview 側は IntersectionObserver で表示範囲付近の画像だけ data URI を要求し、セッション切替時は画像データキャッシュを破棄する
-  - `follow` モードとチャット末尾ボタンは、`#timeline` に描画済みの最後の `.row` へスクロールする
+  - `follow` モードは、`#timeline` に描画済みの `.row` から追従対象を選ぶ。末尾が `patchGroup` の場合は直前の非 `patchGroup` 行を優先し、非 `patchGroup` 行がなければ最後の `patchGroup` 行へフォールバックする
+  - チャット末尾ボタンは、`#timeline` に描画済みの最後の `.row` へスクロールする
   - patch group のカード幅保持キーは `turnId`、メッセージ index、変更ファイル情報などから安定的に作る
 - Markdown transcript: `src/transcript/*`
 - Control / Status ビュー: `src/tree/utilityTrees.ts`
@@ -495,7 +509,17 @@ npm run package
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 
-### 5.4 v1.5.0 リリースメモ（2026-05-07）
+### 5.4 v1.5.1 リリースメモ（2026-05-08）
+
+- 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
+- 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
+- `chat.openPosition = lastMessage` で、画面内に本文メッセージがない位置の保存や、復元対象メッセージが描画されない場合に、直前の描画済み本文メッセージまたは先頭へフォールバックするようにした
+- チャット末尾ボタンは最後に描画されたカードへ移動するため、diff そのものを確認できる
+- Codex の `custom_tool_call` を、`toolCalls` / `toolCallsAndOutputs` の検索インデックスに軽量メタとして含めるようにした
+- `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
+- 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
+
+### 5.5 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -504,7 +528,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.5 v1.4.3 リリースメモ（2026-04-30）
+### 5.6 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -536,7 +560,7 @@ npm run package
 - 履歴が 0 件の場合、History に履歴保存先確認・再読み込み・Claude 有効化に関する案内ノードが表示される
 - 履歴絞り込みで一致件数が 0 件になった場合、History に絞り込み変更 / 解除を促す案内ノードが表示される
 - `preserve` ではスクロール位置、選択メッセージ、詳細表示、開いているカード、開いている diff、検索サイドバー状態が維持される
-- `follow` では UI 状態を維持しつつ、最新の表示カードへ移動する
+- `follow` では UI 状態を維持しつつ、最新の表示カードへ移動する。末尾が grouped diff カードの場合は直前の非 diff カードへ移動する
 - 自動更新で Search 結果が勝手にクリアされない
 - `Show details` を ON/OFF しても、切り替え前に見ていたカードまたは次の表示カードへスクロールが復元される
 - 詳細 OFF の大型セッションで tool 詳細、patch diff 行、画像 data URI が初回描画時にまとめて読み込まれず、詳細表示・diff 展開・画像表示時に必要分が読み込まれる
@@ -544,6 +568,10 @@ npm run package
 - `Search` が履歴側の絞り込み条件に追従する
 - `Search` のロール設定、保存済み検索、再検索、タグ絞り込みが動く
 - `search.indexToolContent` を `conversationOnly` / `toolCalls` / `toolCallsAndOutputs` で切り替えると、検索インデックスに入るツール情報の範囲が変わる
+- `toolCalls` / `toolCallsAndOutputs` で Codex の `custom_tool_call` の tool 名、command、対象ファイルパスが検索にヒットする
+- `conversationOnly` では Codex の `custom_tool_call` の tool 名、command、対象ファイルパスが検索にヒットしない
+- Codex の `custom_tool_call` に patch / diff 本文が含まれる場合、対象ファイルパスは検索にヒットし、diff 本文の具体行は検索にヒットしない
+- `toolCallsAndOutputs` でも Codex の `custom_tool_call_output` の stdout / stderr 全文や diff 本文は検索インデックスへ入らない
 - `search.indexToolContent` 変更時に検索インデックス再作成の通知が出て、`Rebuild Search Index` で検索インデックスだけ再作成できる
 - `Rebuild Cache` 実行前に確認が出て、履歴キャッシュと検索インデックスが再作成される
 - `Delete` 実行後に `undo-delete` / `deleted` の扱いと `Undo Last Action` が整合する
@@ -561,6 +589,8 @@ npm run package
 - `chat.openPosition = top` のとき、移動先指定のないチャット表示が先頭から開く
 - `chat.openPosition = lastMessage` のとき、同じセッションを開き直すと最後に見ていたメッセージ付近へ戻る
 - 保存位置がない場合、または保存位置が現在の詳細表示設定で表示される先頭メッセージの場合は、タグ / メモカードが見えるスクロール最上部から開く
+- `chat.openPosition = lastMessage` で tool / usage / diff など本文メッセージが画面内にない位置を最後に見ていた位置として保存した場合、開き直し時は直前の描画済み本文メッセージ付近、直前がなければ先頭へ戻る
+- `chat.openPosition = lastMessage` で保存済みの本文メッセージが現在の表示条件で描画されない場合、直前の描画済み本文メッセージへ戻り、直前がなければ先頭から開く
 - ツリー選択で同じセッションの `session` タブが開いている場合、そのタブがアクティブになり、`reusable` タブは差し替わらない
 - ツリー選択で同じセッションの `reusable` タブだけが開いている場合、そのタブがアクティブになる
 - 別タブ表示中に、既に選択されている履歴行を再クリックしても、同じセッションの既存チャットタブがアクティブになる
@@ -600,6 +630,8 @@ npm run package
 - 検索サイドバーの幅をドラッグで変更でき、再表示後も保持される
 - 未入力・一致なし時ともにカウントが `0/0` と表示される
 - チャットヘッダーの先頭・末尾ボタンで、実際に表示されている最初 / 最後のカードへスクロールできる
+- 自動更新 `follow` で最後が diff カードのとき、直前の非 diff カードへ追従し、チャット末尾ボタンでは最後の diff カードへ移動できる
+- 自動更新 `follow` が pending のカードアンカー復元や reload 後のレイアウト更新に上書きされず、追従後の位置が最後に見ていた位置として保存される
 - `Show details` OFF のとき、描画されていない詳細カードへ先頭 / 末尾スクロールしない
 - ヘッダー幅が狭くなるとラベルボタンが自動的にアイコンのみに切り替わる
 - Reload 後にスクロール位置と選択メッセージが復元される

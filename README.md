@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **1.5.0** (2026-05-07).
+Latest release: **1.5.1** (2026-05-08).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -56,10 +56,11 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Reusable chat tabs reset session-scoped Webview state when switching to a different session, avoiding stale search, preview, or image-cache state.
 - Selecting a session uses a reusable chat tab, while **Open in New Tab (Chat)** keeps the session in its own tab
 - If the same session is already open, selecting or opening it activates the existing chat tab instead of creating a duplicate
-- Chat sessions can reopen at the top or near the last viewed message, based on the setting
-- Chat viewer scrolling starts below the fixed toolbar so the scrollbar belongs to the scrollable content area
+- Chat sessions can open at the top or near the last viewed message, based on the setting
+- Last-viewed-message restoration uses the previous rendered message or the top when no message bubble is visible
+- Chat viewer scrolling starts below the fixed toolbar
 - Reload in the chat viewer preserves scroll/selection and refreshes the tab title using the active history date basis
-- The chat tab "follow latest" mode and the bottom scroll action target the latest rendered card instead of the absolute bottom of the scroll container
+- Follow latest auto-refresh targets the latest non-diff content card when trailing grouped diff cards are present, while the bottom scroll action targets the latest rendered card
 - Workspace-relative Markdown file links open inside VS Code from both chat sessions and Markdown transcripts
 - Chat tab icon switches by source (`Codex` / `Claude`)
 - Chat header annotation block (tags + note), including quick actions (filter/remove/edit)
@@ -69,7 +70,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Incremental local search index for faster repeated searches (tracks file updates/deletions and prunes stale entries)
 - Search scope follows the active History filters (date scope, project/CWD, and source)
 - Search roles filter (default: `user`/`assistant`, optional `developer`/`tool`) with configurable defaults from the Search header or Control view
-- Search index tool-content scope can be reduced from the compatibility default (`toolCallsAndOutputs`) to `toolCalls` or `conversationOnly` to shrink the local search index
+- Search index tool-content scope can be reduced from the compatibility default (`toolCallsAndOutputs`) to `toolCalls` or `conversationOnly` to shrink the local search index; Codex `custom_tool_call` records are indexed as lightweight tool metadata when tool calls are enabled
 - Search rerun (current conditions), search pane reset, and saved search presets (run/save/delete)
 - Search hits include session annotations (`tag` / `note`) in addition to message/tool text
 - Advanced query syntax: `/regex/`, `re:...`, `exact:...`, and `AND` / `OR` / `NOT`
@@ -181,11 +182,12 @@ For the full command list with per-command descriptions, see:
 - Import recursively scans the selected source folder for `.jsonl` files.
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 
-## What's New in 1.5.0
+## What's New in 1.5.1
 
-- Added extension-local custom titles for Codex and Claude sessions.
-- Added session tree tooltip modes: full, compact, and title-only.
-- Added a configurable search index tool-content scope.
+- Changed chat auto-refresh `follow latest` scrolling to prefer the latest non-diff content card when trailing grouped diff cards are last.
+- Fixed chat auto-refresh `follow latest` scrolling when pending card-anchor restoration or later layout updates could pull the view away from the follow target.
+- Fixed chat last-viewed-message saving and restoring when no message bubble is visible, falling back to the previous rendered message or the top.
+- Changed Codex `custom_tool_call` search indexing to include lightweight tool metadata.
 
 ## Changelog
 

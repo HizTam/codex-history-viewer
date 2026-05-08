@@ -513,14 +513,17 @@
       showDetails = shouldPreserveUiState ? prevShowDetails : shouldAutoShowDetails(model, selectedMessageIndex);
       updateToolbar();
       render();
-      const restoredDetailAnchor = restorePendingDetailScrollAnchorAfterRender({ clear: true });
+      const restoredDetailAnchor = autoScrollToBottom
+        ? clearPendingDetailScrollAnchor()
+        : restorePendingDetailScrollAnchorAfterRender({ clear: true });
       if (isImagePreviewOpen()) syncImagePreviewControls();
 
       if (shouldPreserveUiState) {
         if (typeof selectedMessageIndex === "number") restoreHighlight(selectedMessageIndex);
-        if (!restoredDetailAnchor) {
+        if (autoScrollToBottom) {
+          restoreScrollToBottom();
+        } else if (!restoredDetailAnchor) {
           if (typeof restoreScrollY === "number") restoreScroll(restoreScrollY);
-          else if (autoScrollToBottom) restoreScrollToBottom();
         }
       } else if (typeof msg.revealMessageIndex === "number") {
         revealMessage(msg.revealMessageIndex);
@@ -814,22 +817,32 @@
     const viewportBottom = rootRect.bottom;
     let bestIndex = null;
     let bestDistance = Number.POSITIVE_INFINITY;
+    let previousIndex = null;
+    let previousBottom = Number.NEGATIVE_INFINITY;
 
     for (const node of document.querySelectorAll("[id^='msg-']")) {
       if (!(node instanceof HTMLElement)) continue;
-      const match = /^msg-(\d+)$/u.exec(node.id);
-      if (!match) continue;
+      const index = readMessageAnchorIndex(node);
+      if (typeof index !== "number") continue;
       const rect = node.getBoundingClientRect();
-      if (rect.bottom < viewportTop || rect.top > viewportBottom) continue;
+      if (rect.bottom < viewportTop) {
+        if (rect.bottom > previousBottom) {
+          previousBottom = rect.bottom;
+          previousIndex = index;
+        }
+        continue;
+      }
+      if (rect.top > viewportBottom) continue;
       const distance = Math.abs(rect.top - viewportTop);
       if (distance < bestDistance) {
         bestDistance = distance;
-        bestIndex = Number(match[1]);
+        bestIndex = index;
       }
     }
 
-    if (!Number.isFinite(bestIndex)) return null;
-    return isFirstRenderedMessageIndex(bestIndex) ? 0 : bestIndex;
+    const resolvedIndex = Number.isFinite(bestIndex) ? bestIndex : previousIndex;
+    if (!Number.isFinite(resolvedIndex)) return 0;
+    return isFirstRenderedMessageIndex(resolvedIndex) ? 0 : resolvedIndex;
   }
 
   function captureTimelineScrollAnchor() {
@@ -875,6 +888,11 @@
     restoreTimelineScrollAnchorAfterLayout(anchor);
     if (options.clear === true) pendingDetailScrollAnchor = null;
     return true;
+  }
+
+  function clearPendingDetailScrollAnchor() {
+    pendingDetailScrollAnchor = null;
+    return false;
   }
 
   function restoreTimelineScrollAnchorAfterLayout(anchor) {
@@ -931,6 +949,30 @@
       return Math.max(0, Math.floor(item.messageIndex));
     }
     return null;
+  }
+
+  function readMessageAnchorIndex(node) {
+    if (!(node instanceof HTMLElement)) return null;
+    const match = /^msg-(\d+)$/u.exec(node.id);
+    if (!match) return null;
+    const index = Number(match[1]);
+    return Number.isFinite(index) ? Math.max(0, Math.floor(index)) : null;
+  }
+
+  function findPreviousRenderedMessageElement(messageIndex) {
+    const safeIndex = Math.max(0, Math.floor(Number(messageIndex) || 0));
+    let bestElement = null;
+    let bestIndex = Number.NEGATIVE_INFINITY;
+    for (const node of document.querySelectorAll("[id^='msg-']")) {
+      if (!(node instanceof HTMLElement)) continue;
+      const index = readMessageAnchorIndex(node);
+      if (typeof index !== "number" || index >= safeIndex) continue;
+      if (index > bestIndex) {
+        bestIndex = index;
+        bestElement = node;
+      }
+    }
+    return bestElement;
   }
 
   function isFirstRenderedMessageIndex(messageIndex) {
@@ -1587,6 +1629,7 @@
 
   function renderItem(item, itemIndex) {
     const cardKey = buildTimelineCardKey(item, itemIndex);
+    const itemType = item && typeof item.type === "string" ? item.type : "note";
     let rendered = null;
     if (item.type === "message") rendered = renderMessage(item, cardKey);
     else if (item.type === "patchGroup") rendered = renderPatchGroup(item, itemIndex, cardKey);
@@ -1598,6 +1641,7 @@
     if (rendered instanceof HTMLElement) {
       rendered.dataset.cardKey = cardKey;
       rendered.dataset.itemIndex = String(itemIndex);
+      rendered.dataset.itemType = itemType;
     }
     return rendered;
   }
@@ -3644,24 +3688,49 @@
   }
 
   function restoreScrollToBottom() {
-    // Follow the latest rendered card after DOM updates finish.
+    // Follow the latest content card after DOM updates finish.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        const target = getTimelineBoundaryCard("bottom");
-        if (target) {
-          scrollElementIntoRootView(target, { behavior: "auto", block: "start" });
-          return;
-        }
-        const root = getScrollRoot();
-        root.scrollTo(0, root.scrollHeight);
+        scrollToLatestFollowTarget({ persist: false });
+        requestAnimationFrame(() => {
+          scrollToLatestFollowTarget({ persist: true });
+        });
       });
     });
+  }
+
+  function scrollToLatestFollowTarget(options = {}) {
+    const target = getTimelineFollowLatestCard();
+    if (target) {
+      scrollElementIntoRootView(target, { behavior: "auto", block: "start" });
+    } else {
+      const root = getScrollRoot();
+      root.scrollTo(0, root.scrollHeight);
+    }
+    if (options.persist === true) {
+      requestAnimationFrame(() => persistCurrentChatOpenPosition({ immediate: true }));
+    }
   }
 
   function getTimelineBoundaryCard(direction) {
     const cards = getRenderedTimelineRows();
     if (cards.length === 0) return null;
     return direction === "bottom" ? cards[cards.length - 1] : cards[0];
+  }
+
+  function getTimelineFollowLatestCard() {
+    const cards = getRenderedTimelineRows();
+    if (cards.length === 0) return null;
+
+    const last = cards[cards.length - 1];
+    if (!(last instanceof HTMLElement)) return null;
+    if (last.dataset.itemType !== "patchGroup") return last;
+
+    for (let i = cards.length - 2; i >= 0; i -= 1) {
+      const candidate = cards[i];
+      if (candidate instanceof HTMLElement && candidate.dataset.itemType !== "patchGroup") return candidate;
+    }
+    return last;
   }
 
   function scrollElementIntoRootView(element, options = {}) {
@@ -3724,9 +3793,15 @@
       restoreScroll(0);
       return null;
     }
-    const elTarget = document.getElementById(`msg-${messageIndex}`);
+    let elTarget = document.getElementById(`msg-${messageIndex}`);
+    let targetMessageIndex = messageIndex;
     if (!elTarget) {
-      debugChatOpenPosition("restoreMiss", {
+      elTarget = findPreviousRenderedMessageElement(messageIndex);
+      targetMessageIndex = readMessageAnchorIndex(elTarget);
+    }
+    if (!elTarget || typeof targetMessageIndex !== "number") {
+      debugChatOpenPosition("restoreTop", {
+        reason: "noPreviousMessage",
         session: getDebugSessionName(key),
         index: messageIndex,
         hostIndex: hostMessageIndex,
@@ -3734,9 +3809,21 @@
       restoreScroll(0);
       return null;
     }
+    if (targetMessageIndex !== messageIndex && isFirstRenderedMessageIndex(targetMessageIndex)) {
+      debugChatOpenPosition("restoreTop", {
+        reason: "firstRenderedFallback",
+        session: getDebugSessionName(key),
+        index: messageIndex,
+        fallbackIndex: targetMessageIndex,
+        hostIndex: hostMessageIndex,
+      });
+      restoreScroll(0);
+      return null;
+    }
     debugChatOpenPosition("restoreApply", {
       session: getDebugSessionName(key),
-      index: messageIndex,
+      index: targetMessageIndex,
+      requestedIndex: targetMessageIndex === messageIndex ? undefined : messageIndex,
       hostIndex: hostMessageIndex,
       scrollTop: getScrollTop(),
     });
@@ -3745,13 +3832,13 @@
         elTarget.scrollIntoView({ block: "start" });
         debugChatOpenPosition("restoreDone", {
           session: getDebugSessionName(key),
-          index: messageIndex,
+          index: targetMessageIndex,
           scrollTop: getScrollTop(),
         });
         showToast(i18n.restoredLastPosition || "Restored last viewed position.");
       });
     });
-    return messageIndex;
+    return targetMessageIndex;
   }
 
   function clearHighlights() {

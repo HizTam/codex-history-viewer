@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.1] - 2026-05-08
+
+### Changed
+
+- Changed chat auto-refresh `follow latest` scrolling to prefer the latest non-diff content card when trailing grouped diff cards are last. The bottom scroll action targets the latest rendered card.
+- Changed search indexing for Codex `custom_tool_call` records so `toolCalls` and `toolCallsAndOutputs` include lightweight tool metadata such as actions, commands, files, and paths.
+
+### Fixed
+
+- Fixed chat auto-refresh `follow latest` scrolling sometimes being overridden by pending card-anchor restoration or later layout updates.
+- Fixed `lastMessage` chat open-position saving and restoring when no message bubble is visible, falling back to the previous rendered message or the top.
+
 ## [1.5.0] - 2026-05-07
 
 ### Added

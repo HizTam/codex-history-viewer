@@ -8,6 +8,10 @@ import { readJson, writeJson } from "../storage/jsonStorage";
 import { normalizeWhitespace } from "../utils/textUtils";
 import type { DebugLogger } from "./logger";
 
+const SEARCH_INDEX_FILE_VERSION = 5;
+const MAX_COMMAND_META_LENGTH = 1000;
+const MAX_RECURSIVE_META_DEPTH = 5;
+
 export type IndexedSearchRole = "user" | "assistant" | "developer" | "tool";
 
 export interface IndexedSearchMessage {
@@ -41,7 +45,7 @@ interface SearchIndexCacheContext {
 }
 
 interface SearchIndexFileV2 {
-  version: 4;
+  version: typeof SEARCH_INDEX_FILE_VERSION;
   context: SearchIndexCacheContext;
   entries: Record<string, SearchIndexEntryV1>;
 }
@@ -220,7 +224,7 @@ export class SearchIndexService {
     const entries: Record<string, SearchIndexEntryV1> = {};
     for (const [key, value] of this.entries.entries()) entries[key] = value;
     const payload: SearchIndexFileV2 = {
-      version: 4,
+      version: SEARCH_INDEX_FILE_VERSION,
       context: this.context,
       entries,
     };
@@ -303,15 +307,25 @@ function indexCodexRecord(obj: any, state: BuildState): boolean {
     return true;
   }
 
-  if (payloadType === "function_call") {
+  if (payloadType === "function_call" || payloadType === "custom_tool_call") {
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : "";
-    const name = typeof obj?.payload?.name === "string" ? obj.payload.name : "";
-    const argsRaw = typeof obj?.payload?.arguments === "string" ? obj.payload.arguments : "";
-    const argsText = normalizeWhitespace(argsRaw);
     const anchor = Math.max(1, state.messageIndex);
     if (callId) state.toolAnchorByCallId.set(callId, anchor);
 
     if (!shouldIndexToolCalls(state.indexToolContent)) return true;
+
+    const name =
+      typeof obj?.payload?.name === "string" && obj.payload.name.trim()
+        ? obj.payload.name
+        : payloadType === "custom_tool_call"
+          ? "custom_tool_call"
+          : "";
+    const argsText =
+      payloadType === "custom_tool_call"
+        ? buildCustomToolCallMetaText(obj?.payload)
+        : typeof obj?.payload?.arguments === "string"
+          ? normalizeWhitespace(obj.payload.arguments)
+          : "";
 
     if (name) {
       state.messages.push({
@@ -332,12 +346,16 @@ function indexCodexRecord(obj: any, state: BuildState): boolean {
     return true;
   }
 
-  if (payloadType === "function_call_output") {
+  if (payloadType === "function_call_output" || payloadType === "custom_tool_call_output") {
     if (!shouldIndexToolOutputs(state.indexToolContent)) return true;
 
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : "";
-    const outRaw = typeof obj?.payload?.output === "string" ? obj.payload.output : "";
-    const outText = normalizeWhitespace(outRaw);
+    const outText =
+      payloadType === "custom_tool_call_output"
+        ? buildCustomToolOutputMetaText(obj?.payload)
+        : typeof obj?.payload?.output === "string"
+          ? normalizeWhitespace(obj.payload.output)
+          : "";
     if (!outText) return true;
 
     const anchor =
@@ -553,6 +571,277 @@ function safeJsonStringify(value: unknown): string {
   }
 }
 
+function buildCustomToolCallMetaText(payload: any): string {
+  const name = typeof payload?.name === "string" ? payload.name : "";
+  const input = getCustomToolInput(payload);
+  const action = inferToolAction(name);
+  const meta: CustomToolCallMeta = {
+    commands: [],
+    files: [],
+    paths: [],
+    sawDiffLikeText: false,
+  };
+
+  collectCustomToolCallMeta(input, meta, { depth: 0, key: "", action });
+  const parts: string[] = [];
+  if (action) parts.push(`action: ${action}`);
+  if (meta.commands.length > 0) parts.push(`command: ${dedupeStrings(meta.commands).join(" | ")}`);
+  if (meta.files.length > 0) parts.push(`files: ${dedupeStrings(meta.files).join(", ")}`);
+  if (meta.paths.length > 0) parts.push(`paths: ${dedupeStrings(meta.paths).join(", ")}`);
+  if (meta.sawDiffLikeText && meta.files.length === 0) parts.push("diff: omitted");
+  return normalizeWhitespace(parts.join(" "));
+}
+
+function buildCustomToolOutputMetaText(payload: any): string {
+  const fields = new Map<string, string>();
+  collectExecutionMetaFields(payload?.output, fields, 0);
+  collectExecutionMetaFields(payload, fields, 0);
+  if (fields.size === 0) return "";
+
+  const parts = ["tool_output: custom_tool_call_output"];
+  for (const [key, value] of fields.entries()) parts.push(`${key}: ${value}`);
+  return normalizeWhitespace(parts.join(" "));
+}
+
+interface CustomToolCallMeta {
+  commands: string[];
+  files: string[];
+  paths: string[];
+  sawDiffLikeText: boolean;
+}
+
+function getCustomToolInput(payload: any): unknown {
+  if (payload && typeof payload === "object" && "input" in payload) return payload.input;
+  if (!payload || typeof payload !== "object" || !("arguments" in payload)) return undefined;
+  const rawArgs = payload.arguments;
+  if (typeof rawArgs !== "string") return rawArgs;
+  const parsed = tryParseJson(rawArgs);
+  return parsed === undefined ? rawArgs : parsed;
+}
+
+function collectCustomToolCallMeta(
+  value: unknown,
+  meta: CustomToolCallMeta,
+  context: { depth: number; key: string; action?: string },
+): void {
+  if (context.depth > MAX_RECURSIVE_META_DEPTH || value === undefined || value === null) return;
+  const key = normalizeMetaKey(context.key);
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    const text = normalizeMetaScalar(value);
+    if (!text || looksLikeDataUri(text)) return;
+
+    if (isCommandKey(key) || (!key && context.action === "run")) {
+      addMetaValue(meta.commands, normalizeCommandMeta(text));
+      return;
+    }
+    if (isFilePathKey(key)) {
+      addMetaValue(meta.files, text);
+      return;
+    }
+    if (isDirectoryPathKey(key)) {
+      addMetaValue(meta.paths, text);
+      return;
+    }
+
+    const diffPaths = extractPatchFilePaths(text);
+    if (diffPaths.length > 0) {
+      meta.sawDiffLikeText = true;
+      for (const filePath of diffPaths) addMetaValue(meta.files, filePath);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectCustomToolCallMeta(item, meta, { ...context, depth: context.depth + 1 });
+    }
+    return;
+  }
+
+  if (typeof value === "object") {
+    for (const [childKey, childValue] of Object.entries(value as Record<string, unknown>)) {
+      if (isSensitiveMetaKey(childKey)) continue;
+      collectCustomToolCallMeta(childValue, meta, {
+        depth: context.depth + 1,
+        key: childKey,
+        action: context.action,
+      });
+    }
+  }
+}
+
+function collectExecutionMetaFields(value: unknown, fields: Map<string, string>, depth: number): void {
+  if (depth > MAX_RECURSIVE_META_DEPTH || value === undefined || value === null) return;
+  if (typeof value === "string") {
+    const parsed = tryParseJson(value);
+    if (parsed !== undefined) collectExecutionMetaFields(parsed, fields, depth + 1);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectExecutionMetaFields(item, fields, depth + 1);
+    return;
+  }
+  if (typeof value !== "object") return;
+
+  for (const [rawKey, rawValue] of Object.entries(value as Record<string, unknown>)) {
+    const key = normalizeMetaKey(rawKey);
+    if (isSensitiveMetaKey(rawKey)) continue;
+    const targetKey = normalizeExecutionMetaKey(key);
+    if (targetKey && isExecutionMetaScalar(rawValue)) {
+      const valueText = normalizeExecutionMetaValue(targetKey, rawValue);
+      if (valueText) fields.set(targetKey, valueText);
+      continue;
+    }
+    collectExecutionMetaFields(rawValue, fields, depth + 1);
+  }
+}
+
+function inferToolAction(name: string): string | undefined {
+  const normalized = normalizeToolNameForMeta(name);
+  if (!normalized) return undefined;
+  if (/(?:applypatch|patch|edit|write|replace|insert|delete|rename|move|multiedit)/u.test(normalized)) return "edit";
+  if (/(?:shell|command|exec|bash|powershell|python|npm|run)/u.test(normalized)) return "run";
+  if (/(?:search|grep|ripgrep|rg|find)/u.test(normalized)) return "search";
+  if (/(?:read|open|cat|view|list|ls)/u.test(normalized)) return "read";
+  return undefined;
+}
+
+function extractPatchFilePaths(text: string): string[] {
+  if (!/^\s*(?:\*\*\*|diff --git|--- |\+\+\+ )/mu.test(text)) return [];
+
+  const out: string[] = [];
+  for (const line of text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n")) {
+    const patchHeader = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/u.exec(line);
+    if (patchHeader) {
+      addMetaValue(out, cleanupDiffPath(patchHeader[1] ?? ""));
+      continue;
+    }
+
+    const moveHeader = /^\*\*\* Move to:\s*(.+)$/u.exec(line);
+    if (moveHeader) {
+      addMetaValue(out, cleanupDiffPath(moveHeader[1] ?? ""));
+      continue;
+    }
+
+    const gitHeader = /^diff --git\s+a\/(.+?)\s+b\/(.+)$/u.exec(line);
+    if (gitHeader) {
+      addMetaValue(out, cleanupDiffPath(gitHeader[1] ?? ""));
+      addMetaValue(out, cleanupDiffPath(gitHeader[2] ?? ""));
+      continue;
+    }
+
+    const sideHeader = /^(?:---|\+\+\+)\s+(.+)$/u.exec(line);
+    if (sideHeader) addMetaValue(out, cleanupDiffPath(sideHeader[1] ?? ""));
+  }
+  return dedupeStrings(out);
+}
+
+function cleanupDiffPath(value: string): string {
+  let text = normalizeMetaScalar(value).replace(/^"|"$/g, "");
+  const tabIndex = text.indexOf("\t");
+  if (tabIndex >= 0) text = text.slice(0, tabIndex).trim();
+  if (text.startsWith("a/") || text.startsWith("b/")) text = text.slice(2);
+  return text === "/dev/null" ? "" : text;
+}
+
+function normalizeCommandMeta(value: string): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  if (text.length <= MAX_COMMAND_META_LENGTH) return text;
+  return `${text.slice(0, MAX_COMMAND_META_LENGTH - 3)}...`;
+}
+
+function normalizeMetaScalar(value: string | number | boolean): string {
+  return String(value).replace(/\s+/g, " ").trim();
+}
+
+function normalizeMetaKey(value: string): string {
+  return String(value ?? "").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+}
+
+function normalizeToolNameForMeta(value: string): string {
+  return String(value ?? "").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+}
+
+function normalizeExecutionMetaKey(key: string): string | null {
+  if (key === "status" || key === "state") return "status";
+  if (key === "exitcode" || key === "exitstatus") return "exitCode";
+  if (key === "durationms" || key === "elapsedms") return "durationMs";
+  if (key === "success" || key === "ok") return "success";
+  if (key === "error" || key === "iserror") return "error";
+  return null;
+}
+
+function normalizeExecutionMetaValue(key: string, value: string | number | boolean): string {
+  if (key === "error") {
+    if (value === false || value === "false" || value === "") return "";
+    return value === true ? "true" : "true";
+  }
+  const text = normalizeMetaScalar(value);
+  return looksLikeDataUri(text) ? "" : normalizeCommandMeta(text);
+}
+
+function isCommandKey(key: string): boolean {
+  return key === "command" || key === "cmd" || key === "script" || key === "commandline" || key === "shellcommand";
+}
+
+function isFilePathKey(key: string): boolean {
+  return (
+    key === "path" ||
+    key === "paths" ||
+    key === "file" ||
+    key === "files" ||
+    key === "filepath" ||
+    key === "filepaths" ||
+    key === "filename" ||
+    key === "targetfile" ||
+    key === "targetpath"
+  );
+}
+
+function isDirectoryPathKey(key: string): boolean {
+  return key === "cwd" || key === "workdir" || key === "workdirectory" || key === "workingdirectory";
+}
+
+function isSensitiveMetaKey(key: string): boolean {
+  const normalized = normalizeMetaKey(key);
+  return /(?:secret|token|apikey|password|credential|authorization|authheader)/u.test(normalized);
+}
+
+function isExecutionMetaScalar(value: unknown): value is string | number | boolean {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function looksLikeDataUri(value: string): boolean {
+  return /^data:[^,]+,/iu.test(value);
+}
+
+function addMetaValue(target: string[], value: string): void {
+  const text = normalizeMetaScalar(value);
+  if (!text || looksLikeDataUri(text)) return;
+  target.push(text);
+}
+
+function dedupeStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(value);
+  }
+  return out;
+}
+
+function tryParseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+}
+
 function shouldIndexToolCalls(mode: SearchIndexToolContent): boolean {
   return mode === "toolCalls" || mode === "toolCallsAndOutputs";
 }
@@ -564,7 +853,7 @@ function shouldIndexToolOutputs(mode: SearchIndexToolContent): boolean {
 function isValidCacheFile(value: unknown): value is SearchIndexFileV2 {
   if (!value || typeof value !== "object") return false;
   const obj = value as any;
-  if (obj.version !== 4) return false;
+  if (obj.version !== SEARCH_INDEX_FILE_VERSION) return false;
   if (!obj.context || typeof obj.context !== "object") return false;
   if (typeof obj.context.codexSessionsRoot !== "string") return false;
   if (typeof obj.context.claudeSessionsRoot !== "string") return false;
