@@ -55,6 +55,8 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.5 2.5a.75.75 0 0 1 .75.75v2.53A5.25 5.25 0 1 1 2.75 8a.75.75 0 0 1 1.5 0 3.75 3.75 0 1 0 2-3.31v2.06a.75.75 0 0 1-1.28.53L2.7 5.03a.75.75 0 0 1 0-1.06l2.27-2.25a.75.75 0 0 1 .53-.22Z"/></svg>';
   const PIN_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.25 1.5a.75.75 0 0 0-.53 1.28L5.94 4v2.38L3.72 8.6a.75.75 0 0 0 .53 1.28h3v4.37a.75.75 0 0 0 1.5 0V9.88h3a.75.75 0 0 0 .53-1.28L10.06 6.38V4l1.22-1.22a.75.75 0 0 0-.53-1.28h-5.5Z"/></svg>';
+  const BOOKMARK_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4.25 2A1.25 1.25 0 0 1 5.5.75h5A1.25 1.25 0 0 1 11.75 2v11.8a.75.75 0 0 1-1.14.64L8 12.86l-2.61 1.58a.75.75 0 0 1-1.14-.64V2Zm1.5.25v10.22l1.86-1.13a.75.75 0 0 1 .78 0l1.86 1.13V2.25h-4.5Z"/></svg>';
   const CUSTOM_TITLE_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M11.56 1.56a1.9 1.9 0 0 1 2.68 2.68l-7.4 7.4a2.25 2.25 0 0 1-1.01.57l-2.24.56a.75.75 0 0 1-.91-.91l.56-2.24c.1-.4.3-.74.57-1.01l7.4-7.4Zm1.62 1.06a.4.4 0 0 0-.56 0l-1.04 1.04 1.62 1.62 1.04-1.04a.4.4 0 0 0 0-.56l-1.06-1.06ZM10.52 4.72 4.31 10.93a.75.75 0 0 0-.19.34l-.3 1.2 1.2-.3a.75.75 0 0 0 .34-.19l6.21-6.21-1.05-1.05Z"/></svg>';
   const MARKDOWN_ICON_SVG =
@@ -206,6 +208,7 @@
   let wideTimelineCardKeys = new Set();
   let wrappedPatchHunkKeys = new Set();
   let isPinned = false;
+  let bookmarkedKeys = new Set();
   let pageSearchMatches = [];
   let pageSearchResults = [];
   let activePageSearchResultIndex = -1;
@@ -567,6 +570,7 @@
       );
       imageSettings = normalizeImageSettings(msg.imageSettings);
       isPinned = !!msg.isPinned;
+      bookmarkedKeys = normalizeBookmarkKeys(msg.bookmarks);
       detailsLoaded = msg.detailsLoaded === true || msg.detailMode === "full";
       detailReloadPending = false;
       updateEffectivePerformanceMode({ showAutoToast: true });
@@ -666,6 +670,12 @@
       if (isImagePreviewOpen()) syncImagePreviewControls();
       return;
     }
+    if (msg.type === "bookmarkState") {
+      bookmarkedKeys = normalizeBookmarkKeys(msg.keys);
+      applyBookmarkStateToDom();
+      updateTimeGuide({ afterPaint: true, rebuildItems: true });
+      return;
+    }
     if (msg.type === "requestReload") {
       requestReload({ followLatest: msg.mode === "follow" });
       return;
@@ -691,6 +701,23 @@
       return;
     }
   });
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const button = target?.closest(".bookmarkBtn[data-bookmark-key]");
+      if (!(button instanceof HTMLButtonElement)) return;
+      const key = button.dataset.bookmarkKey || "";
+      if (!key) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleBookmarkKeyLocally(key);
+      debugWebview("bookmark", "toggleClick", { key });
+      vscode.postMessage({ type: "toggleBookmark", key });
+    },
+    true,
+  );
 
   vscode.postMessage({ type: "ready" });
 
@@ -1976,6 +2003,8 @@
           itemIndex: Number.isFinite(itemIndex) ? itemIndex : index,
           timestampIso,
           title: buildTimeGuideItemTitle(item, Number.isFinite(itemIndex) ? itemIndex : index),
+          role: item && item.type === "message" ? getMessageRole(item) : "",
+          bookmarked: isItemBookmarked(item),
           element: target,
         };
       })
@@ -2226,6 +2255,7 @@
 
     const bubble = el("div", { className: `bubble ${role}` });
     applyTimelineCardWidthState(bubble, cardKey);
+    applyBookmarkMetadata(bubble, item);
     if (typeof item.messageIndex === "number") {
       bubble.id = `msg-${item.messageIndex}`;
       bubble.dataset.messageIndex = String(item.messageIndex);
@@ -2267,6 +2297,7 @@
         headerActions.appendChild(createMessageNavButton("next", nav.role, nav.nextIndex));
       }
     }
+    appendBookmarkButton(headerActions, item);
     headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
     metaLine.appendChild(headerActions);
     bubble.appendChild(metaLine);
@@ -3187,6 +3218,7 @@
     const row = el("div", { className: "row tool" });
     const bubble = el("div", { className: "bubble tool toolCard patchGroupCard toolCard-kind-edit" });
     applyTimelineCardWidthState(bubble, cardKey);
+    applyBookmarkMetadata(bubble, item);
     bubble.id = `patch-group-${itemIndex}`;
     bubble.dataset.patchGroupIndex = String(itemIndex);
 
@@ -3212,6 +3244,7 @@
     navActions.appendChild(createPatchGroupNavButton("prev", nav.prevIndex));
     navActions.appendChild(createPatchGroupNavButton("next", nav.nextIndex));
     headerActions.appendChild(navActions);
+    appendBookmarkButton(headerActions, item);
     headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
     header.appendChild(headerActions);
     bubble.appendChild(header);
@@ -4040,6 +4073,7 @@
     const presentation = resolveToolPresentation(item);
     const bubble = el("div", { className: "bubble tool toolCard" });
     applyTimelineCardWidthState(bubble, cardKey);
+    applyBookmarkMetadata(bubble, item);
     bubble.classList.add(`toolCard-kind-${presentation.toolKind}`);
     if (presentation.severity) bubble.classList.add(`toolCard-severity-${presentation.severity}`);
     if (showDetails) bubble.classList.add("toolCard-expanded");
@@ -4059,6 +4093,7 @@
       badge.textContent = presentation.badgeText;
       headerActions.appendChild(badge);
     }
+    appendBookmarkButton(headerActions, item);
     headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
     header.appendChild(headerActions);
     bubble.appendChild(header);
@@ -4284,11 +4319,13 @@
     const row = el("div", { className: "row tool" });
     const bubble = el("div", { className: "bubble tool" });
     applyTimelineCardWidthState(bubble, cardKey);
+    applyBookmarkMetadata(bubble, item);
     const title = el("div", { className: "metaLine" });
     const titleText = el("span", {});
     titleText.textContent = item && item.title ? String(item.title) : "note";
     title.appendChild(titleText);
     const headerActions = el("div", { className: "messageNav cardHeaderActions" });
+    appendBookmarkButton(headerActions, item);
     headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
     title.appendChild(headerActions);
     bubble.appendChild(title);
@@ -4599,6 +4636,97 @@
     button.title = label;
     button.setAttribute("aria-label", label);
     button.setAttribute("aria-pressed", expanded ? "true" : "false");
+  }
+
+  function normalizeBookmarkKeys(values) {
+    const out = new Set();
+    if (!Array.isArray(values)) return out;
+    for (const value of values) {
+      const key = typeof value === "string" ? value.trim() : "";
+      if (key) out.add(key);
+    }
+    return out;
+  }
+
+  function getItemBookmarkKey(item) {
+    return item && typeof item.bookmarkKey === "string" ? item.bookmarkKey.trim() : "";
+  }
+
+  function isItemBookmarked(item) {
+    const key = getItemBookmarkKey(item);
+    return !!(key && bookmarkedKeys.has(key));
+  }
+
+  function applyBookmarkMetadata(element, item) {
+    if (!(element instanceof HTMLElement)) return;
+    if (!isBookmarkUiEnabled()) {
+      delete element.dataset.bookmarked;
+      delete element.dataset.bookmarkKey;
+      element.classList.remove("bookmarked");
+      return;
+    }
+    const key = getItemBookmarkKey(item);
+    if (key) element.dataset.bookmarkKey = key;
+    else delete element.dataset.bookmarkKey;
+    const bookmarked = isItemBookmarked(item);
+    element.dataset.bookmarked = bookmarked ? "true" : "false";
+    if (item && item.type === "message") element.dataset.timeGuideRole = getMessageRole(item);
+    else delete element.dataset.timeGuideRole;
+    element.classList.toggle("bookmarked", bookmarked);
+  }
+
+  function appendBookmarkButton(container, item) {
+    if (!(container instanceof HTMLElement)) return;
+    if (!isBookmarkUiEnabled()) return;
+    const key = getItemBookmarkKey(item);
+    if (!key) return;
+    container.appendChild(createBookmarkButton(key));
+  }
+
+  function createBookmarkButton(bookmarkKey) {
+    const btn = el("button", { type: "button", className: "iconBtn bookmarkBtn" });
+    btn.dataset.bookmarkKey = bookmarkKey;
+    btn.innerHTML = BOOKMARK_ICON_SVG;
+    syncBookmarkButton(btn, bookmarkedKeys.has(bookmarkKey));
+    return btn;
+  }
+
+  function syncBookmarkButton(button, bookmarked) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    const on = bookmarked === true;
+    const label = on
+      ? getSafeUiText(i18n.bookmarkRemoveTooltip, "Remove bookmark")
+      : getSafeUiText(i18n.bookmarkAddTooltip, "Add bookmark");
+    button.classList.toggle("bookmarkBtn-on", on);
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  function applyBookmarkStateToDom() {
+    if (!isBookmarkUiEnabled()) return;
+    for (const button of document.querySelectorAll(".bookmarkBtn[data-bookmark-key]")) {
+      if (!(button instanceof HTMLButtonElement)) continue;
+      syncBookmarkButton(button, bookmarkedKeys.has(button.dataset.bookmarkKey || ""));
+    }
+    for (const element of document.querySelectorAll("[data-bookmark-key]")) {
+      if (!(element instanceof HTMLElement)) continue;
+      const bookmarked = bookmarkedKeys.has(element.dataset.bookmarkKey || "");
+      element.dataset.bookmarked = bookmarked ? "true" : "false";
+      element.classList.toggle("bookmarked", bookmarked);
+    }
+  }
+
+  function toggleBookmarkKeyLocally(key) {
+    if (!key) return;
+    if (bookmarkedKeys.has(key)) bookmarkedKeys.delete(key);
+    else bookmarkedKeys.add(key);
+    applyBookmarkStateToDom();
+    updateTimeGuide({ afterPaint: true, rebuildItems: true });
+  }
+
+  function isBookmarkUiEnabled() {
+    return timeGuideEnabled === true;
   }
 
   function buildMessageNavMap(items) {

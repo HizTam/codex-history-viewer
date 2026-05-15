@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.1] - 2026-05-15
+
+### Added
+
+- Added bookmark toggles to history cards.
+- Added bookmark and user markers to the date guide.
+- Added a density-aware date-guide lens that expands crowded timeline regions, follows the original guide hover position, and uses the active lens item as the click target.
+- Added an icon to the file-change history **Open in History** button.
+
 ## [2.0.0] - 2026-05-14
 
 ### Added

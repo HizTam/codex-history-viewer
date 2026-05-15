@@ -55,6 +55,8 @@ export interface ChatMessageItem {
   images?: ChatImageAttachment[];
   // Treat large environment/rule messages as "context".
   isContext: boolean;
+  bookmarkKey?: string;
+  isBookmarked?: boolean;
 }
 
 export interface ChatToolItem {
@@ -68,6 +70,8 @@ export interface ChatToolItem {
   detailsOmitted?: boolean;
   execution?: ChatToolExecution;
   presentation?: ChatToolPresentation;
+  bookmarkKey?: string;
+  isBookmarked?: boolean;
 }
 
 export interface ChatToolExecution {
@@ -100,6 +104,8 @@ export interface ChatUsageItem {
   speed?: string;
   stopReason?: string;
   rateLimits?: ChatRateLimits;
+  bookmarkKey?: string;
+  isBookmarked?: boolean;
 }
 
 export interface ChatRateLimit {
@@ -126,6 +132,8 @@ export interface ChatEnvironmentItem {
   gitBranch?: string;
   gitCommit?: string;
   gitDirty?: boolean;
+  bookmarkKey?: string;
+  isBookmarked?: boolean;
 }
 
 export type ChatPatchChangeType = "create" | "delete" | "move" | "rename" | "update" | "unknown";
@@ -136,10 +144,13 @@ export interface ChatPatchGroupItem {
   messageIndex?: number;
   timestampIso?: string;
   turnId?: string;
+  bookmarkGroupId?: string;
   entryCount: number;
   totalAdded: number;
   totalRemoved: number;
   entries: ChatPatchEntry[];
+  bookmarkKey?: string;
+  isBookmarked?: boolean;
 }
 
 export interface ChatPatchEntry {
@@ -174,6 +185,8 @@ export interface ChatNoteItem {
   timestampIso?: string;
   title: string;
   text?: string;
+  bookmarkKey?: string;
+  isBookmarked?: boolean;
 }
 
 export interface ChatSessionModel {

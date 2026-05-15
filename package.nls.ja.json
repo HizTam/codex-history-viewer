@@ -94,7 +94,7 @@
   "cfg.uiLanguage.enumAuto": "VS Code の表示言語に従います。",
   "cfg.uiLanguage.enumJapanese": "この拡張機能を常に日本語で表示します。",
   "cfg.uiLanguage.enumEnglish": "この拡張機能を常に英語で表示します。",
-  "cfg.uiTimeGuideEnabled": "履歴画面に日付ガイドを表示します。",
+  "cfg.uiTimeGuideEnabled": "履歴画面に日付ガイドとしおり操作を表示します。",
   "cfg.uiAlwaysShowHeaderActions": "各ビューのヘッダーアクション（右上のアイコン）を常に表示します（VS Code の設定 workbench.view.alwaysShowHeaderActions を有効化します）。",
   "cfg.historyDateBasis": "履歴ツリーと日付ベースの検索フィルタで使う日付基準を選択します。",
   "cfg.historyDateBasis.labelStarted": "開始日時",

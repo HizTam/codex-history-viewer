@@ -10,6 +10,11 @@ import type {
 } from "../chat/chatTypes";
 import { t } from "../i18n";
 import type { CodexHistoryViewerConfig } from "../settings";
+import {
+  buildClaudePatchBookmarkGroupId,
+  buildCodexPatchBookmarkGroupId,
+  resolveClaudeToolCallId,
+} from "../services/bookmarkIdentity";
 import type { SearchIndexService } from "../services/searchIndexService";
 import type { HistoryIndex, SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { formatYmdHmsInTimeZone, toYmdInTimeZone, ymdToString } from "../utils/dateUtils";
@@ -28,6 +33,7 @@ import type {
 
 interface ParsedPatchEntry {
   entry: ChatPatchEntry;
+  bookmarkGroupId?: string;
   messageIndex?: number;
   timestampIso?: string;
 }
@@ -261,10 +267,12 @@ async function parseCodexSession(
         const entries = buildCodexApplyPatchEntries(customApplyPatchInput, session.meta.cwd, target, callId);
         if (entries.length > 0) {
           diffStats.codexApplyPatchParsed += entries.length;
+          const bookmarkGroupId = `apply:${callId}`;
           pendingApplyPatchEntries.set(
             callId,
             entries.map((entry) => ({
               entry,
+              bookmarkGroupId,
               messageIndex: messageIndex > 0 ? messageIndex : undefined,
               timestampIso: timestampIso ?? session.lastActivityAtIso ?? session.startedAtIso ?? session.meta.timestampIso,
             })),
@@ -286,7 +294,7 @@ async function parseCodexSession(
       if (obj?.type !== "event_msg" || obj?.payload?.type !== "patch_apply_end") continue;
       const rawCallId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
       const callId = rawCallId ?? `patch:${lineIndex}`;
-      const groupKey = buildCodexPatchGroupKey(obj, lineIndex);
+      const groupKey = buildCodexPatchBookmarkGroupId(obj, lineIndex);
       const timestampIso =
         typeof obj?.payload?.timestamp === "string"
           ? obj.payload.timestamp
@@ -311,6 +319,7 @@ async function parseCodexSession(
           out,
           {
             entry,
+            bookmarkGroupId: groupKey,
             messageIndex: messageIndex > 0 ? messageIndex : undefined,
             timestampIso: timestampIso ?? session.lastActivityAtIso ?? session.startedAtIso ?? session.meta.timestampIso,
           },
@@ -361,12 +370,16 @@ async function parseClaudeSession(
       if (normalizeWhitespace(parsed.messageText)) messageIndex += 1;
       const timestampIso = resolveClaudeDiffTimestamp(obj, session);
 
-      for (const toolCall of parsed.toolCalls) {
-        const entries = buildClaudeToolUsePatchEntries(toolCall, session.meta.cwd, target, lineIndex);
+      for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
+        const toolCall = parsed.toolCalls[toolCallIndex]!;
+        const callId = resolveClaudeToolCallId(toolCall.callId, lineIndex, toolCallIndex);
+        const bookmarkGroupId = buildClaudePatchBookmarkGroupId(toolCall.callId, lineIndex, toolCallIndex, messageIndex);
+        const entries = buildClaudeToolUsePatchEntries(toolCall, session.meta.cwd, target, callId);
         addClaudeDiffStats(diffStats, toolCall, entries.length);
         for (const entry of entries) {
           out.push({
             entry,
+            bookmarkGroupId,
             messageIndex: messageIndex > 0 ? messageIndex : undefined,
             timestampIso,
           });
@@ -562,6 +575,7 @@ function appendMergedParsedPatchEntry(
 function mergeParsedPatchEntry(base: ParsedPatchEntry, next: ParsedPatchEntry): ParsedPatchEntry {
   return {
     ...base,
+    bookmarkGroupId: next.bookmarkGroupId ?? base.bookmarkGroupId,
     timestampIso: next.timestampIso ?? base.timestampIso,
     entry: mergePatchEntry(base.entry, next.entry),
   };
@@ -594,20 +608,6 @@ function clonePatchEntry(entry: ChatPatchEntry): ChatPatchEntry {
 function getCodexPatchMergePath(entry: ChatPatchEntry): string {
   const raw = entry.movePath || entry.moveDisplayPath || entry.path || entry.displayPath;
   return normalizePatchSignaturePath(raw).toLowerCase();
-}
-
-function buildCodexPatchGroupKey(obj: any, fallbackIndex: number): string {
-  const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id.trim() : "";
-  if (turnId) return `turn:${turnId}`;
-  const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id.trim() : "";
-  if (callId) return `call:${callId}`;
-  const timestampIso =
-    typeof obj?.payload?.timestamp === "string"
-      ? obj.payload.timestamp.trim()
-      : typeof obj?.timestamp === "string"
-        ? obj.timestamp.trim()
-        : "";
-  return timestampIso ? `ts:${timestampIso}` : `line:${fallbackIndex}`;
 }
 
 function isPatchApplyEndFailure(obj: any): boolean {
@@ -743,7 +743,7 @@ function buildClaudeToolUsePatchEntries(
   toolCall: ClaudeToolCall,
   sessionCwd: string | undefined,
   target: FileChangeHistoryTarget,
-  lineIndex: number,
+  callId: string,
 ): ChatPatchEntry[] {
   const input = typeof toolCall.input === "string" ? parseJsonLine(toolCall.input) ?? toolCall.input : toolCall.input;
   if (!input || typeof input !== "object" || Array.isArray(input)) return [];
@@ -753,7 +753,6 @@ function buildClaudeToolUsePatchEntries(
   if (!matchPatchPaths(filePath, undefined, sessionCwd, target).matched) return [];
 
   const entries: ChatPatchEntry[] = [];
-  const callId = toolCall.callId ?? `claude:${lineIndex}`;
   const baseId = `${callId}:0`;
 
   if (toolName.includes("multiedit")) {
@@ -900,6 +899,7 @@ function toHistoryCard(
     sessionCacheKey: session.cacheKey,
     sessionTitle: resolveSessionTitle(session, sourceLabel, timestampIso),
     sessionCwd: session.meta.cwd,
+    bookmarkGroupId: parsed.bookmarkGroupId,
     messageIndex: parsed.messageIndex,
     timestampIso,
     localDate: dateInfo.localDate,

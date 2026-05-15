@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **2.0.0** (2026-05-14).
+Latest release: **2.0.1** (2026-05-15).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -19,6 +19,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Search across prompts, responses, tool output, tags, and notes
 - View sessions in a chat-like UI with Markdown, code highlighting, math rendering, and file-change diffs
 - Open **AI Change History** for a workspace file to review Codex / Claude diffs that touched that file
+- Bookmark important history cards and use date-guide markers to revisit them quickly
 - Keep open chat tabs up to date with header-controlled auto-refresh modes
 - Show supported image attachments from Codex / Claude sessions, with on-demand loading, preview, and save controls
 - Organize sessions with pins, tags, notes, custom titles, saved searches, and filters
@@ -52,7 +53,8 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Chat viewer shows grouped file-change cards from patch activity, with collapsible side-by-side diffs, per-hunk wrap toggles, syntax highlighting, previous/next diff navigation, and jump-to-line actions
 - File-level **AI Change History** opens from an opt-in Explorer file context menu and shows only the loaded Codex / Claude diffs for the selected file inside the current workspace
 - AI Change History includes source toggles, in-view search, top/bottom navigation, previous/next card navigation, "Open in History" links back to the matching diff card in the original session, and incremental **Load more** paging
-- Date guides can be enabled in settings when you want a compact timeline for long sessions or file histories
+- History cards can be bookmarked when date guides are enabled
+- Date guides can show bookmark and user markers, with a density-aware lens that expands crowded timeline regions
 - Chat viewer includes a right-side in-page search sidebar with match counts, result snippets, line hints for diffs, direct result navigation, and resizable overlay behavior
 - Chat viewer toolbar includes quick scroll actions (first / latest rendered card) and automatically switches label buttons to icon-only mode when the header gets narrow
 - Chat viewer toolbar can show an auto-refresh button per chat tab when the History auto-refresh setting is enabled. Modes are `off`, `on with current view preserved`, and `follow latest`.
@@ -173,7 +175,7 @@ For the full command list with per-command descriptions, see:
 - `codexHistoryViewer.resume.openTarget`: Where `Resume in OpenAI Codex` opens the conversation (`sidebar` by default, or `panel`)
 - `codexHistoryViewer.delete.useTrash`: When deleting, move files to the OS trash/recycle bin (recommended)
 - `codexHistoryViewer.ui.language`: UI language for this extension (`auto` / `en` / `ja`)
-- `codexHistoryViewer.ui.timeGuide.enabled`: Enable compact date guides in history views
+- `codexHistoryViewer.ui.timeGuide.enabled`: Enable compact date guides and bookmark controls in history views
 - `codexHistoryViewer.ui.alwaysShowHeaderActions`: Always show view header action icons (enables VS Code setting `workbench.view.alwaysShowHeaderActions`)
 - `codexHistoryViewer.debug.logging.enabled`: Write diagnostic timing logs to the **Codex History Viewer** output channel. Disabled by default and intended for troubleshooting.
 
@@ -209,14 +211,11 @@ For the full command list with per-command descriptions, see:
 - Import recursively scans the selected source folder for `.jsonl` files.
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 
-## What's New in 2.0.0
+## What's New in 2.0.1
 
-- Added file-level **AI Change History** for workspace files, available from the opt-in **File Change History > Explorer Context Menu: Enabled** setting, with Codex / Claude source toggles, search, paging, card navigation, and links back to the matching diff card in the original session view.
-- Codex `apply_patch` activity can now appear as diff cards when possible, without duplicating matching `patch_apply_end` diffs.
-- Custom title actions now use a shared QuickPick flow, also available from the chat viewer header.
-- Added history-view performance modes for large histories, including a simplified mode that loads heavy diff/detail sections on demand.
-- Added the `latest` option to `codexHistoryViewer.chat.openPosition` so chat sessions can open at the latest rendered card.
-- Added optional compact date guides that can be enabled or disabled from settings.
+- Added bookmark toggles to history cards.
+- Added bookmark and user markers to the date guide.
+- Added a density-aware date-guide lens that expands crowded timeline regions, follows the original guide hover position, and uses the active lens item as the click target.
 
 ## Changelog
 

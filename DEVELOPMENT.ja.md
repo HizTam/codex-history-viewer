@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-05-14
-- 対象バージョン: 2.0.0
+- 最終更新: 2026-05-15
+- 対象バージョン: 2.0.1
 
 ## 1. 概要
 
@@ -299,6 +299,40 @@
   - source icon は light / dark 両方を Webview へ渡し、VS Code Webview theme class に合わせて切り替える
   - 色だけで source を区別せず、icon + label を表示する
 
+### 3.6.2 しおり / 日付ガイド
+
+- しおり:
+  - 通常履歴 Webview とファイル履歴 Webview のカードに、しおり ON/OFF を付けられる
+  - しおり状態は VS Code `globalState` に保存し、元のセッション JSONL は変更しない
+  - 通常履歴 Webview とファイル履歴 Webview は同じしおり状態を共有する
+  - Codex の grouped diff / ファイル履歴 diff は、可能な限り `turn:<turn_id>` を使った `patchGroup` 単位のキーで同期する
+  - `turn_id` がない Codex patch は `call_id`、`payload.timestamp`、JSONL record の `timestamp`、JSONL 行番号へ順にフォールバックする
+  - Claude tool use 由来の patch は `tool_use.id` を優先し、欠如時は JSONL 行番号と同一行内の tool call index へフォールバックする
+  - 旧しおりキーの互換読み取りは行わない。キー生成規則変更前のしおりは付け直しを前提とする
+  - セッション削除時は該当セッションのしおりも削除し、Undo では削除前のしおりを復元する
+- しおり UI:
+  - `codexHistoryViewer.ui.timeGuide.enabled = true` のときだけ、カード上のしおりボタンを表示する
+  - `codexHistoryViewer.ui.timeGuide.enabled = false` のときは、日付ガイドとカード上のしおり UI をどちらも表示しない
+  - しおり済みカードはカード側でも強調表示する
+  - ファイル履歴 Webview の `履歴で開く` ボタンはアイコン付きで表示する
+- 日付ガイド上のマーカー:
+  - しおり位置は黄色の丸で表示する
+  - user 位置は青系の丸で表示する
+  - user としおりが同じ位置にある場合は、黄色丸を主表示しつつ青系の外周表現を残す
+  - 現在位置は通常ドットとは別の最前面リングとして表示し、user / しおり / 密集マーカーに隠れないようにする
+  - 日付ガイドの開閉条件や表示維持条件は、しおり有無では変えない
+- 巨大履歴向けの密集レンズ:
+  - 日付ガイド上のマーカーが密集している場合だけ、右レール左側に拡大レンズを表示する
+  - 通常時は既存の日付ガイド表示を維持し、常時拡大はしない
+  - 密集判定は近辺の item 数と隣接間隔を基準にする
+  - レンズ内では対象 item を縦方向に広げ、最低間隔を確保する
+  - レンズ内でも user / しおり / 現在位置の表現を維持する
+  - 右側の元レール上をマウスオーバーすると、レンズ内の最も近い item を active にし、その tooltip を表示する
+  - 右側の元レール上をクリックすると、レンズ内で tooltip が出ている item へ移動する
+  - レンズ内へポインタを移した場合は、元レール連動 tooltip を抑制し、hover 中のレンズ item の tooltip だけを表示する
+  - レンズは件数に応じて高さを変え、最小 140px、最大 220px、かつ画面高さの 45% を上限とする
+  - レンズ内の item 選択では現在位置としおりを優先し、user だけで埋まらないよう通常 item も混ぜる
+
 ### 3.7 設定（`codexHistoryViewer.*`）
 
 - `sessionsRoot`
@@ -593,6 +627,47 @@
 - `Debug Info (Copy)` のような通常 UI 導線は持たない
   - 必要時は `settings.json` で診断ログを有効化し、OutputChannel からコピーする
 
+### 4.15 しおり / 日付ガイド実装
+
+- `src/services/bookmarkStore.ts`
+  - しおり状態を VS Code `globalState` の `codexHistoryViewer.bookmarks.v1` に保存する
+  - `BookmarkTarget` / `BookmarkEntry` を正規化し、不正な key / kind / path は保存しない
+  - `buildBookmarkKey` は `sessionCacheKey`、target kind、必要な識別情報から保存キーを作る
+  - `patchGroup` は `groupId` がある場合にそれを優先する。Codex grouped diff では `turn:<turn_id>` を使う
+  - セッション削除では `removeMany()` で該当セッションのしおりを退避付きで削除し、Undo では `restore()` で戻す
+- `src/services/bookmarkIdentity.ts`
+  - 通常履歴 Webview とファイル履歴 Webview で同じ `bookmarkGroupId` を生成するための共通 helper を持つ
+  - Codex `patch_apply_end` は `turn_id`、`call_id`、`payload.timestamp`、record `timestamp`、JSONL 行番号の順で group id を解決する
+  - Claude tool use は `tool_use.id` を優先し、欠如時は JSONL 行番号と同一行内 tool call index から fallback call id を作る
+- `src/chat/chatModelBuilder.ts`
+  - Codex `patch_apply_end` の grouped diff に `bookmarkGroupId` を付与する
+  - `turn_id` がある場合は `turn:<turn_id>` を `bookmarkGroupId` とする
+  - `turn_id` がない場合は `bookmarkIdentity.ts` の共通規則で callId / timestamp / line fallback へフォールバックする
+  - `apply_patch` 入力由来の pending patch group は `apply:<callId>` を `bookmarkGroupId` として扱い、callId 欠如時は JSONL 行番号由来の fallback callId を使う
+  - Claude tool use 由来の patch group には tool call と message index から `bookmarkGroupId` を作る
+- `src/fileHistory/fileChangeHistoryService.ts`
+  - ファイル履歴 card に `bookmarkGroupId` を付与する
+  - Codex `patch_apply_end` では通常履歴 Webview と同じ `bookmarkIdentity.ts` の group id を使い、1 ファイル diff card と通常履歴 grouped diff の同期キーを揃える
+  - Claude tool use の callId 欠如時も、通常履歴 Webview と同じ JSONL 行番号 / tool call index fallback を使う
+- `src/chat/chatPanelManager.ts` / `src/fileHistory/fileChangeHistoryPanelManager.ts`
+  - Webview model へ `bookmarkKey` / `isBookmarked` を付与する
+  - Webview からの `toggleBookmark` message を受け取り、`BookmarkStore` を更新する
+  - `BookmarkStore.onDidChange` で開いている Webview へ `bookmarkState` を再送し、通常履歴 Webview とファイル履歴 Webview の表示を同期する
+  - `BookmarkStore.toggle()` が失敗した場合も `bookmarkState` を返し、Webview の楽観的 UI 更新を store 側の状態へ戻す
+  - 初回 model 送信時は `withBookmarkState()` で算出した bookmarked keys を再利用し、同じ target 群への `getKeysForTargets()` 二重実行を避ける
+- `media/chatView.js` / `media/fileChangeHistory.js`
+  - `bookmarkState` を受け取り、カード上のしおりボタンとカード強調を更新する
+  - 日付ガイドが無効な場合は、カード上のしおり UI も生成しない
+  - 日付ガイド用 item には `bookmarked` と user role を渡し、Webview DOM にも `data-bookmarked` / `data-time-guide-role` を反映する
+- `media/sharedTimeGuide.js` / `media/sharedTimeGuide.css`
+  - 日付ガイド上で user / しおり / 現在位置を別表現として描画する
+  - 現在位置は独立した `dateGuideCurrentMarker` として描画し、通常 tick より前面に置く
+  - 密集時だけ `dateGuideLens` を表示し、近辺 item を拡大表示する
+  - レンズは右側の元レール hover 位置へ追従し、active item の tooltip とクリック移動対象を同期する
+  - レンズ内 hover 時は active item tooltip の二重表示を抑制する
+- `l10n/bundle.l10n.json` / `l10n/bundle.l10n.ja.json`
+  - しおり追加 / 解除 tooltip を実行時 Webview 文言として管理する
+
 ## 5. 開発手順
 
 ### 5.1 セットアップ
@@ -622,7 +697,31 @@ npm run package
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 
-### 5.4 v2.0.0 リリースメモ（2026-05-14）
+### 5.4 v2.0.1 リリースメモ（2026-05-15）
+
+- 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
+- しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
+- 通常履歴 Webview とファイル履歴 Webview のしおり状態を同期し、一方で ON/OFF した状態がもう一方にも反映されるようにした
+- Codex の diff しおりキーは、通常利用では `turn:<turn_id>` ベースの `patchGroup` 単位に統一し、ファイル履歴の 1 ファイル diff card と通常履歴の grouped diff が同じしおり状態を共有できるようにした
+- Codex の `turn_id` 欠如時 fallback を通常履歴 Webview / ファイル履歴 Webview で共通化し、`call_id`、`payload.timestamp`、record `timestamp`、JSONL 行番号の順で同期キーを作るようにした
+- Claude の `tool_use.id` 欠如時 fallback を通常履歴 Webview / ファイル履歴 Webview で共通化し、JSONL 行番号と同一行内 tool call index で同期キーを作るようにした
+- しおり ON/OFF の保存に失敗した場合でも、Webview へ現在の `bookmarkState` を返して楽観的 UI 更新を巻き戻すようにした
+- 初回 model 送信時の bookmarked keys 算出を再利用し、同じ target 群への重複計算を避けるようにした
+- 旧キー互換は入れず、キー生成規則変更前のしおりは付け直しを前提とした
+- 日付ガイドが無効なときは、カード上のしおり UI も表示しないようにした
+- 日付ガイド上にしおり位置と user 位置を表示するようにした
+- しおりマーカーは黄色の丸、user マーカーは青系の丸で表示するようにした
+- 現在位置は最前面の独立リングとして表示し、user / しおり / 密集マーカーに隠れないようにした
+- しおり有無で日付ガイドの開閉や表示維持の挙動が変わらないようにした
+- 巨大履歴で日付ガイドが密集する場合だけ、吹き出し風の拡大レンズを表示するようにした
+- 拡大レンズでは近辺 item を縦方向に広げ、tooltip とクリック移動対象を右側の元レール hover 位置へ同期するようにした
+- 拡大レンズ内にポインタを移したとき、tooltip が二重に出ないようにした
+- 拡大レンズの高さを件数に応じて可変にし、最小 140px、最大 220px、画面高さの 45% を上限とした
+- 拡大レンズ内で user だけが選択枠を占有しないよう、現在位置 / しおりを優先しつつ通常 item も混ぜるようにした
+- ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
+- `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
+
+### 5.5 v2.0.0 リリースメモ（2026-05-14）
 
 - ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる AI Change History を追加した
 - カスタムタイトル操作を QuickPick 入口へ統一し、チャット履歴ビューアのヘッダーからも設定 / 消去できるようにした
@@ -640,7 +739,7 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.5 v1.5.1 リリースメモ（2026-05-08）
+### 5.6 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
@@ -651,7 +750,7 @@ npm run package
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.6 v1.5.0 リリースメモ（2026-05-07）
+### 5.7 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -660,7 +759,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.7 v1.4.3 リリースメモ（2026-04-30）
+### 5.8 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -705,6 +804,24 @@ npm run package
 - date guide の tooltip は目盛り近辺だけで表示され、カード操作ボタン付近では表示されない
 - date guide 外クリックで date guide が即座に閉じ、下の UI 操作は妨げられない
 - date guide 上にマウスがある間は、目盛り以外をクリックしても date guide が閉じない
+- `ui.timeGuide.enabled = true` のとき、通常履歴 Webview / ファイル履歴 Webview のカードにしおりボタンが表示される
+- `ui.timeGuide.enabled = false` のとき、通常履歴 Webview / ファイル履歴 Webview のカードにしおりボタンが表示されない
+- 通常履歴 Webview でしおりを付けると、同じセッション / 同じ diff group のファイル履歴 Webview 側にも反映される
+- ファイル履歴 Webview でしおりを外すと、通常履歴 Webview 側の同じ diff group でも外れる
+- Codex の同じ `turn_id` に含まれる複数ファイル diff は、通常履歴 Webview では同じ grouped diff のしおりとして同期される
+- Codex の `turn_id` がなく `payload.timestamp` だけがある patch でも、通常履歴 Webview とファイル履歴 Webview のしおりが同期される
+- Codex の `turn_id` / `call_id` / timestamp がない patch でも、JSONL 行番号 fallback により通常履歴 Webview とファイル履歴 Webview のしおりが同期される
+- Claude の `tool_use.id` がない patch でも、JSONL 行番号と tool call index fallback により通常履歴 Webview とファイル履歴 Webview のしおりが同期される
+- しおり保存失敗時は、Webview の表示が最終的に extension 側の `bookmarkState` と一致する
+- セッション削除時に該当セッションのしおりが削除され、Undo で復元される
+- date guide 上にしおりマーカーが黄色丸として表示される
+- date guide 上に user マーカーが青系丸として表示される
+- date guide の現在位置リングが user / しおりマーカーに隠れない
+- 巨大履歴で date guide が密集している箇所にマウスオーバーすると、密集時だけ拡大レンズが表示される
+- 拡大レンズでは右側の元レール hover 位置に連動して tooltip が表示される
+- 右側の元レールをクリックすると、拡大レンズ内で tooltip が出ている item へ移動する
+- 拡大レンズ内へポインタを移しても tooltip が二重表示されない
+- 拡大レンズ内で user だけが並ばず、通常 item / しおり / 現在位置も確認できる
 - `chat.performanceMode = auto` で大きい履歴が `simplified` として表示される
 - チャットヘッダーのパフォーマンスモードボタンで、この画面だけ `auto` / `normal` / `simplified` を切り替えられる
 - `simplified` では diff entry を開くまで重い diff 本文が描画されない

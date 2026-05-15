@@ -52,6 +52,7 @@ body.dateGuideScrolling .dateGuideHoverRail {
 .dateGuideTimeline::before {
   content: "";
   position: absolute;
+  z-index: 0;
   top: 2px;
   bottom: 2px;
   right: 9px;
@@ -63,6 +64,7 @@ body.dateGuideScrolling .dateGuideHoverRail {
 
 .dateGuideTick {
   position: absolute;
+  z-index: 1;
   top: var(--pos);
   right: 0;
   display: grid;
@@ -153,22 +155,250 @@ body.dateGuideScrolling .dateGuideHoverRail {
 }
 
 .dateGuideTick-current {
+  z-index: 5;
   color: var(--chv-accent);
 }
 
+.dateGuideTick-user {
+  z-index: 2;
+}
+
+.dateGuideTick-bookmark {
+  z-index: 3;
+}
+
 .dateGuideTick-current .dateGuideDot {
+  width: 6px;
+  height: 6px;
+  border: 0;
+  background: var(--chv-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--chv-bg) 72%, transparent);
+}
+
+.dateGuideTick-user .dateGuideDot {
+  width: 8px;
+  height: 8px;
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 70%, var(--chv-bg) 30%);
+  background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 62%, var(--chv-bg) 38%);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 14%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--chv-bg) 72%, transparent);
+}
+
+.dateGuideTick-bookmark .dateGuideDot {
   width: 9px;
   height: 9px;
-  border: 2px solid color-mix(in srgb, var(--chv-accent) 62%, var(--chv-bg) 38%);
-  background: var(--chv-accent);
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 76%, var(--chv-fg) 24%);
+  border-radius: 999px;
+  background: var(--vscode-charts-yellow, #cca700);
   box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--chv-accent) 16%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 20%, transparent),
     0 0 0 1px color-mix(in srgb, var(--chv-bg) 72%, transparent);
+}
+
+.dateGuideTick-user.dateGuideTick-bookmark .dateGuideDot {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 32%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 14%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--chv-bg) 72%, transparent);
+}
+
+.dateGuideTick-bookmark .dateGuideHit {
+  right: -8px;
+  width: 38px;
 }
 
 .dateGuideTick-current .dateGuideLabel {
   color: var(--chv-accent);
   font-weight: 700;
+}
+
+.dateGuideCurrentMarker {
+  position: absolute;
+  z-index: 8;
+  top: var(--pos);
+  right: 0;
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.dateGuideCurrentMarker[hidden] {
+  display: none;
+}
+
+.dateGuideCurrentMarker::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 2px solid color-mix(in srgb, var(--chv-accent) 74%, var(--vscode-editor-foreground, #ffffff) 26%);
+  border-radius: inherit;
+  background: transparent;
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--chv-bg) 84%, transparent),
+    0 0 9px color-mix(in srgb, var(--chv-accent) 34%, transparent);
+}
+
+.dateGuideLens {
+  position: absolute;
+  z-index: 12;
+  top: var(--lens-top, 0);
+  right: 24px;
+  width: 34px;
+  height: var(--lens-height, 140px);
+  --dateGuideLensBg: color-mix(in srgb, var(--chv-bg) 86%, var(--chv-assistant-bg) 14%);
+  border: 1px solid color-mix(in srgb, var(--chv-accent) 34%, var(--chv-border) 66%);
+  border-radius: 8px;
+  background: var(--dateGuideLensBg);
+  box-shadow:
+    0 8px 22px color-mix(in srgb, var(--chv-bg) 54%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--chv-fg) 5%, transparent);
+  opacity: 0.98;
+  overflow: visible;
+  pointer-events: auto;
+}
+
+.dateGuideLens[hidden] {
+  display: none;
+}
+
+.dateGuideLens::before {
+  content: "";
+  position: absolute;
+  top: var(--lens-tail-top, 50%);
+  right: -6px;
+  width: 10px;
+  height: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--chv-accent) 34%, var(--chv-border) 66%);
+  border-right: 1px solid color-mix(in srgb, var(--chv-accent) 34%, var(--chv-border) 66%);
+  background: var(--dateGuideLensBg);
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.dateGuideLensItem {
+  position: absolute;
+  top: var(--lens-pos);
+  right: 6px;
+  display: grid;
+  width: 20px;
+  height: 16px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--chv-muted);
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.dateGuideLensItem::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 24;
+  top: 50%;
+  right: 26px;
+  display: none;
+  min-width: max-content;
+  max-width: min(340px, calc(100vw - 120px));
+  padding: 5px 9px;
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--chv-accent));
+  border-radius: 5px;
+  background: var(--vscode-editorHoverWidget-background, var(--chv-assistant-bg));
+  box-shadow:
+    0 6px 16px color-mix(in srgb, var(--chv-bg) 54%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--chv-accent) 18%, transparent);
+  color: var(--vscode-editorHoverWidget-foreground, var(--chv-fg));
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  pointer-events: none;
+  transform: translateY(-50%);
+  white-space: normal;
+}
+
+.dateGuideLensItem:hover::after,
+.dateGuideLensItem:focus-visible::after,
+.dateGuideLens:not(:hover) .dateGuideLensItem-active::after {
+  display: block;
+}
+
+.dateGuideLensDot {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chv-accent) 44%, var(--chv-muted) 56%);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--chv-bg) 76%, transparent);
+}
+
+.dateGuideLensItem:hover .dateGuideLensDot,
+.dateGuideLensItem:focus-visible .dateGuideLensDot {
+  background: var(--chv-accent);
+}
+
+.dateGuideLensItem-user .dateGuideLensDot {
+  width: 8px;
+  height: 8px;
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 70%, var(--chv-bg) 30%);
+  background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 62%, var(--chv-bg) 38%);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 14%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--chv-bg) 72%, transparent);
+}
+
+.dateGuideLensItem-bookmark .dateGuideLensDot {
+  width: 9px;
+  height: 9px;
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 76%, var(--chv-fg) 24%);
+  background: var(--vscode-charts-yellow, #cca700);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 20%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--chv-bg) 72%, transparent);
+}
+
+.dateGuideLensItem-user.dateGuideLensItem-bookmark .dateGuideLensDot {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 32%, transparent),
+    0 0 0 4px color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 14%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--chv-bg) 72%, transparent);
+}
+
+.dateGuideLensItem-current {
+  z-index: 2;
+}
+
+.dateGuideLensItem-current::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  border: 2px solid color-mix(in srgb, var(--chv-accent) 74%, var(--vscode-editor-foreground, #ffffff) 26%);
+  border-radius: 999px;
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--chv-bg) 84%, transparent),
+    0 0 8px color-mix(in srgb, var(--chv-accent) 34%, transparent);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.dateGuideLensItem-current .dateGuideLensDot {
+  width: 6px;
+  height: 6px;
+  border: 0;
+  background: var(--chv-accent);
+}
+
+.dateGuideLensItem-active .dateGuideLensDot {
+  outline: 2px solid color-mix(in srgb, var(--chv-accent) 64%, transparent);
+  outline-offset: 2px;
 }
 
 .dateGuideLabel {
@@ -223,5 +453,29 @@ body.dateGuideScrolling .dateGuideHoverRail {
 
   .dateGuideTick::after {
     right: 18px;
+  }
+
+  .dateGuideTick-bookmark .dateGuideDot {
+    width: 8px;
+    height: 8px;
+  }
+
+  .dateGuideCurrentMarker {
+    width: 13px;
+    height: 13px;
+  }
+
+  .dateGuideLens {
+    right: 18px;
+    width: 30px;
+  }
+
+  .dateGuideLensItem {
+    right: 4px;
+  }
+
+  .dateGuideLensItem::after {
+    right: 24px;
+    max-width: min(260px, calc(100vw - 80px));
   }
 }

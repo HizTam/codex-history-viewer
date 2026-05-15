@@ -2,6 +2,12 @@ import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { PinStore } from "../services/pinStore";
+import {
+  buildBookmarkKey,
+  type BookmarkStore,
+  type BookmarkTarget,
+  type BookmarkTargetKind,
+} from "../services/bookmarkStore";
 import type { ChatOpenPositionStore } from "../services/chatOpenPositionStore";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { buildSessionSummary } from "../sessions/sessionSummary";
@@ -41,6 +47,10 @@ type ChatPerformanceStats = {
   diffLineEstimate: number;
   imageCount: number;
 };
+type ChatBookmarkState = {
+  model: ChatSessionModel;
+  bookmarkKeys: string[];
+};
 
 type MissingSessionHandler = (fsPath: string) => Promise<void> | void;
 export type ChatPanelKind = "reusable" | "session";
@@ -64,16 +74,19 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly historyService: HistoryService;
   private readonly annotationStore: SessionAnnotationStore;
   private readonly pinStore: PinStore;
+  private readonly bookmarkStore: BookmarkStore;
   private readonly openPositionStore: ChatOpenPositionStore;
   private readonly onMissingSession?: MissingSessionHandler;
   private readonly logger?: DebugLogger;
   private readonly codexPanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudePanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly autoRefreshConsumerVisibilityEmitter = new vscode.EventEmitter<void>();
+  private readonly bookmarkSubscription: vscode.Disposable;
 
   private reusablePanel: vscode.WebviewPanel | null = null;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
   private readonly stateByPanel = new WeakMap<vscode.WebviewPanel, ChatPanelState>();
+  private readonly bookmarkTargetsByPanel = new WeakMap<vscode.WebviewPanel, Map<string, BookmarkTarget>>();
   private readonly readyByPanel = new WeakMap<vscode.WebviewPanel, boolean>();
   private readonly imageDataByPanel = new WeakMap<vscode.WebviewPanel, Map<string, SaveableChatImage>>();
   private readonly patchEntryDetailRequestsByPanel = new WeakMap<vscode.WebviewPanel, Set<string>>();
@@ -84,6 +97,7 @@ export class ChatPanelManager implements vscode.Disposable {
     historyService: HistoryService,
     annotationStore: SessionAnnotationStore,
     pinStore: PinStore,
+    bookmarkStore: BookmarkStore,
     openPositionStore: ChatOpenPositionStore,
     onMissingSession?: MissingSessionHandler,
     logger?: DebugLogger,
@@ -92,6 +106,7 @@ export class ChatPanelManager implements vscode.Disposable {
     this.historyService = historyService;
     this.annotationStore = annotationStore;
     this.pinStore = pinStore;
+    this.bookmarkStore = bookmarkStore;
     this.openPositionStore = openPositionStore;
     this.onMissingSession = onMissingSession;
     this.logger = logger;
@@ -103,9 +118,13 @@ export class ChatPanelManager implements vscode.Disposable {
       light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-claude.svg"),
       dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-claude.svg"),
     };
+    this.bookmarkSubscription = this.bookmarkStore.onDidChange(() => {
+      this.refreshBookmarkState();
+    });
   }
 
   public dispose(): void {
+    this.bookmarkSubscription.dispose();
     this.autoRefreshConsumerVisibilityEmitter.dispose();
   }
 
@@ -138,6 +157,25 @@ export class ChatPanelManager implements vscode.Disposable {
 
     if (this.reusablePanel) send(this.reusablePanel);
     for (const panel of this.panelsByKey.values()) send(panel);
+  }
+
+  private refreshBookmarkState(): void {
+    const send = (panel: vscode.WebviewPanel): void => {
+      if (!this.readyByPanel.get(panel)) return;
+      void this.sendBookmarkState(panel);
+    };
+    if (this.reusablePanel) send(this.reusablePanel);
+    for (const panel of this.panelsByKey.values()) send(panel);
+  }
+
+  private async sendBookmarkState(panel: vscode.WebviewPanel): Promise<void> {
+    const targets = this.bookmarkTargetsByPanel.get(panel);
+    if (!targets || targets.size === 0) {
+      await panel.webview.postMessage({ type: "bookmarkState", keys: [] });
+      return;
+    }
+    const keys = Array.from(this.bookmarkStore.getKeysForTargets(Array.from(targets.values())).values());
+    await panel.webview.postMessage({ type: "bookmarkState", keys });
   }
 
   public refreshPanels(): void {
@@ -577,6 +615,27 @@ export class ChatPanelManager implements vscode.Disposable {
         await this.sendSessionData(panel);
         return;
       }
+      case "toggleBookmark": {
+        const key = typeof msg?.key === "string" ? msg.key.trim() : "";
+        const target = key ? this.bookmarkTargetsByPanel.get(panel)?.get(key) : undefined;
+        if (!target) {
+          await this.sendBookmarkState(panel);
+          return;
+        }
+        try {
+          await this.bookmarkStore.toggle(target);
+        } catch (error) {
+          this.logger?.debug(
+            formatDebugFields("bookmark toggle failed", {
+              session: safeDebugBasename(state.fsPath),
+              error: sanitizeDebugError(error),
+            }),
+          );
+        } finally {
+          await this.sendBookmarkState(panel);
+        }
+        return;
+      }
       case "manageCustomTitle": {
         const changed = await vscode.commands.executeCommand<boolean>("codexHistoryViewer.manageCustomTitle", {
           fsPath: state.fsPath,
@@ -736,7 +795,8 @@ export class ChatPanelManager implements vscode.Disposable {
     this.logger?.debug(
       `chatOpenPosition send session=${debugSessionName(state.fsPath)} mode=${config.chatOpenPosition} panelKind=${state.kind} saved=${savedOpenMessageIndex ?? "none"}`,
     );
-    const webviewModel = toWebviewChatSessionModel(model, detailMode);
+    const bookmarkState = this.withBookmarkState(toWebviewChatSessionModel(model, detailMode), state.fsPath, panel);
+    const webviewModel = bookmarkState.model;
     void panel.webview.postMessage({
       type: "sessionData",
       model: {
@@ -755,6 +815,7 @@ export class ChatPanelManager implements vscode.Disposable {
       panelKind: state.kind,
       isPreview: state.kind === "reusable",
       isPinned: this.pinStore.isPinned(state.fsPath),
+      bookmarks: bookmarkState.bookmarkKeys,
       i18n: this.buildI18n(),
       dateTime,
       chatOpenPosition: config.chatOpenPosition,
@@ -789,6 +850,36 @@ export class ChatPanelManager implements vscode.Disposable {
       }),
     );
     return true;
+  }
+
+  private withBookmarkState(model: ChatSessionModel, sessionFsPath: string, panel: vscode.WebviewPanel): ChatBookmarkState {
+    const sessionCacheKey = normalizeCacheKey(sessionFsPath);
+    const targets = new Map<string, BookmarkTarget>();
+    const itemTargets = new Map<number, BookmarkTarget>();
+
+    const items = Array.isArray(model.items)
+      ? model.items.map((item, itemIndex) => {
+          const target = buildChatBookmarkTarget(sessionFsPath, sessionCacheKey, item, itemIndex);
+          if (!target) return item;
+          targets.set(target.key, target);
+          itemTargets.set(itemIndex, target);
+          return { ...item, bookmarkKey: target.key };
+        })
+      : [];
+
+    const bookmarkedKeys = this.bookmarkStore.getKeysForTargets(Array.from(targets.values()));
+    const itemsWithState = items.map((item, itemIndex) => {
+      const target = itemTargets.get(itemIndex);
+      return target ? { ...item, isBookmarked: bookmarkedKeys.has(target.key) } : item;
+    });
+    this.bookmarkTargetsByPanel.set(panel, targets);
+    return {
+      model: {
+        ...model,
+        items: itemsWithState,
+      },
+      bookmarkKeys: Array.from(bookmarkedKeys.values()),
+    };
   }
 
   private async loadPatchEntryDetails(panel: vscode.WebviewPanel, msg: any): Promise<void> {
@@ -958,6 +1049,8 @@ export class ChatPanelManager implements vscode.Disposable {
       unpin: t("chat.button.unpin"),
       pinTooltip: t("chat.tooltip.pin"),
       unpinTooltip: t("chat.tooltip.unpin"),
+      bookmarkAddTooltip: t("chat.tooltip.bookmarkAdd"),
+      bookmarkRemoveTooltip: t("chat.tooltip.bookmarkRemove"),
       customTitle: t("chat.button.customTitle"),
       customTitleTooltip: t("chat.tooltip.customTitle"),
       markdown: t("chat.button.markdown"),
@@ -1297,6 +1390,85 @@ function sanitizePatchDetailChangeType(value: unknown): ChatPatchChangeType | un
 
 function toWebviewChatSessionModel(model: ChatSessionModel, detailMode: ChatSessionDetailMode): ChatSessionModel {
   return detailMode === "full" ? toFullWebviewChatSessionModel(model) : toSummaryChatSessionModel(model);
+}
+
+function buildChatBookmarkTarget(
+  sessionFsPath: string,
+  sessionCacheKey: string,
+  item: ChatTimelineItem,
+  itemIndex: number,
+): BookmarkTarget | null {
+  if (!item || typeof item !== "object") return null;
+  const kind = getBookmarkTargetKind(item);
+  if (!kind) return null;
+  const timestampIso = typeof item.timestampIso === "string" ? item.timestampIso.trim() : "";
+  const rawMessageIndex = "messageIndex" in item ? item.messageIndex : undefined;
+  const messageIndex =
+    typeof rawMessageIndex === "number" && Number.isFinite(rawMessageIndex)
+      ? Math.max(0, Math.floor(rawMessageIndex))
+      : undefined;
+  const fallbackId = getBookmarkFallbackId(item, itemIndex);
+  const groupId = getBookmarkGroupId(item);
+  const keyParams = { sessionCacheKey, kind, groupId, messageIndex, timestampIso, fallbackId };
+  const key = buildBookmarkKey(keyParams);
+  if (!key) return null;
+  return {
+    key,
+    sessionFsPath,
+    sessionCacheKey,
+    kind,
+    ...(groupId ? { groupId } : {}),
+    title: getBookmarkTitle(item, itemIndex),
+    ...(messageIndex !== undefined ? { messageIndex } : {}),
+    ...(timestampIso ? { timestampIso } : {}),
+  };
+}
+
+function getBookmarkTargetKind(item: ChatTimelineItem): BookmarkTargetKind | "" {
+  if (item.type === "message") return "message";
+  if (item.type === "patchGroup") return "patchGroup";
+  if (item.type === "tool") return "tool";
+  if (item.type === "usage") return "usage";
+  if (item.type === "environment") return "environment";
+  if (item.type === "note") return "note";
+  return "";
+}
+
+function getBookmarkFallbackId(item: ChatTimelineItem, itemIndex: number): string {
+  if (item.type === "patchGroup") {
+    const turnId = typeof item.turnId === "string" ? item.turnId.trim() : "";
+    if (turnId) return turnId;
+  }
+  if (item.type === "tool") {
+    const callId = typeof item.callId === "string" ? item.callId.trim() : "";
+    if (callId) return callId;
+  }
+  if (item.type === "note") {
+    const title = typeof item.title === "string" ? item.title.trim() : "";
+    if (title) return `${itemIndex}:${title}`;
+  }
+  return `item:${itemIndex}`;
+}
+
+function getBookmarkGroupId(item: ChatTimelineItem): string | undefined {
+  if (item.type !== "patchGroup") return undefined;
+  const explicitGroupId = typeof item.bookmarkGroupId === "string" ? item.bookmarkGroupId.trim() : "";
+  if (explicitGroupId) return explicitGroupId;
+  const turnId = typeof item.turnId === "string" ? item.turnId.trim() : "";
+  return turnId ? `turn:${turnId}` : undefined;
+}
+
+function getBookmarkTitle(item: ChatTimelineItem, itemIndex: number): string {
+  if (item.type === "message") {
+    const role = item.role === "user" || item.role === "assistant" || item.role === "developer" ? item.role : "message";
+    return typeof item.messageIndex === "number" ? `${role} #${item.messageIndex}` : role;
+  }
+  if (item.type === "patchGroup") return `diff #${itemIndex + 1}`;
+  if (item.type === "tool") return item.name || `tool #${itemIndex + 1}`;
+  if (item.type === "usage") return `usage #${itemIndex + 1}`;
+  if (item.type === "environment") return `environment #${itemIndex + 1}`;
+  if (item.type === "note") return item.title || `note #${itemIndex + 1}`;
+  return `card #${itemIndex + 1}`;
 }
 
 function toFullWebviewChatSessionModel(model: ChatSessionModel): ChatSessionModel {

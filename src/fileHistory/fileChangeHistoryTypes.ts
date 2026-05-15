@@ -25,6 +25,7 @@ export interface FileChangeHistoryCard {
   sessionCacheKey: string;
   sessionTitle: string;
   sessionCwd?: string;
+  bookmarkGroupId?: string;
   messageIndex?: number;
   timestampIso?: string;
   localDate: string;
@@ -37,6 +38,8 @@ export interface FileChangeHistoryCard {
   moveDisplayPath?: string;
   added: number;
   removed: number;
+  bookmarkKey?: string;
+  isBookmarked?: boolean;
   entry: ChatPatchEntry;
 }
 

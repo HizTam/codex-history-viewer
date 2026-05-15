@@ -184,6 +184,8 @@
   "chat.tooltip.resumeInClaude": "Resume this session in Claude Code (VS Code Extension).",
   "chat.tooltip.pin": "Pin this session.",
   "chat.tooltip.unpin": "Unpin this session.",
+  "chat.tooltip.bookmarkAdd": "Add bookmark",
+  "chat.tooltip.bookmarkRemove": "Remove bookmark",
   "chat.tooltip.customTitle": "Set or clear the custom title for this session.",
   "chat.tooltip.markdown": "Open this session as a searchable Markdown transcript.",
   "chat.tooltip.reload": "Reload the session and preserve the current scroll position.",

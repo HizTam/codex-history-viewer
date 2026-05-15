@@ -184,6 +184,8 @@
   "chat.tooltip.resumeInClaude": "このセッションを Claude Code（VS Code Extension）で再開します。",
   "chat.tooltip.pin": "このセッションをピン留めします。",
   "chat.tooltip.unpin": "このセッションのピン留めを解除します。",
+  "chat.tooltip.bookmarkAdd": "しおりを付ける",
+  "chat.tooltip.bookmarkRemove": "しおりを外す",
   "chat.tooltip.customTitle": "このセッションのカスタムタイトルを設定または消去します。",
   "chat.tooltip.markdown": "このセッションを検索しやすい Markdown 形式で開きます。",
   "chat.tooltip.reload": "現在のスクロール位置を維持したまま、セッションを再読み込みします。",

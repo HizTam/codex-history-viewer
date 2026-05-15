@@ -30,6 +30,11 @@ import {
   extractCodexMessageContent,
   stripImagePlaceholders,
 } from "./chatImageAttachments";
+import {
+  buildClaudePatchBookmarkGroupId,
+  buildCodexPatchBookmarkGroupId,
+  resolveClaudeToolCallId,
+} from "../services/bookmarkIdentity";
 
 export interface ChatSessionModelBuildOptions {
   images?: ImagesConfig;
@@ -97,9 +102,11 @@ async function readTimelineItems(
   const usageState: UsageBuildState = {};
   const environmentState: EnvironmentBuildState = {};
   let messageIndex = 0;
+  let lineIndex = 0;
 
   try {
     for await (const line of rl) {
+      lineIndex += 1;
       if (!line) continue;
       let obj: any;
       try {
@@ -124,6 +131,7 @@ async function readTimelineItems(
           codexTurnMeta,
           sessionCwd,
           options,
+          lineIndex,
         )
       ) {
         continue;
@@ -139,6 +147,7 @@ async function readTimelineItems(
           usageState,
           sessionCwd,
           options,
+          lineIndex,
         )
       ) {
         continue;
@@ -153,6 +162,7 @@ async function readTimelineItems(
           usageState,
           sessionCwd,
           options,
+          lineIndex,
         )
       ) {
         continue;
@@ -225,7 +235,7 @@ async function readPatchEntryDetails(
         if (payloadType === "patch_apply_end") {
           const rawCallId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
           const callId = rawCallId ?? `patch:${lineIndex}`;
-          const groupKey = buildPatchGroupKey(obj);
+          const groupKey = buildPatchGroupKey(obj, lineIndex);
           if (rawCallId) pendingApplyPatchEntries.delete(rawCallId);
           if (isPatchApplyEndFailure(obj)) continue;
           appendGroupEntries(
@@ -242,12 +252,13 @@ async function readPatchEntryDetails(
       const parsed = parseClaudeMessageContent(getClaudeMessageContent(obj));
       const stripped = stripImagePlaceholders(parsed.messageText);
       if (normalizeText(stripped.text)) messageIndex += 1;
-      for (const toolCall of parsed.toolCalls) {
-        const callId = toolCall.callId ?? `claude:${lineIndex}`;
+      for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
+        const toolCall = parsed.toolCalls[toolCallIndex]!;
+        const callId = resolveClaudeToolCallId(toolCall.callId, lineIndex, toolCallIndex);
         const entries = buildClaudeToolUsePatchEntries(toolCall, sessionCwd, callId, true).filter((entry) =>
           isPatchEntryDetailCandidate(entry, target),
         );
-        appendGroupEntries(`claude:${callId}:${messageIndex}`, entries);
+        appendGroupEntries(buildClaudePatchBookmarkGroupId(toolCall.callId, lineIndex, toolCallIndex, messageIndex), entries);
       }
     }
   } finally {
@@ -271,6 +282,7 @@ async function indexCodexTimelineRecord(
   codexTurnMeta: ChatMessageModelMeta,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
+  lineIndex = 0,
 ): Promise<boolean> {
   if (obj?.type !== "response_item") return false;
   const payloadType = obj?.payload?.type;
@@ -336,11 +348,13 @@ async function indexCodexTimelineRecord(
 
     const customApplyPatchInput = readCodexCustomApplyPatchInput(obj);
     if (customApplyPatchInput !== undefined) {
-      const patchCallId = callId ?? `apply_patch:${items.length}`;
+      const patchCallId = callId ?? `apply_patch:${lineIndex}`;
       const matchEntries = buildCodexApplyPatchEntries(customApplyPatchInput, sessionCwd, patchCallId, includeDetails);
       const entries = mergePatchEntriesLikeCodex(matchEntries);
       if (entries.length > 0) {
+        const applyGroupKey = buildApplyPatchPendingGroupKey(patchCallId, lineIndex);
         const group: PendingPatchGroup = {
+          bookmarkGroupId: applyGroupKey,
           messageIndex: messageIndex > 0 ? messageIndex : undefined,
           firstTimestampIso: ts,
           lastTimestampIso: ts,
@@ -350,7 +364,7 @@ async function indexCodexTimelineRecord(
           totalRemoved: entries.reduce((sum, entry) => sum + entry.removed, 0),
         };
         items.push(toPatchGroupItem(group));
-        pendingPatchGroups.set(buildApplyPatchPendingGroupKey(callId, items.length - 1), {
+        pendingPatchGroups.set(applyGroupKey, {
           ...group,
           flushed: true,
           itemIndex: items.length - 1,
@@ -394,6 +408,7 @@ function indexCodexEventRecord(
   usageState: UsageBuildState,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
+  lineIndex = 0,
 ): boolean {
   if (obj?.type !== "event_msg") return false;
 
@@ -412,9 +427,11 @@ function indexCodexEventRecord(
   }
 
   if (payloadType === "patch_apply_end") {
-    const key = buildPatchGroupKey(obj);
+    const key = buildPatchGroupKey(obj, lineIndex);
+    const bookmarkGroupId = buildCodexPatchBookmarkGroupId(obj, lineIndex);
     const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id : undefined;
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
+    const patchCallId = callId ?? `patch:${lineIndex}`;
     const timestampIso =
       typeof obj?.payload?.timestamp === "string"
         ? obj.payload.timestamp
@@ -424,7 +441,7 @@ function indexCodexEventRecord(
     const matchEntries = buildPatchEntries(
       obj?.payload?.changes,
       sessionCwd,
-      callId,
+      patchCallId,
       shouldIncludeDetails(options),
     );
     const entries = mergePatchEntriesLikeCodex(matchEntries);
@@ -446,6 +463,7 @@ function indexCodexEventRecord(
 
     pendingPatchGroups.set(key, {
       turnId,
+      bookmarkGroupId,
       messageIndex: currentMessageIndex() > 0 ? currentMessageIndex() : undefined,
       firstTimestampIso: timestampIso,
       lastTimestampIso: timestampIso,
@@ -484,6 +502,7 @@ async function indexClaudeTimelineRecord(
   usageState: UsageBuildState,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
+  lineIndex = 0,
 ): Promise<boolean> {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
@@ -519,7 +538,8 @@ async function indexClaudeTimelineRecord(
   }
 
   const includeDetails = shouldIncludeDetails(options);
-  for (const toolCall of parsed.toolCalls) {
+  for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
+    const toolCall = parsed.toolCalls[toolCallIndex]!;
     const name = normalizeText(toolCall.name ?? "") || "tool_use";
     const callId = toolCall.callId;
     const argumentsText = toolCall.argumentsText ? normalizeText(toolCall.argumentsText) : undefined;
@@ -540,12 +560,14 @@ async function indexClaudeTimelineRecord(
     const patchEntries = buildClaudeToolUsePatchEntries(
       toolCall,
       sessionCwd,
-      callId ?? `claude:${items.length}`,
+      resolveClaudeToolCallId(callId, lineIndex, toolCallIndex),
       includeDetails,
     );
     if (patchEntries.length > 0) {
+      const bookmarkGroupId = buildClaudePatchBookmarkGroupId(callId, lineIndex, toolCallIndex, messageIndex);
       items.push({
         type: "patchGroup",
+        bookmarkGroupId,
         messageIndex: messageIndex > 0 ? messageIndex : undefined,
         timestampIso: ts,
         entryCount: patchEntries.length,
@@ -1130,6 +1152,7 @@ function assignImageIds(images: ChatImageAttachment[], scope: string): void {
 
 interface PendingPatchGroup {
   turnId?: string;
+  bookmarkGroupId?: string;
   messageIndex?: number;
   firstTimestampIso?: string;
   lastTimestampIso?: string;
@@ -1181,6 +1204,7 @@ function toPatchGroupItem(group: PendingPatchGroup): ChatPatchGroupItem {
     messageIndex: group.messageIndex,
     timestampIso: group.lastTimestampIso ?? group.firstTimestampIso,
     turnId: group.turnId,
+    bookmarkGroupId: group.bookmarkGroupId,
     entryCount: group.entries.length,
     totalAdded: group.totalAdded,
     totalRemoved: group.totalRemoved,
@@ -1188,13 +1212,21 @@ function toPatchGroupItem(group: PendingPatchGroup): ChatPatchGroupItem {
   };
 }
 
-function buildPatchGroupKey(obj: any): string {
+function buildPatchGroupKey(obj: any, fallbackIndex?: number): string {
   const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id.trim() : "";
   if (turnId) return turnId;
   const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id.trim() : "";
   if (callId) return `call:${callId}`;
-  const timestampIso = typeof obj?.timestamp === "string" ? obj.timestamp.trim() : "";
-  return timestampIso ? `ts:${timestampIso}` : "patch";
+  const timestampIso =
+    typeof obj?.payload?.timestamp === "string"
+      ? obj.payload.timestamp.trim()
+      : typeof obj?.timestamp === "string"
+        ? obj.timestamp.trim()
+        : "";
+  if (timestampIso) return `ts:${timestampIso}`;
+  return typeof fallbackIndex === "number" && Number.isFinite(fallbackIndex) && fallbackIndex > 0
+    ? `line:${Math.floor(fallbackIndex)}`
+    : "patch";
 }
 
 function buildApplyPatchPendingGroupKey(callId: string | undefined, fallbackIndex: number): string {

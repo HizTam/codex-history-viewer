@@ -94,7 +94,7 @@
   "cfg.uiLanguage.enumAuto": "Use VS Code's display language.",
   "cfg.uiLanguage.enumJapanese": "Always show this extension in Japanese.",
   "cfg.uiLanguage.enumEnglish": "Always show this extension in English.",
-  "cfg.uiTimeGuideEnabled": "Show the date guide in history views.",
+  "cfg.uiTimeGuideEnabled": "Show the date guide and bookmark controls in history views.",
   "cfg.uiAlwaysShowHeaderActions": "Always show view header action icons (sets VS Code setting 'workbench.view.alwaysShowHeaderActions').",
   "cfg.historyDateBasis": "Choose which session date is used by the history tree and date-based search filters.",
   "cfg.historyDateBasis.labelStarted": "Started date",

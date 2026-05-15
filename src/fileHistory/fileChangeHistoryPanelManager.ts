@@ -12,6 +12,7 @@ import {
 } from "../services/debugLogUtils";
 import type { HistoryService } from "../services/historyService";
 import type { DebugLogger } from "../services/logger";
+import { buildBookmarkKey, type BookmarkStore, type BookmarkTarget } from "../services/bookmarkStore";
 import { SearchIndexService } from "../services/searchIndexService";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { normalizeCacheKey, pathExists } from "../utils/fsUtils";
@@ -45,15 +46,23 @@ interface SourceIconUris {
   dark: string;
 }
 
+interface FileChangeBookmarkState {
+  cards: FileChangeHistoryCard[];
+  bookmarkKeys: string[];
+}
+
 export class FileChangeHistoryPanelManager implements vscode.Disposable {
   private readonly extensionUri: vscode.Uri;
   private readonly historyService: HistoryService;
   private readonly searchIndexService: SearchIndexService;
   private readonly fileChangeHistoryService: FileChangeHistoryService;
   private readonly chatPanels: ChatPanelManager;
+  private readonly bookmarkStore: BookmarkStore;
   private readonly logger?: DebugLogger;
+  private readonly bookmarkSubscription: vscode.Disposable;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
   private readonly stateByPanel = new WeakMap<vscode.WebviewPanel, FileChangeHistoryPanelState>();
+  private readonly bookmarkTargetsByPanel = new WeakMap<vscode.WebviewPanel, Map<string, BookmarkTarget>>();
   private readonly readyByPanel = new WeakMap<vscode.WebviewPanel, boolean>();
   private readonly panelIconPath: { light: vscode.Uri; dark: vscode.Uri };
 
@@ -63,6 +72,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     searchIndexService: SearchIndexService,
     fileChangeHistoryService: FileChangeHistoryService,
     chatPanels: ChatPanelManager,
+    bookmarkStore: BookmarkStore,
     logger?: DebugLogger,
   ) {
     this.extensionUri = extensionUri;
@@ -70,15 +80,20 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     this.searchIndexService = searchIndexService;
     this.fileChangeHistoryService = fileChangeHistoryService;
     this.chatPanels = chatPanels;
+    this.bookmarkStore = bookmarkStore;
     this.logger = logger;
     const extensionIcon = vscode.Uri.joinPath(extensionUri, "resources", "extension-icon.svg");
     this.panelIconPath = {
       light: extensionIcon,
       dark: extensionIcon,
     };
+    this.bookmarkSubscription = this.bookmarkStore.onDidChange(() => {
+      this.refreshBookmarkState();
+    });
   }
 
   public dispose(): void {
+    this.bookmarkSubscription.dispose();
     for (const panel of this.panelsByKey.values()) {
       this.cancelLoadMore(panel, true);
       panel.dispose();
@@ -98,6 +113,23 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
         timeGuideEnabled: config.timeGuideEnabled,
       });
     }
+  }
+
+  private refreshBookmarkState(): void {
+    for (const panel of this.panelsByKey.values()) {
+      if (!this.readyByPanel.get(panel)) continue;
+      void this.sendBookmarkState(panel);
+    }
+  }
+
+  private async sendBookmarkState(panel: vscode.WebviewPanel): Promise<void> {
+    const targets = this.bookmarkTargetsByPanel.get(panel);
+    if (!targets || targets.size === 0) {
+      await panel.webview.postMessage({ type: "bookmarkState", keys: [] });
+      return;
+    }
+    const keys = Array.from(this.bookmarkStore.getKeysForTargets(Array.from(targets.values())).values());
+    await panel.webview.postMessage({ type: "bookmarkState", keys });
   }
 
   public notifySettingsChanged(reason: StaleReason): void {
@@ -452,6 +484,26 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       case "openHistory":
         await this.openHistory(panel, typeof msg?.cardId === "string" ? msg.cardId : "");
         return;
+      case "toggleBookmark": {
+        const key = typeof msg?.key === "string" ? msg.key.trim() : "";
+        const target = key ? this.bookmarkTargetsByPanel.get(panel)?.get(key) : undefined;
+        if (!target) {
+          await this.sendBookmarkState(panel);
+          return;
+        }
+        try {
+          await this.bookmarkStore.toggle(target);
+        } catch (error) {
+          this.logger?.debug(
+            formatDebugFields("bookmark toggle failed", {
+              error: sanitizeDebugError(error),
+            }),
+          );
+        } finally {
+          await this.sendBookmarkState(panel);
+        }
+        return;
+      }
       case "dismissStale":
         this.dismissStale(panel);
         return;
@@ -577,14 +629,16 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     const state = this.stateByPanel.get(panel);
     if (!state) return;
     const config = getConfig();
+    const bookmarkState = this.withBookmarkState(state.cards, panel);
+    const cards = bookmarkState.cards;
     const model: FileChangeHistoryWebviewModel = {
       target: state.target,
-      cards: state.cards,
-      sourceCounts: countSources(state.cards),
+      cards,
+      sourceCounts: countSources(cards),
       enabledSources: { codex: config.enableCodexSource, claude: config.enableClaudeSource },
-      totalCount: state.cards.length,
+      totalCount: cards.length,
       hasMore: state.hasMore,
-      noMore: state.cards.length > 0 && !state.hasMore,
+      noMore: cards.length > 0 && !state.hasMore,
     };
     await panel.webview.postMessage({
       type: "model",
@@ -595,9 +649,33 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       staleReason: state.staleReason,
       addedCount: options.addedCount,
       reason: options.reason,
+      bookmarks: bookmarkState.bookmarkKeys,
       timeGuideEnabled: config.timeGuideEnabled,
       debugLoggingEnabled: this.logger?.isDebugEnabled() ?? false,
     });
+  }
+
+  private withBookmarkState(cards: readonly FileChangeHistoryCard[], panel: vscode.WebviewPanel): FileChangeBookmarkState {
+    const targets = new Map<string, BookmarkTarget>();
+    const cardTargets = new Map<string, BookmarkTarget>();
+    const nextCards = cards.map((card) => {
+      const target = buildFileChangeBookmarkTarget(card);
+      if (!target) return card;
+      targets.set(target.key, target);
+      cardTargets.set(card.id, target);
+      return { ...card, bookmarkKey: target.key };
+    });
+
+    const bookmarkedKeys = this.bookmarkStore.getKeysForTargets(Array.from(targets.values()));
+    this.bookmarkTargetsByPanel.set(panel, targets);
+    const cardsWithState = nextCards.map((card) => {
+      const target = cardTargets.get(card.id);
+      return target ? { ...card, isBookmarked: bookmarkedKeys.has(target.key) } : card;
+    });
+    return {
+      cards: cardsWithState,
+      bookmarkKeys: Array.from(bookmarkedKeys.values()),
+    };
   }
 
   private buildHtml(webview: vscode.Webview): string {
@@ -665,6 +743,8 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       patchAfter: t("chat.patch.after"),
       patchNoDiff: t("chat.patch.noDiff"),
       openInHistory: t("fileChangeHistory.openInHistory"),
+      bookmarkAdd: t("chat.tooltip.bookmarkAdd"),
+      bookmarkRemove: t("chat.tooltip.bookmarkRemove"),
       loadFailed: t("fileChangeHistory.error.loadFallback"),
       loadMore: t("fileChangeHistory.loadMore"),
       loadMoreCanceled: t("fileChangeHistory.loadMoreCanceled"),
@@ -735,6 +815,33 @@ function countSources(cards: readonly FileChangeHistoryCard[]): { codex: number;
     else claude += 1;
   }
   return { codex, claude };
+}
+
+function buildFileChangeBookmarkTarget(card: FileChangeHistoryCard): BookmarkTarget | null {
+  const sessionFsPath = typeof card.sessionFsPath === "string" ? card.sessionFsPath.trim() : "";
+  const sessionCacheKey = typeof card.sessionCacheKey === "string" ? card.sessionCacheKey.trim() : "";
+  if (!sessionFsPath || !sessionCacheKey) return null;
+  const groupId = typeof card.bookmarkGroupId === "string" ? card.bookmarkGroupId.trim() : "";
+  const keyParams = {
+    sessionCacheKey,
+    kind: "patchGroup",
+    groupId,
+    messageIndex: card.messageIndex,
+    timestampIso: card.timestampIso,
+    fallbackId: card.entry?.callId || card.entry?.id || card.id,
+  } as const;
+  const key = buildBookmarkKey(keyParams);
+  if (!key) return null;
+  return {
+    key,
+    sessionFsPath,
+    sessionCacheKey,
+    kind: "patchGroup",
+    ...(groupId ? { groupId } : {}),
+    title: card.sessionTitle,
+    ...(typeof card.messageIndex === "number" ? { messageIndex: card.messageIndex } : {}),
+    ...(typeof card.timestampIso === "string" && card.timestampIso.trim() ? { timestampIso: card.timestampIso.trim() } : {}),
+  };
 }
 
 function buildPanelKey(target: FileChangeHistoryTarget): string {

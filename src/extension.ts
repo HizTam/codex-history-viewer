@@ -13,6 +13,7 @@ import { renderResumeContext } from "./transcript/resumeRenderer";
 import { promoteSessionCopyToToday } from "./services/promoteService";
 import { cleanupDeletedSessionUndoBackups, deleteSessionsWithConfirmation } from "./services/deleteService";
 import { PinStore } from "./services/pinStore";
+import { BookmarkStore, type BookmarkEntry } from "./services/bookmarkStore";
 import { type SearchRequest, runSearchFlow } from "./services/searchService";
 import { type IndexedSearchRole, SearchIndexService } from "./services/searchIndexService";
 import { exportMaskedTranscripts, exportSessions, importSessions } from "./services/importExportService";
@@ -73,6 +74,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   updateUiLanguageContext();
 
   const pinStore = new PinStore(context.globalState);
+  const bookmarkStore = new BookmarkStore(context.globalState);
   const annotationStore = new SessionAnnotationStore(context.globalState);
   const titleOverrideStore = new SessionTitleOverrideStore(context.globalState);
   const searchPresetStore = new SearchPresetStore(context.globalState);
@@ -87,6 +89,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyService,
     annotationStore,
     pinStore,
+    bookmarkStore,
     chatOpenPositionStore,
     async () => {
       await vscode.commands.executeCommand("codexHistoryViewer.refresh");
@@ -100,9 +103,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     searchIndexService,
     fileChangeHistoryService,
     chatPanels,
+    bookmarkStore,
     logger,
   );
-  context.subscriptions.push(fileChangeHistoryPanels);
+  context.subscriptions.push(bookmarkStore, fileChangeHistoryPanels);
   let storageStats: StorageStats = {
     globalStorageBytes: 0,
     trashFileCount: 0,
@@ -2750,6 +2754,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         previousAnnotations.set(normalizeCacheKey(fsPath), ann ? { tags: [...ann.tags], note: ann.note } : null);
       }
       await annotationStore.removeMany(deletedPaths);
+      let previousBookmarks: BookmarkEntry[] = [];
+      try {
+        previousBookmarks = await bookmarkStore.removeMany(deletedPaths);
+      } catch (error) {
+        logger.debug(
+          formatDebugFields("bookmark deleteMany failed", {
+            count: deletedPaths.length,
+            error: sanitizeDebugError(error),
+          }),
+        );
+      }
       try {
         await chatOpenPositionStore.deleteMany(deletedPaths);
       } catch (error) {
@@ -2785,6 +2800,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               if (!before) continue;
               await annotationStore.set(fsPath, { tags: before.tags, note: before.note });
             }
+            await bookmarkStore.restore(previousBookmarks);
           },
           async (reason) => {
             await cleanupDeletedSessionUndoBackups(result.undoItems, {

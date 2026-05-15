@@ -590,6 +590,13 @@ mark.pageSearchMatch-active {
   box-shadow: 0 0 0 2px var(--chv-accent) inset;
 }
 
+.diffCard.bookmarked {
+  border-color: color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 54%, var(--chv-border) 46%);
+  box-shadow:
+    inset 4px 0 0 color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 84%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 18%, transparent);
+}
+
 .cardHeader {
   display: flex;
   gap: 12px;
@@ -733,6 +740,40 @@ mark.pageSearchMatch-active {
 .iconBtn svg {
   width: 16px;
   height: 16px;
+  fill: currentColor;
+}
+
+.bookmarkBtn {
+  padding: 2px 5px;
+}
+
+.bookmarkBtn svg {
+  width: 12px;
+  height: 12px;
+}
+
+.bookmarkBtn-on {
+  border-color: color-mix(in srgb, var(--chv-accent) 70%, var(--chv-border) 30%);
+  background: color-mix(in srgb, var(--chv-accent) 16%, transparent);
+  color: var(--chv-accent);
+}
+
+.iconBtn.bookmarkBtn.bookmarkBtn-on {
+  border-color: color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 74%, var(--chv-border) 26%);
+  background: color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 20%, transparent);
+  color: var(--vscode-charts-yellow, #cca700);
+}
+
+.iconTextBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.iconTextBtn svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
   fill: currentColor;
 }
 
@@ -1065,6 +1106,10 @@ mark.pageSearchMatch-active {
   .cardActions {
     justify-content: flex-end;
     max-width: 100%;
+  }
+
+  .iconTextBtn .btnText {
+    display: none;
   }
 
   .diffDetailsSummary {

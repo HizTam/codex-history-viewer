@@ -22,6 +22,9 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.22 3.22a.75.75 0 0 1 1.06 0L8 6.94l3.72-3.72a.75.75 0 1 1 1.06 1.06L9.06 8l3.72 3.72a.75.75 0 1 1-1.06 1.06L8 9.06l-3.72 3.72a.75.75 0 1 1-1.06-1.06L6.94 8 3.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg>';
   const OPEN_FILE_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.75 2h5.5a.75.75 0 0 1 0 1.5h-5.5a.25.25 0 0 0-.25.25v8.5c0 .14.11.25.25.25h8.5a.25.25 0 0 0 .25-.25v-5.5a.75.75 0 0 1 1.5 0v5.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm4.72 1.22a.75.75 0 0 1 .53-.22h4.25a.75.75 0 0 1 .75.75V8a.75.75 0 0 1-1.5 0V5.56L8.78 9.28a.75.75 0 1 1-1.06-1.06l3.72-3.72H9a.75.75 0 0 1-.53-1.28Z"/></svg>';
+  const HISTORY_ICON_SVG = OPEN_FILE_ICON_SVG;
+  const BOOKMARK_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4.25 2A1.25 1.25 0 0 1 5.5.75h5A1.25 1.25 0 0 1 11.75 2v11.8a.75.75 0 0 1-1.14.64L8 12.86l-2.61 1.58a.75.75 0 0 1-1.14-.64V2Zm1.5.25v10.22l1.86-1.13a.75.75 0 0 1 .78 0l1.86 1.13V2.25h-4.5Z"/></svg>';
 
   const MIN_PAGE_SEARCH_WIDTH = 280;
   const RESTORE_COVER_HIDE_DELAY_MS = 140;
@@ -37,6 +40,7 @@
   let staleReason = null;
   let dismissedStale = false;
   let loadingMore = false;
+  let bookmarkedKeys = new Set();
   let timeGuideEnabled = false;
   let debugLoggingEnabled = false;
   let pageSearchOpen = false;
@@ -98,6 +102,7 @@
       const reloadScrollAnchor = pendingReloadScrollAnchor;
       pendingReloadScrollAnchor = null;
       model = msg.model || null;
+      bookmarkedKeys = normalizeBookmarkKeys(msg.bookmarks);
       const modelReason = typeof msg.reason === "string" ? msg.reason : "";
       sourceFilter = normalizeSourceFilterForModel(sourceFilter, model);
       staleReason = msg.staleReason || null;
@@ -121,6 +126,12 @@
       render();
       if (reloadScrollAnchor) restoreReloadScrollAnchor(reloadScrollAnchor, scrollTop);
       else restoreScroll(scrollTop);
+      return;
+    }
+    if (msg.type === "bookmarkState") {
+      bookmarkedKeys = normalizeBookmarkKeys(msg.keys);
+      applyBookmarkStateToDom();
+      updateDateGuide();
       return;
     }
     if (msg.type === "stale") {
@@ -174,6 +185,23 @@
       showToast(msg.message || text("copied", "Copied."), { key: "copied" });
     }
   });
+
+  document.addEventListener(
+    "click",
+    (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const button = target?.closest(".bookmarkBtn[data-bookmark-key]");
+      if (!(button instanceof HTMLButtonElement)) return;
+      const key = button.dataset.bookmarkKey || "";
+      if (!key) return;
+      event.preventDefault();
+      event.stopPropagation();
+      toggleBookmarkKeyLocally(key);
+      debugWebview("bookmark", "toggleClick", { key });
+      vscode.postMessage({ type: "toggleBookmark", key });
+    },
+    true,
+  );
 
   window.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
@@ -436,10 +464,81 @@
     return panel;
   }
 
+  function normalizeBookmarkKeys(values) {
+    const out = new Set();
+    if (!Array.isArray(values)) return out;
+    for (const value of values) {
+      const key = typeof value === "string" ? value.trim() : "";
+      if (key) out.add(key);
+    }
+    return out;
+  }
+
+  function getCardBookmarkKey(card) {
+    return card && typeof card.bookmarkKey === "string" ? card.bookmarkKey.trim() : "";
+  }
+
+  function isCardBookmarked(card) {
+    const key = getCardBookmarkKey(card);
+    return !!(key && bookmarkedKeys.has(key));
+  }
+
+  function createBookmarkButton(card) {
+    if (!isBookmarkUiEnabled()) return null;
+    const key = getCardBookmarkKey(card);
+    if (!key) return null;
+    const btn = el("button", { type: "button", className: "iconBtn bookmarkBtn" });
+    btn.dataset.bookmarkKey = key;
+    btn.innerHTML = BOOKMARK_ICON_SVG;
+    syncBookmarkButton(btn, bookmarkedKeys.has(key));
+    return btn;
+  }
+
+  function syncBookmarkButton(button, bookmarked) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    const on = bookmarked === true;
+    const label = on ? text("bookmarkRemove", "Remove bookmark") : text("bookmarkAdd", "Add bookmark");
+    button.classList.toggle("bookmarkBtn-on", on);
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+
+  function applyBookmarkStateToDom() {
+    if (!isBookmarkUiEnabled()) return;
+    for (const button of document.querySelectorAll(".bookmarkBtn[data-bookmark-key]")) {
+      if (!(button instanceof HTMLButtonElement)) continue;
+      syncBookmarkButton(button, bookmarkedKeys.has(button.dataset.bookmarkKey || ""));
+    }
+    for (const card of document.querySelectorAll(".diffCard[data-bookmark-key]")) {
+      if (!(card instanceof HTMLElement)) continue;
+      const bookmarked = bookmarkedKeys.has(card.dataset.bookmarkKey || "");
+      card.dataset.bookmarked = bookmarked ? "true" : "false";
+      card.classList.toggle("bookmarked", bookmarked);
+    }
+  }
+
+  function toggleBookmarkKeyLocally(key) {
+    if (!key) return;
+    if (bookmarkedKeys.has(key)) bookmarkedKeys.delete(key);
+    else bookmarkedKeys.add(key);
+    applyBookmarkStateToDom();
+    updateDateGuide();
+  }
+
+  function isBookmarkUiEnabled() {
+    return timeGuideEnabled === true;
+  }
+
   function renderCard(card, index, visibleCards) {
     const cards = Array.isArray(visibleCards) ? visibleCards : [];
     const cardEl = el("article", { className: "diffCard", id: card.id });
     cardEl.dataset.localDate = String(card.localDate || "");
+    const bookmarkKey = getCardBookmarkKey(card);
+    if (isBookmarkUiEnabled() && bookmarkKey) cardEl.dataset.bookmarkKey = bookmarkKey;
+    const cardBookmarked = isBookmarkUiEnabled() && isCardBookmarked(card);
+    cardEl.dataset.bookmarked = cardBookmarked ? "true" : "false";
+    cardEl.classList.toggle("bookmarked", cardBookmarked);
     const header = el("div", { className: "cardHeader" });
 
     const left = el("div", { className: "cardTitleBlock" });
@@ -465,8 +564,15 @@
     const actions = el("div", { className: "messageNav cardActions" });
     actions.appendChild(navButton("prevCard", index > 0 ? cards[index - 1]?.id || "" : ""));
     actions.appendChild(navButton("nextCard", index + 1 < cards.length ? cards[index + 1]?.id || "" : ""));
-    const openBtn = el("button", { type: "button", className: "secondaryBtn" });
-    openBtn.textContent = text("openInHistory", "Open in History");
+    const bookmarkBtn = createBookmarkButton(card);
+    if (bookmarkBtn) actions.appendChild(bookmarkBtn);
+    const openBtn = el("button", { type: "button", className: "secondaryBtn iconTextBtn" });
+    openBtn.innerHTML = HISTORY_ICON_SVG;
+    const openText = el("span", { className: "btnText" });
+    openText.textContent = text("openInHistory", "Open in History");
+    openBtn.appendChild(openText);
+    openBtn.title = openText.textContent;
+    openBtn.setAttribute("aria-label", openText.textContent);
     openBtn.addEventListener("click", () => vscode.postMessage({ type: "openHistory", cardId: card.id }));
     actions.appendChild(openBtn);
     header.appendChild(actions);
@@ -1149,6 +1255,7 @@
           timestampMs,
           dateKey: localDate,
           title: card.sessionTitle || "",
+          bookmarked: isCardBookmarked(card),
           tooltipOverride: buildDateGuideTooltip(card),
           element,
         };

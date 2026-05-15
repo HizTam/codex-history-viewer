@@ -9,6 +9,16 @@
   const CURRENT_REFERENCE_MAX_PX = 180;
   const TOOLTIP_DOT_HIT_PADDING_PX = 10;
   const TOOLTIP_RAIL_HIT_WIDTH_PX = 26;
+  const LENS_DENSE_RADIUS_PX = 28;
+  const LENS_CONTEXT_RADIUS_PX = 52;
+  const LENS_DENSE_MIN_ITEMS = 5;
+  const LENS_MIN_CLUSTER_GAP_PX = 3;
+  const LENS_MAX_ITEMS = 18;
+  const LENS_MIN_ITEM_GAP_PX = 8;
+  const LENS_MIN_HEIGHT_PX = 140;
+  const LENS_MAX_HEIGHT_PX = 220;
+  const LENS_MAX_VIEWPORT_RATIO = 0.45;
+  const LENS_PADDING_PX = 10;
 
   function createTimeGuide(options) {
     return new TimeGuide(options || {});
@@ -20,11 +30,15 @@
       this.guide = null;
       this.rail = null;
       this.hoverRail = null;
+      this.currentMarker = null;
+      this.lens = null;
+      this.lensActivePeriod = null;
       this.scrollRoot = null;
       this.contentElement = null;
       this.currentItems = [];
       this.currentPeriods = [];
       this.currentScale = "";
+      this.currentKey = "";
       this.updateFrame = 0;
       this.revealTimer = 0;
       this.scrollRevealTimer = 0;
@@ -40,10 +54,8 @@
       this.handlePointerDownIntent = (event) => this.handlePointerDownEvent(event);
       this.handleDocumentPointerDown = (event) => this.handleDocumentPointerDownEvent(event);
       this.handleGuideMouseMove = (event) => this.handleGuideMouseMoveEvent(event);
-      this.handleGuideMouseLeave = () => {
-        this.clearTooltipActiveTick();
-        this.scheduleHideHover();
-      };
+      this.handleGuideMouseLeave = (event) => this.handleGuideMouseLeaveEvent(event);
+      this.handleLensMouseLeave = (event) => this.handleLensMouseLeaveEvent(event);
       this.handlePointerMoveIntent = () => {
         if (this.scrollbarDragActive) this.markUserScrollIntent();
       };
@@ -72,7 +84,11 @@
       guide.hidden = shouldHide;
       guide.setAttribute("aria-label", this.getAriaLabel());
       if (shouldHide) {
-        if (this.rail) this.rail.textContent = "";
+        if (this.rail) {
+          this.rail.textContent = "";
+          this.currentMarker = null;
+        }
+        this.hideLens();
         return;
       }
 
@@ -98,11 +114,27 @@
 
       const activeItem = this.findCurrentItem();
       const activeKey = activeItem ? this.getActiveKey(activeItem) : "";
+      this.currentKey = activeKey;
+      let activeTick = null;
       for (const tick of ticks) {
         const isCurrent = !!activeKey && tick.dataset.key === activeKey;
         tick.classList.toggle("dateGuideTick-current", isCurrent);
-        if (isCurrent) tick.setAttribute("aria-current", "true");
-        else tick.removeAttribute("aria-current");
+        if (isCurrent) {
+          activeTick = tick;
+          tick.setAttribute("aria-current", "true");
+        } else {
+          tick.removeAttribute("aria-current");
+        }
+      }
+
+      if (this.currentMarker instanceof HTMLElement) {
+        if (activeTick instanceof HTMLElement) {
+          const position = activeTick.style.getPropertyValue("--pos") || "0%";
+          this.currentMarker.style.setProperty("--pos", position);
+          this.currentMarker.hidden = false;
+        } else {
+          this.currentMarker.hidden = true;
+        }
       }
     }
 
@@ -122,6 +154,9 @@
       this.guide = null;
       this.rail = null;
       this.hoverRail = null;
+      this.currentMarker = null;
+      this.lens = null;
+      this.lensActivePeriod = null;
       this.contentElement = null;
       this.activeTooltipTick = null;
       if (this.updateFrame) cancelAnimationFrame(this.updateFrame);
@@ -183,10 +218,17 @@
         this.hoverRail.setAttribute("aria-hidden", "true");
         this.hoverRail.addEventListener("mouseenter", () => this.revealForHover());
         this.hoverRail.addEventListener("mouseleave", this.handleGuideMouseLeave);
+        this.hoverRail.addEventListener("mousemove", this.handleGuideMouseMove);
+        this.lens = document.createElement("div");
+        this.lens.className = "dateGuideLens";
+        this.lens.hidden = true;
+        this.lens.addEventListener("mouseenter", () => this.revealForHover());
+        this.lens.addEventListener("mouseleave", this.handleLensMouseLeave);
         this.rail = document.createElement("div");
         this.rail.className = "dateGuideTimeline";
         this.guide.appendChild(this.hoverRail);
         this.guide.appendChild(this.rail);
+        this.guide.appendChild(this.lens);
         host.appendChild(this.guide);
       }
       return this.guide;
@@ -269,6 +311,7 @@
 
       const periods = entries.map((entry, index) => {
         const position = this.resolvePosition(entry.item, entry.item.itemIndex, dateItems.length);
+        const targetElement = entry.item.element;
         const major = isMajorDateGuideEntry(entry.key, scale, index, {
           allSameYear,
           allSameMonth,
@@ -285,7 +328,9 @@
           label: major ? formatDateGuideLabel(entry.key, scale, { allSameYear, allSameMonth }) : "",
           position,
           tooltip: formatDateGuideTitle(entry.key, scale),
-          targetElement: entry.item.element,
+          bookmarked: entry.item.bookmarked === true || isGuideTargetBookmarked(targetElement),
+          role: resolveGuideTargetRole(targetElement, entry.item.role),
+          targetElement,
         };
       });
       return thinGuideLabels(periods, this.estimateGuideHeight());
@@ -314,6 +359,8 @@
         label: entry.major ? formatTimelineLabel(entry.parts, labelKind, entry.context) : "",
         position: this.resolvePosition(entry, entry.itemIndex, timeItems.length),
         tooltip: formatTimelineTooltip(entry, timeZone),
+        bookmarked: entry.bookmarked === true || isGuideTargetBookmarked(entry.element),
+        role: resolveGuideTargetRole(entry.element, entry.role),
         targetElement: entry.element,
       }));
       return thinGuideLabels(periods, this.estimateGuideHeight());
@@ -353,12 +400,20 @@
       if (!(rail instanceof HTMLElement)) return;
       rail.textContent = "";
       this.activeTooltipTick = null;
+      this.currentMarker = null;
+      this.hideLens();
       for (const period of periods) {
         const btn = document.createElement("button");
         btn.type = "button";
-        btn.className = `dateGuideTick dateGuideTick-${period.scale || "item"} ${
-          period.major ? "dateGuideTick-major" : "dateGuideTick-minor"
-        }`;
+        btn.className = [
+          "dateGuideTick",
+          `dateGuideTick-${period.scale || "item"}`,
+          period.major ? "dateGuideTick-major" : "dateGuideTick-minor",
+          period.bookmarked ? "dateGuideTick-bookmark" : "",
+          period.role === "user" ? "dateGuideTick-user" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
         btn.style.setProperty("--pos", `${period.position}%`);
         btn.dataset.key = period.key;
         btn.dataset.scale = period.scale || "";
@@ -383,13 +438,19 @@
         hit.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
-          this.activatePeriod(period, btn);
+          this.activatePeriod(this.getLensClickPeriod(period), btn);
         });
         btn.appendChild(label);
         btn.appendChild(dot);
         btn.appendChild(hit);
         rail.appendChild(btn);
       }
+      const currentMarker = document.createElement("span");
+      currentMarker.className = "dateGuideCurrentMarker";
+      currentMarker.hidden = true;
+      currentMarker.setAttribute("aria-hidden", "true");
+      rail.appendChild(currentMarker);
+      this.currentMarker = currentMarker;
     }
 
     activatePeriod(period, button) {
@@ -404,6 +465,12 @@
       scrollElementIntoRootView(this.getRoot(), target, { behavior: "smooth", block: "start" });
       target.classList.add("highlight");
       window.setTimeout(() => target.classList.remove("highlight"), 2000);
+    }
+
+    getLensClickPeriod(fallbackPeriod) {
+      const lens = this.lens;
+      if (lens instanceof HTMLElement && !lens.hidden && this.lensActivePeriod) return this.lensActivePeriod;
+      return fallbackPeriod;
     }
 
     findCurrentItem() {
@@ -494,6 +561,15 @@
     }
 
     handleGuideMouseMoveEvent(event) {
+      this.revealForHover();
+      const lensModel = this.buildLensModel(event);
+      if (lensModel) {
+        this.clearTooltipActiveTick();
+        this.showLens(lensModel);
+        return;
+      }
+      this.hideLens();
+
       const target = event && event.target instanceof HTMLElement ? event.target : null;
       const tick = target ? target.closest(".dateGuideTick") : null;
       if (!(tick instanceof HTMLElement) || !this.isPointerNearTickMark(event, tick)) {
@@ -501,6 +577,26 @@
         return;
       }
       this.setTooltipActiveTick(tick);
+    }
+
+    handleGuideMouseLeaveEvent(event) {
+      if (this.isRelatedTargetInsideLens(event)) {
+        this.clearTooltipActiveTick();
+        this.revealForHover();
+        return;
+      }
+      this.clearTooltipActiveTick();
+      this.hideLens();
+      this.scheduleHideHover();
+    }
+
+    handleLensMouseLeaveEvent(event) {
+      if (this.isRelatedTargetInsideGuide(event)) {
+        this.revealForHover();
+        return;
+      }
+      this.hideLens();
+      this.scheduleHideHover();
     }
 
     isPointerNearTickMark(event, tick) {
@@ -544,6 +640,7 @@
 
     scheduleHideHover() {
       this.clearTooltipActiveTick();
+      this.hideLens();
       document.body.classList.add("dateGuideHovering");
       if (this.hoverTimer) window.clearTimeout(this.hoverTimer);
       this.hoverTimer = window.setTimeout(() => {
@@ -554,6 +651,7 @@
 
     hideImmediately() {
       this.clearTooltipActiveTick();
+      this.hideLens();
       if (this.hoverTimer) {
         window.clearTimeout(this.hoverTimer);
         this.hoverTimer = 0;
@@ -592,6 +690,123 @@
       );
     }
 
+    isRelatedTargetInsideLens(event) {
+      const related = event && event.relatedTarget instanceof Node ? event.relatedTarget : null;
+      return !!(related && this.lens instanceof HTMLElement && this.lens.contains(related));
+    }
+
+    isRelatedTargetInsideGuide(event) {
+      const related = event && event.relatedTarget instanceof Node ? event.relatedTarget : null;
+      return !!(related && this.guide instanceof HTMLElement && this.guide.contains(related));
+    }
+
+    buildLensModel(event) {
+      const rail = this.rail;
+      const guide = this.guide;
+      if (!(rail instanceof HTMLElement) || !(guide instanceof HTMLElement) || !event) return null;
+      if (!this.isPointerNearTimelineRail(event)) return null;
+
+      const periods = Array.isArray(this.currentPeriods) ? this.currentPeriods : [];
+      if (periods.length < LENS_DENSE_MIN_ITEMS) return null;
+
+      const railRect = rail.getBoundingClientRect();
+      const railHeight = railRect.height;
+      if (!Number.isFinite(railHeight) || railHeight <= 0) return null;
+      const hoverY = clampNumber(event.clientY - railRect.top, 0, railHeight);
+      const positioned = periods
+        .map((period, index) => ({
+          period,
+          index,
+          y: (clampNumber(Number(period.position), 0, 100) / 100) * railHeight,
+        }))
+        .filter((entry) => Number.isFinite(entry.y))
+        .sort((a, b) => a.y - b.y || a.index - b.index);
+
+      if (!isDenseLensNeighborhood(positioned, hoverY)) return null;
+
+      const contextItems = positioned.filter((entry) => Math.abs(entry.y - hoverY) <= LENS_CONTEXT_RADIUS_PX);
+      const selected = selectLensItems(contextItems.length > 0 ? contextItems : positioned, hoverY, this.currentKey);
+      if (selected.length < 2) return null;
+
+      const guideRect = guide.getBoundingClientRect();
+      const maxLensHeight = Math.max(LENS_MIN_HEIGHT_PX, Math.min(LENS_MAX_HEIGHT_PX, window.innerHeight * LENS_MAX_VIEWPORT_RATIO));
+      const lensHeight = clampNumber(selected.length * 11 + LENS_PADDING_PX * 2 + 4, LENS_MIN_HEIGHT_PX, maxLensHeight);
+      const topInGuide = clampNumber(
+        event.clientY - guideRect.top - lensHeight / 2,
+        0,
+        Math.max(0, guideRect.height - lensHeight),
+      );
+      return {
+        items: layoutLensItems(selected, lensHeight),
+        top: topInGuide,
+        height: lensHeight,
+        tailTop: clampNumber(event.clientY - guideRect.top - topInGuide, 12, Math.max(12, lensHeight - 12)),
+        activeY: hoverY,
+      };
+    }
+
+    isPointerNearTimelineRail(event) {
+      const rail = this.rail;
+      if (!(rail instanceof HTMLElement) || !event) return false;
+      const rect = rail.getBoundingClientRect();
+      return (
+        event.clientX >= rect.right - 44 &&
+        event.clientX <= rect.right + 12 &&
+        event.clientY >= rect.top - 4 &&
+        event.clientY <= rect.bottom + 4
+      );
+    }
+
+    showLens(model) {
+      const lens = this.lens;
+      if (!(lens instanceof HTMLElement) || !model || !Array.isArray(model.items)) return;
+      lens.hidden = false;
+      lens.style.setProperty("--lens-top", `${Math.round(model.top)}px`);
+      lens.style.setProperty("--lens-height", `${Math.round(model.height)}px`);
+      lens.style.setProperty("--lens-tail-top", `${Math.round(model.tailTop)}px`);
+      lens.textContent = "";
+
+      const activeKey = this.currentKey || "";
+      const activeLensItem = findClosestLensItem(model.items, model.activeY);
+      this.lensActivePeriod = activeLensItem ? activeLensItem.period : null;
+      for (const item of model.items) {
+        const period = item.period;
+        const isLensActive = item === activeLensItem;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = [
+          "dateGuideLensItem",
+          period.bookmarked ? "dateGuideLensItem-bookmark" : "",
+          period.role === "user" ? "dateGuideLensItem-user" : "",
+          activeKey && period.key === activeKey ? "dateGuideLensItem-current" : "",
+          isLensActive ? "dateGuideLensItem-active" : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        button.style.setProperty("--lens-pos", `${Math.round(item.lensY)}px`);
+        button.dataset.tooltip = period.tooltip || "";
+        button.setAttribute("aria-label", period.tooltip || period.label || period.key);
+        button.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.activatePeriod(period, button);
+        });
+
+        const dot = document.createElement("span");
+        dot.className = "dateGuideLensDot";
+        button.appendChild(dot);
+        lens.appendChild(button);
+      }
+    }
+
+    hideLens() {
+      const lens = this.lens;
+      if (!(lens instanceof HTMLElement)) return;
+      lens.hidden = true;
+      lens.textContent = "";
+      this.lensActivePeriod = null;
+    }
+
     estimateGuideHeight() {
       const guide = this.rail;
       const height = guide instanceof HTMLElement ? guide.getBoundingClientRect().height : 0;
@@ -604,6 +819,134 @@
       if (!(root instanceof HTMLElement)) return true;
       return root.scrollHeight > root.clientHeight * 1.2;
     }
+  }
+
+  function isDenseLensNeighborhood(entries, hoverY) {
+    if (!Array.isArray(entries) || entries.length < LENS_DENSE_MIN_ITEMS) return false;
+    const denseItems = entries.filter((entry) => Math.abs(entry.y - hoverY) <= LENS_DENSE_RADIUS_PX);
+    if (denseItems.length >= LENS_DENSE_MIN_ITEMS) return true;
+
+    const nearby = entries.filter((entry) => Math.abs(entry.y - hoverY) <= LENS_CONTEXT_RADIUS_PX);
+    for (let i = 1; i < nearby.length; i += 1) {
+      if (nearby[i].y - nearby[i - 1].y < LENS_MIN_CLUSTER_GAP_PX) return true;
+    }
+    return false;
+  }
+
+  function selectLensItems(entries, hoverY, activeKey) {
+    if (!Array.isArray(entries) || entries.length === 0) return [];
+    const sortedByDistance = [...entries].sort((a, b) => Math.abs(a.y - hoverY) - Math.abs(b.y - hoverY) || a.index - b.index);
+    const selectedByIndex = new Map();
+    const skippedUsers = [];
+    const userSoftLimit = Math.max(3, Math.floor(LENS_MAX_ITEMS * 0.35));
+    const nonUserTotal = sortedByDistance.filter((entry) => !isUserLensPeriod(entry.period)).length;
+    let selectedUsers = 0;
+    let selectedNonUsers = 0;
+
+    const addEntry = (entry) => {
+      if (!entry || selectedByIndex.has(entry.index) || selectedByIndex.size >= LENS_MAX_ITEMS) return false;
+      selectedByIndex.set(entry.index, entry);
+      if (isUserLensPeriod(entry.period)) selectedUsers += 1;
+      else selectedNonUsers += 1;
+      return true;
+    };
+
+    const important = sortedByDistance.filter((entry) => isImportantLensPeriod(entry.period, activeKey));
+    for (const entry of important) {
+      if (!addEntry(entry)) break;
+    }
+
+    for (const entry of sortedByDistance) {
+      if (selectedByIndex.size >= LENS_MAX_ITEMS) break;
+      if (
+        isUserLensPeriod(entry.period) &&
+        selectedUsers >= userSoftLimit &&
+        selectedNonUsers < nonUserTotal
+      ) {
+        skippedUsers.push(entry);
+        continue;
+      }
+      addEntry(entry);
+    }
+
+    for (const entry of skippedUsers) {
+      if (selectedByIndex.size >= LENS_MAX_ITEMS) break;
+      addEntry(entry);
+    }
+    return Array.from(selectedByIndex.values()).sort((a, b) => a.y - b.y || a.index - b.index);
+  }
+
+  function isImportantLensPeriod(period, activeKey) {
+    if (!period || typeof period !== "object") return false;
+    if (period.bookmarked === true) return true;
+    return !!(activeKey && period.key === activeKey);
+  }
+
+  function isUserLensPeriod(period) {
+    return !!(period && typeof period === "object" && period.role === "user");
+  }
+
+  function layoutLensItems(entries, lensHeight) {
+    const sorted = [...entries].sort((a, b) => a.y - b.y || a.index - b.index);
+    if (sorted.length === 0) return [];
+    const top = LENS_PADDING_PX;
+    const bottom = Math.max(top, lensHeight - LENS_PADDING_PX);
+    const sourceMin = sorted[0].y;
+    const sourceMax = sorted[sorted.length - 1].y;
+    const sourceRange = sourceMax - sourceMin;
+    const positions = sorted.map((entry, index) => {
+      if (sorted.length === 1) return lensHeight / 2;
+      if (sourceRange < 1) return top + ((bottom - top) * index) / Math.max(1, sorted.length - 1);
+      return top + ((entry.y - sourceMin) / sourceRange) * (bottom - top);
+    });
+
+    for (let i = 1; i < positions.length; i += 1) {
+      if (positions[i] - positions[i - 1] < LENS_MIN_ITEM_GAP_PX) positions[i] = positions[i - 1] + LENS_MIN_ITEM_GAP_PX;
+    }
+    const overflow = positions[positions.length - 1] - bottom;
+    if (overflow > 0) {
+      for (let i = 0; i < positions.length; i += 1) positions[i] -= overflow;
+    }
+    for (let i = positions.length - 2; i >= 0; i -= 1) {
+      if (positions[i + 1] - positions[i] < LENS_MIN_ITEM_GAP_PX) positions[i] = positions[i + 1] - LENS_MIN_ITEM_GAP_PX;
+    }
+    const underflow = top - positions[0];
+    if (underflow > 0) {
+      for (let i = 0; i < positions.length; i += 1) positions[i] += underflow;
+    }
+
+    if (positions[0] < top - 0.5 || positions[positions.length - 1] > bottom + 0.5) {
+      for (let i = 0; i < positions.length; i += 1) {
+        positions[i] = sorted.length === 1 ? lensHeight / 2 : top + ((bottom - top) * i) / Math.max(1, sorted.length - 1);
+      }
+    }
+
+    return sorted.map((entry, index) => ({
+      period: entry.period,
+      index: entry.index,
+      sourceY: entry.y,
+      lensY: positions[index],
+    }));
+  }
+
+  function findClosestLensItem(items, sourceY) {
+    if (!Array.isArray(items) || items.length === 0) return null;
+    let best = items[0];
+    let bestDistance = Math.abs(best.sourceY - sourceY);
+    for (let i = 1; i < items.length; i += 1) {
+      const item = items[i];
+      const distance = Math.abs(item.sourceY - sourceY);
+      if (distance >= bestDistance) continue;
+      best = item;
+      bestDistance = distance;
+    }
+    return best;
+  }
+
+  function clampNumber(value, min, max) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return min;
+    return Math.max(min, Math.min(max, number));
   }
 
   function normalizeGuideItem(item, index) {
@@ -752,6 +1095,29 @@
       parts,
       key: item.key || `ts-${timestampMs}-${item.itemIndex}`,
     };
+  }
+
+  function isGuideTargetBookmarked(element) {
+    return (
+      element instanceof HTMLElement &&
+      (element.dataset.bookmarked === "true" || element.classList.contains("bookmarked"))
+    );
+  }
+
+  function resolveGuideTargetRole(element, fallback) {
+    const value =
+      element instanceof HTMLElement && typeof element.dataset.timeGuideRole === "string"
+        ? element.dataset.timeGuideRole
+        : typeof fallback === "string"
+          ? fallback
+          : "";
+    if (value === "user" || value === "assistant" || value === "developer") return value;
+    if (element instanceof HTMLElement) {
+      if (element.classList.contains("user")) return "user";
+      if (element.classList.contains("assistant")) return "assistant";
+      if (element.classList.contains("developer")) return "developer";
+    }
+    return "";
   }
 
   function chooseTimelineLabelKind(items, rangeMs, labelBudget) {
