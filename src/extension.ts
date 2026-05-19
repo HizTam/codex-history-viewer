@@ -36,6 +36,14 @@ import {
   emptyTrashAndCleanupLegacy,
   listLegacyFiles,
 } from "./services/storageMaintenanceService";
+import {
+  type HandoffResult,
+  type HandoffTarget,
+  buildHandoffPrompt,
+  cleanupHandoffs,
+  createHandoff,
+  resolveHandoffLocation,
+} from "./services/handoffService";
 import type { TreeNode } from "./tree/treeNodes";
 import { DayNode, MissingPinnedNode, MonthNode, SearchHitNode, YearNode, isSessionNode } from "./tree/treeNodes";
 import {
@@ -72,6 +80,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.uiLang", lang);
   };
   updateUiLanguageContext();
+  const updateHandoffMenuContext = (): void => {
+    const latestConfig = getConfig();
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.handoffEnabled", latestConfig.handoffEnabled);
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.codexToClaudeHandoffEnabled",
+      latestConfig.handoffEnabled && latestConfig.enableCodexSource && latestConfig.enableClaudeSource,
+    );
+  };
+  updateHandoffMenuContext();
 
   const pinStore = new PinStore(context.globalState);
   const bookmarkStore = new BookmarkStore(context.globalState);
@@ -111,6 +129,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     globalStorageBytes: 0,
     trashFileCount: 0,
     trashBytes: 0,
+    handoffCount: 0,
+    handoffBytes: 0,
   };
   const refreshStorageStats = async (): Promise<void> => {
     storageStats = await collectStorageStats(context.globalStorageUri);
@@ -273,6 +293,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       totalTagCount: annotationStore.listTagStats().length,
       storageBytes: storageStats.globalStorageBytes,
       trashCount: storageStats.trashFileCount,
+      handoffCount: storageStats.handoffCount,
+      handoffBytes: storageStats.handoffBytes,
       searchHitCount: searchProvider.root?.totalHits ?? 0,
       currentSearchRoles: resolveStatusCurrentSearchRoles(),
       currentSearchTagFilter: searchTagFilter,
@@ -302,6 +324,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const OPENAI_CODEX_CUSTOM_EDITOR_VIEW_TYPE = "chatgpt.conversationEditor";
   const OPENAI_CODEX_URI_SCHEME = "openai-codex";
   const OPENAI_CODEX_URI_AUTHORITY = "route";
+  const OPENAI_CODEX_OPEN_SIDEBAR_COMMAND = "chatgpt.openSidebar";
+  const OPENAI_CODEX_NEW_CHAT_COMMAND = "chatgpt.newChat";
   const CLAUDE_CODE_EXTENSION_ID = "anthropic.claude-code";
   const CLAUDE_CODE_OPEN_COMMAND = "claude-vscode.editor.open";
 
@@ -737,6 +761,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         "codexHistoryViewer.fileChangeHistory.explorerContextMenu.enabled",
       );
       const sourcesEnabledChanged = e.affectsConfiguration("codexHistoryViewer.sources.enabled");
+      const handoffEnabledChanged = e.affectsConfiguration("codexHistoryViewer.handoff.enabled");
       const sessionsRootChanged =
         e.affectsConfiguration("codexHistoryViewer.sessionsRoot") ||
         e.affectsConfiguration("codexHistoryViewer.claude.sessionsRoot") ||
@@ -765,6 +790,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         !searchIndexToolContentChanged &&
         !fileChangeHistoryExplorerContextMenuChanged &&
         !sourcesEnabledChanged &&
+        !handoffEnabledChanged &&
         !sessionsRootChanged &&
         !historyDateBasisChanged &&
         !historyTitleSourceChanged &&
@@ -791,6 +817,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       if (uiLanguageChanged) updateUiLanguageContext();
+      if (sourcesEnabledChanged || handoffEnabledChanged) updateHandoffMenuContext();
       updateViewTitles();
       updatePinnedViewDescription();
       updateHistoryViewDescription();
@@ -1047,6 +1074,279 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showErrorMessage(t("app.resumeSessionInClaudeFailed"));
       return false;
     }
+  };
+
+  const sourceDisplayLabel = (source: "codex" | "claude"): string =>
+    source === "claude" ? t("history.filter.source.claude") : t("history.filter.source.codex");
+
+  const targetDisplayLabel = (target: HandoffTarget): string =>
+    target === "claude" ? t("history.filter.source.claude") : t("history.filter.source.codex");
+
+  const resolveDefaultHandoffTargetForSource = (source: SessionSummary["source"]): HandoffTarget =>
+    source === "claude" ? "codex" : "claude";
+
+  const ensureCrossHandoffReady = (session: SessionSummary, target: HandoffTarget): boolean => {
+    if (!getConfig().handoffEnabled) {
+      void vscode.window.showErrorMessage(t("handoff.disabled"));
+      return false;
+    }
+
+    const expectedSource = target === "codex" ? "claude" : "codex";
+    if (session.source !== expectedSource) {
+      void vscode.window.showErrorMessage(t("handoff.wrongSource", sourceDisplayLabel(expectedSource), targetDisplayLabel(target)));
+      return false;
+    }
+    return true;
+  };
+
+  const openHandoffInCodex = async (): Promise<boolean> => {
+    const codexExtension = vscode.extensions.getExtension(OPENAI_CODEX_EXTENSION_ID);
+    if (!codexExtension) return false;
+
+    try {
+      await codexExtension.activate();
+      const commands = new Set(await vscode.commands.getCommands(true));
+      let opened = false;
+      if (commands.has(OPENAI_CODEX_OPEN_SIDEBAR_COMMAND)) {
+        await vscode.commands.executeCommand(OPENAI_CODEX_OPEN_SIDEBAR_COMMAND);
+        opened = true;
+      }
+      if (commands.has(OPENAI_CODEX_NEW_CHAT_COMMAND)) {
+        await vscode.commands.executeCommand(OPENAI_CODEX_NEW_CHAT_COMMAND);
+        opened = true;
+      }
+      return opened;
+    } catch {
+      return false;
+    }
+  };
+
+  const openHandoffInClaude = async (handoff: HandoffResult): Promise<boolean> => {
+    const claudeExtension = vscode.extensions.getExtension(CLAUDE_CODE_EXTENSION_ID);
+    if (!claudeExtension) return false;
+
+    try {
+      await claudeExtension.activate();
+      const commands = new Set(await vscode.commands.getCommands(true));
+      if (!commands.has(CLAUDE_CODE_OPEN_COMMAND)) return false;
+      await vscode.commands.executeCommand(CLAUDE_CODE_OPEN_COMMAND, undefined, handoff.promptText);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const openHandoffDocument = async (handoffUri: vscode.Uri): Promise<boolean> => {
+    try {
+      await vscode.window.showTextDocument(handoffUri, { preview: false });
+      return true;
+    } catch {
+      void vscode.window.showErrorMessage(t("handoff.openFileFailed"));
+      return false;
+    }
+  };
+
+  const copyHandoffPrompt = async (handoff: HandoffResult): Promise<boolean> => {
+    try {
+      await vscode.env.clipboard.writeText(handoff.promptText);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const showHandoffActions = async (message: string, handoff: HandoffResult): Promise<void> => {
+    const openAction = t("handoff.action.openFile");
+    const copyAction = t("handoff.action.copyPrompt");
+    const choice = await vscode.window.showInformationMessage(message, openAction, copyAction);
+    if (choice === openAction) {
+      await openHandoffDocument(handoff.handoffUri);
+      return;
+    }
+    if (choice === copyAction) {
+      if (await copyHandoffPrompt(handoff)) {
+        void vscode.window.showInformationMessage(t("handoff.copyPromptDone"));
+      } else {
+        void vscode.window.showErrorMessage(t("handoff.copyPromptFailed"));
+      }
+    }
+  };
+
+  const showHandoffPromptCopied = async (message: string, handoff: HandoffResult): Promise<void> => {
+    const openAction = t("handoff.action.openFile");
+    const choice = await vscode.window.showInformationMessage(message, openAction);
+    if (choice === openAction) await openHandoffDocument(handoff.handoffUri);
+  };
+
+  const resolveSourceSessionsRootForHandoff = (
+    session: SessionSummary,
+    cfg: CodexHistoryViewerConfig,
+  ): string => session.source === "claude" ? cfg.claudeSessionsRoot : cfg.sessionsRoot;
+
+  const buildExistingHandoffResult = (
+    session: SessionSummary,
+    target: HandoffTarget,
+    location: ReturnType<typeof resolveHandoffLocation>,
+  ): HandoffResult => ({
+    directoryUri: location.directoryUri,
+    handoffUri: location.handoffUri,
+    metadataUri: location.metadataUri,
+    handoffPath: location.handoffPath,
+    promptText: buildHandoffPrompt(location.handoffPath),
+    source: session.source,
+    target,
+    createdAtIso: new Date().toISOString(),
+  });
+
+  const confirmExistingHandoffReuse = async (): Promise<"reuse" | "recreate" | "cancel"> => {
+    const reuseAction = t("handoff.action.useExistingFile");
+    const recreateAction = t("handoff.action.recreateFile");
+    const choice = await vscode.window.showInformationMessage(t("handoff.existingConfirm"), reuseAction, recreateAction);
+    if (choice === reuseAction) return "reuse";
+    if (choice === recreateAction) return "recreate";
+    return "cancel";
+  };
+
+  const prepareHandoff = async (
+    session: SessionSummary,
+    target: HandoffTarget,
+    options?: { existing?: "confirm" | "reuse" },
+  ): Promise<HandoffResult | null> => {
+    const latestConfig = getConfig();
+    const sourceSessionsRoot = resolveSourceSessionsRootForHandoff(session, latestConfig);
+    const location = resolveHandoffLocation({
+      globalStorageUri: context.globalStorageUri,
+      session,
+      sourceSessionsRoot,
+      target,
+    });
+
+    if (await pathExists(location.handoffPath)) {
+      if (options?.existing === "reuse") return buildExistingHandoffResult(session, target, location);
+      const choice = await confirmExistingHandoffReuse();
+      if (choice === "cancel") return null;
+      if (choice === "reuse") return buildExistingHandoffResult(session, target, location);
+    }
+
+    try {
+      return await createHandoff({
+        globalStorageUri: context.globalStorageUri,
+        session,
+        target,
+        sourceSessionsRoot,
+      });
+    } catch {
+      void vscode.window.showErrorMessage(t("handoff.createFailed"));
+      return null;
+    }
+  };
+
+  const refreshHandoffStorageState = async (): Promise<void> => {
+    await refreshStorageStats();
+    statusProvider.refresh();
+  };
+
+  const openSessionHandoff = async (elementOrArgs?: unknown): Promise<boolean> => {
+    const session = resolveSingleSessionTarget(elementOrArgs);
+    if (!session) return false;
+    if (!getConfig().handoffEnabled) {
+      void vscode.window.showErrorMessage(t("handoff.disabled"));
+      return false;
+    }
+
+    const latestConfig = getConfig();
+    const location = resolveHandoffLocation({
+      globalStorageUri: context.globalStorageUri,
+      session,
+      sourceSessionsRoot: resolveSourceSessionsRootForHandoff(session, latestConfig),
+    });
+    if (!(await pathExists(location.handoffPath))) {
+      const createAction = t("handoff.action.createFile");
+      const choice = await vscode.window.showInformationMessage(t("handoff.sessionMissing"), createAction);
+      if (choice !== createAction) return false;
+
+      const target = resolveDefaultHandoffTargetForSource(session.source);
+      const handoff = await prepareHandoff(session, target, { existing: "reuse" });
+      if (!handoff) return false;
+      await refreshHandoffStorageState();
+      return openHandoffDocument(handoff.handoffUri);
+    }
+
+    return openHandoffDocument(location.handoffUri);
+  };
+
+  const copyHandoffPromptToClipboard = async (elementOrArgs?: unknown): Promise<boolean> => {
+    const session = resolveSingleSessionTarget(elementOrArgs);
+    if (!session) return false;
+    if (!getConfig().handoffEnabled) {
+      void vscode.window.showErrorMessage(t("handoff.disabled"));
+      return false;
+    }
+
+    const target = resolveDefaultHandoffTargetForSource(session.source);
+    const latestConfig = getConfig();
+    const location = resolveHandoffLocation({
+      globalStorageUri: context.globalStorageUri,
+      session,
+      sourceSessionsRoot: resolveSourceSessionsRootForHandoff(session, latestConfig),
+      target,
+    });
+    const existed = await pathExists(location.handoffPath);
+    const handoff = await prepareHandoff(session, target, { existing: "reuse" });
+    if (!handoff) return false;
+    await refreshHandoffStorageState();
+
+    if (await copyHandoffPrompt(handoff)) {
+      await showHandoffPromptCopied(t(existed ? "handoff.copyPromptDone" : "handoff.copyPromptCreatedDone"), handoff);
+      return true;
+    }
+
+    void vscode.window.showErrorMessage(t("handoff.copyPromptFailed"));
+    return false;
+  };
+
+  const createHandoffFileForSession = async (elementOrArgs?: unknown): Promise<boolean> => {
+    const session = resolveSingleSessionTarget(elementOrArgs);
+    if (!session) return false;
+    if (!getConfig().handoffEnabled) {
+      void vscode.window.showErrorMessage(t("handoff.disabled"));
+      return false;
+    }
+
+    const target = resolveDefaultHandoffTargetForSource(session.source);
+    const handoff = await prepareHandoff(session, target);
+    if (!handoff) return false;
+    await refreshHandoffStorageState();
+    await showHandoffActions(t("handoff.fileReady"), handoff);
+    return true;
+  };
+
+  const runCrossHandoff = async (elementOrArgs: unknown, target: HandoffTarget): Promise<boolean> => {
+    const session = resolveSingleSessionTarget(elementOrArgs);
+    if (!session) return false;
+    if (!ensureCrossHandoffReady(session, target)) return false;
+
+    const handoff = await prepareHandoff(session, target);
+    if (!handoff) return false;
+    await refreshHandoffStorageState();
+
+    if (target === "codex") {
+      const copied = await copyHandoffPrompt(handoff);
+      const opened = await openHandoffInCodex();
+      const message = opened
+        ? copied
+          ? t("handoff.codexReady")
+          : t("handoff.codexCopyFailed")
+        : copied
+          ? t("handoff.codexClipboardOnly")
+          : t("handoff.codexFallback");
+      await showHandoffActions(message, handoff);
+      return true;
+    }
+
+    const opened = await openHandoffInClaude(handoff);
+    await showHandoffActions(opened ? t("handoff.claudeOpened") : t("handoff.claudeFallback"), handoff);
+    return true;
   };
 
   const normalizeTags = (values: readonly string[]): string[] => {
@@ -1529,6 +1829,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.handoffToCodex", async (elementOrArgs?: unknown) =>
+      runCrossHandoff(elementOrArgs, "codex"),
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.handoffToClaude", async (elementOrArgs?: unknown) =>
+      runCrossHandoff(elementOrArgs, "claude"),
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.copyHandoffPrompt", copyHandoffPromptToClipboard),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.createHandoffFile", createHandoffFileForSession),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.openSessionHandoff", openSessionHandoff),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.openSettings", async () => {
       // Open the VS Code Settings UI filtered to this extension.
       const extId = context.extension.id;
@@ -1915,6 +2239,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage(
         t("trash.removed", result.removedTrashFiles),
       );
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.cleanupHandoffs", async () => {
+      await refreshStorageStats();
+      const handoffCount = storageStats.handoffCount;
+      const handoffBytes = storageStats.handoffBytes;
+
+      if (handoffCount === 0) {
+        void vscode.window.showInformationMessage(t("handoff.cleanupEmpty"));
+        return;
+      }
+
+      const choice = await vscode.window.showWarningMessage(
+        t("handoff.cleanupConfirm", handoffCount, formatBytesForUi(handoffBytes)),
+        { modal: true },
+        "OK",
+      );
+      if (choice !== "OK") return;
+
+      const result = await cleanupHandoffs(context.globalStorageUri, { mode: "all" });
+      await refreshStorageStats();
+      statusProvider.refresh();
+
+      if (result.failedPaths.length > 0) {
+        void vscode.window.showWarningMessage(
+          t("handoff.cleanupPartialFailed", result.removedHandoffs, result.failedPaths.length),
+        );
+        return;
+      }
+
+      void vscode.window.showInformationMessage(t("handoff.cleanupRemoved", result.removedHandoffs));
     }),
   );
 
@@ -2836,6 +3193,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.resumeSessionInCodex", "codexHistoryViewer.resumeSessionInCodex");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.resumeSessionInClaude", "codexHistoryViewer.resumeSessionInClaude");
   registerUiCommandAlias("codexHistoryViewer.ui.en.resumeSessionInClaude", "codexHistoryViewer.resumeSessionInClaude");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.handoffToCodex", "codexHistoryViewer.handoffToCodex");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.handoffToCodex", "codexHistoryViewer.handoffToCodex");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.handoffToClaude", "codexHistoryViewer.handoffToClaude");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.handoffToClaude", "codexHistoryViewer.handoffToClaude");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.copyHandoffPrompt", "codexHistoryViewer.copyHandoffPrompt");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.copyHandoffPrompt", "codexHistoryViewer.copyHandoffPrompt");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.createHandoffFile", "codexHistoryViewer.createHandoffFile");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.createHandoffFile", "codexHistoryViewer.createHandoffFile");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.openSessionHandoff", "codexHistoryViewer.openSessionHandoff");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.openSessionHandoff", "codexHistoryViewer.openSessionHandoff");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.promoteSession", "codexHistoryViewer.promoteSession");
   registerUiCommandAlias("codexHistoryViewer.ui.en.promoteSession", "codexHistoryViewer.promoteSession");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.pinSession", "codexHistoryViewer.pinSession");
@@ -2895,6 +3262,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.rebuildCache", "codexHistoryViewer.rebuildCache");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.emptyTrash", "codexHistoryViewer.emptyTrash");
   registerUiCommandAlias("codexHistoryViewer.ui.en.emptyTrash", "codexHistoryViewer.emptyTrash");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.cleanupHandoffs", "codexHistoryViewer.cleanupHandoffs");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.cleanupHandoffs", "codexHistoryViewer.cleanupHandoffs");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.cleanupMissingPins", "codexHistoryViewer.cleanupMissingPins");
   registerUiCommandAlias("codexHistoryViewer.ui.en.cleanupMissingPins", "codexHistoryViewer.cleanupMissingPins");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.exportSessions", "codexHistoryViewer.exportSessions");
@@ -3009,6 +3378,19 @@ function isPathInsideRoot(fsPath: string, rootPath: string): boolean {
   const rel = path.relative(root, fsPath);
   if (!rel) return true;
   return !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+function formatBytesForUi(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  const rounded = value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
+  return `${rounded} ${units[unitIndex]}`;
 }
 
 type HistoryFilterChange =

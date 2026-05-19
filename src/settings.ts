@@ -29,6 +29,7 @@ export interface CodexHistoryViewerConfig {
   claudeSessionsRoot: string;
   enableCodexSource: boolean;
   enableClaudeSource: boolean;
+  handoffEnabled: boolean;
   fileChangeHistoryExplorerContextMenuEnabled: boolean;
   previewOpenOnSelection: boolean;
   previewMaxMessages: number;
@@ -155,6 +156,7 @@ export function getConfig(): CodexHistoryViewerConfig {
     claudeSessionsRoot: claudeSessionsRootRaw.length > 0 ? claudeSessionsRootRaw : getDefaultClaudeSessionsRoot(),
     enableCodexSource: enabledSources.enableCodexSource,
     enableClaudeSource: enabledSources.enableClaudeSource,
+    handoffEnabled: cfg.get<boolean>("handoff.enabled") ?? true,
     fileChangeHistoryExplorerContextMenuEnabled:
       cfg.get<boolean>("fileChangeHistory.explorerContextMenu.enabled") ?? false,
     previewOpenOnSelection: cfg.get<boolean>("preview.openOnSelection") ?? true,

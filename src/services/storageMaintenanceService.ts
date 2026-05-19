@@ -12,6 +12,8 @@ export interface StorageStats {
   globalStorageBytes: number;
   trashFileCount: number;
   trashBytes: number;
+  handoffCount: number;
+  handoffBytes: number;
 }
 
 export interface EmptyTrashResult {
@@ -20,7 +22,7 @@ export interface EmptyTrashResult {
   failedPaths: string[];
 }
 
-// Collect total size and trash stats (undo-delete/deleted) under globalStorage.
+// Collect total size, trash stats, and generated handoff stats under globalStorage.
 export async function collectStorageStats(globalStorageUri: vscode.Uri): Promise<StorageStats> {
   const files = await listFilesRecursive(globalStorageUri);
   const rootFsPath = normalizeFsPath(globalStorageUri.fsPath);
@@ -28,6 +30,8 @@ export async function collectStorageStats(globalStorageUri: vscode.Uri): Promise
   let globalStorageBytes = 0;
   let trashFileCount = 0;
   let trashBytes = 0;
+  let handoffCount = 0;
+  let handoffBytes = 0;
 
   for (const fileUri of files) {
     const fileSize = await readFileSize(fileUri);
@@ -39,10 +43,15 @@ export async function collectStorageStats(globalStorageUri: vscode.Uri): Promise
     if (topSegment === "undo-delete" || topSegment === "deleted") {
       trashFileCount += 1;
       trashBytes += fileSize;
+      continue;
+    }
+    if (topSegment === "handoffs") {
+      if (path.basename(fileUri.fsPath).toLowerCase() === "handoff.md") handoffCount += 1;
+      handoffBytes += fileSize;
     }
   }
 
-  return { globalStorageBytes, trashFileCount, trashBytes };
+  return { globalStorageBytes, trashFileCount, trashBytes, handoffCount, handoffBytes };
 }
 
 // Manually clean trash-equivalent data and legacy cache/index files.

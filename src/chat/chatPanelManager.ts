@@ -1056,7 +1056,7 @@ export class ChatPanelManager implements vscode.Disposable {
       markdown: t("chat.button.markdown"),
       markdownTooltip: t("chat.tooltip.markdown"),
       copyResume: t("chat.button.copyResume"),
-      // Tooltip explains the purpose of the "Copy Prompt Excerpt" action.
+      // Tooltip explains the purpose of the "Copy Quick Prompt" action.
       copyResumeTooltip: t("chat.tooltip.copyResume"),
       reload: t("chat.button.reload"),
       reloadTooltip: t("chat.tooltip.reload"),

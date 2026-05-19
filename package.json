@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.0.1",
+  "version": "2.1.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -246,6 +246,31 @@
         "category": "%cmd.category%"
       },
       {
+        "command": "codexHistoryViewer.handoffToCodex",
+        "title": "%cmd.handoffToCodex%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.handoffToClaude",
+        "title": "%cmd.handoffToClaude%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.openSessionHandoff",
+        "title": "%cmd.openSessionHandoff%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.copyHandoffPrompt",
+        "title": "%cmd.copyHandoffPrompt%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.createHandoffFile",
+        "title": "%cmd.createHandoffFile%",
+        "category": "%cmd.category%"
+      },
+      {
         "command": "codexHistoryViewer.openSettings",
         "title": "%cmd.openSettings%",
         "category": "%cmd.category%",
@@ -290,6 +315,12 @@
         "category": "%cmd.category%"
       },
       {
+        "command": "codexHistoryViewer.cleanupHandoffs",
+        "title": "%cmd.cleanupHandoffs%",
+        "category": "%cmd.category%",
+        "icon": "$(files)"
+      },
+      {
         "command": "codexHistoryViewer.emptyTrash",
         "title": "%cmd.emptyTrash%",
         "category": "%cmd.category%",
@@ -319,11 +350,11 @@
       },
       {
         "command": "codexHistoryViewer.ui.ja.copyResumePrompt",
-        "title": "プロンプト抜粋をコピー"
+        "title": "簡易プロンプトをコピー"
       },
       {
         "command": "codexHistoryViewer.ui.en.copyResumePrompt",
-        "title": "Copy Prompt Excerpt"
+        "title": "Copy Quick Prompt"
       },
       {
         "command": "codexHistoryViewer.ui.ja.resumeSessionInCodex",
@@ -340,6 +371,46 @@
       {
         "command": "codexHistoryViewer.ui.en.resumeSessionInClaude",
         "title": "Resume in Claude Code"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.handoffToCodex",
+        "title": "OpenAI Codex に引き継ぐ"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.handoffToCodex",
+        "title": "Handoff to OpenAI Codex"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.handoffToClaude",
+        "title": "Claude Code へ引き継ぐ"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.handoffToClaude",
+        "title": "Handoff to Claude Code"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.openSessionHandoff",
+        "title": "引き継ぎファイルを開く"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.openSessionHandoff",
+        "title": "Open Handoff File"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.copyHandoffPrompt",
+        "title": "引き継ぎプロンプトをクリップボードにコピー"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.copyHandoffPrompt",
+        "title": "Copy Handoff Prompt to Clipboard"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.createHandoffFile",
+        "title": "引き継ぎファイルを作成"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.createHandoffFile",
+        "title": "Create Handoff File"
       },
       {
         "command": "codexHistoryViewer.ui.ja.promoteSession",
@@ -620,6 +691,16 @@
         "command": "codexHistoryViewer.ui.en.rebuildCache",
         "title": "Rebuild Cache",
         "icon": "$(sync)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.cleanupHandoffs",
+        "title": "引き継ぎファイルを削除",
+        "icon": "$(files)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.cleanupHandoffs",
+        "title": "Delete Handoff Files",
+        "icon": "$(files)"
       },
       {
         "command": "codexHistoryViewer.ui.ja.emptyTrash",
@@ -926,6 +1007,16 @@
         }
       }
     ],
+    "submenus": [
+      {
+        "id": "codexHistoryViewer.handoffSubmenu.ja",
+        "label": "他のAIへ引継ぎ"
+      },
+      {
+        "id": "codexHistoryViewer.handoffSubmenu.en",
+        "label": "Handoff to Other AI"
+      }
+    ],
     "menus": {
       "explorer/context": [
         {
@@ -960,6 +1051,10 @@
           "when": "false"
         },
         {
+          "command": "codexHistoryViewer.copyResumePrompt",
+          "when": "false"
+        },
+        {
           "command": "codexHistoryViewer.ui.ja.resumeSessionInCodex",
           "when": "false"
         },
@@ -973,6 +1068,62 @@
         },
         {
           "command": "codexHistoryViewer.ui.en.resumeSessionInClaude",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.handoffToCodex",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.handoffToCodex",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.handoffToClaude",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.handoffToClaude",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.openSessionHandoff",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.openSessionHandoff",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.copyHandoffPrompt",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.copyHandoffPrompt",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.createHandoffFile",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.createHandoffFile",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.handoffToCodex",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.handoffToClaude",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.copyHandoffPrompt",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.createHandoffFile",
           "when": "false"
         },
         {
@@ -1168,6 +1319,14 @@
           "when": "false"
         },
         {
+          "command": "codexHistoryViewer.ui.ja.cleanupHandoffs",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.cleanupHandoffs",
+          "when": "false"
+        },
+        {
           "command": "codexHistoryViewer.ui.ja.emptyTrash",
           "when": "false"
         },
@@ -1342,6 +1501,50 @@
         {
           "command": "codexHistoryViewer.ui.cycleHistorySourceClaude",
           "when": "false"
+        }
+      ],
+      "codexHistoryViewer.handoffSubmenu.ja": [
+        {
+          "command": "codexHistoryViewer.ui.ja.handoffToClaude",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.customTitle)?$/ && codexHistoryViewer.codexToClaudeHandoffEnabled",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.createHandoffFile",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@2"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.copyHandoffPrompt",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@3"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.openSessionHandoff",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@4"
+        }
+      ],
+      "codexHistoryViewer.handoffSubmenu.en": [
+        {
+          "command": "codexHistoryViewer.ui.en.handoffToClaude",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.customTitle)?$/ && codexHistoryViewer.codexToClaudeHandoffEnabled",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.createHandoffFile",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@2"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.copyHandoffPrompt",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@3"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.openSessionHandoff",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@4"
         }
       ],
       "view/title": [
@@ -1693,14 +1896,14 @@
           "group": "navigation@2"
         },
         {
-          "command": "codexHistoryViewer.ui.ja.copyResumePrompt",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation@3"
+          "submenu": "codexHistoryViewer.handoffSubmenu.ja",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@0.5"
         },
         {
-          "command": "codexHistoryViewer.ui.en.copyResumePrompt",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang != 'ja'",
-          "group": "navigation@3"
+          "submenu": "codexHistoryViewer.handoffSubmenu.en",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@0.5"
         },
         {
           "command": "codexHistoryViewer.ui.ja.resumeSessionInCodex",
@@ -1873,6 +2076,13 @@
           "description": "%cfg.sourcesEnabled%",
           "scope": "application",
           "order": 30
+        },
+        "codexHistoryViewer.handoff.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "%cfg.handoffEnabled%",
+          "scope": "application",
+          "order": 35
         },
         "codexHistoryViewer.preview.openOnSelection": {
           "type": "boolean",

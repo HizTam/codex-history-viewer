@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-05-15
-- 対象バージョン: 2.0.1
+- 最終更新: 2026-05-19
+- 対象バージョン: 2.1.0
 
 ## 1. 概要
 
@@ -38,6 +38,7 @@
   - `Cleanup Missing Pins`
   - `Bulk Rename Tag`
   - `Bulk Delete Tags`
+  - `Delete Handoff Files`
   - `Empty Trash`
 - **Pinned**: ピン留め済みセッション一覧
   - タグ絞り込み対応
@@ -60,6 +61,7 @@
   - 有効ソースごとのセッション件数
   - ピン数 / 欠損ピン数 / 保存済み検索数 / 総タグ数
   - キャッシュフォルダ容量
+  - Handoff 件数 / 容量
   - ゴミ箱件数（`undo-delete` + `deleted` の合算）
   - 現在の検索ロール / 検索タグ / 履歴絞り込み / 現在プロジェクト / 最終更新時刻
   - 有効ソースごとのセッションルート
@@ -71,9 +73,10 @@
 - `Open in New Tab (Chat)`: Webview で会話をセッションタブとして表示
 - `Custom Title...`: QuickPick からカスタムタイトルの設定 / 消去を選択する
 - `Open Session (Markdown)`: 仮想ドキュメントとして Markdown 化して表示
-- `Copy Prompt Excerpt`: 連携用に短い抜粋をクリップボードへコピー
+- `Copy Quick Prompt`: チャット表示内で、タスクと直近メッセージだけの軽量な再開用プロンプトをクリップボードへコピー
 - `Resume in OpenAI Codex`: OpenAI Codex 拡張へ引き継ぐ
 - `Resume in Claude Code`: Claude Code 拡張へ引き継ぐ
+- `他のAIへ引継ぎ`: Handoff 用の階層メニューを表示する
 - `Pin / Unpin`: ピン留めの追加 / 解除
 - `Promote to Today (Copy)`: セッションを「今日」の履歴として複製する
 - `Delete`: 削除確認後に削除する
@@ -81,6 +84,26 @@
 - `Edit Session Annotation`: タグ / ノート編集
 - `Export Sessions`: 生 JSONL または Markdown transcript を出力
 - `Import Sessions`: フォルダ単位で `.jsonl` を再帰取り込み
+
+### 3.2.1 他のAIへ引継ぎ
+
+- 表示条件:
+  - `codexHistoryViewer.handoff.enabled` が有効で、History / Pinned / Search の表示中セッションであれば、`Sources: Enabled` の組み合わせに関係なく Handoff 階層メニューを表示する
+  - `codexHistoryViewer.handoff.enabled` が無効な場合は、Handoff 階層メニューと作成 / コピー / 開く操作を表示しない
+  - `Sources: Enabled` を見るのは、Codex セッションの `Claude Code へ引き継ぐ` メニュー表示だけに限定する
+- メニュー構成:
+  - `Claude Code へ引き継ぐ`: Codex セッションかつ Codex / Claude の両ソースが有効な場合のみ表示し、Handoff ファイルを作成または既存利用して Claude Code を開く
+  - `引き継ぎファイルを作成`: 選択セッションの Handoff ファイルを作成する
+  - `引き継ぎプロンプトをクリップボードにコピー`: Handoff ファイルを参照するプロンプトをクリップボードへコピーする
+  - `引き継ぎファイルを開く`: 選択セッションに対応する Handoff ファイルを開く。存在しない場合は作成確認トーストを出し、承認時は作成後に開く
+- `Delete Handoff Files` と Status の Handoff 件数 / 容量は保守機能として残し、`handoff.enabled` が無効でも利用できる
+- Claude から Codex への引き継ぎは Codex 側の入力欄へ自動投入できないため、通常メニューには出さず、プロンプトのクリップボードコピーで扱う
+- `引き継ぎプロンプトをクリップボードにコピー` は、既存 Handoff ファイルがある場合は確認なしで既存ファイルを参照するプロンプトをコピーし、存在しない場合だけ新規作成して作成込みのコピー完了通知を出す
+- `Claude Code へ引き継ぐ` と `引き継ぎファイルを作成` は、既存 Handoff ファイルがある場合に「既存を使う / 再作成」を確認する
+- Handoff プロンプトは UI 言語に応じてローカライズし、作業開始前にファイルを読ませ、理解後は短い確認応答だけを返すよう促す
+- Handoff ファイル (`handoff.md`) の本文ラベルは token 節約のため英語で固定する
+- Handoff ファイルには、末尾優先の transcript 抜粋、直近のユーザー依頼、復元可能なファイル変更、`Source session file` を含める
+- Handoff ファイルには tool call と tool output を含めない
 
 ### 3.3 検索
 
@@ -147,6 +170,13 @@
   - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ、取得できる場合に status / exitCode / durationMs / success / error などの短い実行メタだけを保存する
   - ファイル履歴向けの `fileChangeHints` は関連セッションの優先付け補助として使う。最終的な diff 抽出結果の正しさは元のセッション JSONL の再解析で担保する
   - 保存形式: 整形なし JSON（サイズ削減のため）
+- Handoff 生成ファイル:
+  - 保存先: `globalStorageUri/handoffs/<source>/<source-root-relative-path-with-final-stem>/`
+  - 例: Claude の `~/.claude/projects/<project>/<session>.jsonl` は `handoffs/claude/<project>/<session>/handoff.md` に対応する
+  - 通常は 1 つの元セッションに 1 つの Handoff ディレクトリを対応させ、同じセッションで作り直す場合は上書きする
+  - ソースルートからの相対化ができない場合は `handoffs/<source>/by-hash/<hash>/` にフォールバックする
+  - `handoff.md` と生成メタデータを同じディレクトリへ保存する
+  - 自動整理では 30 日超または 100 ディレクトリ超の古い Handoff ディレクトリを削除対象にする
 - `Rebuild Cache`:
   - 実行前に確認ダイアログを出す
   - 履歴キャッシュと検索インデックスを両方とも強制再作成する
@@ -162,13 +192,16 @@
 - `Undo Last Action`:
   - メモリ上の Undo スタックは直近 20 件を上限とする
   - 上限超過で破棄された Undo アクションは cleanup hook を実行する
+- `Delete Handoff Files`:
+  - `globalStorageUri/handoffs` 配下の Handoff 生成ファイルを手動削除する
+  - 実行前に Handoff 件数と容量を確認ダイアログで表示する
 - `Empty Trash`:
   - `deleted` と `undo-delete` を手動削除する
   - あわせて旧世代の `cache.v*.json` / `search-index.v*.json` も削除する
   - ダイアログと Status 表示上の件数は「ゴミ箱件数」のみを扱う
 - 自動削除:
-  - 行わない
-  - 不要ファイル整理はユーザー操作 (`Empty Trash` / `Rebuild Cache`) に委ねる
+  - 履歴キャッシュ、検索インデックス、ゴミ箱はユーザー操作 (`Empty Trash` / `Rebuild Cache`) に委ねる
+  - Handoff 生成ファイルは作成時に古い世代だけを整理し、全削除はユーザー操作 (`Delete Handoff Files`) に委ねる
 
 ### 3.5 自動更新
 
@@ -338,6 +371,7 @@
 - `sessionsRoot`
 - `claude.sessionsRoot`
 - `sources.enabled`
+- `handoff.enabled`
 - `preview.openOnSelection`
 - `preview.maxMessages`
 - `preview.tooltipMode`
@@ -508,6 +542,7 @@
 - `src/services/storageMaintenanceService.ts`
   - キャッシュフォルダ全体容量を集計する
   - `undo-delete` / `deleted` 件数を合算して返す
+  - `handoffs` 配下の Handoff 件数 / 容量も集計する。件数は `handoff.md` の数、容量は `metadata.json` を含む配下全体の合算とする
   - `Empty Trash` 実行時に旧世代キャッシュ / インデックスも整理する
 
 ### 4.8 注釈 / ピン / 保存済み検索
@@ -522,6 +557,30 @@
   - 最後に見えていた表示位置を `globalState` に最大 100 セッション分保存する
   - 復元には `chat.openPosition = lastMessage` のときだけ使用する
   - `chat.openPosition = latest` は保存位置を使わず、Webview 側で最新の描画済みカードへ移動する
+
+### 4.8.1 Handoff
+
+- `src/services/handoffService.ts`
+  - 元セッション JSONL を UTF-8 stream として読み取り、Handoff 用の transcript 抜粋とファイル変更を生成する
+  - LLM による要約生成は行わず、末尾優先で transcript 本文をサイズ上限内に切り出す
+  - Codex は `patch_apply_end` の `unified_diff` を復元可能なファイル変更として取り込む
+  - Claude は `Edit` / `MultiEdit` / `Write` から復元可能な synthetic diff を作る
+  - tool call / tool output 本文は Handoff ファイルへ含めない
+  - secret / token / password 系に見える値は Handoff 用テキストへ入れる前に伏せる
+  - `handoff.md` の保存先は元セッションパスから安定的に決め、同一セッションでは同じファイルを再利用または上書きする
+  - `metadata.json` は Handoff ディレクトリの作成時刻、元セッション情報、生成サイズなどを保持する
+  - 生成時に 30 日超または 100 ディレクトリ超の古い Handoff ディレクトリを整理する
+- `src/extension.ts`
+  - `handoffToClaude` は Codex セッションを対象に、既存ファイル確認後に `claude-vscode.editor.open` へ localized prompt を渡す
+  - `handoffToCodex` は Codex の入力欄へ自動投入できないため、Handoff prompt をクリップボードへコピーし、可能な範囲で Codex UI を開く
+  - `copyHandoffPrompt` は既存 Handoff ファイルを確認なしで使い、存在しない場合だけ作成して、作成有無に応じたコピー完了通知と `引き継ぎファイルを開く` action を出す
+  - `createHandoffFile` は既存 Handoff ファイルがある場合に「既存を使う / 再作成」を確認する
+  - `openSessionHandoff` は選択セッションに対応する Handoff ファイルを開き、存在しない場合は作成確認トーストから生成して開けるようにする
+- `package.json`
+  - `codexHistoryViewer.handoff.enabled` が有効な場合だけ、Codex / Claude の表示中セッションに Handoff 階層メニューを表示する
+  - `codexHistoryViewer.handoffEnabled` context key により、Handoff 階層メニューと作成 / コピー / 開く操作の表示を切り替える
+  - `codexHistoryViewer.codexToClaudeHandoffEnabled` context key により、`Claude Code へ引き継ぐ` だけ Handoff が有効かつ Codex / Claude の両ソースが有効な Codex セッションに限定して表示する
+  - `引き継ぎファイルを作成` / `引き継ぎプロンプトをクリップボードにコピー` / `引き継ぎファイルを開く` は Codex / Claude セッションで表示する
 
 ### 4.9 表示
 
@@ -697,7 +756,27 @@ npm run package
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 
-### 5.4 v2.0.1 リリースメモ（2026-05-15）
+### 5.4 v2.1.0 リリースメモ（2026-05-19）
+
+- Codex / Claude Code 間の Handoff を新規実装した
+- History / Pinned / Search のセッション右クリックに、`他のAIへ引継ぎ` 階層メニューを追加した
+- Handoff 階層メニューは `codexHistoryViewer.handoff.enabled` で表示 / 非表示を切り替えられるようにした
+- Handoff の作成 / コピー / 既存ファイル表示は、Handoff が有効であれば `Sources: Enabled` の組み合わせに関係なく表示中セッションで使えるようにした
+- `Claude Code へ引き継ぐ` メニューだけ、Handoff が有効で Codex と Claude の両方のソースが有効な Codex セッションで表示するようにした
+- Codex セッションから Claude Code へ、Handoff ファイルを作成して localized prompt 付きで開けるようにした
+- Claude から Codex への引き継ぎは、Handoff prompt のクリップボードコピーを主経路にした
+- Handoff ファイルは `globalStorageUri/handoffs/<source>/.../handoff.md` に保存し、元セッションに対して 1 対 1 で再利用または上書きするようにした
+- Handoff ファイルには `Source session file`、末尾優先の transcript 抜粋、直近のユーザー依頼、復元可能なファイル変更を含めるようにした
+- Handoff ファイルから tool call と tool output を除外するようにした
+- 既存 Handoff ファイルがある場合、`Claude Code へ引き継ぐ` と `引き継ぎファイルを作成` では既存利用または再作成を選べるようにした
+- `引き継ぎプロンプトをクリップボードにコピー` は、既存 Handoff ファイルがある場合は確認なしで既存ファイルを参照するプロンプトをコピーするようにした
+- `引き継ぎファイルを開く` を追加した
+- Control / Status に Handoff 生成ファイルの削除、件数、容量表示を追加した
+- `Delete Handoff Files` は Control で `Empty Trash` の直前に配置し、Handoff 表示設定が無効でも利用できるようにした
+- チャット表示内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
+- `package.json` / `package-lock.json` のバージョンを `2.1.0` に更新した
+
+### 5.5 v2.0.1 リリースメモ（2026-05-15）
 
 - 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
 - しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
@@ -721,7 +800,7 @@ npm run package
 - ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
 - `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
 
-### 5.5 v2.0.0 リリースメモ（2026-05-14）
+### 5.6 v2.0.0 リリースメモ（2026-05-14）
 
 - ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる AI Change History を追加した
 - カスタムタイトル操作を QuickPick 入口へ統一し、チャット履歴ビューアのヘッダーからも設定 / 消去できるようにした
@@ -739,7 +818,7 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.6 v1.5.1 リリースメモ（2026-05-08）
+### 5.7 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
@@ -750,7 +829,7 @@ npm run package
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.7 v1.5.0 リリースメモ（2026-05-07）
+### 5.8 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -759,7 +838,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.8 v1.4.3 リリースメモ（2026-04-30）
+### 5.9 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -827,6 +906,20 @@ npm run package
 - `simplified` では diff entry を開くまで重い diff 本文が描画されない
 - 長い履歴のタブを切り替えて戻っても、本文領域の一瞬の縮小表示が restore cover で見えにくい
 - Codex のみ有効 / Claude のみ有効 / 両方有効で履歴が正しく出る
+- Codex / Claude のどちらか一方だけが有効な場合でも、表示中セッション右クリックに `他のAIへ引継ぎ` 階層メニューが表示される
+- `他のAIへ引継ぎ` 配下で、Codex と Claude の両方が有効な Codex セッションには `Claude Code へ引き継ぐ` が表示され、Claude セッションや Claude 無効時の Codex セッションには表示されない
+- `codexHistoryViewer.handoff.enabled = false` のとき、表示中セッション右クリックに `他のAIへ引継ぎ` 階層メニューが表示されず、Control の `Delete Handoff Files` と Status の Handoff 件数 / 容量は表示される
+- `引き継ぎファイルを作成` で `globalStorageUri/handoffs/<source>/.../handoff.md` が作成され、同じセッションでは同じファイルが使われる
+- 既存 Handoff ファイルがある状態で `Claude Code へ引き継ぐ` または `引き継ぎファイルを作成` を実行すると、既存利用 / 再作成の確認が出る
+- `引き継ぎプロンプトをクリップボードにコピー` は、既存 Handoff ファイルがある場合に確認なしで既存ファイル参照プロンプトをコピーする
+- Handoff ファイルがない状態で `引き継ぎプロンプトをクリップボードにコピー` を実行すると、Handoff ファイルを作成してからプロンプトをコピーし、作成したことも通知する。通知から Handoff ファイルを開ける
+- Handoff ファイルがない状態で `引き継ぎファイルを開く` を実行すると、作成確認トーストが出て、承認時は作成後に開く
+- Codex から Claude Code への Handoff では、Claude Code が localized prompt 付きで開く、または fallback 通知から Handoff ファイルを開く / プロンプトをコピーできる
+- Claude から Codex への Handoff は、Handoff prompt がクリップボードへコピーされ、Codex 入力欄へ自動投入されない前提の案内になる
+- Handoff prompt は `ui.language` に応じてローカライズされる
+- `handoff.md` には `Source session file`、直近のユーザー依頼、末尾優先の transcript 抜粋、復元可能なファイル変更が含まれる
+- `handoff.md` の本文ラベルは英語で、tool call / tool output 本文は含まれない
+- `引き継ぎファイルを削除` 実行後、Status の Handoff 件数 / 容量が更新される
 - `History` の日付 / プロジェクト / ソース / タグ絞り込みが期待どおり動く
 - `History` の表示モードを `日付別` / `最新順` で切り替えられ、選択中セッションの操作が維持される
 - History / Pinned の右クリックから QuickPick 経由でカスタムタイトルを設定 / 消去でき、History / Pinned / チャット Webview タイトルへ反映される

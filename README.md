@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **2.0.1** (2026-05-15).
+Latest release: **2.1.0** (2026-05-19).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -10,7 +10,7 @@ Latest release: **2.0.1** (2026-05-15).
 
 Codex and Claude Code sessions can become hard to revisit once they are no longer active in the editor. Codex History Viewer keeps those local session files useful by turning them into a searchable, chat-like history browser inside VS Code.
 
-Use it to find past prompts, reuse useful answers, inspect file changes, organize sessions with tags and notes, and hand off past sessions to the official Codex and Claude Code VS Code extensions for resume.
+Use it to find past prompts, reuse useful answers, inspect file changes, organize sessions with tags and notes, resume same-source sessions, and hand off work between Codex and Claude Code.
 
 ## Highlights
 
@@ -24,6 +24,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Show supported image attachments from Codex / Claude sessions, with on-demand loading, preview, and save controls
 - Organize sessions with pins, tags, notes, custom titles, saved searches, and filters
 - Resume past sessions through the official Codex and Claude Code VS Code extensions
+- Create handoff files and prompts when moving work between Codex and Claude Code
 
 ## Detailed Features
 
@@ -38,7 +39,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Session tooltips can show both **Started** and **Last activity** timestamps when they differ
 - Session tooltips can be shown as full details, compact metadata, or the title-only tree row
 - Session titles can be renamed inside this extension from tree menus or the chat viewer header, with original titles available in detailed tooltips
-- Open any session in a chat-like viewer (Webview) with Markdown rendering, syntax-highlighted fenced code blocks (powered by Shiki), and toolbar quick actions for pin/unpin, Markdown transcript, prompt excerpt copy, and source-aware resume (**OpenAI Codex** for Codex sessions, **Claude Code** for Claude sessions)
+- Open any session in a chat-like viewer (Webview) with Markdown rendering, syntax-highlighted fenced code blocks (powered by Shiki), and toolbar quick actions for pin/unpin, Markdown transcript, quick prompt copy, and source-aware resume (**OpenAI Codex** for Codex sessions, **Claude Code** for Claude sessions)
 - Chat viewer renders inline and block equations with KaTeX-compatible math support
 - Chat viewer renders supported image attachments from data/local image references, loads image data on demand, and shows a clear unavailable state for unsupported, missing, remote-only, disabled, or oversized images
 - Image attachments open in an in-view preview modal with a thumbnail strip, previous/next navigation, left/right keyboard navigation, fit/original-size toggle, and save action
@@ -84,6 +85,8 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Advanced query syntax: `/regex/`, `re:...`, `exact:...`, and `AND` / `OR` / `NOT`
 - Session titles can optionally prefer native titles from Codex / Claude metadata while preserving the generated-title default
 - Session tags/notes annotations (editable from tree context menus and chat view)
+- Cross-agent handoff creates per-session `handoff.md` files in VS Code global storage, with tail-prioritized transcript excerpts, the latest user request, source session path, and recoverable file changes
+- The **Handoff to Other AI** context submenu can create a handoff file, copy a handoff prompt, open or create a session handoff file, or hand off a Codex session to Claude Code when the Claude Code extension is available
 - Global tag operations: bulk rename tag and bulk delete tags
 - Cleanup Missing Pins action for stale pinned entries
 - Promote: copy a past session into "today" without modifying the original file
@@ -91,12 +94,12 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Multi-select support for open/pin/promote/delete
 - Drag & drop pinning: drag sessions from **History** or **Search** into **Pinned**
 - Import/Export sessions: export raw JSONL or sanitized Markdown transcripts, and import with duplicate session ID handling (skip or overwrite)
-- Control view for settings, import, rebuild cache, empty trash, bulk tag maintenance, and undo
+- Control view for settings, import, rebuild cache, empty trash, bulk tag maintenance, handoff cleanup, and undo
 - Dedicated refresh actions for **Pinned**, **History**, and **Status**, plus global refresh from the Control view
 - History view shows a localized loading row during initial startup and helpful empty-state guidance when no sessions are found or active filters match nothing
 - Manual trash cleanup: **Empty Trash** clears internal trash/quarantine files and legacy cache/index generations on demand
 - Undo last action (pin/unpin/promote/delete/annotation/tag operations)
-- Status view metrics, including current filters/roles/tags, total tag count, cache folder size, trash file count, and copyable paths for the current project and session roots
+- Status view metrics, including current filters/roles/tags, total tag count, cache folder size, handoff count/storage size, trash file count, and copyable paths for the current project and session roots
 
 ## Quick start
 
@@ -107,7 +110,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 5. Run **Search...** and refine with roles, query syntax, presets, and search tag filters.
 6. Use context menus or chat header actions to edit tags/notes and run bulk tag operations when needed.
 7. Enable **File Change History > Explorer Context Menu: Enabled** when you want file-level diff history from file right-click menus.
-8. Resume a session through the official Codex or Claude Code extension when you want to continue the work.
+8. Resume a same-source session through the official Codex or Claude Code extension, or use **Handoff to Other AI** when moving work between agents.
 
 ## AI Change History
 
@@ -124,6 +127,29 @@ Use it when you want to answer questions such as:
 The Explorer file context menu entry is opt-in. Enable **File Change History > Explorer Context Menu: Enabled**, then right-click a file in VS Code Explorer and run **Show File AI Change History**.
 
 The view is scoped to the current workspace and selected file. It shows only renderable AI diffs, supports Codex / Claude source toggles, searches the loaded diff cards, preserves scroll position when loading more, and opens the matching diff card in the original session view via **Open in History** without replacing the file history tab.
+
+## Handoff to Other AI
+
+Use handoff when you want another agent to continue work after reading the prior context, instead of only reopening the original session.
+
+Handoff actions appear in the **History**, **Pinned**, and **Search** session context menus under **Handoff to Other AI** for visible Codex / Claude sessions when `codexHistoryViewer.handoff.enabled` is enabled.
+
+Available actions:
+
+- **Handoff to Claude Code**: available for Codex sessions when both Codex and Claude sources are enabled. Creates or reuses a `handoff.md` file, then opens Claude Code with a prompt that points to that file.
+- **Create Handoff File**: creates the session's `handoff.md` without opening another agent.
+- **Copy Handoff Prompt to Clipboard**: copies a prompt that tells the target agent to read the `handoff.md` file. If the file does not exist yet, it is created first and the notification says so.
+- **Open Handoff File**: opens the handoff file for the selected session. If none exists, a notification asks whether to create one and opens it after creation.
+
+Claude-to-Codex handoff uses the clipboard path. Codex currently does not provide a reliable command for automatically attaching or pre-filling this prompt, so paste the copied prompt into Codex manually.
+
+The generated handoff file is stored under this extension's VS Code global storage, not inside your workspace. It includes a tail-prioritized transcript excerpt, the latest user request, the source session file path, and recoverable file changes. Tool calls and tool outputs are intentionally omitted.
+
+Generated handoff files may be automatically cleaned up when they are older than 30 days or when more than 100 handoff entries exist. Automatic cleanup runs when creating a handoff, and manually edited handoff files are not protected from this cleanup.
+
+If a handoff file already exists, **Handoff to Claude Code** and **Create Handoff File** ask whether to use the existing file or recreate it. **Copy Handoff Prompt to Clipboard** reuses an existing file without asking.
+
+Set `codexHistoryViewer.handoff.enabled` to `false` if you do not want handoff actions in session context menus. Handoff cleanup and Status metrics remain available so existing generated files can still be tracked and removed.
 
 ## History View Header Actions
 
@@ -151,6 +177,7 @@ For the full command list with per-command descriptions, see:
 - `codexHistoryViewer.sessionsRoot`: Root folder of Codex sessions. Leave empty to use the default (`~/.codex/sessions`).
 - `codexHistoryViewer.claude.sessionsRoot`: Root folder of Claude Code sessions. Leave empty to use the default (`~/.claude/projects`).
 - `codexHistoryViewer.sources.enabled`: Enabled history sources. Default is `["codex"]`. Add `claude` to load Claude history too.
+- `codexHistoryViewer.handoff.enabled`: Show cross-agent handoff actions in session context menus. Cleanup and Status metrics remain available when disabled.
 - `codexHistoryViewer.preview.openOnSelection`: Open a preview when selecting an item
 - `codexHistoryViewer.preview.maxMessages`: Max number of user/assistant messages to include in tooltips and quick previews
 - `codexHistoryViewer.preview.tooltipMode`: How much information session tree tooltips show (`full`, `compact`, or `titleOnly`)
@@ -191,6 +218,7 @@ For the full command list with per-command descriptions, see:
 - Auto-refresh reacts to local session file changes. For Codex sessions, assistant output may be written to `rollout-*.jsonl` only after a response or turn is complete, so chat tabs may not update token-by-token while the answer is still streaming.
 - If chat tab auto-refresh still feels delayed after the session file changes, try lowering `codexHistoryViewer.autoRefresh.debounceMs` and/or `codexHistoryViewer.autoRefresh.minIntervalMs`. Lower values feel more live but can increase CPU and disk activity.
 - Very large session files or sessions with many diff entries can take longer to render in the chat viewer. If switching back to a tab feels slow, set `codexHistoryViewer.chat.performanceMode` to `auto` or `simplified`, or use the header performance button for that view.
+- Handoff files are stored in VS Code global storage. Use **Control > Delete Handoff Files** when you want to remove generated handoff files.
 - To prevent the cache folder from growing over time, regularly run **Control > Empty Trash**. Trash files are not deleted automatically, and this also removes legacy cache/index generations.
 - For performance troubleshooting, enable `codexHistoryViewer.debug.logging.enabled` in `settings.json`, then inspect **Output > Codex History Viewer**. Logs include counts and timings, not session paths or message content.
 
@@ -198,7 +226,7 @@ For the full command list with per-command descriptions, see:
 
 - When you run `Resume in OpenAI Codex` for the first time, VS Code may show a security prompt asking whether the target extension can open the URI.
 - This is expected VS Code behavior for extension URI handlers (`vscode://...`).
-- If you click **Cancel**, resume will not proceed. Click **Open** to allow the handoff.
+- If you click **Cancel**, resume will not proceed. Click **Open** to allow the resume URI.
 - If you check "Do not ask me again for this extension", future resumes will not show the same prompt.
 - You can manage previously authorized extension URIs from Command Palette: `Extensions: Manage Authorized Extension URIs...`
 - If the official Codex extension stops reopening a conversation, try these VS Code commands before reloading the whole window: `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
@@ -211,11 +239,11 @@ For the full command list with per-command descriptions, see:
 - Import recursively scans the selected source folder for `.jsonl` files.
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 
-## What's New in 2.0.1
+## What's New in 2.1.0
 
-- Added bookmark toggles to history cards.
-- Added bookmark and user markers to the date guide.
-- Added a density-aware date-guide lens that expands crowded timeline regions, follows the original guide hover position, and uses the active lens item as the click target.
+- Added cross-agent handoff between Codex and Claude Code, backed by per-session `handoff.md` files in VS Code global storage.
+- Added the **Handoff to Other AI** context submenu for creating/opening handoff files and copying handoff prompts; Codex-to-Claude can open Claude Code with the prompt, while Claude-to-Codex uses clipboard copy.
+- Added a setting for showing or hiding handoff context-menu actions, handoff cleanup and Status metrics, and renamed the lightweight chat copy action to **Copy Quick Prompt**.
 
 ## Changelog
 
@@ -229,7 +257,7 @@ See [SECURITY](SECURITY.md). Use the latest release whenever possible; do not in
 
 This extension reads local session files and renders them inside VS Code. It does not implement any network communication and does not send session content anywhere.
 
-If you use **Copy Prompt Excerpt**, this extension copies a compact session excerpt to your clipboard. Data is only sent externally if you paste it into another tool or extension.
+If you use **Copy Quick Prompt** or **Copy Handoff Prompt to Clipboard**, this extension copies session context to your clipboard. Data is only sent externally if you paste it into another tool or extension.
 
 When you open a session as a Markdown transcript, the generated transcript includes local paths (e.g., the session file path and CWD). Review before sharing.
 

@@ -115,6 +115,13 @@ export class ControlTreeDataProvider implements vscode.TreeDataProvider<UtilityN
         command: { command: "codexHistoryViewer.deleteTagsGlobally", title: "" },
       }),
       makeAction({
+        id: "cleanupHandoffs",
+        label: t("maintenance.action.cleanupHandoffs"),
+        description: t("maintenance.action.cleanupHandoffs.description"),
+        icon: new vscode.ThemeIcon("files"),
+        command: { command: "codexHistoryViewer.cleanupHandoffs", title: "" },
+      }),
+      makeAction({
         id: "emptyTrash",
         label: t("maintenance.action.emptyTrash"),
         description: t("maintenance.action.emptyTrash.description"),
@@ -136,6 +143,8 @@ export interface StatusSnapshot {
   totalTagCount: number;
   storageBytes: number;
   trashCount: number;
+  handoffCount: number;
+  handoffBytes: number;
   searchHitCount: number;
   currentSearchRoles: readonly string[];
   currentSearchTagFilter: readonly string[];
@@ -206,6 +215,8 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
       makeInfo("status.totalTags", t("status.label.totalTags"), String(s.totalTagCount), new vscode.ThemeIcon("tag")),
       makeInfo("status.storageBytes", t("status.label.storageBytes"), formatBytes(s.storageBytes), new vscode.ThemeIcon("database")),
       makeInfo("status.trashCount", t("status.label.trashCount"), String(s.trashCount), new vscode.ThemeIcon("trash")),
+      makeInfo("status.handoffCount", t("status.label.handoffCount"), String(s.handoffCount), new vscode.ThemeIcon("files")),
+      makeInfo("status.handoffBytes", t("status.label.handoffBytes"), formatBytes(s.handoffBytes), new vscode.ThemeIcon("file-code")),
       makeInfo("status.searchHits", t("status.label.searchHits"), String(s.searchHitCount), new vscode.ThemeIcon("search")),
       makeInfo(
         "status.searchRoles",

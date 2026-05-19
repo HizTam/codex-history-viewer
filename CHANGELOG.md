@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - 2026-05-19
+
+### Added
+
+- Added cross-agent handoff between Codex and Claude Code, generating per-session `handoff.md` files in extension global storage with transcript excerpts and recoverable file changes.
+- Added the **Handoff to Other AI** context submenu with commands to hand off to Claude Code, create a handoff file, copy a handoff prompt to the clipboard, and open or create a session handoff file.
+- Added clipboard-based Claude-to-Codex handoff prompts and Claude Code opening via `claude-vscode.editor.open`.
+- Added handoff storage cleanup plus Status view metrics for handoff count and storage size.
+
+### Changed
+
+- Renamed the lightweight chat resume copy action to **Copy Quick Prompt** and kept it separate from full handoff commands.
+
 ## [2.0.1] - 2026-05-15
 
 ### Added

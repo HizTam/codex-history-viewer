@@ -18,6 +18,8 @@ Notes:
 | Rebuild Cache | `codexHistoryViewer.rebuildCache` | Rebuilds the local session cache/index from source files. |
 | Rebuild Search Index | `codexHistoryViewer.rebuildSearchIndex` | Rebuilds only the local search index from source files. |
 | Cleanup Missing Pins | `codexHistoryViewer.cleanupMissingPins` | Removes pinned entries whose source files no longer exist. |
+| Delete Handoff Files | `codexHistoryViewer.cleanupHandoffs` | Deletes generated handoff files from extension global storage after confirmation. |
+| Empty Trash | `codexHistoryViewer.emptyTrash` | Clears internal trash/quarantine files and legacy cache/index generations after confirmation. |
 | Debug Info (Copy) | `codexHistoryViewer.debugInfo` | Copies runtime diagnostics and state summary to the clipboard. |
 | Undo Last Action | `codexHistoryViewer.undoLastAction` | Reverts the latest undoable operation. |
 
@@ -56,7 +58,7 @@ Notes:
 | --- | --- | --- |
 | Open in New Tab (Chat) | `codexHistoryViewer.openSession` | Opens a selected session in its own chat-style webview tab, or activates an existing matching chat tab. |
 | Open Session (Markdown) | `codexHistoryViewer.openSessionMarkdown` | Opens a selected session as a Markdown transcript document. |
-| Copy Prompt Excerpt | `codexHistoryViewer.copyResumePrompt` | Copies a compact handoff excerpt from the selected session. |
+| Copy Quick Prompt | `codexHistoryViewer.copyResumePrompt` | Copies a compact resume prompt from the selected chat view. |
 | Resume in OpenAI Codex | `codexHistoryViewer.resumeSessionInCodex` | Sends the selected Codex session to the OpenAI Codex extension. |
 | Resume in Claude Code | `codexHistoryViewer.resumeSessionInClaude` | Opens the selected Claude session in Claude Code. |
 | Promote to Today (Copy) | `codexHistoryViewer.promoteSession` | Copies a past session into today's folder without modifying the original. |
@@ -66,6 +68,17 @@ Notes:
 | Set Custom Title... | `codexHistoryViewer.setCustomTitle` | Sets an extension-local display title for the selected session. |
 | Clear Custom Title | `codexHistoryViewer.clearCustomTitle` | Removes the extension-local custom title from the selected session. |
 | Edit Session Tags/Note... | `codexHistoryViewer.editSessionAnnotation` | Edits tags and note annotation for a selected session. |
+
+## Handoff Actions
+
+Handoff context-menu actions are shown only when `codexHistoryViewer.handoff.enabled` is enabled. `Delete Handoff Files` remains available from the Control view even when handoff context-menu actions are hidden.
+
+| Command (EN label) | Command ID | Description |
+| --- | --- | --- |
+| Handoff to Claude Code | `codexHistoryViewer.handoffToClaude` | Creates or reuses a Codex session handoff file, then opens Claude Code with a prompt that points to it. |
+| Create Handoff File | `codexHistoryViewer.createHandoffFile` | Creates or reuses the selected session's `handoff.md` without opening another agent. |
+| Copy Handoff Prompt to Clipboard | `codexHistoryViewer.copyHandoffPrompt` | Copies a prompt that tells the target agent to read the selected session's handoff file, creating it first if needed. |
+| Open Handoff File | `codexHistoryViewer.openSessionHandoff` | Opens the selected session's handoff file, with an option to create it if it does not exist. |
 
 ## Tag Operations
 
