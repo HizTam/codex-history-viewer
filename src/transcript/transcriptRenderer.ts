@@ -9,7 +9,7 @@ import { formatYmdHmInTimeZone, formatYmdHmsInTimeZone } from "../utils/dateUtil
 // Reads session JSONL and renders the conversation as Markdown.
 export async function renderTranscript(
   fsPath: string,
-  options: { timeZone: string; annotation?: { tags?: readonly string[]; note?: string } },
+  options: { timeZone: string; annotation?: { tags?: readonly string[]; note?: string }; locationLabel?: string },
 ): Promise<{ content: string; messageLineMap: Map<number, number> }> {
   const timeZone = options.timeZone;
 
@@ -23,10 +23,11 @@ export async function renderTranscript(
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
-  lines.push(`# ${historySource === "claude" ? "Claude" : "Codex"} Session`);
+  lines.push(`# ${historySource === "claude" ? "Claude Code" : "Codex"} Session`);
   lines.push(``);
   lines.push(`- File: \`${fsPath}\``);
   lines.push(`- History Source: \`${historySource}\``);
+  if (options.locationLabel) lines.push(`- Location: \`${options.locationLabel}\``);
   if (meta?.timestampIso) lines.push(`- Start: \`${formatIsoToLocal(meta.timestampIso, timeZone, { withSeconds: false })}\``);
   if (meta?.cwd) lines.push(`- CWD: \`${meta.cwd}\``);
   if (meta?.originator) lines.push(`- Originator: \`${meta.originator}\``);

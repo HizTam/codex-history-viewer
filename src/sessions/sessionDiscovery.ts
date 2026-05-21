@@ -1,35 +1,75 @@
 import * as fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import * as path from "node:path";
+import type { SessionArchiveState, SessionRootKind, SessionSource } from "./sessionTypes";
 import { pathExists } from "../utils/fsUtils";
 
 export interface SessionDiscoveryOptions {
   codexRoot: string;
+  codexArchivedRoot: string;
   claudeRoot: string;
   includeCodex: boolean;
+  includeCodexArchived: boolean;
   includeClaude: boolean;
 }
 
+export interface DiscoveredSessionFile {
+  fsPath: string;
+  source: SessionSource;
+  rootKind: SessionRootKind;
+  archiveState: SessionArchiveState;
+  rootPath: string;
+}
+
 // Collect session files from enabled roots.
-export async function findSessionFiles(options: SessionDiscoveryOptions): Promise<string[]> {
-  const results: string[] = [];
+export async function findSessionFiles(options: SessionDiscoveryOptions): Promise<DiscoveredSessionFile[]> {
+  const results: DiscoveredSessionFile[] = [];
   const seen = new Set<string>();
 
-  const pushUnique = (fsPath: string): void => {
-    const key = path.normalize(fsPath).toLowerCase();
+  const pushUnique = (file: DiscoveredSessionFile): void => {
+    const key = path.normalize(file.fsPath).toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
-    results.push(fsPath);
+    results.push(file);
   };
 
   if (options.includeCodex && (await pathExists(options.codexRoot))) {
     const codexFiles = await collectCodexSessionFiles(options.codexRoot);
-    for (const fsPath of codexFiles) pushUnique(fsPath);
+    for (const fsPath of codexFiles) {
+      pushUnique({
+        fsPath,
+        source: "codex",
+        rootKind: "codexSessions",
+        archiveState: "active",
+        rootPath: options.codexRoot,
+      });
+    }
+  }
+
+  if (options.includeCodexArchived && (await pathExists(options.codexArchivedRoot))) {
+    const codexFiles = await collectCodexSessionFiles(options.codexArchivedRoot);
+    for (const fsPath of codexFiles) {
+      pushUnique({
+        fsPath,
+        source: "codex",
+        rootKind: "codexArchivedSessions",
+        archiveState: "archived",
+        rootPath: options.codexArchivedRoot,
+      });
+    }
   }
 
   if (options.includeClaude && (await pathExists(options.claudeRoot))) {
     const claudeFiles = await collectClaudeSessionFiles(options.claudeRoot);
-    for (const fsPath of claudeFiles) pushUnique(fsPath);
+    for (const fsPath of claudeFiles) {
+      pushUnique({
+        fsPath,
+        source: "claude",
+        rootKind: "claudeSessions",
+        archiveState: "active",
+        rootPath: options.claudeRoot,
+      });
+    }
   }
 
   return results;

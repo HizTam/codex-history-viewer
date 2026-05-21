@@ -1,16 +1,17 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-05-19
-- 対象バージョン: 2.1.0
+- 最終更新: 2026-05-21
+- 対象バージョン: 2.2.0
 
 ## 1. 概要
 
 - 目的: Codex CLI / Claude Code のローカル履歴を VS Code 上で閲覧・検索・整理・再開しやすくする
 - 対象データ:
   - Codex: `~/.codex/sessions` 配下の `rollout-*.jsonl`
+  - Codex archived: `~/.codex/archived_sessions` 配下の `rollout-*.jsonl`（任意）
   - Claude: `~/.claude/projects/<project>/<session>.jsonl`
 - 通信: ネットワーク通信は行わない。ローカルファイルと VS Code のストレージだけを扱う
-- 対応ソース: `codexHistoryViewer.sources.enabled` で `codex` / `claude` を切り替える
+- 対応ソース: `codexHistoryViewer.sources.enabled` で `codex` / `claude` を切り替える。Codex archived sessions は `codex` source が有効な場合だけ使える追加保存場所として扱う
 
 ## 2. ディレクトリ構成（主要）
 
@@ -44,27 +45,34 @@
   - タグ絞り込み対応
   - 欠損ピンも表示対象
   - `History` / `Search` からのドラッグ&ドロップで追加可能
+  - Codex アーカイブ済みセッションのピンは、Codex source と archived sessions が有効かつアーカイブ表示中のときだけ表示する
+  - 公式側でアーカイブされてパスが変わったピンは、session identity で追従する
 - **History**: 年 / 月 / 日でグルーピングした履歴ツリー、または最新順のフラット一覧
   - 表示モード: `日付別` / `最新順`
   - 絞り込み: 日付スコープ / プロジェクト (`cwd`) / ソース / タグ
-  - ヘッダー操作: 再読み込み、表示モード切替、絞り込み、現在のプロジェクトで絞り込み、ソース切替、絞り込み解除など
+  - ヘッダー操作: 再読み込み、表示モード切替、絞り込み、現在のプロジェクトで絞り込み、ソース切替、アーカイブ表示切替、絞り込み解除など
   - 複数選択で開く / エクスポート / Promote / Delete が可能
+  - Codex アーカイブ済みセッションは、アーカイブ表示が `すべて` または `アーカイブのみ` のときに表示し、アイコン / 説明 / tooltip で通常履歴と区別する
   - 初回履歴ロード中は、空状態案内ではなく読み込み中ノードを表示する
   - 履歴が 0 件の場合は、履歴保存先確認・再読み込み・Claude 有効化に関する案内ノードを表示する
   - 絞り込み適用後に一致する履歴がない場合は、絞り込み条件の変更 / 解除を促す案内ノードを表示する
 - **Search**: 検索結果ツリー
   - 表示構造: セッション -> ヒット一覧
-  - ヘッダー操作: `Search...`、`Rerun Search`、`Clear Results`、タグ絞り込み、保存済み検索、既定ロール設定
+  - ヘッダー操作: `Search...`、`Rerun Search`、`Clear Results`、アーカイブ表示切替、タグ絞り込み、保存済み検索、既定ロール設定
   - 検索対象は History 側の「日付 / プロジェクト / ソース」絞り込みに追従する
   - Search 独自のタグ絞り込みも別途持つ
+  - アーカイブ非表示時は archived hit を候補から除外し、`search.maxResults` は表示される hit 数として扱う
+  - アーカイブ表示を切り替えた時点で検索結果がある場合は、最後の検索条件で再検索する
 - **Status**: 実行時状態の要約
   - 有効ソースごとのセッション件数
+  - Codex source と Codex archived sessions が有効な場合は archived 件数
   - ピン数 / 欠損ピン数 / 保存済み検索数 / 総タグ数
   - キャッシュフォルダ容量
   - Handoff 件数 / 容量
   - ゴミ箱件数（`undo-delete` + `deleted` の合算）
   - 現在の検索ロール / 検索タグ / 履歴絞り込み / 現在プロジェクト / 最終更新時刻
   - 有効ソースごとのセッションルート
+  - Codex archived sessions root は、Codex source と archived sessions が有効な場合だけ表示する
   - 拡張機能バージョン
   - `Current project` と `Sessions root` 系のパスは行右側のコピーアイコンからクリップボードへコピーできる
 
@@ -77,6 +85,8 @@
 - `Resume in OpenAI Codex`: OpenAI Codex 拡張へ引き継ぐ
 - `Resume in Claude Code`: Claude Code 拡張へ引き継ぐ
 - `他のAIへ引継ぎ`: Handoff 用の階層メニューを表示する
+- `Move to Archive`: active Codex セッションを Codex archived sessions へ移動する
+- `Move to Codex History`: archived Codex セッションを通常の Codex history へ戻す
 - `Pin / Unpin`: ピン留めの追加 / 解除
 - `Promote to Today (Copy)`: セッションを「今日」の履歴として複製する
 - `Delete`: 削除確認後に削除する
@@ -85,7 +95,31 @@
 - `Export Sessions`: 生 JSONL または Markdown transcript を出力
 - `Import Sessions`: フォルダ単位で `.jsonl` を再帰取り込み
 
-### 3.2.1 他のAIへ引継ぎ
+### 3.2.1 Codex アーカイブ
+
+- `codexHistoryViewer.sources.enabled` に `codex` が含まれ、かつ `codexHistoryViewer.codex.archivedSessions.enabled` が有効な場合、通常の Codex `sessions` に加えて Codex `archived_sessions` も読み込む
+- `codexHistoryViewer.codex.archivedSessionsRoot` が空の場合は、Codex `sessionsRoot` と同階層の `archived_sessions` を既定値にする
+- `codexHistoryViewer.sources.enabled` に `codex` が含まれていない場合は、`codexHistoryViewer.codex.archivedSessions.enabled = true` でも archived sessions を使用しない
+- `archiveLocationFilter` は workspace ごとに保持し、既定は `通常のみ` とする
+- History / Pinned / Search の view title action から、`通常のみ` / `すべて` / `アーカイブのみ` を即時に切り替えられる
+- archived 由来の session は `storage.archiveState = "archived"`、`rootKind = "codexArchivedSessions"` として扱う
+- active と archived に同じ session identity がある場合は active を優先し、重複表示を避ける
+- archived Codex session の Markdown には `Location: Archived` を表示し、Chat では `Archived` 表示で通常履歴と区別する
+- archived Codex session の Chat では `Resume in Codex` の位置に `Move to Codex History` を表示する
+- active Codex session の Chat / 履歴 Webview には `Move to Archive` ボタンを置かない
+- 右クリックメニューでは、active Codex session は `Move to Archive` だけ、archived Codex session は `Move to Codex History` だけを表示する
+- 移動系 action はカスタムタイトル系 action の下に区切って配置し、Delete はさらに下に区切って配置する
+- archived Codex session では `Resume in Codex` と `Promote to Today (Copy)` を表示しない
+- `Move to Archive` は公式 Codex provider の `thread/archive` を使い、filesystem fallback は行わない
+- `Move to Codex History` は公式 Codex provider の `thread/unarchive` を優先し、使えない場合は filesystem provider で `<sessionsRoot>/<YYYY>/<MM>/<DD>/` へ Move する
+- filesystem provider fallback の Move は、同名衝突時に suffix を付け、copy+verify+delete fallback と Undo で安全性を確保する
+- archive / unarchive / pin reconcile では、annotation / bookmark / chat open position などの path-keyed metadata を移動先へ寄せる
+- `chat.openPosition = lastMessage` の archived Codex Chat から `Move to Codex History` を実行した場合は、操作直前に見ていた本文メッセージへ復元後に移動する
+- `PinEntry` は `identityKey` / `archiveState` / `rootKind` を保持し、公式側でアーカイブされて path が変わった場合も refresh 後に追従する
+- archived sessions が無効またはアーカイブ非表示のとき、archived 由来と判断できる pin は Pinned に欠損として出さず、Status の missing pin count にも含めない
+- archived 由来と判断できない missing pin は、通常の削除 / 外部移動と区別できないため従来通り missing として扱う
+
+### 3.2.2 他のAIへ引継ぎ
 
 - 表示条件:
   - `codexHistoryViewer.handoff.enabled` が有効で、History / Pinned / Search の表示中セッションであれば、`Sources: Enabled` の組み合わせに関係なく Handoff 階層メニューを表示する
@@ -122,6 +156,8 @@
   - ツール引数 / ツール出力（`search.indexToolContent` の設定に従う）
   - セッションの表示タイトル / カスタムタイトル / オリジナルタイトル
   - セッション注釈のタグ / ノート
+- Codex archived sessions は実効有効な場合に検索インデックスへ取り込み、表示時は `archiveLocationFilter` に従って hit を含める / 除外する
+- archived 非表示時は archived hit を先に除外してから `search.maxResults` を適用するため、表示件数が最大件数に達する
 - 保存済み検索:
   - 実行
   - 保存
@@ -132,11 +168,13 @@
 ### 3.4 キャッシュ / インデックス / 保守
 
 - 履歴キャッシュ:
-  - 保存先: `globalStorageUri/cache.v8.json`
+  - 保存先: `globalStorageUri/cache.v9.json`
   - 用途: 一覧表示用の要約キャッシュ
+  - 通常起動時は、有効な cache context であれば filesystem scan / stat を待たずに cache から `HistoryIndex` を即時表示し、その後 background refresh で最新状態へ更新する
   - セッションファイル処理は上限付き並列で行う（無制限 `Promise.all` は使わない）
   - 再利用条件:
     - `sessionsRoot`
+    - `codexArchivedSessionsRoot`
     - `claudeSessionsRoot`
     - 有効ソース設定
     - `preview.maxMessages`
@@ -157,6 +195,7 @@
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
   - 再利用条件:
     - `sessionsRoot`
+    - `codexArchivedSessionsRoot`
     - `claudeSessionsRoot`
     - 有効ソース設定
     - `search.indexToolContent`
@@ -207,6 +246,7 @@
 
 - 履歴の自動更新設定は既定では無効 (`codexHistoryViewer.autoRefresh.enabled = false`)
 - 有効時は Codex / Claude の履歴 `.jsonl` を監視する
+- Codex source と Codex archived sessions が有効な場合は archived root も監視対象に含める
 - 変更イベントは `autoRefresh.debounceMs` でまとめ、`autoRefresh.minIntervalMs` より短い間隔では refresh しない
 - 実際の refresh 実行条件:
   - History view が表示中、または自動更新オンのチャットタブが開いている
@@ -278,6 +318,7 @@
   - 保存時に画面内の本文メッセージがない場合は、直前の描画済み本文メッセージを保存し、直前もなければ先頭扱いにする
   - 復元対象の本文メッセージが描画されていない場合は、直前の描画済み本文メッセージへフォールバックし、直前もなければ先頭へ戻す
   - 復元フォールバックでは直後の本文メッセージへは進めない
+  - archived Codex Chat から `Move to Codex History` を実行する場合は、ボタン押下時に現在見えている本文メッセージ index を保存し、復元後の active Chat panel で同じ本文メッセージを明示的に reveal する
 - ツリー選択で開くチャットは再利用タブとして扱い、次のツリー選択で中身を差し替える
 - メニューから開くチャットはセッションタブとして扱い、別セッションを開いても差し替えない
 - 再利用タブに表示中の同じセッションをメニューから開いた場合、そのタブをセッションタブへ昇格する
@@ -368,9 +409,11 @@
 
 ### 3.7 設定（`codexHistoryViewer.*`）
 
-- `sessionsRoot`
-- `claude.sessionsRoot`
 - `sources.enabled`
+- `sessionsRoot`
+- `codex.archivedSessions.enabled`
+- `codex.archivedSessionsRoot`
+- `claude.sessionsRoot`
 - `handoff.enabled`
 - `preview.openOnSelection`
 - `preview.maxMessages`
@@ -406,12 +449,16 @@
 
 - `src/sessions/sessionDiscovery.ts`
   - Codex は `rollout-*.jsonl` を再帰走査で収集する
+  - Codex source と Codex archived sessions が有効な場合は archived root も `rollout-*.jsonl` の再帰走査対象にする
+  - 収集結果には `rootKind` / `rootPath` を付与し、通常 Codex と archived Codex を区別する
   - Claude は `.claude/projects/<project>/<session>.jsonl` の 2 階層構造のみを対象にする
 
 ### 4.2 セッション要約
 
 - `src/sessions/sessionSummary.ts`
   - `session_meta` を読み取り、一覧用メタ情報を構築する
+  - `DiscoveredSessionFile` の root 情報から `storage.archiveState` と `rootKind` を設定する
+  - Codex は session id から identity key を作り、path が active / archived 間で変わっても同一 session として扱えるようにする
   - `user` / `assistant` メッセージを先頭から最大 `preview.maxMessages` 件だけ読んでスニペットを作る
   - 大きすぎるコンテキスト断片は一覧スニペットから除外する
   - Claude のネイティブタイトルは `custom-title -> ai-title -> rename -> summary` の優先順で抽出する
@@ -419,10 +466,13 @@
 ### 4.3 履歴キャッシュ
 
 - `src/services/historyService.ts`
-  - `cache.v8.json` を読み書きする
+  - `cache.v9.json` を読み書きする
+  - 有効な cache context から `HistoryIndex` を復元し、初回表示を先に完了できるようにする
   - 変更のないファイルはキャッシュ済み `summary` を再利用する
   - ファイルごとの `stat` / キャッシュ判定 / `buildSessionSummary` は最大 4 並列で処理する
   - `HistoryIndex.byCacheKey` を構築し、`findByFsPath()` は `Map` で引く
+  - `HistoryIndex.byIdentityKey` を構築し、active / archived 間の path 移動や pin 追従に使う
+  - active と archived に同じ identity がある場合は active を優先して dedupe する
   - 最終的な一覧はローカル日付 / 時刻順で降順ソートする
   - `history.titleSource` に応じて `displayTitle` を後段で解決する
 - `src/services/sessionTitleOverrideStore.ts`
@@ -441,6 +491,8 @@
 - `src/services/autoRefreshService.ts`
   - 履歴の自動更新設定 (`codexHistoryViewer.autoRefresh.enabled`) が `true` のときだけ FileSystemWatcher を作成する
   - Codex は `**/rollout-*.jsonl`、Claude は `*/*.jsonl` を監視する
+  - Codex source と Codex archived sessions が有効な場合は archived root にも `**/rollout-*.jsonl` watcher を作成する
+  - watcher root signature には `rootKind` を含め、通常 Codex と archived Codex の root を区別する
   - watcher イベントは即 refresh せず、変更された `fsPath` を pending 集合に入れて debounce / min interval を適用する
   - refresh callback には変更された `fsPath` の配列を渡す
   - `History` view が非表示かつ自動更新オンのチャットタブが開いていない場合、または VS Code ウィンドウが非フォーカスの場合は timer を止めて pending を保持する
@@ -463,6 +515,7 @@
   - `search-index.v2.json` を管理する
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
+  - index context に `codexArchivedSessionsRoot` と `includeCodexArchived` を含め、archived root / 有効状態の変更を検知する
   - JSONL をストリーミングで読み、検索対象メッセージ列を構築する
   - `search.indexToolContent` に応じてツール名 / 引数 / 出力を検索インデックスへ入れる範囲を変える
   - Codex の `custom_tool_call` は既存 tool 検索と同じ `role: tool` / `source: toolArguments` 粒度で、軽量メタだけを入れる
@@ -527,6 +580,7 @@
   - 検索開始時に検索インデックスの差分同期を行う
   - 削除済みファイルに対応してインデックスから不要エントリを落とす
   - 候補絞り込みは「日付 / プロジェクト / ソース / Search タグ」の順で適用する
+  - `includeArchivedSessions` に従って archived session を除外し、除外後に `search.maxResults` を適用する
   - 進捗表示とキャンセルに対応する
 
 ### 4.7 削除とゴミ箱
@@ -549,14 +603,21 @@
 
 - `src/services/sessionAnnotationStore.ts`
   - タグ / ノートを `globalState` に保存する
+  - session path 移動時は `relocateSessionPath()` で annotation を新 path へ移す
+  - path 移動時に移行先 annotation がある場合、tags は merge し、note は空文字でも移行先を優先する
 - `src/services/pinStore.ts`
   - ピン留め情報を `globalState` に保存する
+  - `PinEntry` は `identityKey` / `archiveState` / `rootKind` を保持する
+  - refresh 後の `reconcile()` で identity key を使い、active / archived 間で移動した pin path を追従する
+  - archived 由来 pin は archived sessions 無効時またはアーカイブ非表示時に missing として出さない
 - `src/services/searchPresetStore.ts`
   - 保存済み検索条件を `workspaceState` に保存する
 - `src/services/chatOpenPositionStore.ts`
   - 最後に見えていた表示位置を `globalState` に最大 100 セッション分保存する
   - 復元には `chat.openPosition = lastMessage` のときだけ使用する
   - `chat.openPosition = latest` は保存位置を使わず、Webview 側で最新の描画済みカードへ移動する
+  - session path 移動時は `relocateSessionPath()` で保存位置を新 path へ移す
+  - path 移動時に移行先 entry が既にある場合は移行先を優先し、source 側で上書きしない
 
 ### 4.8.1 Handoff
 
@@ -582,11 +643,37 @@
   - `codexHistoryViewer.codexToClaudeHandoffEnabled` context key により、`Claude Code へ引き継ぐ` だけ Handoff が有効かつ Codex / Claude の両ソースが有効な Codex セッションに限定して表示する
   - `引き継ぎファイルを作成` / `引き継ぎプロンプトをクリップボードにコピー` / `引き継ぎファイルを開く` は Codex / Claude セッションで表示する
 
+### 4.8.2 Codex アーカイブ / 復元
+
+- `src/services/restoreArchivedSessionService.ts`
+  - `restoreArchivedSessionToActive()` は archived Codex session を通常 Codex history へ戻す
+  - `archiveSessionToArchived()` は active Codex session を Codex archive へ移動する
+  - restore は公式 Codex provider の `thread/unarchive` を優先し、使えない場合は filesystem provider へ fallback する
+  - archive は公式 Codex provider の `thread/archive` のみを使い、filesystem fallback は行わない
+  - 公式 provider は bundled `codex` executable を見つけ、app-server initialization 後に `codexHome` が設定 root と整合する場合だけ使う
+  - filesystem restore は作成日の `<YYYY>/<MM>/<DD>` 配下へ Move し、同名衝突時は suffix を付ける
+  - filesystem restore の move 失敗時は copy to temp、size 検証、destination rename、source delete の順で fallback する
+  - 公式 provider 成功後に移動先を解決できない場合は、active root / archived root の再スキャンで解決する
+- `src/services/sessionReferenceRelocator.ts`
+  - session path 移動時に annotation / bookmark / chat open position を可能な範囲で新 path へ移す
+  - bookmark は `bm-<sessionHash>-<kind>-<targetHash>` の `<targetHash>` を維持し、移行先 path の `<sessionHash>` だけ差し替える
+  - 個別 metadata の移行に失敗しても archive / restore 自体は破綻させず、診断ログに留める
+- `src/extension.ts`
+  - `codexHistoryViewer.restoreArchivedSession` は確認後に restore を実行し、成功後に履歴を refresh する
+  - Chat WebView 由来の restore は direct 引数の `revealMessageIndex` を検証し、復元先 active path の `ChatOpenPositionStore` に保存する
+  - restore が例外を投げた場合は `app.restoreArchivedFailed` を表示し、履歴と view を更新して部分移動済み状態にも追従する
+  - filesystem restore の場合だけ Undo を出し、公式 provider restore では本家状態との整合を優先して Undo を出さない
+  - `codexHistoryViewer.archiveSession` は Codex source と archived sessions が有効な active Codex session だけを対象にする
+  - `archiveLocationFilter` は `workspaceState` に保存し、VS Code context `codexHistoryViewer.archiveLocationFilter` に反映する
+
 ### 4.9 表示
 
 - チャット表示: `src/chat/*`
   - `ChatPanelManager` は対象ファイルの存在を確認してから開く / reload する
   - refresh や削除で元ファイルが消えたパネルは閉じる
+  - archived Codex session では `Resume in Codex` の代わりに `Move to Codex History` を表示する
+  - `restoreArchivedSession` message を受け取り、復元成功後は同じ Webview panel を通常 session で開き直す
+  - archived Codex Chat からの restore message は `lastMessage` 時に現在見えている `revealMessageIndex` を渡し、復元後 panel で明示 reveal する
   - `ChatPanelManager` はツリー選択用の `reusable` タブと、明示的に開いた `session` タブを区別する
   - 既存タブ検索では `session` タブを優先し、なければ同じセッションを表示中の `reusable` タブを使う
   - `ChatPanelManager` は `ChatOpenPositionStore` を使い、明示的な移動先がない場合だけ最後に見えていたメッセージ付近を復元する
@@ -622,9 +709,15 @@
   - チャット末尾ボタンは、`#timeline` に描画済みの最後の `.row` へスクロールする
   - patch group のカード幅保持キーは `turnId`、メッセージ index、変更ファイル情報などから安定的に作る
 - Markdown transcript: `src/transcript/*`
+  - Codex session の `Location: Active` / `Location: Archived` を transcript metadata として表示する
+  - Export した Markdown transcript でも同じ Location metadata を出力する
 - Control / Status ビュー: `src/tree/utilityTrees.ts`
+  - Status は Codex source と archived sessions が有効な場合だけ Codex archived 件数と Codex archived sessions root を表示する
+  - Codex archived sessions root は、Codex source が無効な場合や archived sessions が無効な場合は表示しない
 - History / Pinned / Search ツリー: `src/tree/*`
   - History は `date` / `latest` の表示モードを持ち、`latest` ではセッションをフラットに降順表示する
+  - archived Codex session は description / tooltip / icon 色で通常履歴と区別する
+  - `archiveLocationFilter="activeOnly"` のときは archived Codex session を History / Pinned / Search から除外する
 
 ### 4.10 ツール意味付けレイヤー
 
@@ -646,9 +739,11 @@
 
 - `src/settings.ts`
   - 拡張設定の読み取りヘルパーをまとめる
-  - `preview.*`、`search.*`、`history.titleSource`、`autoRefresh.*`、`chat.openPosition`、`chat.toolDisplayMode`、`images.*` などの設定もここで管理する
+  - `codex.archivedSessions.enabled`、`codex.archivedSessionsRoot`、`preview.*`、`search.*`、`history.titleSource`、`autoRefresh.*`、`chat.openPosition`、`chat.toolDisplayMode`、`images.*` などの設定もここで管理する
   - 数値設定は下限 / 上限を丸め、想定外の enum 値は既定値へ戻す
   - `preview.maxMessages` は `1..50`、`search.maxResults` は `1..10000` に丸め、`package.json` の `minimum` / `maximum` と一致させる
+  - `codex.archivedSessionsRoot` が空の場合は `sessionsRoot` の兄弟 `archived_sessions` を使う
+  - `sources.enabled` は最上位の親設定であり、`codex` が含まれない場合は `codex.archivedSessions.enabled` が true でも archived sessions を無効扱いにする
 - `src/utils/dateTimeSettings.ts`
   - 日付時刻表示は VS Code Extension Host のタイムゾーンを使う
   - UI 言語はタイムゾーン決定に使わない
@@ -714,6 +809,9 @@
   - `BookmarkStore.onDidChange` で開いている Webview へ `bookmarkState` を再送し、通常履歴 Webview とファイル履歴 Webview の表示を同期する
   - `BookmarkStore.toggle()` が失敗した場合も `bookmarkState` を返し、Webview の楽観的 UI 更新を store 側の状態へ戻す
   - 初回 model 送信時は `withBookmarkState()` で算出した bookmarked keys を再利用し、同じ target 群への `getKeysForTargets()` 二重実行を避ける
+  - `BookmarkKeyParams.fallbackId` は target identity 由来に限定し、session path / cache key / 既存 bookmark key は使わない
+  - session path relocation では bookmark key の `<sessionHash>` だけ差し替え、`<targetHash>` は維持する
+  - 既に不一致 key へ変換済みの旧 entry は互換救済しない
 - `media/chatView.js` / `media/fileChangeHistory.js`
   - `bookmarkState` を受け取り、カード上のしおりボタンとカード強調を更新する
   - 日付ガイドが無効な場合は、カード上のしおり UI も生成しない
@@ -756,7 +854,41 @@ npm run package
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 
-### 5.4 v2.1.0 リリースメモ（2026-05-19）
+### 5.4 v2.2.0 リリースメモ（2026-05-21）
+
+- Codex の通常 `sessions` に加えて、任意で `archived_sessions` を読み込めるようにした
+- `codexHistoryViewer.codex.archivedSessions.enabled` と `codexHistoryViewer.codex.archivedSessionsRoot` を追加した
+- `sources.enabled` は `codex` / `claude` の最上位ソース設定のままとし、`codex` が含まれる場合だけ archived sessions 設定を適用するようにした
+- 設定 UI では `Sources: Enabled` を先頭に置き、Codex archived sessions 設定がその子設定だと分かるようにした
+- archived sessions root の既定値を、Codex `sessionsRoot` と同階層の `archived_sessions` にした
+- History / Pinned / Search に `通常のみ` / `すべて` / `アーカイブのみ` のアーカイブ表示切り替え view title action を追加した
+- `通常のみ` のときは、History / Pinned / Search から archived Codex session を即時に除外するようにした
+- Search はアーカイブ非表示時に archived hit を候補から除外し、表示される hit 数が `search.maxResults` に達するようにした
+- Codex archived session を History / Pinned / Search / Markdown / Chat で通常 session と区別できるようにした
+- Markdown transcript に `Location: Active` / `Location: Archived` を表示し、Chat では archived Codex session を `Archived` 表示で識別できるようにした
+- archived Codex session の Chat では、`Resume in Codex` の代わりに `Move to Codex History` を表示するようにした
+- active Codex session の右クリックメニューに `Move to Archive` を追加した
+- archived Codex session の右クリックメニューに `Move to Codex History` を追加した
+- 移動系 action は active / archived で相互排他にし、カスタムタイトル系 action の下、Delete より上に区切って配置した
+- archived Codex session では `Resume in Codex` と `Promote to Today (Copy)` を表示しないようにした
+- `Move to Archive` は公式 Codex provider の `thread/archive` を使うようにした
+- `Move to Codex History` は公式 Codex provider の `thread/unarchive` を優先し、使えない場合は filesystem provider の Move に fallback するようにした
+- filesystem restore では作成日の `<YYYY>/<MM>/<DD>` へ戻し、同名衝突時は suffix を付けるようにした
+- filesystem restore の Move には Undo を提供し、公式 provider restore では本家状態との整合を優先して Undo を出さないようにした
+- restore / archive / pin reconcile 時に、annotation / bookmark / chat open position を移動先 path へ寄せるようにした
+- archive / unarchive 時の bookmark key 移行で target hash を維持し、WebView で同じしおりとして認識できるようにした
+- archived Chat の `Move to Codex History` は `chat.openPosition = lastMessage` のとき操作直前の表示位置へ復元後に移動するようにした
+- Export した Markdown transcript にも `Location: Active` / `Location: Archived` を出すようにした
+- metadata relocation の衝突時は、annotation note と chat open position で移行先を優先するようにした
+- pin に `identityKey` / `archiveState` / `rootKind` を追加し、公式側でアーカイブされた Codex session の path 変更へ追従できるようにした
+- archived sessions が無効または非表示のとき、archived 由来 pin を Pinned の missing として表示せず、Status の missing pin count にも含めないようにした
+- Status に、Codex source と archived sessions がどちらも有効な場合だけ Codex archived session count と Codex archived sessions root を表示するようにした
+- Auto Refresh で archived root の `rollout-*.jsonl` も監視できるようにした
+- 履歴キャッシュを `cache.v9.json` に更新し、archived root / archived 有効状態 / identity dedupe を含めるようにした
+- 検索インデックスの context に archived root / archived 有効状態を含めるようにした
+- `package.json` のバージョンを `2.2.0` に更新した
+
+### 5.5 v2.1.0 リリースメモ（2026-05-19）
 
 - Codex / Claude Code 間の Handoff を新規実装した
 - History / Pinned / Search のセッション右クリックに、`他のAIへ引継ぎ` 階層メニューを追加した
@@ -776,7 +908,7 @@ npm run package
 - チャット表示内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
 - `package.json` / `package-lock.json` のバージョンを `2.1.0` に更新した
 
-### 5.5 v2.0.1 リリースメモ（2026-05-15）
+### 5.6 v2.0.1 リリースメモ（2026-05-15）
 
 - 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
 - しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
@@ -800,7 +932,7 @@ npm run package
 - ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
 - `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
 
-### 5.6 v2.0.0 リリースメモ（2026-05-14）
+### 5.7 v2.0.0 リリースメモ（2026-05-14）
 
 - ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる AI Change History を追加した
 - カスタムタイトル操作を QuickPick 入口へ統一し、チャット履歴ビューアのヘッダーからも設定 / 消去できるようにした
@@ -818,7 +950,7 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.7 v1.5.1 リリースメモ（2026-05-08）
+### 5.8 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
@@ -829,7 +961,7 @@ npm run package
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.8 v1.5.0 リリースメモ（2026-05-07）
+### 5.9 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -838,7 +970,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.9 v1.4.3 リリースメモ（2026-04-30）
+### 5.10 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -848,6 +980,41 @@ npm run package
 
 ## 6. 手動テスト観点
 
+- `codexHistoryViewer.codex.archivedSessions.enabled = false` のとき、通常の Codex / Claude 履歴表示が従来通り動く
+- 有効な `cache.v9.json` がある通常起動では、History / Pinned / Status が cache から先に表示され、その後 background refresh 完了時に最新状態へ更新される
+- cache context が設定と一致しない場合や `Rebuild Cache` では、cache 即時表示を使わず従来通り最新 refresh を待つ
+- `codexHistoryViewer.codex.archivedSessions.enabled = false` のとき、Status に Codex archived sessions root が表示されない
+- `codexHistoryViewer.sources.enabled` に `codex` がない場合、`codexHistoryViewer.codex.archivedSessions.enabled = true` でも Codex archived sessions が読み込まれない
+- `codexHistoryViewer.sources.enabled` に `codex` がない場合、Status に Codex archived session count / root が表示されない
+- Codex source と archived sessions が有効な状態で archived root が存在しない場合もエラーにならない
+- Codex source と archived sessions が有効、かつアーカイブ表示が `通常のみ` のとき、History / Pinned / Search に archived Codex session が出ない
+- アーカイブ表示を `すべて` または `アーカイブのみ` にすると、History / Pinned / Search に archived Codex session が出る
+- アーカイブ表示を切り替えると、History / Pinned は再スキャンなしで即時に更新される
+- Search 結果がある状態でアーカイブ表示を切り替えると、最後の検索条件で再検索される
+- アーカイブ非表示時の Search は、表示される通常履歴 hit 数が `search.maxResults` に達する
+- archived Codex session の Markdown に `Location: Archived` が表示され、Chat では `Archived` 表示で通常履歴と区別できる
+- active Codex session の Markdown に `Location: Active` が表示される
+- archived Codex session の Chat では `Resume in Codex` の位置に `Move to Codex History` が表示される
+- active Codex session の Chat / 履歴 Webview には `Move to Archive` ボタンが表示されない
+- active Codex session の右クリックメニューには `Move to Archive` だけが表示され、`Move to Codex History` は表示されない
+- archived Codex session の右クリックメニューには `Move to Codex History` だけが表示され、`Move to Archive` は表示されない
+- `Move to Archive` / `Move to Codex History` はカスタムタイトル系 action の下に区切って表示され、Delete はさらに下に区切って表示される
+- archived Codex session では `Resume in Codex` と `Promote to Today (Copy)` が表示されない
+- `Move to Archive` は公式 Codex provider の `thread/archive` を使い、filesystem fallback しない
+- `Move to Codex History` は公式 Codex provider の `thread/unarchive` を優先し、使えない場合は filesystem Move に fallback する
+- `Move to Codex History` の filesystem fallback では、作成日の `<YYYY>/<MM>/<DD>` へ移動される
+- `Move to Codex History` 失敗時は、ユーザー向けの失敗メッセージが表示され、履歴表示が更新される
+- filesystem fallback で戻した session は Undo で archived path へ戻せる
+- 公式 provider で戻した session には filesystem Undo が出ない
+- 公式側でアーカイブされた pinned session は、refresh 後に archived path へ追従する
+- archived sessions が無効またはアーカイブ非表示のとき、archived 由来 pin が Pinned に `見つからない` として出ない
+- archived sessions が無効またはアーカイブ非表示のとき、archived 由来 pin が Status の missing pin count に含まれない
+- archive / unarchive / pin reconcile 後に、annotation / bookmark / chat open position が可能な範囲で新 path へ移行される
+- active で付けたしおりは archive / unarchive 後も同じカードのしおりとして表示される
+- archived 側で付けたしおりは `Move to Codex History` 後も同じカードのしおりとして表示される
+- `chat.openPosition = lastMessage` の archived Chat で `Move to Codex History` を実行した場合、復元後の Chat は操作直前に見ていた本文メッセージ付近へ移動する
+- Export した active / archived Codex Markdown transcript に `Location: Active` / `Location: Archived` が表示される
+- Codex source と archived sessions が有効な場合、Auto Refresh 有効時に archived root の `rollout-*.jsonl` 変更で履歴が更新される
 - `fileChangeHistory.explorerContextMenu.enabled = false` のとき、Explorer のファイル右クリックに `Show File AI Change History` が表示されない
 - History / Pinned のセッション右クリックで `Custom Title...` が表示され、QuickPick から設定 / 消去を選べる
 - カスタムタイトル未設定のセッションでは QuickPick に消去アクションが出ない

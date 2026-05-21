@@ -607,6 +607,22 @@ export class ChatPanelManager implements vscode.Disposable {
         await vscode.commands.executeCommand(commandId, { fsPath: state.fsPath });
         return;
       }
+      case "restoreArchivedSession": {
+        const revealMessageIndex =
+          typeof msg?.revealMessageIndex === "number" && Number.isFinite(msg.revealMessageIndex)
+            ? Math.max(0, Math.floor(msg.revealMessageIndex))
+            : undefined;
+        const result = await vscode.commands.executeCommand<{ activeFsPath?: string }>(
+          "codexHistoryViewer.restoreArchivedSession",
+          { fsPath: state.fsPath, reopenInCurrentPanel: true, revealMessageIndex },
+        );
+        const activeFsPath = typeof result?.activeFsPath === "string" ? result.activeFsPath : "";
+        if (activeFsPath) {
+          this.stateByPanel.set(panel, { ...state, fsPath: activeFsPath, revealMessageIndex });
+          await this.sendSessionData(panel, { preserveUiState: false });
+        }
+        return;
+      }
       case "togglePin": {
         const commandId = this.pinStore.isPinned(state.fsPath)
           ? "codexHistoryViewer.unpinSession"
@@ -796,7 +812,18 @@ export class ChatPanelManager implements vscode.Disposable {
       `chatOpenPosition send session=${debugSessionName(state.fsPath)} mode=${config.chatOpenPosition} panelKind=${state.kind} saved=${savedOpenMessageIndex ?? "none"}`,
     );
     const bookmarkState = this.withBookmarkState(toWebviewChatSessionModel(model, detailMode), state.fsPath, panel);
-    const webviewModel = bookmarkState.model;
+    const summary = this.historyService.findByFsPath(state.fsPath);
+    const webviewModel: ChatSessionModel = {
+      ...bookmarkState.model,
+      ...(summary
+        ? {
+            sessionLocation: {
+              archiveState: summary.storage.archiveState,
+              rootKind: summary.storage.rootKind,
+            },
+          }
+        : {}),
+    };
     void panel.webview.postMessage({
       type: "sessionData",
       model: {
@@ -1043,6 +1070,9 @@ export class ChatPanelManager implements vscode.Disposable {
     return {
       resumeInCodex: t("chat.button.resumeInCodex"),
       resumeInCodexTooltip: t("chat.tooltip.resumeInCodex"),
+      restoreArchived: t("chat.button.restoreArchived"),
+      restoreArchivedTooltip: t("chat.tooltip.restoreArchived"),
+      sessionLocationArchived: t("session.location.archived"),
       resumeInClaude: t("chat.button.resumeInClaude"),
       resumeInClaudeTooltip: t("chat.tooltip.resumeInClaude"),
       pin: t("chat.button.pin"),
@@ -1213,12 +1243,15 @@ export class ChatPanelManager implements vscode.Disposable {
 
     const config = getConfig();
     this.historyService.updateConfig(config);
-    const summary = await buildSessionSummary({
-      sessionsRoot: config.sessionsRoot,
-      fsPath: state.fsPath,
-      previewMaxMessages: config.previewMaxMessages,
-      timeZone: this.buildDateTime().timeZone,
-    });
+    const existingSummary = this.historyService.findByFsPath(state.fsPath);
+    const summary =
+      existingSummary ??
+      (await buildSessionSummary({
+        sessionsRoot: config.sessionsRoot,
+        fsPath: state.fsPath,
+        previewMaxMessages: config.previewMaxMessages,
+        timeZone: this.buildDateTime().timeZone,
+      }));
     if (!summary) return;
 
     const displaySummary = await this.historyService.resolveDisplaySummary(

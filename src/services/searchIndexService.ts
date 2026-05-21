@@ -8,7 +8,7 @@ import { readJson, writeJson } from "../storage/jsonStorage";
 import { normalizeWhitespace } from "../utils/textUtils";
 import type { DebugLogger } from "./logger";
 
-const SEARCH_INDEX_FILE_VERSION = 6;
+const SEARCH_INDEX_FILE_VERSION = 7;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
 
@@ -39,16 +39,20 @@ interface SearchIndexEntryV1 {
 
 interface SearchIndexContext {
   codexSessionsRoot: string;
+  codexArchivedSessionsRoot: string;
   claudeSessionsRoot: string;
   includeCodex: boolean;
+  includeCodexArchived: boolean;
   includeClaude: boolean;
   indexToolContent: SearchIndexToolContent;
 }
 
 interface SearchIndexCacheContext {
   codexSessionsRoot: string;
+  codexArchivedSessionsRoot?: string;
   claudeSessionsRoot: string;
   includeCodex: boolean;
+  includeCodexArchived?: boolean;
   includeClaude: boolean;
   indexToolContent?: SearchIndexToolContent;
 }
@@ -66,8 +70,10 @@ export class SearchIndexService {
   private loaded = false;
   private context: SearchIndexContext = {
     codexSessionsRoot: "",
+    codexArchivedSessionsRoot: "",
     claudeSessionsRoot: "",
     includeCodex: true,
+    includeCodexArchived: false,
     includeClaude: false,
     indexToolContent: "toolCallsAndOutputs",
   };
@@ -81,8 +87,10 @@ export class SearchIndexService {
   public async ensureUpToDate(params: {
     index: HistoryIndex;
     codexSessionsRoot: string;
+    codexArchivedSessionsRoot: string;
     claudeSessionsRoot: string;
     includeCodex: boolean;
+    includeCodexArchived: boolean;
     includeClaude: boolean;
     indexToolContent: SearchIndexToolContent;
     token?: vscode.CancellationToken;
@@ -101,8 +109,10 @@ export class SearchIndexService {
 
     const context: SearchIndexContext = {
       codexSessionsRoot: params.codexSessionsRoot,
+      codexArchivedSessionsRoot: params.codexArchivedSessionsRoot,
       claudeSessionsRoot: params.claudeSessionsRoot,
       includeCodex: params.includeCodex,
+      includeCodexArchived: params.includeCodexArchived,
       includeClaude: params.includeClaude,
       indexToolContent: params.indexToolContent,
     };
@@ -1008,8 +1018,14 @@ function isValidCacheFile(value: unknown): value is SearchIndexFileV2 {
   if (obj.version !== SEARCH_INDEX_FILE_VERSION) return false;
   if (!obj.context || typeof obj.context !== "object") return false;
   if (typeof obj.context.codexSessionsRoot !== "string") return false;
+  if (obj.context.codexArchivedSessionsRoot !== undefined && typeof obj.context.codexArchivedSessionsRoot !== "string") {
+    return false;
+  }
   if (typeof obj.context.claudeSessionsRoot !== "string") return false;
   if (typeof obj.context.includeCodex !== "boolean") return false;
+  if (obj.context.includeCodexArchived !== undefined && typeof obj.context.includeCodexArchived !== "boolean") {
+    return false;
+  }
   if (typeof obj.context.includeClaude !== "boolean") return false;
   if (obj.context.indexToolContent !== undefined && !isSearchIndexToolContent(obj.context.indexToolContent)) return false;
   if (!obj.entries || typeof obj.entries !== "object") return false;
@@ -1024,8 +1040,10 @@ function isValidCacheFile(value: unknown): value is SearchIndexFileV2 {
 function normalizeContext(context: SearchIndexCacheContext): SearchIndexContext {
   return {
     codexSessionsRoot: normalizePathKey(context.codexSessionsRoot),
+    codexArchivedSessionsRoot: normalizePathKey(context.codexArchivedSessionsRoot ?? ""),
     claudeSessionsRoot: normalizePathKey(context.claudeSessionsRoot),
     includeCodex: !!context.includeCodex,
+    includeCodexArchived: !!context.includeCodexArchived,
     includeClaude: !!context.includeClaude,
     indexToolContent: normalizeSearchIndexToolContent(context.indexToolContent),
   };
@@ -1036,8 +1054,10 @@ function isSameContext(left: SearchIndexCacheContext, right: SearchIndexCacheCon
   const b = normalizeContext(right);
   return (
     a.codexSessionsRoot === b.codexSessionsRoot &&
+    a.codexArchivedSessionsRoot === b.codexArchivedSessionsRoot &&
     a.claudeSessionsRoot === b.claudeSessionsRoot &&
     a.includeCodex === b.includeCodex &&
+    a.includeCodexArchived === b.includeCodexArchived &&
     a.includeClaude === b.includeClaude &&
     a.indexToolContent === b.indexToolContent
   );

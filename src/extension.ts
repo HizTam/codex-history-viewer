@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 import { resolveUiLanguage, t } from "./i18n";
 import { getConfig, type CodexHistoryViewerConfig } from "./settings";
 import { HistoryService } from "./services/historyService";
-import type { SessionSourceFilter, SessionSummary } from "./sessions/sessionTypes";
+import type { ArchiveLocationFilter, SessionSourceFilter, SessionSummary } from "./sessions/sessionTypes";
 import { PinnedTreeDataProvider } from "./tree/pinnedTree";
 import { HistoryTreeDataProvider, type HistoryViewMode } from "./tree/historyTree";
 import { SearchTreeDataProvider } from "./tree/searchTree";
@@ -11,8 +11,13 @@ import { TranscriptContentProvider } from "./transcript/transcriptProvider";
 import { TranscriptDocumentLinkProvider } from "./transcript/transcriptDocumentLinkProvider";
 import { renderResumeContext } from "./transcript/resumeRenderer";
 import { promoteSessionCopyToToday } from "./services/promoteService";
+import {
+  archiveSessionToArchived,
+  moveSessionFileNoOverwrite,
+  restoreArchivedSessionToActive,
+} from "./services/restoreArchivedSessionService";
 import { cleanupDeletedSessionUndoBackups, deleteSessionsWithConfirmation } from "./services/deleteService";
-import { PinStore } from "./services/pinStore";
+import { PinStore, type PinEntry } from "./services/pinStore";
 import { BookmarkStore, type BookmarkEntry } from "./services/bookmarkStore";
 import { type SearchRequest, runSearchFlow } from "./services/searchService";
 import { type IndexedSearchRole, SearchIndexService } from "./services/searchIndexService";
@@ -27,6 +32,7 @@ import {
 } from "./services/sessionTitleOverrideStore";
 import { AutoRefreshService } from "./services/autoRefreshService";
 import { ChatOpenPositionStore } from "./services/chatOpenPositionStore";
+import { SessionReferenceRelocator } from "./services/sessionReferenceRelocator";
 import { formatDebugFields, safeDebugBasename, sanitizeDebugError } from "./services/debugLogUtils";
 import { type UndoCleanupReason, type UndoPostRefreshMode, UndoService } from "./services/undoService";
 import { OutputChannelLogger } from "./services/logger";
@@ -71,7 +77,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const PINNED_TAG_FILTER_KEY = "codexHistoryViewer.pinnedTagFilter.v1";
   const SEARCH_TAG_FILTER_KEY = "codexHistoryViewer.searchTagFilter.v1";
   const LAST_SEARCH_REQUEST_KEY = "codexHistoryViewer.lastSearchRequest.v1";
+  const ARCHIVE_LOCATION_FILTER_KEY = "codexHistoryViewer.archiveLocationFilter.v1";
+  const LEGACY_SHOW_ARCHIVED_SESSIONS_KEY = "codexHistoryViewer.showArchivedSessions.v1";
   const SEARCH_DEFAULT_ROLES_CONFIG = "search.defaultRoles";
+  let archiveLocationFilter: ArchiveLocationFilter = sanitizeArchiveLocationFilter(
+    context.workspaceState.get(ARCHIVE_LOCATION_FILTER_KEY),
+    context.workspaceState.get(LEGACY_SHOW_ARCHIVED_SESSIONS_KEY),
+  );
 
   const updateUiLanguageContext = (): void => {
     // Keep the UI language context up to date for menu visibility switching.
@@ -90,6 +102,36 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   };
   updateHandoffMenuContext();
+  const updateArchivedSessionsContext = (): void => {
+    const latestConfig = getConfig();
+    const showArchivedSessions = archiveLocationFilter !== "activeOnly";
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.codexArchivedSessionsEnabled",
+      latestConfig.enableCodexArchivedSessions,
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.codexSourceConfigured",
+      latestConfig.enableCodexSource,
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.archiveLocationFilter",
+      archiveLocationFilter,
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.showArchivedSessions",
+      showArchivedSessions,
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.archivedOnly",
+      archiveLocationFilter === "archivedOnly",
+    );
+  };
+  updateArchivedSessionsContext();
 
   const pinStore = new PinStore(context.globalState);
   const bookmarkStore = new BookmarkStore(context.globalState);
@@ -98,6 +140,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const searchPresetStore = new SearchPresetStore(context.globalState);
   const chatOpenPositionStore = new ChatOpenPositionStore(context.globalState);
   const logger = new OutputChannelLogger();
+  const sessionReferenceRelocator = new SessionReferenceRelocator(
+    annotationStore,
+    bookmarkStore,
+    chatOpenPositionStore,
+    logger,
+  );
   context.subscriptions.push(logger);
   const historyService = new HistoryService(context.globalStorageUri, config, titleOverrideStore, logger);
   const searchIndexService = new SearchIndexService(context.globalStorageUri, logger);
@@ -157,6 +205,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceCodexEnabled", true);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceClaudeEnabled", true);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historySourceSwitchable", true);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasMultiSelection", false);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasMultiSessionSelection", false);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.canArchiveSelection", false);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.canRestoreArchivedSelection", false);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasMixedArchiveSelection", false);
 
   let pinnedTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(PINNED_TAG_FILTER_KEY));
   let historyViewMode: HistoryViewMode = sanitizeHistoryViewMode(context.workspaceState.get(HISTORY_VIEW_MODE_KEY));
@@ -174,6 +227,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     annotationStore,
     historySourceFilter,
     pinnedTagFilter,
+    historySourceFilter === "claude" ? "all" : archiveLocationFilter,
     context.extensionUri,
   );
   const historyProvider = new HistoryTreeDataProvider(
@@ -185,10 +239,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyProjectCwd,
     historySourceFilter,
     historyTagFilter,
+    historySourceFilter === "claude" ? "all" : archiveLocationFilter,
     context.extensionUri,
   );
-  const searchProvider = new SearchTreeDataProvider(pinStore, annotationStore, context.extensionUri);
+  const searchProvider = new SearchTreeDataProvider(
+    pinStore,
+    annotationStore,
+    historySourceFilter === "claude" ? "all" : archiveLocationFilter,
+    context.extensionUri,
+  );
   let lastHistoryRefreshAt: number | null = null;
+
+  const resolveEffectiveArchiveLocationFilter = (): ArchiveLocationFilter =>
+    historySourceFilter === "claude" ? "all" : archiveLocationFilter;
+
+  const syncArchiveLocationFilterToProviders = (): void => {
+    const effectiveArchiveLocationFilter = resolveEffectiveArchiveLocationFilter();
+    pinnedProvider.setArchiveLocationFilter(effectiveArchiveLocationFilter);
+    historyProvider.setArchiveLocationFilter(effectiveArchiveLocationFilter);
+    searchProvider.setArchiveLocationFilter(effectiveArchiveLocationFilter);
+  };
 
   const isCodexSourceEnabled = (sourceFilter: SessionSourceFilter): boolean =>
     sourceFilter === "all" || sourceFilter === "codex";
@@ -202,9 +272,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const isHistorySourceSwitchable = (): boolean => resolveLockedHistorySource(getConfig()) === null;
 
   const getHistorySourceOptionsForPrompt = (): SessionSourceFilter[] => {
-    const locked = resolveLockedHistorySource(getConfig());
+    const cfg = getConfig();
+    const locked = resolveLockedHistorySource(cfg);
     if (locked) return [locked];
-    return ["all", "codex", "claude"];
+    const out: SessionSourceFilter[] = ["all"];
+    if (cfg.enableCodexSource || cfg.enableCodexArchivedSessions) out.push("codex");
+    if (cfg.enableClaudeSource) out.push("claude");
+    return out;
   };
 
   const buildSourceFilterSummary = (): string => {
@@ -214,6 +288,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return t("history.filter.sourceLabel", sourceLabel);
   };
 
+  const buildArchiveLocationFilterSummary = (): string => {
+    if (historySourceFilter === "claude") return "";
+    if (archiveLocationFilter === "activeOnly") return "";
+    return t("archiveLocation.summary", getArchiveLocationLabel(archiveLocationFilter));
+  };
+
   const buildHistoryFilterSummary = (): string => {
     const parts: string[] = [];
     const dateValue = getDateScopeValue(historyFilter);
@@ -221,6 +301,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (historyProjectCwd) parts.push(t("history.filter.projectLabel", safeDisplayPath(historyProjectCwd, 60)));
     const sourceSummary = buildSourceFilterSummary();
     if (sourceSummary) parts.push(sourceSummary);
+    const archiveLocationSummary = buildArchiveLocationFilterSummary();
+    if (archiveLocationSummary) parts.push(archiveLocationSummary);
     if (historyTagFilter.length > 0) parts.push(`tags: ${historyTagFilter.map((tag) => `#${tag}`).join(", ")}`);
     return parts.join(" / ");
   };
@@ -233,6 +315,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (session) return session.source;
 
     if (isPathInsideRoot(fsPath, cfg.sessionsRoot)) return "codex";
+    if (isPathInsideRoot(fsPath, cfg.codexArchivedSessionsRoot)) return "codex";
     if (isPathInsideRoot(fsPath, cfg.claudeSessionsRoot)) return "claude";
 
     const base = path.basename(fsPath).toLowerCase();
@@ -245,9 +328,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     source: "codex" | "claude" | null,
     cfg: CodexHistoryViewerConfig,
   ): boolean => {
-    if (source === "codex") return cfg.enableCodexSource;
+    if (source === "codex") return cfg.enableCodexSource || cfg.enableCodexArchivedSessions;
     if (source === "claude") return cfg.enableClaudeSource;
     return false;
+  };
+
+  const isArchivedPinEntry = (pin: PinEntry, cfg: CodexHistoryViewerConfig): boolean => {
+    if (pin.archiveState === "archived") return true;
+    if (pin.rootKind === "codexArchivedSessions") return true;
+    return isPathInsideRoot(pin.fsPath, cfg.codexArchivedSessionsRoot);
+  };
+
+  const isPinVisibleInStatus = (pin: PinEntry, cfg: CodexHistoryViewerConfig): boolean => {
+    if (isArchivedPinEntry(pin, cfg) && !cfg.enableCodexArchivedSessions) return false;
+    const source = resolvePinnedEntrySource(pin.fsPath, cfg);
+    return isSourceEnabledInConfig(source, cfg);
   };
 
   const countEnabledPins = (cfg: CodexHistoryViewerConfig): { pinCount: number; missingPinCount: number } => {
@@ -256,8 +351,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     let missingPinCount = 0;
 
     for (const p of pins) {
-      const source = resolvePinnedEntrySource(p.fsPath, cfg);
-      if (!isSourceEnabledInConfig(source, cfg)) continue;
+      if (!isPinVisibleInStatus(p, cfg)) continue;
       pinCount += 1;
       if (!historyService.findByFsPath(p.fsPath)) missingPinCount += 1;
     }
@@ -278,14 +372,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const statusProvider = new StatusTreeDataProvider(() => {
     const cfg = getConfig();
     const sessions = historyService.getIndex().sessions;
-    const codexSessionCount = sessions.filter((s) => s.source === "codex").length;
+    const codexSessionCount = sessions.filter((s) => s.source === "codex" && s.storage.archiveState === "active").length;
+    const codexArchivedSessionCount = sessions.filter((s) => s.source === "codex" && s.storage.archiveState === "archived").length;
     const claudeSessionCount = sessions.filter((s) => s.source === "claude").length;
     const pinCounters = countEnabledPins(cfg);
 
     return {
       enableCodexSource: cfg.enableCodexSource,
+      enableCodexArchivedSessions: cfg.enableCodexArchivedSessions,
       enableClaudeSource: cfg.enableClaudeSource,
       codexSessionCount,
+      codexArchivedSessionCount,
       claudeSessionCount,
       pinCount: pinCounters.pinCount,
       missingPinCount: pinCounters.missingPinCount,
@@ -295,12 +392,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       trashCount: storageStats.trashFileCount,
       handoffCount: storageStats.handoffCount,
       handoffBytes: storageStats.handoffBytes,
-      searchHitCount: searchProvider.root?.totalHits ?? 0,
+      searchHitCount: searchProvider.root ? searchProvider.visibleTotalHits : 0,
       currentSearchRoles: resolveStatusCurrentSearchRoles(),
       currentSearchTagFilter: searchTagFilter,
       filterSummary: buildHistoryFilterSummary(),
       currentProjectCwd: resolveStatusCurrentProjectCwd(),
       codexSessionsRoot: cfg.sessionsRoot,
+      codexArchivedSessionsRoot: cfg.codexArchivedSessionsRoot,
       claudeSessionsRoot: cfg.claudeSessionsRoot,
       lastRefreshAt: lastHistoryRefreshAt,
       extensionVersion: resolveExtensionVersion(context),
@@ -361,6 +459,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const collectSessionsFromTargets = (targets: readonly unknown[]): SessionSummary[] => {
     const byKey = new Map<string, SessionSummary>();
     const push = (session: SessionSummary): void => {
+      if (!matchesArchiveLocationFilter(session, resolveEffectiveArchiveLocationFilter())) return;
       byKey.set(normalizeCacheKey(session.fsPath), session);
     };
     const pushMany = (sessions: readonly SessionSummary[]): void => {
@@ -461,13 +560,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (fsPaths.length === 0) return;
 
       // Only allow pinning sessions present in the history index (prevents mixing in external drag-and-drop items).
-      const candidates = fsPaths
-        .map((p) => historyService.findByFsPath(p)?.fsPath)
-        .filter((p): p is string => typeof p === "string" && p.length > 0);
-      const unique = dedupeFsPaths(candidates);
-      if (unique.length === 0) return;
+      const byKey = new Map<string, SessionSummary>();
+      for (const fsPath of fsPaths) {
+        const session = historyService.findByFsPath(fsPath);
+        if (!session) continue;
+        byKey.set(normalizeCacheKey(session.fsPath), session);
+      }
+      const sessions = Array.from(byKey.values());
+      if (sessions.length === 0) return;
 
-      const { pinned, skipped } = await pinStore.pinMany(unique);
+      const { pinned, skipped } = await pinStore.pinSessions(sessions);
       refreshViews();
 
       if (pinned === 1 && skipped === 0) {
@@ -575,6 +677,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const parts: string[] = [];
     const sourceSummary = buildSourceFilterSummary();
     if (sourceSummary) parts.push(sourceSummary);
+    const archiveLocationSummary = buildArchiveLocationFilterSummary();
+    if (archiveLocationSummary) parts.push(archiveLocationSummary);
     if (pinnedTagFilter.length > 0) {
       parts.push(`tags: ${pinnedTagFilter.map((tag) => `#${tag}`).join(", ")}`);
     }
@@ -588,14 +692,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const buildSearchTagFilterSummary = (): string => {
-    if (searchTagFilter.length === 0) return "";
-    return t("search.tagFilter.summary", searchTagFilter.map((tag) => `#${tag}`).join(", "));
+    const parts: string[] = [];
+    const archiveLocationSummary = buildArchiveLocationFilterSummary();
+    if (archiveLocationSummary) parts.push(archiveLocationSummary);
+    if (searchTagFilter.length > 0) parts.push(t("search.tagFilter.summary", searchTagFilter.map((tag) => `#${tag}`).join(", ")));
+    return parts.join(" / ");
   };
 
   const updateSearchViewDescription = (): void => {
     const v = buildSearchTagFilterSummary();
     searchView.description = v;
-    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.searchTagFiltered", v.length > 0);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.searchTagFiltered", searchTagFilter.length > 0);
   };
 
   const isSameTagFilter = (left: readonly string[], right: readonly string[]): boolean => {
@@ -662,6 +769,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyProvider.setFilters(historyFilter, historyProjectCwd, historySourceFilter, historyTagFilter);
     historyProvider.refresh();
     pinnedProvider.setSourceFilter(historySourceFilter);
+    syncArchiveLocationFilterToProviders();
     pinnedProvider.refresh();
     updateHistoryViewDescription();
     updatePinnedViewDescription();
@@ -764,6 +872,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const handoffEnabledChanged = e.affectsConfiguration("codexHistoryViewer.handoff.enabled");
       const sessionsRootChanged =
         e.affectsConfiguration("codexHistoryViewer.sessionsRoot") ||
+        e.affectsConfiguration("codexHistoryViewer.codex.archivedSessionsRoot") ||
+        e.affectsConfiguration("codexHistoryViewer.codex.archivedSessions.root") ||
+        e.affectsConfiguration("codexHistoryViewer.codex.archivedSessions.enabled") ||
         e.affectsConfiguration("codexHistoryViewer.claude.sessionsRoot") ||
         e.affectsConfiguration("codexHistoryViewer.claudeSessionsRoot");
       const historyDateBasisChanged = e.affectsConfiguration("codexHistoryViewer.history.dateBasis");
@@ -812,12 +923,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           historySourceFilter = constrained;
           historyProvider.setSourceFilter(historySourceFilter);
           pinnedProvider.setSourceFilter(historySourceFilter);
+          syncArchiveLocationFilterToProviders();
           void context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
         }
       }
 
       if (uiLanguageChanged) updateUiLanguageContext();
       if (sourcesEnabledChanged || handoffEnabledChanged) updateHandoffMenuContext();
+      if (sourcesEnabledChanged || sessionsRootChanged) updateArchivedSessionsContext();
       updateViewTitles();
       updatePinnedViewDescription();
       updateHistoryViewDescription();
@@ -882,23 +995,80 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await openReusableSessionFromElement(element);
   };
 
+  const collectSessionSelection = (
+    targets: readonly unknown[],
+  ): { sessions: SessionSummary[]; invalidCount: number; rawCount: number } => {
+    const byKey = new Map<string, SessionSummary>();
+    let invalidCount = 0;
+    for (const target of targets) {
+      if (!isSessionNode(target)) {
+        invalidCount += 1;
+        continue;
+      }
+      const session = target.session;
+      const key = normalizeCacheKey(session.fsPath);
+      if (!byKey.has(key)) byKey.set(key, session);
+    }
+    return { sessions: Array.from(byKey.values()), invalidCount, rawCount: targets.length };
+  };
+
+  const updateArchiveSelectionContext = (selection: readonly unknown[]): void => {
+    const { sessions, invalidCount, rawCount } = collectSessionSelection(selection);
+    const hasMultiSelection = rawCount > 1;
+    const hasMultiSessionSelection = sessions.length > 1;
+    const hasInvalidSelection = invalidCount > 0;
+    const allActiveCodex =
+      hasMultiSelection &&
+      !hasInvalidSelection &&
+      sessions.length >= 1 &&
+      sessions.every((session) => session.source === "codex" && session.storage.archiveState === "active");
+    const allArchivedCodex =
+      hasMultiSelection &&
+      !hasInvalidSelection &&
+      sessions.length >= 1 &&
+      sessions.every((session) => session.source === "codex" && session.storage.archiveState === "archived");
+    const hasMixedArchiveSelection =
+      hasMultiSelection && !allActiveCodex && !allArchivedCodex && (hasInvalidSelection || sessions.length > 0);
+
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasMultiSelection", hasMultiSelection);
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.hasMultiSessionSelection",
+      hasMultiSessionSelection,
+    );
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.canArchiveSelection", allActiveCodex);
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.canRestoreArchivedSelection",
+      allArchivedCodex,
+    );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.hasMixedArchiveSelection",
+      hasMixedArchiveSelection,
+    );
+  };
+
   // Track the last interacted view, since multiple views can be visible at the same time.
   let lastSelectionSource: "pinned" | "history" | "search" | null = null;
   context.subscriptions.push(
     pinnedView.onDidChangeSelection((e) => {
       lastSelectionSource = "pinned";
+      updateArchiveSelectionContext(e.selection);
       void tryOpenPreview(e.selection[0]);
     }),
   );
   context.subscriptions.push(
     historyView.onDidChangeSelection((e) => {
       lastSelectionSource = "history";
+      updateArchiveSelectionContext(e.selection);
       void tryOpenPreview(e.selection[0]);
     }),
   );
   context.subscriptions.push(
     searchView.onDidChangeSelection((e) => {
       lastSelectionSource = "search";
+      updateArchiveSelectionContext(e.selection);
       void tryOpenPreview(e.selection[0]);
     }),
   );
@@ -937,9 +1107,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const resolveTargets = (element?: unknown): readonly unknown[] => {
     // When invoked from a context menu, element is provided.
     // If there is multi-selection, apply the same operation to the whole selection.
-    const selection = element === undefined ? resolveActiveSelection() : resolveSelectionForElement(element) ?? resolveActiveSelection();
-    if (element === undefined) return selection;
-    return selection.length > 1 ? selection : [element];
+    if (element === undefined) return resolveActiveSelection();
+    const selection = resolveSelectionForElement(element);
+    return selection && selection.length > 1 ? selection : [element];
   };
 
   const collectOpenTargets = (targets: readonly unknown[]): Array<{ session: SessionSummary; revealMessageIndex?: number }> => {
@@ -955,14 +1125,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return Array.from(byKey.values());
   };
 
+  const hasDirectFsPathArg = (value: unknown): boolean =>
+    !!value &&
+    typeof value === "object" &&
+    !isSessionNode(value) &&
+    typeof (value as { fsPath?: unknown }).fsPath === "string";
+
   const resolveSingleSessionTarget = (elementOrArgs?: unknown): SessionSummary | undefined => {
     // Prefer an explicit fsPath argument from the webview; otherwise use the selected session.
-    const hasDirectFsPath =
-      !!elementOrArgs &&
-      typeof elementOrArgs === "object" &&
-      !isSessionNode(elementOrArgs) &&
-      typeof (elementOrArgs as { fsPath?: unknown }).fsPath === "string";
-    if (hasDirectFsPath) {
+    if (hasDirectFsPathArg(elementOrArgs)) {
       return resolveSessionFromElementOrFsPath(historyService, elementOrArgs);
     }
 
@@ -971,6 +1142,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (openTargets.length > 0) return openTargets[0]!.session;
 
     return resolveSessionFromElementOrActive(historyService, transcriptProvider.scheme, elementOrArgs);
+  };
+
+  const resolveMoveCommandTargets = (
+    elementOrArgs?: unknown,
+  ): { sessions: SessionSummary[]; invalidCount: number; direct: boolean } => {
+    if (hasDirectFsPathArg(elementOrArgs)) {
+      const session = resolveSessionFromElementOrFsPath(historyService, elementOrArgs);
+      return { sessions: session ? [session] : [], invalidCount: session ? 0 : 1, direct: true };
+    }
+
+    const targets = resolveTargets(elementOrArgs);
+    if (targets.length > 0) {
+      const selected = collectSessionSelection(targets);
+      return { sessions: selected.sessions, invalidCount: selected.invalidCount, direct: false };
+    }
+
+    const fallback = resolveSessionFromElementOrActive(historyService, transcriptProvider.scheme, elementOrArgs);
+    return { sessions: fallback ? [fallback] : [], invalidCount: fallback ? 0 : 1, direct: false };
   };
 
   const resolveCodexConversationId = (session: SessionSummary): string | null => {
@@ -1368,7 +1557,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasSearchResults", value);
   };
 
-  const refreshHistoryIndex = async (forceRebuildCache: boolean): Promise<void> => {
+  let historyRefreshQueue: Promise<void> = Promise.resolve();
+  const performHistoryIndexRefresh = async (forceRebuildCache: boolean): Promise<void> => {
     const latestConfig = getConfig();
     historyService.updateConfig(latestConfig);
     const constrainedSource = resolveConstrainedHistorySourceFilter(historySourceFilter, latestConfig);
@@ -1379,9 +1569,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
     }
     await historyService.refresh({ forceRebuildCache });
+    const reconciledPins = await pinStore.reconcile(historyService.getIndex());
+    for (const move of reconciledPins.moves) {
+      await sessionReferenceRelocator.relocate(move.oldFsPath, move.newFsPath);
+    }
     await chatPanels.closeMissingPanels();
     await refreshStorageStats();
     lastHistoryRefreshAt = Date.now();
+  };
+  const refreshHistoryIndex = (forceRebuildCache: boolean): Promise<void> => {
+    const nextRefresh = historyRefreshQueue.then(
+      () => performHistoryIndexRefresh(forceRebuildCache),
+      () => performHistoryIndexRefresh(forceRebuildCache),
+    );
+    historyRefreshQueue = nextRefresh.catch(() => undefined);
+    return nextRefresh;
   };
 
   const rebuildSearchIndex = async (
@@ -1392,8 +1594,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await searchIndexService.ensureUpToDate({
       index: historyService.getIndex(),
       codexSessionsRoot: latestConfig.sessionsRoot,
+      codexArchivedSessionsRoot: latestConfig.codexArchivedSessionsRoot,
       claudeSessionsRoot: latestConfig.claudeSessionsRoot,
       includeCodex: latestConfig.enableCodexSource,
+      includeCodexArchived: latestConfig.enableCodexArchivedSessions,
       includeClaude: latestConfig.enableClaudeSource,
       indexToolContent: latestConfig.searchIndexToolContent,
       token,
@@ -1416,6 +1620,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     statusProvider.refresh();
   };
+
+  const applyArchiveLocationFilter = async (
+    nextArchiveLocationFilter: ArchiveLocationFilter,
+    options: { persist: boolean; rerunSearch: boolean },
+  ): Promise<boolean> => {
+    const nextValue = sanitizeArchiveLocationFilter(nextArchiveLocationFilter);
+    if (archiveLocationFilter === nextValue) return false;
+
+    archiveLocationFilter = nextValue;
+    syncArchiveLocationFilterToProviders();
+    updateArchivedSessionsContext();
+    updatePinnedViewDescription();
+    updateHistoryViewDescription();
+    updateSearchViewDescription();
+
+    if (options.persist) {
+      await context.workspaceState.update(ARCHIVE_LOCATION_FILTER_KEY, archiveLocationFilter);
+    }
+    if (options.rerunSearch && searchProvider.root && lastSearchRequest) {
+      await executeSearch(lastSearchRequest);
+    } else {
+      refreshViews();
+    }
+    return true;
+  };
+
+  const applyArchivedSessionsVisibility = async (
+    nextShowArchivedSessions: boolean,
+    options: { persist: boolean },
+  ): Promise<boolean> =>
+    applyArchiveLocationFilter(nextShowArchivedSessions ? "all" : "activeOnly", {
+      persist: options.persist,
+      rerunSearch: true,
+    });
 
   const computeAutoRefreshConsumerVisible = (): boolean =>
     historyView.visible || chatPanels.hasOpenAutoRefreshConsumer();
@@ -1539,6 +1777,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         request,
         defaultRoleFilter: getConfiguredDefaultSearchRoles(),
         tagFilter: searchTagFilter,
+        archiveLocationFilter: resolveEffectiveArchiveLocationFilter(),
       },
     );
     if (!results) return false;
@@ -1560,6 +1799,201 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       return false;
     }
     return executeSearch(preset.request);
+  };
+
+  const pushRestoreArchivedUndo = (pairs: Array<{ archivedFsPath: string; activeFsPath: string }>): void => {
+    if (pairs.length === 0) return;
+    const label = pairs.length === 1 ? t("undo.label.restoreArchived") : t("undo.label.restoreArchivedMulti", pairs.length);
+    pushUndoAction(label, async () => {
+      for (const pair of pairs) {
+        if (!(await pathExists(pair.activeFsPath))) continue;
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(pair.archivedFsPath)));
+        await moveSessionFileNoOverwrite(pair.activeFsPath, pair.archivedFsPath);
+        await sessionReferenceRelocator.relocate(pair.activeFsPath, pair.archivedFsPath);
+      }
+    });
+  };
+
+  const restoreArchivedSessions = async (
+    sessions: readonly SessionSummary[],
+  ): Promise<{ activeFsPath?: string; success: boolean }> => {
+    if (sessions.length === 0) {
+      void vscode.window.showInformationMessage(t("app.restoreArchivedUnsupported"));
+      return { success: false };
+    }
+    if (sessions.some((session) => session.source !== "codex" || session.storage.archiveState !== "archived")) {
+      void vscode.window.showInformationMessage(t("app.restoreArchivedUnsupported"));
+      return { success: false };
+    }
+
+    const confirm = await vscode.window.showWarningMessage(
+      sessions.length === 1 ? t("app.restoreArchivedConfirm") : t("app.restoreArchivedConfirmMulti", sessions.length),
+      { modal: true },
+      t("app.restoreArchivedMove"),
+    );
+    if (confirm !== t("app.restoreArchivedMove")) return { success: false };
+
+    const latestConfig = getConfig();
+    const undoPairs: Array<{ archivedFsPath: string; activeFsPath: string }> = [];
+    let restored = 0;
+    let alreadyActive = 0;
+    let failed = 0;
+    let cancelled = 0;
+    let firstActiveFsPath: string | undefined;
+
+    await vscode.window.withProgress(
+      {
+        location: sessions.length === 1 ? vscode.ProgressLocation.Window : vscode.ProgressLocation.Notification,
+        title: sessions.length === 1 ? t("app.restoreArchivedProgress") : t("app.restoreArchivedProgressMulti", sessions.length),
+        cancellable: sessions.length > 1,
+      },
+      async (progress, token) => {
+        for (let i = 0; i < sessions.length; i += 1) {
+          if (token.isCancellationRequested) {
+            cancelled = sessions.length - i;
+            break;
+          }
+          const session = sessions[i]!;
+          if (sessions.length > 1) progress.report({ message: `${i + 1}/${sessions.length}` });
+          try {
+            const result = await restoreArchivedSessionToActive(session, historyService, latestConfig, {
+              extensionVersion: resolveExtensionVersion(context),
+              logger,
+            });
+            if (!firstActiveFsPath) firstActiveFsPath = result.activeFsPath;
+            if (result.kind === "restored") {
+              restored += 1;
+              await sessionReferenceRelocator.relocate(result.archivedFsPath, result.activeFsPath);
+              if (result.undoable) undoPairs.push({ archivedFsPath: result.archivedFsPath, activeFsPath: result.activeFsPath });
+            } else {
+              alreadyActive += 1;
+            }
+          } catch (error) {
+            failed += 1;
+            logger.debug(
+              formatDebugFields("restoreArchivedSession.failed", {
+                error: sanitizeDebugError(error),
+              }),
+            );
+          }
+        }
+      },
+    );
+
+    pushRestoreArchivedUndo(undoPairs);
+    await refreshHistoryIndex(false);
+    refreshViews({ clearSearch: true });
+    offerHistoryReloadHint();
+
+    if (sessions.length === 1) {
+      if (restored > 0) {
+        if (undoPairs.length > 0) offerUndo(t("app.restoreArchivedDone"));
+        else void vscode.window.showInformationMessage(t("app.restoreArchivedDone"));
+      } else if (alreadyActive > 0) {
+        void vscode.window.showInformationMessage(t("app.restoreArchivedAlreadyActive"));
+      } else if (failed > 0) {
+        void vscode.window.showErrorMessage(t("app.restoreArchivedFailed"));
+      }
+    } else if (failed > 0 || cancelled > 0 || alreadyActive > 0) {
+      void vscode.window.showInformationMessage(
+        t("app.restoreArchivedPartialMulti", restored, alreadyActive, failed, cancelled),
+      );
+    } else {
+      if (undoPairs.length > 0) offerUndo(t("app.restoreArchivedDoneMulti", restored));
+      else void vscode.window.showInformationMessage(t("app.restoreArchivedDoneMulti", restored));
+    }
+
+    return { activeFsPath: firstActiveFsPath, success: restored > 0 || alreadyActive > 0 };
+  };
+
+  const archiveSessions = async (sessions: readonly SessionSummary[]): Promise<{ archivedFsPath?: string; success: boolean }> => {
+    if (sessions.length === 0) {
+      void vscode.window.showInformationMessage(t("app.archiveSessionUnsupported"));
+      return { success: false };
+    }
+    if (sessions.some((session) => session.source !== "codex" || session.storage.archiveState !== "active")) {
+      void vscode.window.showInformationMessage(t("app.archiveSessionUnsupported"));
+      return { success: false };
+    }
+
+    const latestConfig = getConfig();
+    if (!latestConfig.enableCodexArchivedSessions) {
+      void vscode.window.showInformationMessage(t("app.archiveSessionUnavailable"));
+      return { success: false };
+    }
+
+    const confirm = await vscode.window.showWarningMessage(
+      sessions.length === 1 ? t("app.archiveSessionConfirm") : t("app.archiveSessionConfirmMulti", sessions.length),
+      { modal: true },
+      t("app.archiveSessionMove"),
+    );
+    if (confirm !== t("app.archiveSessionMove")) return { success: false };
+
+    let archived = 0;
+    let alreadyArchived = 0;
+    let failed = 0;
+    let cancelled = 0;
+    let firstArchivedFsPath: string | undefined;
+
+    await vscode.window.withProgress(
+      {
+        location: sessions.length === 1 ? vscode.ProgressLocation.Window : vscode.ProgressLocation.Notification,
+        title: sessions.length === 1 ? t("app.archiveSessionProgress") : t("app.archiveSessionProgressMulti", sessions.length),
+        cancellable: sessions.length > 1,
+      },
+      async (progress, token) => {
+        for (let i = 0; i < sessions.length; i += 1) {
+          if (token.isCancellationRequested) {
+            cancelled = sessions.length - i;
+            break;
+          }
+          const session = sessions[i]!;
+          if (sessions.length > 1) progress.report({ message: `${i + 1}/${sessions.length}` });
+          try {
+            const result = await archiveSessionToArchived(session, latestConfig, {
+              extensionVersion: resolveExtensionVersion(context),
+              logger,
+            });
+            if (!firstArchivedFsPath) firstArchivedFsPath = result.archivedFsPath;
+            if (result.kind === "archived") {
+              archived += 1;
+              await sessionReferenceRelocator.relocate(result.activeFsPath, result.archivedFsPath);
+            } else {
+              alreadyArchived += 1;
+            }
+          } catch (error) {
+            failed += 1;
+            logger.debug(
+              formatDebugFields("archiveSession.failed", {
+                error: sanitizeDebugError(error),
+              }),
+            );
+          }
+        }
+      },
+    );
+
+    await refreshHistoryIndex(false);
+    refreshViews({ clearSearch: true });
+    offerHistoryReloadHint();
+
+    if (sessions.length === 1) {
+      if (archived > 0) {
+        void vscode.window.showInformationMessage(t("app.archiveSessionDone"));
+      } else if (alreadyArchived > 0) {
+        void vscode.window.showInformationMessage(t("app.archiveSessionAlreadyArchived"));
+      } else if (failed > 0) {
+        void vscode.window.showErrorMessage(t("app.archiveSessionFailed"));
+      }
+    } else if (failed > 0 || cancelled > 0 || alreadyArchived > 0) {
+      void vscode.window.showInformationMessage(
+        t("app.archiveSessionPartialMulti", archived, alreadyArchived, failed, cancelled),
+      );
+    } else {
+      void vscode.window.showInformationMessage(t("app.archiveSessionDoneMulti", archived));
+    }
+
+    return { archivedFsPath: firstArchivedFsPath, success: archived > 0 || alreadyArchived > 0 };
   };
 
   // Register commands (palette + context menus).
@@ -1615,6 +2049,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         async () => refreshHistoryIndex(false),
       );
       statusProvider.refresh();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.filterArchiveLocation", async () => {
+      if (historySourceFilter === "claude") return false;
+      await applyArchiveLocationFilter(nextArchiveLocationFilter(archiveLocationFilter), {
+        persist: true,
+        rerunSearch: true,
+      });
+      return true;
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.toggleArchivedSessionsVisibility", async () => {
+      await applyArchivedSessionsVisibility(archiveLocationFilter === "activeOnly", { persist: true });
     }),
   );
 
@@ -1806,6 +2257,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.resumeSessionInCodex", async (elementOrArgs?: unknown) => {
       const session = resolveSingleSessionTarget(elementOrArgs);
       if (!session) return false;
+      if (session.storage.archiveState === "archived") {
+        void vscode.window.showInformationMessage(t("app.resumeArchivedUseRestore"));
+        return false;
+      }
 
       const opened = await openSessionInOpenAiCodex(session);
       if (!opened) return false;
@@ -2182,10 +2637,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.cleanupMissingPins", async () => {
-      const missingPaths = pinStore
+      const missingPins = pinStore
         .getAll()
-        .map((x) => x.fsPath)
-        .filter((fsPath) => !historyService.findByFsPath(fsPath));
+        .filter((pin) => !historyService.findByFsPath(pin.fsPath));
+      const missingPaths = missingPins.map((pin) => pin.fsPath);
       if (missingPaths.length === 0) {
         void vscode.window.showInformationMessage(t("pins.noMissing"));
         return;
@@ -2202,7 +2657,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       refreshViews();
       if (unpinned > 0) {
         pushUndoAction(t("undo.label.cleanupMissingPins", unpinned), async () => {
-          await pinStore.pinMany(missingPaths);
+          await pinStore.restore(missingPins);
           refreshViews();
         });
         offerUndo(t("app.cleanupMissingPinsDone", unpinned));
@@ -2735,10 +3190,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         projectCwd: historyProjectCwd,
         source: historySourceFilter,
         sourceOptions: getHistorySourceOptionsForPrompt(),
+        archiveLocation: archiveLocationFilter,
         tags: historyTagFilter,
         availableTags: annotationStore.listTagStats().map((x) => x.tag),
       });
       if (!change) return;
+      if (change.kind === "archiveLocation") {
+        await applyArchiveLocationFilter(change.archiveLocation, { persist: true, rerunSearch: true });
+        return;
+      }
       const next = {
         date: change.kind === "date" ? change.date : historyFilter,
         projectCwd: change.kind === "project" ? change.projectCwd : historyProjectCwd,
@@ -2752,6 +3212,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearHistoryFilter", async () => {
       await applyHistoryFilters({ date: { kind: "all" }, projectCwd: null, source: "all", tags: [] }, { persist: true });
+      await applyArchiveLocationFilter("activeOnly", { persist: true, rerunSearch: true });
     }),
   );
 
@@ -2920,6 +3381,35 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
     }),
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.restoreArchivedSession", async (elementOrArgs?: unknown) => {
+      const { sessions, invalidCount, direct } = resolveMoveCommandTargets(elementOrArgs);
+      if (invalidCount > 0 || sessions.length === 0) {
+        void vscode.window.showInformationMessage(t("app.restoreArchivedUnsupported"));
+        return false;
+      }
+      const revealMessageIndex = direct ? resolveRevealIndexFromArgs(elementOrArgs) : undefined;
+      const result = await restoreArchivedSessions(sessions);
+      if (result.activeFsPath && typeof revealMessageIndex === "number") {
+        await chatOpenPositionStore.set(result.activeFsPath, revealMessageIndex);
+      }
+      return result.activeFsPath ? { activeFsPath: result.activeFsPath } : result.success;
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.archiveSession", async (elementOrArgs?: unknown) => {
+      const { sessions, invalidCount } = resolveMoveCommandTargets(elementOrArgs);
+      if (invalidCount > 0 || sessions.length === 0) {
+        void vscode.window.showInformationMessage(t("app.archiveSessionUnsupported"));
+        return false;
+      }
+      const result = await archiveSessions(sessions);
+      return result.archivedFsPath ? { archivedFsPath: result.archivedFsPath } : result.success;
+    }),
+  );
+
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.promoteSession", async (element?: unknown) => {
       // When multiple items are selected, bulk "promote" (copy) the selected sessions to today.
@@ -2931,8 +3421,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const key = normalizeCacheKey(s.fsPath);
         if (!byKey.has(key)) byKey.set(key, s);
       }
-      const sessions = Array.from(byKey.values());
-      if (sessions.length === 0) return;
+      const selectedSessions = Array.from(byKey.values());
+      const sessions = selectedSessions.filter((s) => s.storage.archiveState !== "archived");
+      if (sessions.length === 0) {
+        if (selectedSessions.length > 0) void vscode.window.showInformationMessage(t("app.promoteArchivedUnsupported"));
+        return;
+      }
 
       if (sessions.length === 1) {
         const choice = await vscode.window.showWarningMessage(t("app.promoteConfirm"), { modal: true }, "OK");
@@ -3013,17 +3507,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         typeof element === "object" &&
         !isSessionNode(element) &&
         typeof (element as { fsPath?: unknown }).fsPath === "string";
-      let fsPaths: string[] = [];
+      let sessions: SessionSummary[] = [];
       if (hasDirectFsPath) {
         const session = resolveSessionFromElementOrFsPath(historyService, element);
-        fsPaths = session ? [session.fsPath] : [];
+        sessions = session ? [session] : [];
       } else {
         const targets = resolveTargets(element);
-        fsPaths = collectSessionFsPaths(targets);
+        sessions = collectSessionsFromTargets(targets);
       }
+      const fsPaths = sessions.map((session) => session.fsPath);
       if (fsPaths.length === 0) return;
       const pinnedBefore = new Set(fsPaths.filter((p) => pinStore.isPinned(p)).map((p) => normalizeCacheKey(p)));
-      const { pinned, skipped } = await pinStore.pinMany(fsPaths);
+      const { pinned, skipped } = await pinStore.pinSessions(sessions);
       refreshViews();
       const newlyPinned = fsPaths.filter((p) => !pinnedBefore.has(normalizeCacheKey(p)));
       if (newlyPinned.length > 0) {
@@ -3059,12 +3554,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         fsPaths = collectUnpinFsPaths(targets);
       }
       if (fsPaths.length === 0) return;
-      const pinnedNow = fsPaths.filter((p) => pinStore.isPinned(p));
+      const fsPathKeys = new Set(fsPaths.map((p) => normalizeCacheKey(p)));
+      const pinnedNow = pinStore.getAll().filter((pin) => fsPathKeys.has(pin.cacheKey));
       const { unpinned, skipped } = await pinStore.unpinMany(fsPaths);
       refreshViews();
       if (pinnedNow.length > 0) {
         pushUndoAction(t("undo.label.unpin", pinnedNow.length), async () => {
-          await pinStore.pinMany(pinnedNow);
+          await pinStore.restore(pinnedNow);
         });
         offerUndo(t("undo.offer.unpin", pinnedNow.length));
       }
@@ -3205,6 +3701,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.openSessionHandoff", "codexHistoryViewer.openSessionHandoff");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.promoteSession", "codexHistoryViewer.promoteSession");
   registerUiCommandAlias("codexHistoryViewer.ui.en.promoteSession", "codexHistoryViewer.promoteSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.restoreArchivedSession", "codexHistoryViewer.restoreArchivedSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.restoreArchivedSession", "codexHistoryViewer.restoreArchivedSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.archiveSession", "codexHistoryViewer.archiveSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.archiveSession", "codexHistoryViewer.archiveSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.archiveLocationActiveOnly", "codexHistoryViewer.filterArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.archiveLocationActiveOnly", "codexHistoryViewer.filterArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.archiveLocationAll", "codexHistoryViewer.filterArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.archiveLocationAll", "codexHistoryViewer.filterArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.archiveLocationArchivedOnly", "codexHistoryViewer.filterArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.archiveLocationArchivedOnly", "codexHistoryViewer.filterArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.archiveLocationDisabled", "codexHistoryViewer.filterArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.archiveLocationDisabled", "codexHistoryViewer.filterArchiveLocation");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.pinSession", "codexHistoryViewer.pinSession");
   registerUiCommandAlias("codexHistoryViewer.ui.en.pinSession", "codexHistoryViewer.pinSession");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.unpinSession", "codexHistoryViewer.unpinSession");
@@ -3291,26 +3799,59 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.ja.undoLastAction", "codexHistoryViewer.undoLastAction");
   registerUiCommandAlias("codexHistoryViewer.ui.en.undoLastAction", "codexHistoryViewer.undoLastAction");
 
-  // Initial load on activation.
-  try {
-    await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
-      async () => {
-        await refreshHistoryIndex(false);
-      },
-    );
-  } finally {
+  const completeInitialTreeLoad = (): void => {
     historyProvider.markInitialLoadComplete();
     pinnedProvider.markInitialLoadComplete();
+    refreshViews();
+    controlProvider.refresh();
+  };
+
+  const runInitialBackgroundRefresh = (): void => {
+    void (async () => {
+      try {
+        await refreshHistoryIndex(false);
+        refreshViews();
+        controlProvider.refresh();
+        chatPanels.refreshTitles();
+      } catch (error) {
+        logger.debug(`history.backgroundRefresh failed error=${sanitizeDebugError(error)}`);
+      }
+    })();
+  };
+
+  // Initial load on activation.
+  let loadedCachedIndex = false;
+  try {
+    loadedCachedIndex = await historyService.loadCachedIndexIfFresh();
+  } catch (error) {
+    logger.debug(`history.cacheImmediate failed error=${sanitizeDebugError(error)}`);
   }
-  refreshViews();
-  controlProvider.refresh();
+
+  if (loadedCachedIndex) {
+    completeInitialTreeLoad();
+    runInitialBackgroundRefresh();
+  } else {
+    try {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
+        async () => {
+          await refreshHistoryIndex(false);
+        },
+      );
+    } finally {
+      completeInitialTreeLoad();
+    }
+  }
   await autoRefreshService.configure(getConfig(), computeAutoRefreshConsumerVisible(), vscode.window.state.focused);
 }
 
 function sanitizeProjectCwd(value: unknown): string | null {
   const s = typeof value === "string" ? value.trim() : "";
   return s.length > 0 ? s : null;
+}
+
+function sanitizeBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
 }
 
 function sanitizeIndexedSearchRoles(value: unknown): IndexedSearchRole[] {
@@ -3358,9 +3899,55 @@ function sanitizeHistoryViewMode(value: unknown): HistoryViewMode {
   return s === "latest" ? "latest" : "date";
 }
 
+function sanitizeArchiveLocationFilter(value: unknown, legacyShowArchivedSessions?: unknown): ArchiveLocationFilter {
+  const s = typeof value === "string" ? value.trim() : "";
+  if (s === "activeOnly" || s === "all" || s === "archivedOnly") return s;
+  if (legacyShowArchivedSessions !== undefined) {
+    return sanitizeBoolean(legacyShowArchivedSessions, false) ? "all" : "activeOnly";
+  }
+  return "activeOnly";
+}
+
+function getArchiveLocationLabel(value: ArchiveLocationFilter): string {
+  switch (value) {
+    case "all":
+      return t("archiveLocation.all");
+    case "archivedOnly":
+      return t("archiveLocation.archivedOnly");
+    case "activeOnly":
+    default:
+      return t("archiveLocation.activeOnly");
+  }
+}
+
+function nextArchiveLocationFilter(value: ArchiveLocationFilter): ArchiveLocationFilter {
+  switch (value) {
+    case "activeOnly":
+      return "all";
+    case "all":
+      return "archivedOnly";
+    case "archivedOnly":
+    default:
+      return "activeOnly";
+  }
+}
+
+function matchesArchiveLocationFilter(session: SessionSummary, archiveLocationFilter: ArchiveLocationFilter): boolean {
+  switch (archiveLocationFilter) {
+    case "all":
+      return true;
+    case "archivedOnly":
+      return session.source === "codex" && session.storage.archiveState === "archived";
+    case "activeOnly":
+    default:
+      return session.storage.archiveState !== "archived";
+  }
+}
+
 function resolveLockedHistorySource(config: CodexHistoryViewerConfig): SessionSourceFilter | null {
-  if (config.enableCodexSource && !config.enableClaudeSource) return "codex";
-  if (!config.enableCodexSource && config.enableClaudeSource) return "claude";
+  const codexAvailable = config.enableCodexSource || config.enableCodexArchivedSessions;
+  if (codexAvailable && !config.enableClaudeSource) return "codex";
+  if (!codexAvailable && config.enableClaudeSource) return "claude";
   return null;
 }
 
@@ -3397,13 +3984,15 @@ type HistoryFilterChange =
   | { kind: "date"; date: DateScope }
   | { kind: "project"; projectCwd: string | null }
   | { kind: "source"; source: SessionSourceFilter }
+  | { kind: "archiveLocation"; archiveLocation: ArchiveLocationFilter }
   | { kind: "tags"; tags: string[] };
 
 type HistoryFilterPick = vscode.QuickPickItem & {
-  pickKind?: "date" | "project" | "source" | "tags";
+  pickKind?: "date" | "project" | "source" | "archiveLocation" | "tags";
   date?: DateScope;
   projectCwd?: string | null;
   source?: SessionSourceFilter;
+  archiveLocation?: ArchiveLocationFilter;
   tags?: string[];
 };
 
@@ -3414,6 +4003,7 @@ async function promptHistoryFilter(
     projectCwd: string | null;
     source: SessionSourceFilter;
     sourceOptions: SessionSourceFilter[];
+    archiveLocation: ArchiveLocationFilter;
     tags: string[];
     availableTags: string[];
   },
@@ -3480,13 +4070,31 @@ async function promptHistoryFilter(
         ]
       : [];
 
+  const archiveLocationItemsBase: HistoryFilterPick[] = getConfig().enableCodexArchivedSessions
+    ? [
+        { label: t("history.filter.section.location"), kind: vscode.QuickPickItemKind.Separator },
+        ...(["activeOnly", "all", "archivedOnly"] as const).map((archiveLocation) => ({
+          label: getArchiveLocationLabel(archiveLocation),
+          description: archiveLocation === current.archiveLocation ? t("common.current") : undefined,
+          pickKind: "archiveLocation" as const,
+          archiveLocation,
+        })),
+      ]
+    : [];
+
   const tagItemsBase: HistoryFilterPick[] = [
     { label: t("history.tags.separator"), kind: vscode.QuickPickItemKind.Separator },
     { label: t("history.tags.editFilter"), pickKind: "tags" as const, tags: current.tags },
     { label: t("history.tags.clearFilter"), pickKind: "tags" as const, tags: [] },
   ];
 
-  const baseItems: HistoryFilterPick[] = [...dateItemsBase, ...projectItemsBase, ...sourceItemsBase, ...tagItemsBase];
+  const baseItems: HistoryFilterPick[] = [
+    ...dateItemsBase,
+    ...projectItemsBase,
+    ...sourceItemsBase,
+    ...archiveLocationItemsBase,
+    ...tagItemsBase,
+  ];
 
   const isSameDateScope = (a: DateScope, b: DateScope): boolean => a.kind === b.kind && getDateScopeValue(a) === getDateScopeValue(b);
 
@@ -3518,7 +4126,14 @@ async function promptHistoryFilter(
         date: { kind: "day" as const, ymd },
       }));
 
-      qp.items = [...dateItemsBase, ...dayItems, ...projectItemsBase, ...sourceItemsBase, ...tagItemsBase];
+      qp.items = [
+        ...dateItemsBase,
+        ...dayItems,
+        ...projectItemsBase,
+        ...sourceItemsBase,
+        ...archiveLocationItemsBase,
+        ...tagItemsBase,
+      ];
     };
 
     let done = false;
@@ -3545,6 +4160,10 @@ async function promptHistoryFilter(
         finish({ kind: "source", source: sanitizeHistorySourceFilter(picked?.source) });
         return;
       }
+      if (pickKind === "archiveLocation") {
+        finish({ kind: "archiveLocation", archiveLocation: sanitizeArchiveLocationFilter(picked?.archiveLocation) });
+        return;
+      }
       if (pickKind === "tags") {
         finish({ kind: "tags", tags: sanitizeTagFilter(picked?.tags ?? current.tags) });
         return;
@@ -3562,13 +4181,18 @@ async function promptHistoryFilter(
         )
       : undefined;
     const activeSourceItem = sourceItemsBase.find((it) => it.pickKind === "source" && it.source === current.source);
+    const activeArchiveLocationItem = archiveLocationItemsBase.find(
+      (it) => it.pickKind === "archiveLocation" && it.archiveLocation === current.archiveLocation,
+    );
     qp.activeItems = activeDateItem
       ? [activeDateItem]
       : activeProjectItem
         ? [activeProjectItem]
         : activeSourceItem
           ? [activeSourceItem]
-          : [];
+          : activeArchiveLocationItem
+            ? [activeArchiveLocationItem]
+            : [];
     qp.show();
   });
 }
@@ -3592,7 +4216,7 @@ function resolveRevealIndex(element: unknown): number | undefined {
 function resolveRevealIndexFromArgs(args: unknown): number | undefined {
   if (!args || typeof args !== "object") return undefined;
   const v = (args as any).revealMessageIndex;
-  return typeof v === "number" ? v : undefined;
+  return typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.floor(v)) : undefined;
 }
 
 function resolveSessionFromElementOrFsPath(historyService: HistoryService, elementOrArgs: unknown): SessionSummary | undefined {

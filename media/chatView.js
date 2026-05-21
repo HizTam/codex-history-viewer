@@ -316,7 +316,16 @@
   setToolbarIconButton(btnPageSearchClose, CLOSE_ICON_SVG, "Close search");
 
   btnResumeInCodex.addEventListener("click", () => {
-    vscode.postMessage({ type: "resumeInSource" });
+    if (!isArchivedCodexSession()) {
+      vscode.postMessage({ type: "resumeInSource" });
+      return;
+    }
+    persistCurrentChatOpenPosition({ immediate: true });
+    const revealMessageIndex = chatOpenPosition === "lastMessage" ? findTopVisibleMessageIndex() : null;
+    vscode.postMessage({
+      type: "restoreArchivedSession",
+      revealMessageIndex: typeof revealMessageIndex === "number" ? revealMessageIndex : undefined,
+    });
   });
   btnPinToggle.addEventListener("click", () => {
     vscode.postMessage({ type: "togglePin" });
@@ -736,15 +745,30 @@
     return fallback;
   }
 
+  function isArchivedCodexSession() {
+    return !!(
+      model &&
+      model.meta &&
+      model.meta.historySource === "codex" &&
+      model.sessionLocation &&
+      model.sessionLocation.archiveState === "archived"
+    );
+  }
+
   function updateToolbar() {
     const isClaudeSession = !!(model && model.meta && model.meta.historySource === "claude");
-    const resumeLabel = isClaudeSession
+    const archivedCodexSession = isArchivedCodexSession();
+    const resumeLabel = archivedCodexSession
+      ? i18n.restoreArchived || "Move to Codex History"
+      : isClaudeSession
       ? i18n.resumeInClaude || "Resume in Claude Code"
       : i18n.resumeInCodex || "Resume in Codex";
-    const resumeTooltip = isClaudeSession
+    const resumeTooltip = archivedCodexSession
+      ? i18n.restoreArchivedTooltip || resumeLabel
+      : isClaudeSession
       ? i18n.resumeInClaudeTooltip || resumeLabel
       : i18n.resumeInCodexTooltip || resumeLabel;
-    setToolbarButtonWithIcon(btnResumeInCodex, resumeLabel, RESUME_ICON_SVG);
+    setToolbarButtonWithIcon(btnResumeInCodex, resumeLabel, archivedCodexSession ? CARD_RESTORE_ICON_SVG : RESUME_ICON_SVG);
     btnResumeInCodex.title = resumeTooltip;
     btnResumeInCodex.setAttribute("aria-label", resumeTooltip);
 
@@ -1838,6 +1862,9 @@
     if (model.meta && model.meta.cliVersion) metaLines.push(`CLI: ${model.meta.cliVersion}`);
     if (model.meta && model.meta.modelProvider) metaLines.push(`Model Provider: ${model.meta.modelProvider}`);
     if (model.meta && model.meta.source) metaLines.push(`Source: ${model.meta.source}`);
+    if (model.sessionLocation && model.sessionLocation.archiveState === "archived") {
+      metaLines.push(i18n.sessionLocationArchived || "Archived");
+    }
     if (metaLines.length > 0) metaEl.textContent = metaLines.join(" | ");
 
     const items = Array.isArray(model.items) ? model.items : [];

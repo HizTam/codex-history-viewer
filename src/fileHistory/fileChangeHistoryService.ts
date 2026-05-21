@@ -955,7 +955,7 @@ function buildSearchNeedles(target: FileChangeHistoryTarget): string[] {
 }
 
 function isEnabledSource(source: SessionSource, config: CodexHistoryViewerConfig): boolean {
-  return source === "codex" ? config.enableCodexSource : config.enableClaudeSource;
+  return source === "codex" ? config.enableCodexSource || config.enableCodexArchivedSessions : config.enableClaudeSource;
 }
 
 function isSessionAllowedForWorkspace(session: SessionSummary, workspaceRoot: string): boolean {
@@ -1272,7 +1272,7 @@ function resolveSessionTitle(session: SessionSummary, sourceLabel: string, times
 }
 
 function getSourceLabel(source: SessionSource): string {
-  return source === "codex" ? "Codex" : "Claude";
+  return source === "codex" ? "Codex" : "Claude Code";
 }
 
 function getSessionSortTime(session: SessionSummary): number {

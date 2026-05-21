@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
-import type { SessionSource } from "../sessions/sessionTypes";
+import type { ArchiveLocationFilter, SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import {
   SearchHelpNode,
   type SearchHit,
@@ -28,11 +28,18 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 
   private rootNode: SearchRootNode | null = null;
   private sessionNodes: SearchSessionNode[] = [];
+  private archiveLocationFilter: ArchiveLocationFilter = "activeOnly";
   private readonly helpNode = new SearchHelpNode();
 
-  constructor(pinStore: PinStore, annotationStore: SessionAnnotationStore, extensionUri: vscode.Uri) {
+  constructor(
+    pinStore: PinStore,
+    annotationStore: SessionAnnotationStore,
+    archiveLocationFilter: ArchiveLocationFilter,
+    extensionUri: vscode.Uri,
+  ) {
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
+    this.archiveLocationFilter = archiveLocationFilter;
     this.codexIconPath = {
       light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
       dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-codex.svg"),
@@ -45,6 +52,10 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 
   public get root(): SearchRootNode | null {
     return this.rootNode;
+  }
+
+  public get visibleTotalHits(): number {
+    return this.getVisibleSessionNodes().reduce((sum, node) => sum + node.hits.length, 0);
   }
 
   public refresh(): void {
@@ -63,16 +74,21 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     this.refresh();
   }
 
+  public setArchiveLocationFilter(archiveLocationFilter: ArchiveLocationFilter): void {
+    this.archiveLocationFilter = archiveLocationFilter;
+  }
+
   public getTreeItem(element: TreeNode): vscode.TreeItem {
     if (element instanceof SearchRootNode) {
+      const visibleTotalHits = this.visibleTotalHits;
       const item = new vscode.TreeItem(
-        `${element.query} (${element.totalHits})`,
+        `${element.query} (${visibleTotalHits})`,
         vscode.TreeItemCollapsibleState.Expanded,
       );
       const scopeLabel = formatScopeLabel(element);
       item.description = scopeLabel;
       item.contextValue = toTreeItemContextValue(element);
-      item.tooltip = t("tree.tooltip.searchRoot", element.query, scopeLabel || t("search.filter.all"), element.totalHits);
+      item.tooltip = t("tree.tooltip.searchRoot", element.query, scopeLabel || t("search.filter.all"), visibleTotalHits);
       return item;
     }
     if (element instanceof SearchSessionNode) {
@@ -85,7 +101,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         label,
         vscode.TreeItemCollapsibleState.Collapsed,
       );
-      item.description = buildSessionDescription(element.session.cwdShort, annotation?.tags ?? []);
+      item.description = buildSessionDescription(element.session, annotation?.tags ?? []);
       const node = new SessionNode(element.session, pinned);
       item.contextValue = toTreeItemContextValue(node);
       // Show source-specific icons (Codex/Claude) in the list row.
@@ -143,7 +159,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
     if (!element) return this.rootNode ? [this.rootNode] : [this.helpNode];
-    if (element instanceof SearchRootNode) return this.sessionNodes;
+    if (element instanceof SearchRootNode) return this.getVisibleSessionNodes();
     if (element instanceof SearchSessionNode) {
       return element.hits.map((h) => new SearchHitNode(element.session, h, this.rootNode?.query ?? ""));
     }
@@ -164,6 +180,20 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       return this.rootNode;
     }
     return null;
+  }
+
+  private getVisibleSessionNodes(): SearchSessionNode[] {
+    switch (this.archiveLocationFilter) {
+      case "all":
+        return this.sessionNodes;
+      case "archivedOnly":
+        return this.sessionNodes.filter(
+          (node) => node.session.source === "codex" && node.session.storage.archiveState === "archived",
+        );
+      case "activeOnly":
+      default:
+        return this.sessionNodes.filter((node) => node.session.storage.archiveState !== "archived");
+    }
   }
 
   private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {
@@ -193,6 +223,9 @@ function buildSearchSessionTooltip(
   appendSessionTooltipTitleLines(md, node.session);
   appendSessionTooltipDateLines(md, node.session);
   md.appendMarkdown(`Source: ${sourceName(node.session.source)}  \n`);
+  if (node.session.storage.archiveState === "archived") {
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.location"))}: ${escapeForMarkdown(t("session.location.archived"))}  \n`);
+  }
   if (node.session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(node.session.cwdShort)}  \n`);
   if (tags.length > 0) md.appendMarkdown(`Tags: ${escapeForMarkdown(tags.join(", "))}  \n`);
   if (note.trim().length > 0) md.appendMarkdown(`Note: ${escapeForMarkdown(note.trim())}  \n`);
@@ -257,9 +290,10 @@ function formatLocationLabel(hit: {
   return `[#${hit.messageIndex}]`;
 }
 
-function buildSessionDescription(cwdShort: string, tags: readonly string[]): string {
+function buildSessionDescription(session: SessionSummary, tags: readonly string[]): string {
   const parts: string[] = [];
-  if (cwdShort) parts.push(cwdShort);
+  if (session.storage.archiveState === "archived") parts.push(t("tree.description.archived"));
+  if (session.cwdShort) parts.push(session.cwdShort);
   if (tags.length > 0) parts.push(`#${tags.join(" #")}`);
   return parts.join("  ");
 }
@@ -282,5 +316,5 @@ function isSameSearchHit(
 }
 
 function sourceName(source: SessionSource): string {
-  return source === "claude" ? "Claude" : "Codex";
+  return source === "claude" ? "Claude Code" : "Codex";
 }

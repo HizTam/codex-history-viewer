@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.2.0] - 2026-05-21
+
+### Added
+
+- Added optional Codex `archived_sessions` support alongside normal Codex `sessions`, with configurable archive enablement and archive root path under the Codex source.
+- Added archived-session visibility controls for History, Pinned, and Search views with Active Only, All, and Archived Only modes.
+- Added archive-aware History, Search, Markdown transcript, and Chat rendering, including archived location labels and archived visual markers.
+- Added **Move to Archive** for active Codex sessions and **Move to Codex History** for archived Codex sessions, using the official Codex provider when available.
+- Added filesystem fallback for moving archived sessions back to normal Codex history, including conflict-safe destination handling and Undo support for fallback moves.
+- Added multi-select support for moving Codex sessions to archive or back to Codex history, with sequential bulk execution and partial-result notifications.
+- Added archive-aware pin tracking so pinned Codex sessions can follow official archive/unarchive path changes by session identity.
+- Added metadata relocation for archive/unarchive and pin reconciliation, covering annotations, bookmarks, and saved chat open positions when paths move.
+- Added Status rows for Codex archived session count and Codex archived sessions root when both the Codex source and archived sessions are enabled.
+
+### Changed
+
+- `Sources: Enabled` remains the top-level source switch for Codex and Claude Code; Codex archived sessions are disabled whenever the Codex source is disabled.
+- Moved `Sources: Enabled` to the top of the extension settings so the archived-session settings read as Codex child options.
+- Improved initial history startup by showing a valid cached history index immediately, then refreshing local session files in the background.
+- Archived Codex sessions no longer expose Resume or Promote actions; their primary action is moving them back to Codex history.
+- Active and archived Codex context menus now show only the relevant move action, separated from custom-title actions and delete actions.
+- Chat Webviews for archived Codex sessions replace **Resume in Codex** with **Move to Codex History**.
+
 ## [2.1.0] - 2026-05-19
 
 ### Added

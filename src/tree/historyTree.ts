@@ -3,7 +3,7 @@ import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import { HistoryEmptyNode, SessionNode, DayNode, MonthNode, TreeNode, YearNode, toTreeItemContextValue } from "./treeNodes";
-import type { SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
+import type { ArchiveLocationFilter, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
 import type { DateScope } from "../types/dateScope";
 import { getConfig } from "../settings";
 import { normalizeCacheKey } from "../utils/fsUtils";
@@ -23,6 +23,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private projectCwd: string | null;
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
+  private archiveLocationFilter: ArchiveLocationFilter;
   private initialLoadComplete = false;
   private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
@@ -38,6 +39,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     projectCwd: string | null,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
+    archiveLocationFilter: ArchiveLocationFilter,
     extensionUri: vscode.Uri,
   ) {
     this.historyService = historyService;
@@ -48,6 +50,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
+    this.archiveLocationFilter = archiveLocationFilter;
     this.codexIconPath = {
       light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
       dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-codex.svg"),
@@ -86,6 +89,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public setTagFilter(tags: readonly string[]): void {
     this.tagFilter = normalizeTagFilter(tags);
+  }
+
+  public setArchiveLocationFilter(archiveLocationFilter: ArchiveLocationFilter): void {
+    this.archiveLocationFilter = archiveLocationFilter;
   }
 
   public setFilters(
@@ -135,6 +142,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   private matchesSession(session: SessionSummary): boolean {
     return (
+      this.matchesArchiveVisibility(session) &&
       this.matchesDateFilter(session) &&
       this.matchesProject(session) &&
       this.matchesSource(session) &&
@@ -145,6 +153,18 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private matchesSource(session: SessionSummary): boolean {
     if (this.sourceFilter === "all") return true;
     return session.source === this.sourceFilter;
+  }
+
+  private matchesArchiveVisibility(session: SessionSummary): boolean {
+    switch (this.archiveLocationFilter) {
+      case "all":
+        return true;
+      case "archivedOnly":
+        return session.source === "codex" && session.storage.archiveState === "archived";
+      case "activeOnly":
+      default:
+        return session.storage.archiveState !== "archived";
+    }
   }
 
   private buildNoHistoryNodes(): HistoryEmptyNode[] {
@@ -221,7 +241,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const label = `${prefix} ${shortTitle}`;
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
     const annotation = this.annotationStore.get(session.fsPath);
-    item.description = buildSessionDescription(session.cwdShort, annotation?.tags ?? []);
+    item.description = buildSessionDescription(session, annotation?.tags ?? []);
     const node = new SessionNode(session, pinned);
     item.contextValue = toTreeItemContextValue(node);
     // Show source-specific icons (Codex/Claude) in the list row.
@@ -258,7 +278,11 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     if (!element && idx.sessions.length === 0) return this.buildNoHistoryNodes();
 
     const shouldFilterSessions =
-      this.filter.kind !== "all" || !!this.projectCwd || this.sourceFilter !== "all" || this.tagFilter.length > 0;
+      this.archiveLocationFilter !== "all" ||
+      this.filter.kind !== "all" ||
+      !!this.projectCwd ||
+      this.sourceFilter !== "all" ||
+      this.tagFilter.length > 0;
     if (this.viewMode === "latest") {
       if (element) return [];
       const nodes = idx.sessions
@@ -388,9 +412,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 }
 
-function buildSessionDescription(cwdShort: string, tags: readonly string[]): string {
+function buildSessionDescription(session: SessionSummary, tags: readonly string[]): string {
   const parts: string[] = [];
-  if (cwdShort) parts.push(cwdShort);
+  if (session.storage.archiveState === "archived") parts.push(t("tree.description.archived"));
+  if (session.cwdShort) parts.push(session.cwdShort);
   if (tags.length > 0) parts.push(`#${tags.join(" #")}`);
   return parts.join("  ");
 }

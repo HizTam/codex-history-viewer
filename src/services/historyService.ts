@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig, HistoryDateBasis } from "../settings";
-import { findSessionFiles } from "../sessions/sessionDiscovery";
-import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
+import { findSessionFiles, type DiscoveredSessionFile } from "../sessions/sessionDiscovery";
+import type { HistoryIndex, HistoryRoots, SessionSummary } from "../sessions/sessionTypes";
 import { buildSessionSummary } from "../sessions/sessionSummary";
 import { resolveSessionDisplayTitle, resolveSessionDisplayTitles } from "../sessions/sessionTitleResolver";
 import { normalizeCacheKey } from "../utils/fsUtils";
@@ -17,17 +17,19 @@ interface CacheEntryV1 {
   summary: SessionSummary;
 }
 
-const SUMMARY_CACHE_ALGO_VERSION = 8;
-const HISTORY_CACHE_FILE_NAME = "cache.v8.json";
+const SUMMARY_CACHE_ALGO_VERSION = 9;
+const HISTORY_CACHE_FILE_NAME = "cache.v9.json";
 const HISTORY_CACHE_FILE_PATTERN = /^cache\.v\d+\.json$/i;
 const HISTORY_REFRESH_CONCURRENCY = 4;
 
-interface CacheFileV8 {
-  version: 8;
+interface CacheFileV9 {
+  version: 9;
   summaryAlgoVersion: number;
   codexSessionsRoot: string;
+  codexArchivedSessionsRoot: string;
   claudeSessionsRoot: string;
   includeCodex: boolean;
+  includeCodexArchived: boolean;
   includeClaude: boolean;
   previewMaxMessages: number;
   dateTimeSettingsKey: string;
@@ -61,6 +63,29 @@ function sortSummariesByDisplayDate(summaries: SessionSummary[]): void {
   });
 }
 
+function selectPreferredSummariesByIdentity(summaries: readonly SessionSummary[]): SessionSummary[] {
+  const byIdentity = new Map<string, SessionSummary>();
+  for (const summary of summaries) {
+    const current = byIdentity.get(summary.identityKey);
+    if (!current || compareIdentityCandidate(summary, current) < 0) {
+      byIdentity.set(summary.identityKey, summary);
+    }
+  }
+  return Array.from(byIdentity.values());
+}
+
+function compareIdentityCandidate(left: SessionSummary, right: SessionSummary): number {
+  if (left.storage.archiveState !== right.storage.archiveState) {
+    return left.storage.archiveState === "active" ? -1 : 1;
+  }
+  const leftTime = Date.parse(left.lastActivityAtIso ?? left.startedAtIso ?? "");
+  const rightTime = Date.parse(right.lastActivityAtIso ?? right.startedAtIso ?? "");
+  const leftMs = Number.isFinite(leftTime) ? leftTime : 0;
+  const rightMs = Number.isFinite(rightTime) ? rightTime : 0;
+  if (leftMs !== rightMs) return rightMs - leftMs;
+  return left.cacheKey.localeCompare(right.cacheKey);
+}
+
 async function cleanupObsoleteHistoryCacheFiles(
   globalStorageUri: vscode.Uri,
   currentCacheFileName: string,
@@ -86,11 +111,21 @@ async function cleanupObsoleteHistoryCacheFiles(
   }
 }
 
-function emptyIndex(sessionsRoot: string): HistoryIndex {
+function buildHistoryRoots(config: CodexHistoryViewerConfig): HistoryRoots {
   return {
-    sessionsRoot,
+    codexSessionsRoot: config.sessionsRoot,
+    codexArchivedSessionsRoot: config.codexArchivedSessionsRoot,
+    claudeSessionsRoot: config.claudeSessionsRoot,
+  };
+}
+
+function emptyIndex(roots: HistoryRoots): HistoryIndex {
+  return {
+    sessionsRoot: roots.codexSessionsRoot,
+    roots,
     sessions: [],
     byCacheKey: new Map(),
+    byIdentityKey: new Map(),
     byYmd: new Map(),
     byYm: new Map(),
     byY: new Map(),
@@ -116,7 +151,7 @@ export class HistoryService {
     this.titleOverrideStore = titleOverrideStore;
     this.logger = logger;
     this.config = config;
-    this.index = emptyIndex(config.sessionsRoot);
+    this.index = emptyIndex(buildHistoryRoots(config));
   }
 
   public updateConfig(config: CodexHistoryViewerConfig): void {
@@ -150,6 +185,34 @@ export class HistoryService {
     });
   }
 
+  public async loadCachedIndexIfFresh(): Promise<boolean> {
+    const startedAt = nowMs();
+    const dateTime = resolveDateTimeSettings();
+    const dateTimeSettingsKey = getDateTimeSettingsKey(dateTime);
+    const cache = await readJson<CacheFileV9>(this.getCacheUri());
+    if (!this.isFreshCache(cache, dateTimeSettingsKey)) {
+      this.logger?.debug(`history.cacheImmediate miss totalMs=${elapsedMs(startedAt)}`);
+      return false;
+    }
+
+    const roots = buildHistoryRoots(this.config);
+    const summaries = Object.values(cache.entries)
+      .map((entry) => applyHistoryDateBasis(entry.summary, this.config.historyDateBasis));
+    const selectedSummaries = selectPreferredSummariesByIdentity(summaries);
+    const resolvedSummaries = await this.resolveDisplayTitles(selectedSummaries);
+    sortSummariesByDisplayDate(resolvedSummaries);
+    this.index = buildIndex(roots, resolvedSummaries);
+    this.logger?.debug(
+      [
+        "history.cacheImmediate loaded",
+        `totalMs=${elapsedMs(startedAt)}`,
+        `entries=${Object.keys(cache.entries).length}`,
+        `sessions=${resolvedSummaries.length}`,
+      ].join(" "),
+    );
+    return true;
+  }
+
   public async refresh(options: { forceRebuildCache: boolean }): Promise<void> {
     const totalStartedAt = nowMs();
     let discoverMs = 0;
@@ -165,32 +228,27 @@ export class HistoryService {
 
     this.updateConfig(this.config);
     const sessionsRoot = this.config.sessionsRoot;
+    const codexArchivedSessionsRoot = this.config.codexArchivedSessionsRoot;
     const claudeSessionsRoot = this.config.claudeSessionsRoot;
+    const roots = buildHistoryRoots(this.config);
 
     const dateTime = resolveDateTimeSettings();
     const dateTimeSettingsKey = getDateTimeSettingsKey(dateTime);
 
-    const cacheUri = vscode.Uri.joinPath(this.globalStorageUri, HISTORY_CACHE_FILE_NAME);
-    const cache = options.forceRebuildCache ? null : await readJson<CacheFileV8>(cacheUri);
+    const cacheUri = this.getCacheUri();
+    const cache = options.forceRebuildCache ? null : await readJson<CacheFileV9>(cacheUri);
 
-    const cachedEntries: Record<string, CacheEntryV1> =
-      cache &&
-      cache.version === 8 &&
-      cache.summaryAlgoVersion === SUMMARY_CACHE_ALGO_VERSION &&
-      cache.codexSessionsRoot === sessionsRoot &&
-      cache.claudeSessionsRoot === claudeSessionsRoot &&
-      cache.includeCodex === this.config.enableCodexSource &&
-      cache.includeClaude === this.config.enableClaudeSource &&
-      cache.previewMaxMessages === this.config.previewMaxMessages &&
-      cache.dateTimeSettingsKey === dateTimeSettingsKey
-        ? cache.entries
-        : {};
+    const cachedEntries: Record<string, CacheEntryV1> = this.isFreshCache(cache, dateTimeSettingsKey)
+      ? cache.entries
+      : {};
 
     const discoverStartedAt = nowMs();
     const files = await findSessionFiles({
       codexRoot: sessionsRoot,
+      codexArchivedRoot: codexArchivedSessionsRoot,
       claudeRoot: claudeSessionsRoot,
       includeCodex: this.config.enableCodexSource,
+      includeCodexArchived: this.config.enableCodexArchivedSessions,
       includeClaude: this.config.enableClaudeSource,
     });
     discoverMs = elapsedMs(discoverStartedAt);
@@ -198,10 +256,9 @@ export class HistoryService {
     const summaries: SessionSummary[] = [];
 
     const processStartedAt = nowMs();
-    const fileResults = await mapWithConcurrency(files, HISTORY_REFRESH_CONCURRENCY, async (fsPath) =>
+    const fileResults = await mapWithConcurrency(files, HISTORY_REFRESH_CONCURRENCY, async (file) =>
       this.refreshFile({
-        fsPath,
-        sessionsRoot,
+        file,
         cachedEntries,
         previewMaxMessages: this.config.previewMaxMessages,
         timeZone: dateTime.timeZone,
@@ -222,7 +279,8 @@ export class HistoryService {
     }
 
     const titleStartedAt = nowMs();
-    const resolvedSummaries = await this.resolveDisplayTitles(summaries);
+    const selectedSummaries = selectPreferredSummariesByIdentity(summaries);
+    const resolvedSummaries = await this.resolveDisplayTitles(selectedSummaries);
     titleMs = elapsedMs(titleStartedAt);
     const summariesByKey = new Map(resolvedSummaries.map((summary) => [summary.cacheKey, summary] as const));
     for (const [cacheKey, entry] of Object.entries(nextEntries)) {
@@ -235,13 +293,15 @@ export class HistoryService {
     summaries.push(...resolvedSummaries);
     sortSummariesByDisplayDate(summaries);
 
-    this.index = buildIndex(sessionsRoot, summaries);
-    const nextCache: CacheFileV8 = {
-      version: 8,
+    this.index = buildIndex(roots, summaries);
+    const nextCache: CacheFileV9 = {
+      version: 9,
       summaryAlgoVersion: SUMMARY_CACHE_ALGO_VERSION,
       codexSessionsRoot: sessionsRoot,
+      codexArchivedSessionsRoot,
       claudeSessionsRoot,
       includeCodex: this.config.enableCodexSource,
+      includeCodexArchived: this.config.enableCodexArchivedSessions,
       includeClaude: this.config.enableClaudeSource,
       previewMaxMessages: this.config.previewMaxMessages,
       dateTimeSettingsKey,
@@ -272,14 +332,14 @@ export class HistoryService {
   }
 
   private async refreshFile(params: {
-    fsPath: string;
-    sessionsRoot: string;
+    file: DiscoveredSessionFile;
     cachedEntries: Record<string, CacheEntryV1>;
     previewMaxMessages: number;
     timeZone: string;
     historyDateBasis: HistoryDateBasis;
   }): Promise<RefreshFileResult> {
-    const { fsPath, sessionsRoot, cachedEntries, previewMaxMessages, timeZone, historyDateBasis } = params;
+    const { file, cachedEntries, previewMaxMessages, timeZone, historyDateBasis } = params;
+    const { fsPath } = file;
     const key = normalizeCacheKey(fsPath);
     let st: { mtimeMs: number; size: number } | null = null;
     try {
@@ -303,7 +363,13 @@ export class HistoryService {
 
     const summaryStartedAt = nowMs();
     const builtSummary = await buildSessionSummary({
-      sessionsRoot,
+      sessionsRoot: file.rootPath,
+      sourceRoot: file.rootPath,
+      storage: {
+        rootKind: file.rootKind,
+        archiveState: file.archiveState,
+        rootPath: file.rootPath,
+      },
       fsPath,
       previewMaxMessages,
       timeZone,
@@ -334,7 +400,7 @@ export class HistoryService {
       .map((summary) => summary.meta.id)
       .filter((sessionId): sessionId is string => typeof sessionId === "string" && sessionId.trim().length > 0);
     const codexTitlesById =
-      this.config.enableCodexSource
+      this.config.enableCodexSource || this.config.enableCodexArchivedSessions
         ? await this.codexTitleStore.getTitles({
             sessionsRoot: this.config.sessionsRoot,
             sessionIds: codexSessionIds,
@@ -348,6 +414,28 @@ export class HistoryService {
       codexTitlesById,
       getCustomTitle: (session) => this.titleOverrideStore.getTitle(session),
     });
+  }
+
+  private getCacheUri(): vscode.Uri {
+    return vscode.Uri.joinPath(this.globalStorageUri, HISTORY_CACHE_FILE_NAME);
+  }
+
+  private isFreshCache(cache: CacheFileV9 | null, dateTimeSettingsKey: string): cache is CacheFileV9 {
+    return (
+      !!cache &&
+      cache.version === 9 &&
+      cache.summaryAlgoVersion === SUMMARY_CACHE_ALGO_VERSION &&
+      cache.codexSessionsRoot === this.config.sessionsRoot &&
+      cache.codexArchivedSessionsRoot === this.config.codexArchivedSessionsRoot &&
+      cache.claudeSessionsRoot === this.config.claudeSessionsRoot &&
+      cache.includeCodex === this.config.enableCodexSource &&
+      cache.includeCodexArchived === this.config.enableCodexArchivedSessions &&
+      cache.includeClaude === this.config.enableClaudeSource &&
+      cache.previewMaxMessages === this.config.previewMaxMessages &&
+      cache.dateTimeSettingsKey === dateTimeSettingsKey &&
+      !!cache.entries &&
+      typeof cache.entries === "object"
+    );
   }
 }
 
@@ -396,12 +484,13 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function buildIndex(sessionsRoot: string, summaries: SessionSummary[]): HistoryIndex {
-  const idx: HistoryIndex = emptyIndex(sessionsRoot);
+function buildIndex(roots: HistoryRoots, summaries: SessionSummary[]): HistoryIndex {
+  const idx: HistoryIndex = emptyIndex(roots);
   idx.sessions = summaries;
 
   for (const s of summaries) {
     idx.byCacheKey.set(s.cacheKey, s);
+    idx.byIdentityKey.set(s.identityKey, s);
 
     const ymd = s.localDate;
     const [yyyy, mm, dd] = ymd.split("-");

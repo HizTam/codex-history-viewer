@@ -37,6 +37,8 @@ export class TranscriptContentProvider implements vscode.TextDocumentContentProv
       const ann = this.annotationStore.get(session.fsPath);
       const { content, messageLineMap } = await renderTranscript(session.fsPath, {
         timeZone,
+        locationLabel:
+          session.storage.archiveState === "archived" ? t("session.location.archived") : t("session.location.active"),
         annotation: {
           tags: ann?.tags ?? [],
           note: ann?.note ?? "",

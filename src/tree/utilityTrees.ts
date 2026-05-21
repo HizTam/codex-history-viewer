@@ -134,8 +134,10 @@ export class ControlTreeDataProvider implements vscode.TreeDataProvider<UtilityN
 
 export interface StatusSnapshot {
   enableCodexSource: boolean;
+  enableCodexArchivedSessions: boolean;
   enableClaudeSource: boolean;
   codexSessionCount: number;
+  codexArchivedSessionCount: number;
   claudeSessionCount: number;
   pinCount: number;
   missingPinCount: number;
@@ -151,6 +153,7 @@ export interface StatusSnapshot {
   filterSummary: string;
   currentProjectCwd: string | null;
   codexSessionsRoot: string;
+  codexArchivedSessionsRoot: string;
   claudeSessionsRoot: string;
   lastRefreshAt: number | null;
   extensionVersion: string;
@@ -184,6 +187,7 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
       typeof s.lastRefreshAt === "number" && Number.isFinite(s.lastRefreshAt)
         ? new Date(s.lastRefreshAt).toLocaleString()
         : t("status.value.none");
+    const showCodexArchivedStatus = s.enableCodexSource && s.enableCodexArchivedSessions;
     const items: UtilityNode[] = [];
     const makeCopyPathTooltip = (fsPath: string): string => `${fsPath}\n${t("status.tooltip.copyPath")}`;
 
@@ -194,6 +198,16 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
           t("status.label.sessionsCodex"),
           String(s.codexSessionCount),
           new vscode.ThemeIcon("list-unordered"),
+        ),
+      );
+    }
+    if (showCodexArchivedStatus) {
+      items.push(
+        makeInfo(
+          "status.sessions.codexArchived",
+          t("status.label.sessionsCodexArchived"),
+          String(s.codexArchivedSessionCount),
+          new vscode.ThemeIcon("archive"),
         ),
       );
     }
@@ -251,6 +265,18 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
           new vscode.ThemeIcon("folder-opened"),
           makeCopyPathTooltip(s.codexSessionsRoot),
           s.codexSessionsRoot,
+        ),
+      );
+    }
+    if (showCodexArchivedStatus) {
+      items.push(
+        makeInfo(
+          "status.sessionsRoot.codexArchived",
+          t("status.label.sessionsRootCodexArchived"),
+          safeDisplayPath(s.codexArchivedSessionsRoot, 64),
+          new vscode.ThemeIcon("archive"),
+          makeCopyPathTooltip(s.codexArchivedSessionsRoot),
+          s.codexArchivedSessionsRoot,
         ),
       );
     }

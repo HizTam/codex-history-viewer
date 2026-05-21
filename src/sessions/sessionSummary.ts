@@ -9,7 +9,13 @@ import {
   safeDisplayPath,
   singleLineSnippet,
 } from "../utils/textUtils";
-import type { PreviewMessage, SessionMetaInfo, SessionSource, SessionSummary } from "./sessionTypes";
+import type {
+  PreviewMessage,
+  SessionMetaInfo,
+  SessionSource,
+  SessionStorageLocation,
+  SessionSummary,
+} from "./sessionTypes";
 
 const META_SCAN_LINE_LIMIT = 400;
 
@@ -304,22 +310,31 @@ export async function readPreviewMessages(fsPath: string, maxMessages: number): 
 
 export async function buildSessionSummary(params: {
   sessionsRoot: string;
+  sourceRoot?: string;
+  storage?: SessionStorageLocation;
   fsPath: string;
   previewMaxMessages: number;
   timeZone: string;
 }): Promise<SessionSummary | null> {
   const { sessionsRoot, fsPath, previewMaxMessages, timeZone } = params;
+  const sourceRoot = params.sourceRoot ?? sessionsRoot;
   const stat = await statSafe(fsPath);
   if (!stat) return null;
 
   const cacheKey = normalizeCacheKey(fsPath);
   const readMeta = (await tryReadSessionMeta(fsPath)) ?? {};
   const source = detectSessionSource(readMeta, fsPath);
+  const storage: SessionStorageLocation =
+    params.storage ??
+    (source === "claude"
+      ? { rootKind: "claudeSessions", archiveState: "active", rootPath: sourceRoot }
+      : { rootKind: "codexSessions", archiveState: "active", rootPath: sourceRoot });
   const meta: SessionMetaInfo = { ...readMeta, historySource: source };
+  const identityKey = resolveSessionIdentityKey(source, meta, fsPath, cacheKey);
   const activityInfo = await readSessionActivityInfo(fsPath, source);
   const lastActivityIso = activityInfo.lastActivityTimestampIso;
 
-  const inferred = source === "codex" ? inferYmdFromPath(sessionsRoot, fsPath) ?? undefined : undefined;
+  const inferred = source === "codex" ? inferYmdFromPath(sourceRoot, fsPath) ?? undefined : undefined;
   const startValid = parseTimestampDate(meta.timestampIso);
   const lastActivityValid = parseTimestampDate(lastActivityIso);
 
@@ -359,7 +374,9 @@ export async function buildSessionSummary(params: {
   return {
     fsPath,
     cacheKey,
+    identityKey,
     source,
+    storage,
     meta,
     inferredYmd: inferred,
     startedAtIso: parseTimestampIso(meta.timestampIso),
@@ -382,6 +399,35 @@ function detectSessionSource(meta: SessionMetaInfo, fsPath: string): SessionSour
   if (meta.historySource === "codex" || meta.historySource === "claude") return meta.historySource;
   const base = path.basename(fsPath).toLowerCase();
   return base.startsWith("rollout-") ? "codex" : "claude";
+}
+
+function resolveSessionIdentityKey(
+  source: SessionSource,
+  meta: SessionMetaInfo,
+  fsPath: string,
+  cacheKey: string,
+): string {
+  const sessionId = normalizeIdentityPart(meta.id);
+  if (sessionId) return `${source}:id:${sessionId}`;
+
+  if (source === "codex") {
+    const rolloutId = extractCodexRolloutId(fsPath);
+    if (rolloutId) return `${source}:rollout:${rolloutId}`;
+  }
+
+  return `${source}:path:${cacheKey}`;
+}
+
+function extractCodexRolloutId(fsPath: string): string {
+  const base = path.basename(fsPath);
+  const match =
+    /^rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/iu.exec(base);
+  return match?.[1]?.toLowerCase() ?? "";
+}
+
+function normalizeIdentityPart(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/[\u0000-\u001f\u007f]/gu, "").toLowerCase();
 }
 
 function pickSessionSnippetSource(messages: PreviewMessage[]): string | null {

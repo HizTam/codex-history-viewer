@@ -181,7 +181,8 @@ export function toTreeItemContextValue(node: TreeNode): string {
 }
 
 function withCustomTitleMarker(base: string, session: SessionSummary): string {
-  return session.customTitle ? `${base}.customTitle` : base;
+  const archivedBase = session.storage.archiveState === "archived" ? `${base}.archived` : base;
+  return session.customTitle ? `${archivedBase}.customTitle` : archivedBase;
 }
 
 export function missingPinnedLabel(): string {

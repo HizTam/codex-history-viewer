@@ -52,6 +52,28 @@ export class ChatOpenPositionStore {
     await this.persist();
   }
 
+  public async relocate(oldFsPath: string, newFsPath: string): Promise<boolean> {
+    const oldKey = normalizeFsPathKey(oldFsPath);
+    const newKey = normalizeFsPathKey(newFsPath);
+    if (!oldKey || !newKey || oldKey === newKey) return false;
+
+    const oldEntry = this.entriesByKey.get(oldKey);
+    if (!oldEntry) return false;
+
+    const newEntry = this.entriesByKey.get(newKey);
+    if (!newEntry) {
+      this.entriesByKey.set(newKey, {
+        fsPath: newFsPath,
+        cacheKey: newKey,
+        messageIndex: oldEntry.messageIndex,
+        updatedAt: Date.now(),
+      });
+    }
+    this.entriesByKey.delete(oldKey);
+    await this.persist();
+    return true;
+  }
+
   private prune(): void {
     const entries = this.getAll();
     if (entries.length <= MAX_CHAT_OPEN_POSITIONS) return;

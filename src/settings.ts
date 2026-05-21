@@ -26,8 +26,10 @@ export interface ImagesConfig {
 
 export interface CodexHistoryViewerConfig {
   sessionsRoot: string;
+  codexArchivedSessionsRoot: string;
   claudeSessionsRoot: string;
   enableCodexSource: boolean;
+  enableCodexArchivedSessions: boolean;
   enableClaudeSource: boolean;
   handoffEnabled: boolean;
   fileChangeHistoryExplorerContextMenuEnabled: boolean;
@@ -55,16 +57,23 @@ function getDefaultSessionsRoot(): string {
   return path.join(os.homedir(), ".codex", "sessions");
 }
 
+function getDefaultCodexArchivedSessionsRoot(sessionsRoot: string): string {
+  return path.join(path.dirname(path.resolve(sessionsRoot)), "archived_sessions");
+}
+
 function getDefaultClaudeSessionsRoot(): string {
   return path.join(os.homedir(), ".claude", "projects");
 }
 
-function parseEnabledSources(value: unknown): { enableCodexSource: boolean; enableClaudeSource: boolean } {
+function parseEnabledSources(value: unknown): {
+  enableCodexSource: boolean;
+  enableClaudeSource: boolean;
+} {
   const list = Array.isArray(value) ? value.map((v) => String(v ?? "").trim().toLowerCase()) : [];
   const enableCodexSource = list.includes("codex");
   const enableClaudeSource = list.includes("claude");
 
-  if (!enableCodexSource && !enableClaudeSource) {
+  if (list.length === 0 || (!enableCodexSource && !enableClaudeSource)) {
     return { enableCodexSource: true, enableClaudeSource: true };
   }
   return { enableCodexSource, enableClaudeSource };
@@ -116,6 +125,12 @@ function parseBoundedNumber(value: unknown, fallback: number, min: number, max: 
 export function getConfig(): CodexHistoryViewerConfig {
   const cfg = vscode.workspace.getConfiguration("codexHistoryViewer");
   const sessionsRootRaw = (cfg.get<string>("sessionsRoot") ?? "").trim();
+  const sessionsRoot = sessionsRootRaw.length > 0 ? sessionsRootRaw : getDefaultSessionsRoot();
+  const codexArchivedSessionsRootRaw = (
+    cfg.get<string>("codex.archivedSessionsRoot") ??
+    cfg.get<string>("codex.archivedSessions.root") ??
+    ""
+  ).trim();
   const claudeSessionsRootRaw = (
     cfg.get<string>("claude.sessionsRoot") ??
     cfg.get<string>("claudeSessionsRoot") ??
@@ -150,11 +165,17 @@ export function getConfig(): CodexHistoryViewerConfig {
     maxSizeMB: parseBoundedNumber(cfg.get<number>("images.maxSizeMB"), 20, 1, 100),
     thumbnailSize: parseImageThumbnailSize(cfg.get<string>("images.thumbnailSize") ?? "medium"),
   };
+  const codexArchivedSessionsEnabledSetting = cfg.get<boolean>("codex.archivedSessions.enabled") ?? false;
 
   return {
-    sessionsRoot: sessionsRootRaw.length > 0 ? sessionsRootRaw : getDefaultSessionsRoot(),
+    sessionsRoot,
+    codexArchivedSessionsRoot:
+      codexArchivedSessionsRootRaw.length > 0
+        ? codexArchivedSessionsRootRaw
+        : getDefaultCodexArchivedSessionsRoot(sessionsRoot),
     claudeSessionsRoot: claudeSessionsRootRaw.length > 0 ? claudeSessionsRootRaw : getDefaultClaudeSessionsRoot(),
     enableCodexSource: enabledSources.enableCodexSource,
+    enableCodexArchivedSessions: enabledSources.enableCodexSource && codexArchivedSessionsEnabledSetting,
     enableClaudeSource: enabledSources.enableClaudeSource,
     handoffEnabled: cfg.get<boolean>("handoff.enabled") ?? true,
     fileChangeHistoryExplorerContextMenuEnabled:

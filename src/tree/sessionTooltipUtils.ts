@@ -75,6 +75,11 @@ function appendSessionMetadataLines(
   annotation: SessionTooltipAnnotation | null,
 ): void {
   md.appendMarkdown(`Source: ${sourceName(session.source)}  \n`);
+  if (session.storage.archiveState === "archived") {
+    md.appendMarkdown(
+      `${escapeForMarkdown(t("tree.tooltip.location"))}: ${escapeForMarkdown(t("session.location.archived"))}  \n`,
+    );
+  }
   if (session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(session.cwdShort)}  \n`);
   if (annotation && annotation.tags.length > 0) {
     md.appendMarkdown(`Tags: ${escapeForMarkdown(annotation.tags.join(", "))}  \n`);
@@ -93,5 +98,5 @@ function escapeForMarkdown(value: string): string {
 }
 
 function sourceName(source: SessionSummary["source"]): string {
-  return source === "claude" ? "Claude" : "Codex";
+  return source === "claude" ? "Claude Code" : "Codex";
 }

@@ -1,9 +1,9 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
-import type { PinStore } from "../services/pinStore";
+import type { PinEntry, PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
-import type { SessionSource, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
+import type { ArchiveLocationFilter, SessionSource, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
 import {
   HistoryEmptyNode,
   MissingPinnedNode,
@@ -25,6 +25,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   private readonly annotationStore: SessionAnnotationStore;
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
+  private archiveLocationFilter: ArchiveLocationFilter;
   private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
@@ -37,6 +38,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     annotationStore: SessionAnnotationStore,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
+    archiveLocationFilter: ArchiveLocationFilter,
     extensionUri: vscode.Uri,
   ) {
     this.historyService = historyService;
@@ -44,6 +46,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     this.annotationStore = annotationStore;
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
+    this.archiveLocationFilter = archiveLocationFilter;
     this.codexIconPath = {
       light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
       dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-codex.svg"),
@@ -72,6 +75,10 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
   }
 
+  public setArchiveLocationFilter(archiveLocationFilter: ArchiveLocationFilter): void {
+    this.archiveLocationFilter = archiveLocationFilter;
+  }
+
   private matchesTags(fsPath: string): boolean {
     if (this.tagFilter.length === 0) return true;
     const ann = this.annotationStore.get(fsPath);
@@ -85,11 +92,29 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     return session.source === this.sourceFilter;
   }
 
+  private matchesArchiveVisibility(session: SessionSummary): boolean {
+    switch (this.archiveLocationFilter) {
+      case "all":
+        return true;
+      case "archivedOnly":
+        return session.source === "codex" && session.storage.archiveState === "archived";
+      case "activeOnly":
+      default:
+        return session.storage.archiveState !== "archived";
+    }
+  }
+
   private matchesMissingPinnedSource(fsPath: string): boolean {
     if (this.sourceFilter === "all") return true;
     const inferred = inferSourceFromFsPath(fsPath);
     if (!inferred) return true;
     return inferred === this.sourceFilter;
+  }
+
+  private matchesPinnedArchiveVisibility(pin: PinEntry): boolean {
+    const archived = isArchivedPinEntry(pin);
+    if (archived) return getConfig().enableCodexArchivedSessions && this.archiveLocationFilter !== "activeOnly";
+    return this.archiveLocationFilter !== "archivedOnly";
   }
 
   public getTreeItem(element: TreeNode): vscode.TreeItem {
@@ -100,7 +125,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       const item = new vscode.TreeItem(
         `${element.session.localDate} ${element.session.timeLabel} ${shortTitle}`,
       );
-      item.description = buildSessionDescription(element.session.cwdShort, annotation?.tags ?? []);
+      item.description = buildSessionDescription(element.session, annotation?.tags ?? []);
       item.contextValue = toTreeItemContextValue(element);
       // Show source-specific icons (Codex/Claude) in the list row.
       item.iconPath = this.resolveSourceIconPath(element.session.source);
@@ -159,10 +184,12 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     for (const p of pins) {
       const s = this.historyService.findByFsPath(p.fsPath);
       if (s) {
+        if (!this.matchesArchiveVisibility(s)) continue;
         if (!this.matchesSource(s)) continue;
         if (!this.matchesTags(s.fsPath)) continue;
         nodes.push(new SessionNode(s, true));
       } else {
+        if (!this.matchesPinnedArchiveVisibility(p)) continue;
         if (!this.matchesMissingPinnedSource(p.fsPath)) continue;
         nodes.push(new MissingPinnedNode(p.fsPath));
       }
@@ -177,9 +204,10 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   }
 }
 
-function buildSessionDescription(cwdShort: string, tags: readonly string[]): string {
+function buildSessionDescription(session: SessionSummary, tags: readonly string[]): string {
   const parts: string[] = [];
-  if (cwdShort) parts.push(cwdShort);
+  if (session.storage.archiveState === "archived") parts.push(t("tree.description.archived"));
+  if (session.cwdShort) parts.push(session.cwdShort);
   if (tags.length > 0) parts.push(`#${tags.join(" #")}`);
   return parts.join("  ");
 }
@@ -210,12 +238,20 @@ function normalizeSourceFilter(value: SessionSourceFilter): SessionSourceFilter 
 function inferSourceFromFsPath(fsPath: string): SessionSource | null {
   const cfg = getConfig();
   if (isPathInsideRoot(fsPath, cfg.sessionsRoot)) return "codex";
+  if (isPathInsideRoot(fsPath, cfg.codexArchivedSessionsRoot)) return "codex";
   if (isPathInsideRoot(fsPath, cfg.claudeSessionsRoot)) return "claude";
 
   const base = path.basename(fsPath).toLowerCase();
   if (base.startsWith("rollout-")) return "codex";
   if (base.endsWith(".jsonl")) return "claude";
   return null;
+}
+
+function isArchivedPinEntry(pin: PinEntry): boolean {
+  const cfg = getConfig();
+  if (pin.archiveState === "archived") return true;
+  if (pin.rootKind === "codexArchivedSessions") return true;
+  return isPathInsideRoot(pin.fsPath, cfg.codexArchivedSessionsRoot);
 }
 
 function isPathInsideRoot(fsPath: string, rootPath: string): boolean {

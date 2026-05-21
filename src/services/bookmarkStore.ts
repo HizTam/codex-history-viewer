@@ -25,10 +25,15 @@ export interface BookmarkKeyParams {
   groupId?: string;
   messageIndex?: number;
   timestampIso?: string;
+  /**
+   * Target-level fallback only. Never derive this from a session path, cache key,
+   * or existing bookmark key; relocation preserves the target hash across session paths.
+   */
   fallbackId?: string;
 }
 
 const BOOKMARKS_KEY = "codexHistoryViewer.bookmarks.v1";
+const BOOKMARK_KEY_PATTERN = /^bm-([a-z0-9]+)-([a-zA-Z]+)-([a-z0-9]+)$/u;
 
 // Stores timeline bookmark state in globalState without changing source history files.
 export class BookmarkStore implements vscode.Disposable {
@@ -121,6 +126,41 @@ export class BookmarkStore implements vscode.Disposable {
     await this.memento.update(BOOKMARKS_KEY, compactBookmarks(Array.from(byKey.values())));
     this.onDidChangeEmitter.fire();
   }
+
+  public async relocateSession(oldFsPath: string, newFsPath: string): Promise<number> {
+    const oldCacheKey = normalizeCacheKey(oldFsPath);
+    const newCacheKey = normalizeCacheKey(newFsPath);
+    if (!oldCacheKey || !newCacheKey || oldCacheKey === newCacheKey) return 0;
+
+    const current = this.getAll();
+    const nextByKey = new Map<string, BookmarkEntry>();
+    let relocated = 0;
+
+    for (const entry of current) {
+      if (entry.sessionCacheKey !== oldCacheKey) {
+        nextByKey.set(entry.key, entry);
+        continue;
+      }
+
+      const key = relocateBookmarkKey(entry.key, newCacheKey);
+      if (!key) continue;
+      if (!nextByKey.has(key)) {
+        nextByKey.set(key, {
+          ...entry,
+          key,
+          sessionFsPath: newFsPath,
+          sessionCacheKey: newCacheKey,
+          updatedAt: Date.now(),
+        });
+      }
+      relocated += 1;
+    }
+
+    if (relocated === 0) return 0;
+    await this.memento.update(BOOKMARKS_KEY, compactBookmarks(Array.from(nextByKey.values())));
+    this.onDidChangeEmitter.fire();
+    return relocated;
+  }
 }
 
 export function buildBookmarkKey(params: BookmarkKeyParams): string {
@@ -149,7 +189,7 @@ export function buildBookmarkKey(params: BookmarkKeyParams): string {
 
 export function normalizeBookmarkKey(value: unknown): string {
   const key = typeof value === "string" ? value.trim() : "";
-  return /^bm-[a-z0-9]+-[a-zA-Z]+-[a-z0-9]+$/u.test(key) ? key : "";
+  return BOOKMARK_KEY_PATTERN.test(key) ? key : "";
 }
 
 export function sanitizeBookmarkTarget(value: unknown): BookmarkTarget | null {
@@ -201,6 +241,19 @@ function compactBookmarks(values: readonly unknown[]): BookmarkEntry[] {
     byKey.set(entry.key, entry);
   }
   return Array.from(byKey.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function relocateBookmarkKey(key: string, newSessionCacheKey: string): string {
+  const normalizedKey = normalizeBookmarkKey(key);
+  const newSessionHash = hashString(normalizeBookmarkText(newSessionCacheKey));
+  if (!normalizedKey || !newSessionHash) return "";
+
+  const match = BOOKMARK_KEY_PATTERN.exec(normalizedKey);
+  if (!match) return "";
+  const kind = match[2] ?? "";
+  const targetHash = match[3] ?? "";
+  if (!kind || !targetHash) return "";
+  return `bm-${newSessionHash}-${kind}-${targetHash}`;
 }
 
 function sanitizeBookmarkKind(value: unknown): BookmarkTargetKind | "" {

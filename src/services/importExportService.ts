@@ -159,7 +159,10 @@ export async function exportMaskedTranscripts(params: {
     const fileBase = path.parse(s.fsPath).name;
     const outPath = await ensureUniquePath(path.join(destinationDir, `${fileBase}.md`));
     try {
-      const rendered = await renderTranscript(s.fsPath, { timeZone });
+      const rendered = await renderTranscript(s.fsPath, {
+        timeZone,
+        locationLabel: s.storage.archiveState === "archived" ? t("session.location.archived") : t("session.location.active"),
+      });
       const masked = sanitizeText(rendered.content);
       await fs.writeFile(outPath, masked, { encoding: "utf8" });
       exported += 1;

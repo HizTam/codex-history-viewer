@@ -94,6 +94,33 @@ export class SessionAnnotationStore {
     await this.memento.update(ANNOTATION_KEY, list);
   }
 
+  public async relocate(oldFsPath: string, newFsPath: string): Promise<boolean> {
+    const oldKey = normalizeCacheKey(oldFsPath);
+    const newKey = normalizeCacheKey(newFsPath);
+    if (!oldKey || !newKey || oldKey === newKey) return false;
+
+    const list = this.getAll();
+    const oldAnnotation = list.find((x) => x.cacheKey === oldKey);
+    if (!oldAnnotation) return false;
+
+    const newAnnotation = list.find((x) => x.cacheKey === newKey);
+    const mergedTags = normalizeTags([...(newAnnotation?.tags ?? []), ...oldAnnotation.tags]);
+    const mergedNote = normalizeNote(newAnnotation ? newAnnotation.note : oldAnnotation.note);
+    const next = list.filter((x) => x.cacheKey !== oldKey && x.cacheKey !== newKey);
+    if (mergedTags.length > 0 || mergedNote.length > 0) {
+      next.push({
+        fsPath: newFsPath,
+        cacheKey: newKey,
+        tags: mergedTags,
+        note: mergedNote,
+        updatedAt: Date.now(),
+      });
+    }
+
+    await this.memento.update(ANNOTATION_KEY, compactAnnotations(next));
+    return true;
+  }
+
   public async addTagsMany(fsPaths: readonly string[], tags: readonly string[]): Promise<number> {
     const addTags = normalizeTags(tags);
     if (addTags.length === 0) return 0;

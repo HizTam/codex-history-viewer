@@ -19,6 +19,11 @@ export interface ChatSessionAnnotation {
   note: string;
 }
 
+export interface ChatSessionLocation {
+  archiveState: "active" | "archived";
+  rootKind: "codexSessions" | "codexArchivedSessions" | "claudeSessions";
+}
+
 export type ChatTimelineItem =
   | ChatMessageItem
   | ChatToolItem
@@ -192,6 +197,7 @@ export interface ChatNoteItem {
 export interface ChatSessionModel {
   fsPath: string;
   meta: ChatSessionMeta;
+  sessionLocation?: ChatSessionLocation;
   items: ChatTimelineItem[];
   annotation?: ChatSessionAnnotation;
 }

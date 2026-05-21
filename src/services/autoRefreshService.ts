@@ -7,6 +7,7 @@ import type { DebugLogger } from "./logger";
 
 interface WatchRoot {
   source: "codex" | "claude";
+  rootKind: "codexSessions" | "codexArchivedSessions" | "claudeSessions";
   root: string;
   pattern: string;
 }
@@ -316,10 +317,18 @@ export class AutoRefreshService implements vscode.Disposable {
 async function resolveWatchRoots(config: CodexHistoryViewerConfig): Promise<WatchRoot[]> {
   const candidates: WatchRoot[] = [];
   if (config.enableCodexSource) {
-    candidates.push({ source: "codex", root: config.sessionsRoot, pattern: "**/rollout-*.jsonl" });
+    candidates.push({ source: "codex", rootKind: "codexSessions", root: config.sessionsRoot, pattern: "**/rollout-*.jsonl" });
+  }
+  if (config.enableCodexArchivedSessions) {
+    candidates.push({
+      source: "codex",
+      rootKind: "codexArchivedSessions",
+      root: config.codexArchivedSessionsRoot,
+      pattern: "**/rollout-*.jsonl",
+    });
   }
   if (config.enableClaudeSource) {
-    candidates.push({ source: "claude", root: config.claudeSessionsRoot, pattern: "*/*.jsonl" });
+    candidates.push({ source: "claude", rootKind: "claudeSessions", root: config.claudeSessionsRoot, pattern: "*/*.jsonl" });
   }
 
   const out: WatchRoot[] = [];
@@ -327,7 +336,7 @@ async function resolveWatchRoots(config: CodexHistoryViewerConfig): Promise<Watc
   for (const candidate of candidates) {
     const root = String(candidate.root ?? "").trim();
     if (!root || !(await pathExists(root))) continue;
-    const key = `${candidate.source}:${normalizeCacheKey(root)}:${candidate.pattern}`;
+    const key = `${candidate.rootKind}:${normalizeCacheKey(root)}:${candidate.pattern}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({ ...candidate, root });
@@ -337,7 +346,7 @@ async function resolveWatchRoots(config: CodexHistoryViewerConfig): Promise<Watc
 
 function buildRootSignature(roots: readonly WatchRoot[]): string {
   return roots
-    .map((root) => `${root.source}:${normalizeCacheKey(root.root)}:${root.pattern}`)
+    .map((root) => `${root.rootKind}:${normalizeCacheKey(root.root)}:${root.pattern}`)
     .sort()
     .join("|");
 }

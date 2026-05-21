@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **2.1.0** (2026-05-19).
+Latest release: **2.2.0** (2026-05-21).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -16,6 +16,8 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 
 - Revisit past Codex CLI and Claude Code sessions that are no longer easy to access from the active editor flow
 - Browse sessions in a year / month / day tree or a latest-first list
+- Optionally include Codex `archived_sessions` when the Codex source is enabled, and switch archive visibility instantly
+- Show valid cached History and Pinned data immediately at startup while local session files refresh in the background
 - Search across prompts, responses, tool output, tags, and notes
 - View sessions in a chat-like UI with Markdown, code highlighting, math rendering, and file-change diffs
 - Open **AI Change History** for a workspace file to review Codex / Claude diffs that touched that file
@@ -29,17 +31,21 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 ## Detailed Features
 
 - Five views: **Control**, **Pinned**, **History**, **Search**, and **Status**
-- Optional multi-source history support (**Codex** / **Claude**) with source-aware filtering
+- Load **Codex** and **Claude Code** sources, with Codex `archived_sessions` available as an optional Codex archive location
+- Read Codex `archived_sessions` from a configurable archive root when **Sources: Enabled** includes Codex
+- Switch archived Codex visibility immediately from **History**, **Pinned**, and **Search** view title actions
 - History view can switch between a year/month/day tree and a latest-first flat session list
-- History filters for date scope, project/CWD, source, and tags
+- History filters for date scope, project/CWD, source, archive location, and tags
 - Configurable history date basis (`started` / `lastActivity`) for the History tree and date-based search filtering
 - Optional automatic refresh for local session file changes, with debounce and automatic refresh interval controls
 - One-click "Filter by Current Project" action in the History view header (toggle on/off)
 - Tag filters in **Pinned** and **Search** views (separate from History filters)
+- Archived Codex sessions are visually marked in trees, tooltips, Markdown transcripts, and chat views
 - Session tooltips can show both **Started** and **Last activity** timestamps when they differ
 - Session tooltips can be shown as full details, compact metadata, or the title-only tree row
 - Session titles can be renamed inside this extension from tree menus or the chat viewer header, with original titles available in detailed tooltips
 - Open any session in a chat-like viewer (Webview) with Markdown rendering, syntax-highlighted fenced code blocks (powered by Shiki), and toolbar quick actions for pin/unpin, Markdown transcript, quick prompt copy, and source-aware resume (**OpenAI Codex** for Codex sessions, **Claude Code** for Claude sessions)
+- Archived Codex chat views replace **Resume in Codex** with **Move to Codex History**
 - Chat viewer renders inline and block equations with KaTeX-compatible math support
 - Chat viewer renders supported image attachments from data/local image references, loads image data on demand, and shows a clear unavailable state for unsupported, missing, remote-only, disabled, or oversized images
 - Image attachments open in an in-view preview modal with a thumbnail strip, previous/next navigation, left/right keyboard navigation, fit/original-size toggle, and save action
@@ -76,7 +82,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Language-aware command labels (Japanese/English) based on `codexHistoryViewer.ui.language`
 - Full-text search across sessions (cancellable, configurable max results, optional case sensitivity)
 - Incremental local search index for faster repeated searches (tracks file updates/deletions and prunes stale entries)
-- Search scope follows the active History filters (date scope, project/CWD, and source)
+- Search scope follows the active History filters (date scope, project/CWD, source, and archive visibility)
 - Search roles filter (default: `user`/`assistant`, optional `developer`/`tool`) with configurable defaults from the Search header or Control view
 - Search index tool-content scope can be reduced from the compatibility default (`toolCallsAndOutputs`) to `toolCalls` or `conversationOnly` to shrink the local search index; Codex `custom_tool_call` records are indexed as lightweight tool metadata when tool calls are enabled
 - AI Change History can use search-index file-change hints to prioritize related sessions when those hints are available
@@ -87,19 +93,22 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Session tags/notes annotations (editable from tree context menus and chat view)
 - Cross-agent handoff creates per-session `handoff.md` files in VS Code global storage, with tail-prioritized transcript excerpts, the latest user request, source session path, and recoverable file changes
 - The **Handoff to Other AI** context submenu can create a handoff file, copy a handoff prompt, open or create a session handoff file, or hand off a Codex session to Claude Code when the Claude Code extension is available
+- Active Codex sessions can be moved to archive, and archived Codex sessions can be moved back to normal Codex history
+- Pinned Codex sessions can follow official archive/unarchive path changes by session identity
+- Archive/unarchive path changes relocate related annotations, bookmarks, and saved chat open positions when possible
 - Global tag operations: bulk rename tag and bulk delete tags
 - Cleanup Missing Pins action for stale pinned entries
 - Promote: copy a past session into "today" without modifying the original file
 - Safe deletion: moves files to the OS trash/recycle bin by default (falls back to an internal quarantine folder if trash fails)
-- Multi-select support for open/pin/promote/delete
+- Multi-select support for open, pin, promote, delete, move to archive, and move to Codex history
 - Drag & drop pinning: drag sessions from **History** or **Search** into **Pinned**
 - Import/Export sessions: export raw JSONL or sanitized Markdown transcripts, and import with duplicate session ID handling (skip or overwrite)
 - Control view for settings, import, rebuild cache, empty trash, bulk tag maintenance, handoff cleanup, and undo
 - Dedicated refresh actions for **Pinned**, **History**, and **Status**, plus global refresh from the Control view
-- History view shows a localized loading row during initial startup and helpful empty-state guidance when no sessions are found or active filters match nothing
+- History view shows a localized loading row when a valid startup cache is unavailable, plus helpful empty-state guidance when no sessions are found or active filters match nothing
 - Manual trash cleanup: **Empty Trash** clears internal trash/quarantine files and legacy cache/index generations on demand
 - Undo last action (pin/unpin/promote/delete/annotation/tag operations)
-- Status view metrics, including current filters/roles/tags, total tag count, cache folder size, handoff count/storage size, trash file count, and copyable paths for the current project and session roots
+- Status view metrics, including current filters/roles/tags, total tag count, cache folder size, Codex archived session count when enabled, handoff count/storage size, trash file count, and copyable paths for the current project and active session roots
 
 ## Quick start
 
@@ -110,7 +119,8 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 5. Run **Search...** and refine with roles, query syntax, presets, and search tag filters.
 6. Use context menus or chat header actions to edit tags/notes and run bulk tag operations when needed.
 7. Enable **File Change History > Explorer Context Menu: Enabled** when you want file-level diff history from file right-click menus.
-8. Resume a same-source session through the official Codex or Claude Code extension, or use **Handoff to Other AI** when moving work between agents.
+8. Keep Codex enabled in **Sources: Enabled**, turn on Codex archived sessions when you want archived Codex history included, then use the archive visibility button to choose active only, all, or archived only.
+9. Resume a same-source session through the official Codex or Claude Code extension, or use **Handoff to Other AI** when moving work between agents.
 
 ## AI Change History
 
@@ -127,6 +137,20 @@ Use it when you want to answer questions such as:
 The Explorer file context menu entry is opt-in. Enable **File Change History > Explorer Context Menu: Enabled**, then right-click a file in VS Code Explorer and run **Show File AI Change History**.
 
 The view is scoped to the current workspace and selected file. It shows only renderable AI diffs, supports Codex / Claude source toggles, searches the loaded diff cards, preserves scroll position when loading more, and opens the matching diff card in the original session view via **Open in History** without replacing the file history tab.
+
+## Codex Archived Sessions
+
+Codex History Viewer can optionally read Codex `archived_sessions` in addition to the normal Codex `sessions` folder.
+
+Codex archived sessions are a child option of the Codex source. **Codex History Viewer > Sources: Enabled** must include Codex; if Codex is disabled there, archived sessions are ignored even when **Archived Sessions: Enabled** is on.
+
+Enable **Codex History Viewer > Codex > Archived Sessions: Enabled** to load archived Codex sessions. If **Archived Sessions Root** is empty, the extension uses an `archived_sessions` folder next to the configured Codex sessions root, for example `~/.codex/archived_sessions` next to `~/.codex/sessions`.
+
+Archived Codex sessions can be switched instantly from the **History**, **Pinned**, and **Search** view title actions: **Active Only**, **All**, or **Archived Only**. This changes visible lists without changing the archived-session setting.
+
+Active Codex sessions expose **Move to Archive** from the context menu. Archived Codex sessions expose **Move to Codex History** instead, and do not show **Resume in Codex** or **Promote to Today (Copy)**. In the chat viewer, archived Codex sessions show **Move to Codex History** where **Resume in Codex** would normally appear.
+
+Archive and restore operations prefer the official Codex provider. Moving archived sessions back to normal Codex history can fall back to a filesystem move when the official provider is unavailable; that fallback preserves the original session date folder when possible and offers Undo. Pins, annotations, bookmarks, and saved chat positions are relocated when the session path changes.
 
 ## Handoff to Other AI
 
@@ -159,9 +183,10 @@ The History view header uses compact icon actions:
 | --- | --- |
 | Refresh | Reloads the History view |
 | Show Latest First / Show by Date | Switches between the latest-first list and date-grouped tree |
-| Filter History | Filters by date, project, source, or tags |
+| Filter History | Filters by date, project, source, location, or tags |
 | Filter by Current Project | Narrows history to the active workspace |
-| Source | Cycles Codex / Claude / all enabled sources |
+| Source | Cycles Codex / Claude Code / all enabled sources |
+| Archive Visibility | Switches archived Codex visibility between active only, all, and archived only |
 | Clear Filters | Removes active History filters |
 
 ## Commands
@@ -174,9 +199,11 @@ For the full command list with per-command descriptions, see:
 
 ## Configuration
 
+- `codexHistoryViewer.sources.enabled`: Top-level history sources. Default is `["codex"]`. Use `codex` for Codex history and `claude` for Claude Code history; Codex archived-session settings only apply when `codex` is enabled here.
 - `codexHistoryViewer.sessionsRoot`: Root folder of Codex sessions. Leave empty to use the default (`~/.codex/sessions`).
+- `codexHistoryViewer.codex.archivedSessions.enabled`: Load Codex `archived_sessions` in addition to normal Codex sessions when `codexHistoryViewer.sources.enabled` includes `codex`.
+- `codexHistoryViewer.codex.archivedSessionsRoot`: Root folder of Codex archived sessions. Leave empty to use a sibling `archived_sessions` folder next to the Codex sessions root.
 - `codexHistoryViewer.claude.sessionsRoot`: Root folder of Claude Code sessions. Leave empty to use the default (`~/.claude/projects`).
-- `codexHistoryViewer.sources.enabled`: Enabled history sources. Default is `["codex"]`. Add `claude` to load Claude history too.
 - `codexHistoryViewer.handoff.enabled`: Show cross-agent handoff actions in session context menus. Cleanup and Status metrics remain available when disabled.
 - `codexHistoryViewer.preview.openOnSelection`: Open a preview when selecting an item
 - `codexHistoryViewer.preview.maxMessages`: Max number of user/assistant messages to include in tooltips and quick previews
@@ -211,11 +238,19 @@ For the full command list with per-command descriptions, see:
 - Open Settings and add `claude` to **Codex History Viewer > Sources: Enabled**.
 - If needed, set **Codex History Viewer > Claude: Sessions Root**.
 
+### Enable Codex Archived Sessions (Optional)
+
+- Make sure **Codex History Viewer > Sources: Enabled** includes `codex`.
+- Turn on **Codex History Viewer > Codex > Archived Sessions: Enabled**.
+- Optionally set **Codex History Viewer > Codex > Archived Sessions Root**. Leave it empty to use a sibling `archived_sessions` folder next to the Codex sessions root.
+- Use the archive visibility button in **History**, **Pinned**, or **Search** to switch between active only, all, and archived only without changing settings.
+
 ### Maintenance Tip (All Sources)
 
 - If history or search results look incorrect or stale, run **Control > Rebuild Cache**. It recreates both the history cache and the search index after confirmation.
 - If you want new or updated local sessions to appear without manual refresh, enable the History auto-refresh setting. Automatic refresh runs while the History view is visible or an auto-refresh-enabled chat tab is open, and only while the VS Code window is focused.
 - Auto-refresh reacts to local session file changes. For Codex sessions, assistant output may be written to `rollout-*.jsonl` only after a response or turn is complete, so chat tabs may not update token-by-token while the answer is still streaming.
+- When the Codex source and Codex archived sessions are both enabled, auto-refresh also watches the archived sessions root.
 - If chat tab auto-refresh still feels delayed after the session file changes, try lowering `codexHistoryViewer.autoRefresh.debounceMs` and/or `codexHistoryViewer.autoRefresh.minIntervalMs`. Lower values feel more live but can increase CPU and disk activity.
 - Very large session files or sessions with many diff entries can take longer to render in the chat viewer. If switching back to a tab feels slow, set `codexHistoryViewer.chat.performanceMode` to `auto` or `simplified`, or use the header performance button for that view.
 - Handoff files are stored in VS Code global storage. Use **Control > Delete Handoff Files** when you want to remove generated handoff files.
@@ -230,6 +265,7 @@ For the full command list with per-command descriptions, see:
 - If you check "Do not ask me again for this extension", future resumes will not show the same prompt.
 - You can manage previously authorized extension URIs from Command Palette: `Extensions: Manage Authorized Extension URIs...`
 - If the official Codex extension stops reopening a conversation, try these VS Code commands before reloading the whole window: `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
+- **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if the official provider is unavailable.
 
 ## Import/Export behavior
 
@@ -239,11 +275,13 @@ For the full command list with per-command descriptions, see:
 - Import recursively scans the selected source folder for `.jsonl` files.
 - Import duplicate session IDs can be handled as `skip` or `overwrite` at runtime.
 
-## What's New in 2.1.0
+## What's New in 2.2.0
 
-- Added cross-agent handoff between Codex and Claude Code, backed by per-session `handoff.md` files in VS Code global storage.
-- Added the **Handoff to Other AI** context submenu for creating/opening handoff files and copying handoff prompts; Codex-to-Claude can open Claude Code with the prompt, while Claude-to-Codex uses clipboard copy.
-- Added a setting for showing or hiding handoff context-menu actions, handoff cleanup and Status metrics, and renamed the lightweight chat copy action to **Copy Quick Prompt**.
+- Optional Codex `archived_sessions` support, including archived root configuration and instant active/all/archived-only controls for History, Pinned, and Search.
+- **Sources: Enabled** remains the top-level source switch; Codex archived sessions are used only when Codex is enabled there.
+- Faster startup when a valid history cache is available: History and Pinned views can appear before the background refresh finishes.
+- **Move to Archive** for active Codex sessions and **Move to Codex History** for archived Codex sessions, preferring the official Codex provider.
+- Archive-aware search, Status metrics, Chat/Markdown location labels, pin path tracking, and metadata relocation for moved sessions.
 
 ## Changelog
 
@@ -252,6 +290,16 @@ See [CHANGELOG](CHANGELOG.md).
 ## Security
 
 See [SECURITY](SECURITY.md). Use the latest release whenever possible; do not install or redistribute v1.2.1 or earlier VSIX files.
+
+## Disclaimer
+
+Codex History Viewer is an independent project and is not affiliated with, endorsed by, or officially associated with OpenAI, Anthropic, Codex, or Claude.
+
+This extension works with locally stored session and history files created by official tools and extensions. Their file formats and internal behaviors may change without notice, which may affect compatibility.
+
+Archive, restore, delete, import, and other file operations are designed to be conservative, but they may move or modify local files and extension-managed metadata. The author and contributors cannot guarantee recovery of lost or corrupted data.
+
+Please keep backups of important session data.
 
 ## Privacy
 

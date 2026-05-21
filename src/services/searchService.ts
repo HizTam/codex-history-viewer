@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig } from "../settings";
-import type { HistoryIndex, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
+import type { ArchiveLocationFilter, HistoryIndex, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
 import { t } from "../i18n";
 import { safeDisplayPath, singleLineSnippet } from "../utils/textUtils";
 import { SearchRootNode, SearchSessionNode, type SearchHit } from "../tree/treeNodes";
@@ -53,7 +53,13 @@ export async function runSearchFlow(
   scope?: DateScope,
   projectCwd?: string | null,
   sourceFilter?: SessionSourceFilter,
-  options?: { request?: SearchRequest; defaultRoleFilter?: readonly IndexedSearchRole[]; tagFilter?: readonly string[] },
+  options?: {
+    request?: SearchRequest;
+    defaultRoleFilter?: readonly IndexedSearchRole[];
+    tagFilter?: readonly string[];
+    archiveLocationFilter?: ArchiveLocationFilter;
+    includeArchivedSessions?: boolean;
+  },
 ): Promise<SearchFlowResult | null> {
   if (index.sessions.length === 0) {
     void vscode.window.showInformationMessage(t("app.noSessionsFound"));
@@ -63,6 +69,8 @@ export async function runSearchFlow(
   const effectiveScope = sanitizeDateScope(scope);
   const effectiveSourceFilter = sanitizeSessionSourceFilter(sourceFilter);
   const tagFilter = sanitizeTagFilter(options?.tagFilter ?? []);
+  const archiveLocationFilter =
+    options?.archiveLocationFilter ?? ((options?.includeArchivedSessions ?? true) ? "all" : "activeOnly");
   const request = options?.request;
 
   let queryInput = "";
@@ -96,6 +104,7 @@ export async function runSearchFlow(
       matchScope(s, effectiveScope) &&
       matchProject(s, project) &&
       matchSource(s, effectiveSourceFilter) &&
+      matchArchiveLocation(s, archiveLocationFilter) &&
       matchAnnotationTags(s, tagFilter, annotationStore),
   );
 
@@ -107,8 +116,10 @@ export async function runSearchFlow(
         await searchIndexService.ensureUpToDate({
           index,
           codexSessionsRoot: config.sessionsRoot,
+          codexArchivedSessionsRoot: config.codexArchivedSessionsRoot,
           claudeSessionsRoot: config.claudeSessionsRoot,
           includeCodex: config.enableCodexSource,
+          includeCodexArchived: config.enableCodexArchivedSessions,
           includeClaude: config.enableClaudeSource,
           indexToolContent: config.searchIndexToolContent,
           token,
@@ -203,6 +214,18 @@ function matchProject(session: SessionSummary, projectCwd: string | null): boole
 
 function matchSource(session: SessionSummary, sourceFilter: SessionSourceFilter): boolean {
   return sourceFilter === "all" ? true : session.source === sourceFilter;
+}
+
+function matchArchiveLocation(session: SessionSummary, archiveLocationFilter: ArchiveLocationFilter): boolean {
+  switch (archiveLocationFilter) {
+    case "all":
+      return true;
+    case "archivedOnly":
+      return session.source === "codex" && session.storage.archiveState === "archived";
+    case "activeOnly":
+    default:
+      return session.storage.archiveState !== "archived";
+  }
 }
 
 function matchAnnotationTags(
