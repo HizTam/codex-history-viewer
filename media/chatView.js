@@ -2031,6 +2031,7 @@
           timestampIso,
           title: buildTimeGuideItemTitle(item, Number.isFinite(itemIndex) ? itemIndex : index),
           role: item && item.type === "message" ? getMessageRole(item) : "",
+          attachmentKind: item && item.type === "message" ? getTimeGuideAttachmentKind(getMessageAttachments(item)) : "",
           bookmarked: isItemBookmarked(item),
           element: target,
         };
@@ -2253,7 +2254,9 @@
     if (item.type === "message") {
       const role = item.role === "user" || item.role === "assistant" || item.role === "developer" ? item.role : "message";
       const messageIndex = typeof item.messageIndex === "number" ? `#${item.messageIndex}` : "";
-      return [role, messageIndex].filter(Boolean).join(" ");
+      const attachmentSummary = buildTimeGuideAttachmentSummary(getMessageAttachments(item));
+      const baseTitle = [role, messageIndex].filter(Boolean).join(" ");
+      return attachmentSummary ? `${baseTitle} (${attachmentSummary})` : baseTitle;
     }
     if (item.type === "patchGroup") {
       return formatTemplate(i18n.patchGroupCount || "{0} changes", item.entryCount || 0);
@@ -2274,8 +2277,8 @@
     if (role !== "assistant" && !showDetails && item.isContext) return null;
 
     const textToRender = getMessageTextToRender(item, role);
-    const images = getMessageImages(item);
-    if (role === "user" && !showDetails && !textToRender.trim() && images.length === 0) return null;
+    const attachments = getMessageAttachments(item);
+    if (role === "user" && !showDetails && !textToRender.trim() && attachments.length === 0) return null;
     if (role === "developer" && !showDetails) return null;
 
     const row = el("div", { className: `row ${role}` });
@@ -2335,6 +2338,10 @@
       body.classList.add("messageBody-collapsed", `messageBody-collapsed-${role}`);
     }
 
+    if (attachments.length > 0) {
+      body.appendChild(renderMessageAttachments(attachments));
+    }
+
     const content = el("div", { className: role === "assistant" ? "messageBodyContent markdown" : "messageBodyContent" });
     if (textToRender.trim()) {
       if (role === "assistant") {
@@ -2352,9 +2359,6 @@
         }
       }
       body.appendChild(content);
-    }
-    if (images.length > 0) {
-      body.appendChild(renderMessageImages(images));
     }
     if (collapseState.canCollapse && collapseState.collapsed) {
       body.appendChild(el("div", { className: "messageBodyFade", "aria-hidden": "true" }));
@@ -2636,15 +2640,313 @@
     return text.length > 12 ? text.slice(0, 12) : text;
   }
 
-  function getMessageImages(item) {
-    if (!item || !Array.isArray(item.images)) return [];
-    return item.images.filter((image) => image && image.type === "image");
+  function getMessageAttachments(item) {
+    if (!item || !Array.isArray(item.attachments)) return [];
+    return item.attachments.filter((attachment) => attachment && typeof attachment.type === "string");
   }
 
-  function renderMessageImages(images) {
+  function getTimeGuideAttachmentKind(attachments) {
+    if (!Array.isArray(attachments) || attachments.length === 0) return "";
+    const hasImage = attachments.some((attachment) => attachment && attachment.type === "image");
+    const hasOther = attachments.some((attachment) => attachment && attachment.type !== "image");
+    if (hasImage && hasOther) return "mixed";
+    if (hasImage) return "image";
+    return "attachment";
+  }
+
+  function buildTimeGuideAttachmentSummary(attachments) {
+    if (!Array.isArray(attachments) || attachments.length === 0) return "";
+    const labels = [];
+    const seen = new Set();
+    let total = 0;
+    for (const attachment of attachments) {
+      const label = getTimeGuideAttachmentLabel(attachment);
+      if (!label) continue;
+      total += 1;
+      if (seen.has(label)) continue;
+      seen.add(label);
+      if (labels.length < 3) labels.push(label);
+    }
+    if (total === 0 || labels.length === 0) return "";
+    if (seen.size === 1 && total > 1) return `${labels[0]} \u00d7${total}`;
+    const remaining = Math.max(0, seen.size - labels.length);
+    const kindSummary = remaining > 0 ? `${labels.join(", ")} +${remaining}` : labels.join(", ");
+    if (total > seen.size || remaining > 0) {
+      const countLabel = formatTemplate(getSafeUiText(i18n.attachmentTotalCount, "{0} attachments"), total);
+      return countLabel ? `${kindSummary} / ${countLabel}` : kindSummary;
+    }
+    return kindSummary;
+  }
+
+  function getTimeGuideAttachmentLabel(attachment) {
+    if (!attachment || typeof attachment !== "object") return "";
+    if (attachment.type === "image") return getSafeUiText(i18n.imageAttachmentLabel, "Image");
+    return getAttachmentKindLabel(attachment);
+  }
+
+  function renderMessageAttachments(attachments) {
+    const wrap = el("div", { className: "messageAttachments" });
+    const previewImages = attachments.filter((attachment) => attachment.type === "image" && canPreviewImage(attachment));
+    let pendingImages = [];
+    const flushImages = () => {
+      if (pendingImages.length === 0) return;
+      wrap.appendChild(renderMessageImages(pendingImages, previewImages));
+      pendingImages = [];
+    };
+    for (const attachment of attachments) {
+      if (attachment.type === "image") {
+        pendingImages.push(attachment);
+        continue;
+      }
+      flushImages();
+      const card = renderAttachmentCard(attachment);
+      if (card) wrap.appendChild(card);
+    }
+    flushImages();
+    return wrap;
+  }
+
+  function renderAttachmentCard(attachment) {
+    if (!attachment || typeof attachment !== "object") return null;
+    if (attachment.type === "document") return renderDocumentAttachment(attachment);
+    if (attachment.type === "fileReference") return renderFileReferenceAttachment(attachment);
+    if (attachment.type === "selectionReference") return renderSelectionReferenceAttachment(attachment);
+    return null;
+  }
+
+  function renderDocumentAttachment(attachment) {
+    const label = getAttachmentLabel(attachment);
+    const tooltip = buildAttachmentTitle(attachment);
+    const card = el("div", { className: `messageAttachmentCard messageAttachmentCard-document messageAttachmentCard-${getDocumentKind(attachment)}` });
+    card.title = tooltip;
+    appendAttachmentBadge(card, getAttachmentKindLabel(attachment), tooltip);
+
+    const body = el("div", { className: "messageAttachmentBody" });
+    const title = el("div", { className: "messageAttachmentTitle" });
+    title.textContent = label;
+    title.title = tooltip;
+    body.appendChild(title);
+    card.appendChild(body);
+
+    const actions = el("div", { className: "messageAttachmentActions" });
+    let previewPanel = null;
+    if (attachment.previewText) {
+      previewPanel = el("pre", { className: "messageAttachmentPreviewPanel", hidden: true });
+      previewPanel.textContent = attachment.previewText;
+      const previewButton = createAttachmentActionButton(i18n.attachmentPreview || "Preview", () => {
+        const willOpen = previewPanel.hidden;
+        previewPanel.hidden = !willOpen;
+        previewButton.setAttribute("aria-expanded", willOpen ? "true" : "false");
+        card.classList.toggle("messageAttachmentCard-previewOpen", willOpen);
+      }, DETAILS_ON_ICON_SVG);
+      previewButton.setAttribute("aria-expanded", "false");
+      actions.appendChild(previewButton);
+    }
+    if (attachment.status === "available" && attachment.dataOmitted === true && getAttachmentId(attachment)) {
+      actions.appendChild(createAttachmentActionButton(i18n.attachmentSave || "Save", () => {
+        vscode.postMessage({
+          type: "saveAttachment",
+          attachmentId: getAttachmentId(attachment),
+          fsPath: model && typeof model.fsPath === "string" ? model.fsPath : "",
+        });
+      }, SAVE_ICON_SVG));
+    }
+    if (actions.childElementCount > 0) card.appendChild(actions);
+    if (previewPanel) card.appendChild(previewPanel);
+    return card;
+  }
+
+  function renderFileReferenceAttachment(attachment) {
+    const label = getAttachmentLabel(attachment);
+    const tooltip = buildAttachmentTitle(attachment);
+    const card = el("div", { className: `messageAttachmentCard messageAttachmentCard-file messageAttachmentCard-${getFileKind(attachment)}` });
+    card.title = tooltip;
+    appendAttachmentBadge(card, getAttachmentKindLabel(attachment), tooltip);
+
+    const body = el("div", { className: "messageAttachmentBody" });
+    const title = el("div", { className: "messageAttachmentTitle" });
+    title.textContent = label;
+    title.title = tooltip;
+    body.appendChild(title);
+    card.appendChild(body);
+
+    if (attachment.path) {
+      const actions = el("div", { className: "messageAttachmentActions" });
+      actions.appendChild(createAttachmentActionButton(i18n.attachmentOpen || "Open", () => {
+        vscode.postMessage({
+          type: "openAttachment",
+          fsPath: attachment.path,
+          line: sanitizePositiveNumber(attachment.line),
+        });
+      }, PATCH_JUMP_ICON_SVG));
+      card.appendChild(actions);
+    }
+    return card;
+  }
+
+  function renderSelectionReferenceAttachment(attachment) {
+    const label = getAttachmentLabel(attachment);
+    const tooltip = buildAttachmentTitle(attachment);
+    const card = el("div", { className: "messageAttachmentCard messageAttachmentCard-selection" });
+    card.title = tooltip;
+    appendAttachmentBadge(card, getAttachmentKindLabel(attachment), tooltip);
+
+    const body = el("div", { className: "messageAttachmentBody" });
+    const title = el("div", { className: "messageAttachmentTitle" });
+    const location = formatAttachmentLineRange(attachment);
+    title.textContent = location ? `${label}${location}` : label;
+    title.title = tooltip;
+    body.appendChild(title);
+
+    if (attachment.previewText) {
+      const preview = el("pre", { className: "messageAttachmentSelectionPreview" });
+      preview.textContent = attachment.previewText;
+      body.appendChild(preview);
+    }
+    card.appendChild(body);
+
+    if (attachment.path) {
+      const actions = el("div", { className: "messageAttachmentActions" });
+      actions.appendChild(createAttachmentActionButton(i18n.attachmentOpen || "Open", () => {
+        vscode.postMessage({
+          type: "openAttachment",
+          fsPath: attachment.path,
+          line: sanitizePositiveNumber(attachment.line),
+        });
+      }, PATCH_JUMP_ICON_SVG));
+      card.appendChild(actions);
+    }
+    return card;
+  }
+
+  function appendAttachmentBadge(card, label, tooltip) {
+    const badge = el("div", { className: "messageAttachmentBadge" });
+    if (tooltip) badge.title = tooltip;
+    badge.appendChild(el("span", { className: "messageAttachmentBadgeIcon", "aria-hidden": "true" }));
+    const text = el("span", { className: "messageAttachmentBadgeText" });
+    text.textContent = label;
+    badge.appendChild(text);
+    card.appendChild(badge);
+  }
+
+  function createAttachmentActionButton(label, onClick, iconSvg) {
+    const button = el("button", { type: "button", className: "messageAttachmentAction" });
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    if (iconSvg) {
+      const icon = el("span", { className: "messageAttachmentActionIcon", "aria-hidden": "true" });
+      icon.innerHTML = iconSvg;
+      button.appendChild(icon);
+    } else {
+      button.textContent = label;
+    }
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      onClick();
+    });
+    return button;
+  }
+
+  function getAttachmentId(attachment) {
+    return attachment && typeof attachment.id === "string" ? attachment.id.trim() : "";
+  }
+
+  function getAttachmentLabel(attachment) {
+    const label = attachment && typeof attachment.label === "string" ? attachment.label.trim() : "";
+    if (label) return label;
+    if (attachment?.type === "document") return i18n.attachmentDocument || "Document";
+    if (attachment?.type === "selectionReference") return i18n.attachmentSelection || "Selection";
+    return i18n.attachmentFileReference || "File reference";
+  }
+
+  function getDocumentKind(attachment) {
+    const kind = typeof attachment?.documentKind === "string" ? attachment.documentKind : "generic";
+    if (kind === "pdf" || kind === "text") return kind;
+    return "generic";
+  }
+
+  function getFileKind(attachment) {
+    const kind = typeof attachment?.fileKind === "string" ? attachment.fileKind : "generic";
+    if (kind === "pdf" || kind === "word" || kind === "excel" || kind === "powerpoint" || kind === "text" || kind === "code" || kind === "archive" || kind === "image") return kind;
+    return "generic";
+  }
+
+  function getAttachmentKindLabel(attachment) {
+    if (attachment?.type === "document") {
+      const kind = getDocumentKind(attachment);
+      if (kind === "pdf") return i18n.attachmentPdf || "PDF";
+      if (kind === "text") return i18n.attachmentText || "Text";
+      return i18n.attachmentDocument || "Document";
+    }
+    if (attachment?.type === "selectionReference") return i18n.attachmentSelection || "Selection";
+    if (attachment?.source === "claudeIdeOpenedFile") return i18n.attachmentOpenedFile || "Opened file";
+    const kind = getFileKind(attachment);
+    if (kind === "pdf") return i18n.attachmentPdf || "PDF";
+    if (kind === "word") return i18n.attachmentWord || "Word";
+    if (kind === "excel") return i18n.attachmentExcel || "Excel";
+    if (kind === "powerpoint") return i18n.attachmentPowerPoint || "PowerPoint";
+    if (kind === "archive") return i18n.attachmentArchive || "Archive";
+    if (kind === "text") return i18n.attachmentText || "Text";
+    if (kind === "code") return i18n.attachmentCode || "Code";
+    if (kind === "image") return i18n.attachmentImageReference || "Image";
+    return i18n.attachmentGenericFile || "File";
+  }
+
+  function buildAttachmentTitle(attachment) {
+    const parts = [getAttachmentLabel(attachment)];
+    if (attachment?.path) parts.push(attachment.path);
+    if (attachment?.type === "document") {
+      const meta = buildDocumentAttachmentMeta(attachment);
+      if (meta) parts.push(meta);
+    } else if (attachment?.mimeType) {
+      parts.push(attachment.mimeType);
+    }
+    return parts.filter(Boolean).join("\n");
+  }
+
+  function buildDocumentAttachmentMeta(attachment) {
+    const parts = [];
+    if (attachment.mimeType) parts.push(attachment.mimeType);
+    if (Number.isFinite(Number(attachment.byteLength))) parts.push(formatByteCount(Number(attachment.byteLength)));
+    if (attachment.status === "unavailable") parts.push(formatAttachmentUnavailableReason(attachment.reason));
+    return parts.filter(Boolean).join(" / ");
+  }
+
+  function formatAttachmentUnavailableReason(reason) {
+    if (reason === "tooLarge") return i18n.attachmentTooLarge || "Too large";
+    if (reason === "unsupported") return i18n.attachmentUnsupported || "Unsupported";
+    if (reason === "missing") return i18n.attachmentMissing || "Missing";
+    if (reason === "disabled") return i18n.imageDisabled || "Disabled";
+    return i18n.attachmentUnavailable || "Unavailable";
+  }
+
+  function formatAttachmentLineRange(attachment) {
+    const line = sanitizePositiveNumber(attachment?.line);
+    const endLine = sanitizePositiveNumber(attachment?.endLine);
+    if (!line) return "";
+    if (endLine && endLine > line) return `:${line}-${endLine}`;
+    return `:${line}`;
+  }
+
+  function sanitizePositiveNumber(value) {
+    const num = Number(value);
+    return Number.isFinite(num) && num >= 1 ? Math.floor(num) : undefined;
+  }
+
+  function formatByteCount(value) {
+    const bytes = Math.max(0, Math.floor(Number(value) || 0));
+    if (bytes < 1024) return `${bytes} B`;
+    const kib = bytes / 1024;
+    if (kib < 1024) return `${kib.toFixed(kib >= 10 ? 0 : 1)} KiB`;
+    const mib = kib / 1024;
+    return `${mib.toFixed(mib >= 10 ? 0 : 1)} MiB`;
+  }
+
+  function renderMessageImages(images, allPreviewImages) {
     const thumbnailSize = imageSettings.thumbnailSize || "medium";
     const wrap = el("div", { className: `messageImages messageImages-${thumbnailSize}` });
-    const previewImages = images.filter(canPreviewImage);
+    const previewImages = Array.isArray(allPreviewImages) ? allPreviewImages : images.filter(canPreviewImage);
     for (const image of images) {
       wrap.appendChild(renderMessageImage(image, previewImages, previewImages.indexOf(image)));
     }
@@ -3028,7 +3330,11 @@
   function saveImagePreview() {
     const image = getCurrentPreviewImage();
     if (!image || !image.imageId) return;
-    vscode.postMessage({ type: "saveImage", imageId: image.imageId });
+    vscode.postMessage({
+      type: "saveImage",
+      imageId: image.imageId,
+      fsPath: model && typeof model.fsPath === "string" ? model.fsPath : "",
+    });
   }
 
   function getCurrentPreviewImage() {
@@ -4539,7 +4845,7 @@
     if (role === "developer" && !showDetails) return false;
     if (role === "user" && !showDetails) {
       const text = getMessageTextToRender(item, role);
-      if (!text.trim() && getMessageImages(item).length === 0) return false;
+      if (!text.trim() && getMessageAttachments(item).length === 0) return false;
     }
     return true;
   }

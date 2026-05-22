@@ -32,8 +32,27 @@ export type ChatTimelineItem =
   | ChatPatchGroupItem
   | ChatNoteItem;
 
-export type ChatImageAttachmentStatus = "available" | "unavailable";
+export type ChatAttachmentStatus = "available" | "unavailable";
+export type ChatImageAttachmentStatus = ChatAttachmentStatus;
 export type ChatImageAttachmentReason = "unsupported" | "missing" | "tooLarge" | "invalid" | "remote" | "disabled";
+export type ChatDocumentAttachmentReason = "unsupported" | "missing" | "tooLarge" | "invalid" | "disabled";
+export type ChatDocumentKind = "pdf" | "text" | "generic";
+export type ChatFileKind =
+  | "pdf"
+  | "word"
+  | "excel"
+  | "powerpoint"
+  | "text"
+  | "code"
+  | "archive"
+  | "image"
+  | "generic";
+
+export type ChatAttachment =
+  | ChatImageAttachment
+  | ChatDocumentAttachment
+  | ChatFileReferenceAttachment
+  | ChatSelectionReferenceAttachment;
 
 export interface ChatImageAttachment {
   id?: string;
@@ -47,6 +66,53 @@ export interface ChatImageAttachment {
   reason?: ChatImageAttachmentReason;
 }
 
+export type ChatDocumentPayload =
+  | {
+      kind: "text";
+      text: string;
+    }
+  | {
+      kind: "base64";
+      data: string;
+    };
+
+export interface ChatDocumentAttachment {
+  id?: string;
+  type: "document";
+  status: ChatAttachmentStatus;
+  documentKind: ChatDocumentKind;
+  source: "embeddedBase64" | "embeddedText" | "reference";
+  label?: string;
+  mimeType?: string;
+  byteLength?: number;
+  previewText?: string;
+  dataOmitted?: boolean;
+  reason?: ChatDocumentAttachmentReason;
+  payload?: ChatDocumentPayload;
+}
+
+export interface ChatFileReferenceAttachment {
+  id?: string;
+  type: "fileReference";
+  source: "codexFilesMentioned" | "claudeIdeOpenedFile";
+  label?: string;
+  path?: string;
+  line?: number;
+  endLine?: number;
+  fileKind?: ChatFileKind;
+}
+
+export interface ChatSelectionReferenceAttachment {
+  id?: string;
+  type: "selectionReference";
+  source: "claudeIdeSelection";
+  label?: string;
+  path?: string;
+  line?: number;
+  endLine?: number;
+  previewText?: string;
+}
+
 export interface ChatMessageItem {
   type: "message";
   role: ChatRole;
@@ -57,7 +123,7 @@ export interface ChatMessageItem {
   effort?: string;
   text: string;
   requestText?: string;
-  images?: ChatImageAttachment[];
+  attachments?: ChatAttachment[];
   // Treat large environment/rule messages as "context".
   isContext: boolean;
   bookmarkKey?: string;

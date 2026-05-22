@@ -1467,8 +1467,218 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
   min-width: 0;
 }
 
-.messageBodyContent + .messageImages {
-  margin-top: 10px;
+.messageAttachments + .messageBodyContent {
+  margin-top: 8px;
+}
+
+.messageAttachments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.messageAttachmentCard {
+  --chv-attachment-accent: var(--chv-accent);
+  --chv-attachment-accent-bg: color-mix(in srgb, var(--chv-attachment-accent) 12%, transparent);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+  min-width: 0;
+  max-width: 100%;
+  padding: 7px 8px;
+  border: 1px solid var(--chv-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--chv-code-bg) 70%, var(--chv-bg) 30%);
+}
+
+.messageAttachmentCard-pdf {
+  --chv-attachment-accent: var(--vscode-charts-red, #d73a49);
+}
+
+.messageAttachmentCard-word {
+  --chv-attachment-accent: var(--vscode-charts-blue, #2f6fda);
+}
+
+.messageAttachmentCard-excel {
+  --chv-attachment-accent: var(--vscode-charts-green, #2f8a53);
+}
+
+.messageAttachmentCard-powerpoint {
+  --chv-attachment-accent: var(--vscode-charts-orange, #c2642d);
+}
+
+.messageAttachmentCard-text {
+  --chv-attachment-accent: var(--vscode-charts-blue, #1f8a8a);
+}
+
+.messageAttachmentCard-code {
+  --chv-attachment-accent: var(--vscode-charts-purple, #7b61c8);
+}
+
+.messageAttachmentCard-archive {
+  --chv-attachment-accent: var(--vscode-charts-yellow, #9a7b17);
+}
+
+.messageAttachmentCard-image {
+  --chv-attachment-accent: var(--vscode-charts-purple, #b04f8f);
+}
+
+.messageAttachmentCard-selection {
+  --chv-attachment-accent: var(--vscode-charts-blue, #4f7fba);
+}
+
+.messageAttachmentBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, var(--chv-attachment-accent) 42%, var(--chv-border) 58%);
+  border-radius: 5px;
+  background: var(--chv-attachment-accent-bg);
+  color: var(--chv-attachment-accent);
+  font-size: 11px;
+  line-height: 1.25;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.messageAttachmentBadgeIcon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 9px;
+  height: 11px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.82;
+}
+
+.messageAttachmentBadgeIcon::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 5px;
+  height: 5px;
+  border-bottom: 1px solid currentColor;
+  border-left: 1px solid currentColor;
+  background: var(--chv-bg);
+}
+
+.messageAttachmentCard-code .messageAttachmentBadgeIcon::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 2px;
+  width: 5px;
+  height: 3px;
+  border-top: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+}
+
+.messageAttachmentCard-archive .messageAttachmentBadgeIcon::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 2px;
+  width: 5px;
+  height: 1px;
+  border-top: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+}
+
+.messageAttachmentCard-selection .messageAttachmentBadgeIcon {
+  border-style: dashed;
+}
+
+.messageAttachmentBadgeText {
+  min-width: 0;
+}
+
+.messageAttachmentBody {
+  min-width: 0;
+}
+
+.messageAttachmentTitle {
+  overflow: hidden;
+  color: var(--chv-fg);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messageAttachmentActions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.messageAttachmentAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 2px 5px;
+  border: 1px solid var(--chv-border);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--chv-bg) 82%, var(--chv-fg) 18%);
+  color: var(--chv-fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.messageAttachmentAction:hover {
+  border-color: var(--chv-accent);
+}
+
+.messageAttachmentAction[aria-expanded="true"] {
+  border-color: var(--chv-accent);
+  background: color-mix(in srgb, var(--chv-accent) 16%, var(--chv-bg) 84%);
+}
+
+.messageAttachmentActionIcon {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.messageAttachmentActionIcon svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.messageAttachmentPreviewPanel,
+.messageAttachmentSelectionPreview {
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--chv-code-bg);
+  color: var(--chv-fg);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.messageAttachmentPreviewPanel {
+  box-sizing: border-box;
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0;
+}
+
+.messageAttachmentSelectionPreview {
+  margin: 6px 0 0;
+}
+
+.messageAttachments .messageImages {
+  margin-bottom: 0;
 }
 
 .messageImages {

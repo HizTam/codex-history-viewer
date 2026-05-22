@@ -5,6 +5,12 @@ import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import type { SessionSource } from "../sessions/sessionTypes";
 import { formatYmdHmInTimeZone, formatYmdHmsInTimeZone } from "../utils/dateUtils";
 import { extractCompactUserText, extractTaskSectionText, extractUserRequestText, normalizeWhitespace } from "../utils/textUtils";
+import type { ChatAttachment } from "../chat/chatTypes";
+import {
+  buildAttachmentSummaryLines,
+  extractClaudeMessageContent,
+  extractCodexMessageContent,
+} from "../chat/chatAttachments";
 
 type ResumeRole = "user" | "assistant";
 
@@ -50,10 +56,10 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
         continue;
       }
 
-      if (collectCodexResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty)) {
+      if (await collectCodexResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty)) {
         continue;
       }
-      collectClaudeResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty);
+      await collectClaudeResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty);
     }
   } finally {
     rl.close();
@@ -126,36 +132,38 @@ function buildMarkdown(params: {
   return lines.join("\n");
 }
 
-function collectCodexResumeMessage(
+async function collectCodexResumeMessage(
   obj: any,
   includeContext: boolean,
   recent: ResumeMessage[],
   maxMessages: number,
   setTask: (task: string) => void,
-): boolean {
+): Promise<boolean> {
   if (obj?.type !== "response_item") return false;
   if (obj?.payload?.type !== "message") return true;
 
   const role = obj?.payload?.role;
   if (role !== "user" && role !== "assistant" && role !== "developer") return true;
 
-  const textRaw = extractTextFromCodexContent(obj?.payload?.content);
-  const textNormalized = normalizeWhitespace(textRaw);
-  if (!textNormalized) return true;
+  const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false });
+  const textNormalized = normalizeWhitespace(extracted.text);
+  const attachmentSummary = buildResumeAttachmentSummary(extracted.attachments);
+  const combinedText = combineResumeText(attachmentSummary, textNormalized);
+  if (!combinedText) return true;
 
   if (role === "user") {
     const compactUserText = extractCompactUserText(textNormalized);
     const requestText =
       compactUserText ?? extractTaskSectionText(textNormalized) ?? extractUserRequestText(textNormalized) ?? textNormalized;
-    const isContext = !compactUserText;
+    const isContext = !compactUserText && extracted.attachments.length === 0;
     if (isContext && !includeContext) return true;
-    setTask(requestText);
+    if (textNormalized) setTask(requestText);
     pushRecent(
       recent,
       {
         role: "user",
         timestampIso: typeof obj?.timestamp === "string" ? obj.timestamp : undefined,
-        text: requestText,
+        text: combineResumeText(attachmentSummary, requestText),
       },
       maxMessages,
     );
@@ -168,7 +176,7 @@ function collectCodexResumeMessage(
       {
         role: "assistant",
         timestampIso: typeof obj?.timestamp === "string" ? obj.timestamp : undefined,
-        text: textNormalized,
+        text: combinedText,
       },
       maxMessages,
     );
@@ -182,33 +190,35 @@ function collectCodexResumeMessage(
   return true;
 }
 
-function collectClaudeResumeMessage(
+async function collectClaudeResumeMessage(
   obj: any,
   includeContext: boolean,
   recent: ResumeMessage[],
   maxMessages: number,
   setTask: (task: string) => void,
-): boolean {
+): Promise<boolean> {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
-  const textRaw = extractTextFromClaudeContent(getClaudeMessageContent(obj));
-  const textNormalized = normalizeWhitespace(textRaw);
-  if (!textNormalized) return true;
+  const extracted = await extractClaudeMessageContent(getClaudeMessageContent(obj), undefined, { enabled: false });
+  const textNormalized = normalizeWhitespace(extracted.text);
+  const attachmentSummary = buildResumeAttachmentSummary(extracted.attachments);
+  const combinedText = combineResumeText(attachmentSummary, textNormalized);
+  if (!combinedText) return true;
 
   if (role === "user") {
     const compactUserText = extractCompactUserText(textNormalized);
     const requestText =
       compactUserText ?? extractTaskSectionText(textNormalized) ?? extractUserRequestText(textNormalized) ?? textNormalized;
-    const isContext = !compactUserText;
+    const isContext = !compactUserText && extracted.attachments.length === 0;
     if (isContext && !includeContext) return true;
-    setTask(requestText);
+    if (textNormalized) setTask(requestText);
     pushRecent(
       recent,
       {
         role: "user",
         timestampIso: typeof obj?.timestamp === "string" ? obj.timestamp : undefined,
-        text: requestText,
+        text: combineResumeText(attachmentSummary, requestText),
       },
       maxMessages,
     );
@@ -220,43 +230,28 @@ function collectClaudeResumeMessage(
     {
       role: "assistant",
       timestampIso: typeof obj?.timestamp === "string" ? obj.timestamp : undefined,
-      text: textNormalized,
+      text: combinedText,
     },
     maxMessages,
   );
   return true;
 }
 
+function buildResumeAttachmentSummary(attachments: readonly ChatAttachment[]): string {
+  const lines = buildAttachmentSummaryLines(attachments);
+  if (lines.length === 0) return "";
+  return ["Attachments and referenced files from previous session:", ...lines].join("\n");
+}
+
+function combineResumeText(attachmentSummary: string, text: string): string {
+  const cleanText = text.trim();
+  if (!attachmentSummary) return cleanText;
+  return cleanText ? `${attachmentSummary}\n\n${cleanText}` : attachmentSummary;
+}
+
 function pushRecent(arr: ResumeMessage[], item: ResumeMessage, max: number): void {
   arr.push(item);
   while (arr.length > max) arr.shift();
-}
-
-function extractTextFromCodexContent(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  const texts: string[] = [];
-  for (const item of content) {
-    if (!item || typeof item !== "object") continue;
-    const maybeText = (item as { text?: unknown }).text;
-    if (typeof maybeText === "string") texts.push(maybeText);
-  }
-  return texts.join("");
-}
-
-function extractTextFromClaudeContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  const items = Array.isArray(content) ? content : content && typeof content === "object" ? [content] : [];
-  if (items.length === 0) return "";
-
-  const texts: string[] = [];
-  for (const item of items) {
-    if (!item || typeof item !== "object") continue;
-    const type = typeof (item as { type?: unknown }).type === "string" ? (item as { type: string }).type : "";
-    if (type !== "text" && type !== "input_text" && type !== "output_text") continue;
-    const maybeText = (item as { text?: unknown }).text;
-    if (typeof maybeText === "string") texts.push(maybeText);
-  }
-  return texts.join("");
 }
 
 function detectClaudeMessageRole(obj: any): "user" | "assistant" | null {

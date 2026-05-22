@@ -3,7 +3,6 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import type {
   ChatEnvironmentItem,
-  ChatImageAttachment,
   ChatPatchChangeType,
   ChatPatchEntry,
   ChatPatchGroupItem,
@@ -25,11 +24,12 @@ import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import { extractCompactUserText, isBoilerplateUserMessageText } from "../utils/textUtils";
 import { buildToolPresentation } from "../tools/toolSemantics";
 import {
-  addUnavailablePlaceholderIfNeeded,
-  extractClaudeImageAttachments,
+  assignAttachmentIds,
+  extractClaudeMessageContent,
   extractCodexMessageContent,
-  stripImagePlaceholders,
-} from "./chatImageAttachments";
+  hasClaudeAttachmentLikeContent,
+} from "./chatAttachments";
+import { stripImagePlaceholders } from "./chatImageAttachments";
 import {
   buildClaudePatchBookmarkGroupId,
   buildCodexPatchBookmarkGroupId,
@@ -251,7 +251,7 @@ async function readPatchEntryDetails(
       if (!role) continue;
       const parsed = parseClaudeMessageContent(getClaudeMessageContent(obj));
       const stripped = stripImagePlaceholders(parsed.messageText);
-      if (normalizeText(stripped.text)) messageIndex += 1;
+      if (normalizeText(stripped.text) || hasClaudeAttachmentLikeContent(getClaudeMessageContent(obj))) messageIndex += 1;
       for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
         const toolCall = parsed.toolCalls[toolCallIndex]!;
         const callId = resolveClaudeToolCallId(toolCall.callId, lineIndex, toolCallIndex);
@@ -297,19 +297,19 @@ async function indexCodexTimelineRecord(
       toImageExtractionOptions(options.images),
     );
     const text = normalizeText(parsed.text);
-    const images = parsed.images;
-    if (!text && images.length === 0) return true;
+    const attachments = parsed.attachments;
+    if (!text && attachments.length === 0) return true;
 
     const compactUserText = role === "user" ? extractCompactUserText(text) : null;
     const isBoilerplate = role === "assistant" ? false : isBoilerplateUserMessageText(text);
     const requestText = role === "user" ? compactUserText ?? text : undefined;
     // For user rows, treat only empty compact text as context.
     const isContext =
-      role === "assistant" ? false : role === "user" ? !compactUserText && images.length === 0 : isBoilerplate;
+      role === "assistant" ? false : role === "user" ? !compactUserText && attachments.length === 0 : isBoilerplate;
 
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
     const idx = role === "user" || role === "assistant" ? nextMessageIndex() : undefined;
-    assignImageIds(images, typeof idx === "number" ? `m${idx}` : `item${items.length}`);
+    assignAttachmentIds(attachments, typeof idx === "number" ? `m${idx}` : `item${items.length}`);
 
     items.push({
       type: "message",
@@ -319,7 +319,7 @@ async function indexCodexTimelineRecord(
       ...(role === "assistant" ? toMessageModelMeta(codexTurnMeta) : {}),
       text,
       requestText,
-      ...(images.length > 0 ? { images } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
       isContext,
     });
     return true;
@@ -509,19 +509,17 @@ async function indexClaudeTimelineRecord(
 
   const rawContent = getClaudeMessageContent(obj);
   const parsed = parseClaudeMessageContent(rawContent);
-  const stripped = stripImagePlaceholders(parsed.messageText);
-  const imageOptions = toImageExtractionOptions(options.images);
-  const images = await extractClaudeImageAttachments(rawContent, sessionCwd, imageOptions);
-  addUnavailablePlaceholderIfNeeded(images, stripped.placeholderCount, imageOptions.enabled ? "remote" : "disabled");
-  const text = normalizeText(stripped.text);
+  const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, toImageExtractionOptions(options.images));
+  const attachments = extracted.attachments;
+  const text = normalizeText(extracted.text);
   const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
 
-  if (text || images.length > 0) {
+  if (text || attachments.length > 0) {
     const compactUserText = role === "user" ? extractCompactUserText(text) : null;
     const requestText = role === "user" ? compactUserText ?? text : undefined;
-    const isContext = role === "user" ? !compactUserText && images.length === 0 : false;
+    const isContext = role === "user" ? !compactUserText && attachments.length === 0 : false;
     const idx = nextMessageIndex();
-    assignImageIds(images, `m${idx}`);
+    assignAttachmentIds(attachments, `m${idx}`);
     const modelMeta = role === "assistant" ? extractClaudeMessageModelMeta(obj) : {};
 
     items.push({
@@ -532,7 +530,7 @@ async function indexClaudeTimelineRecord(
       ...modelMeta,
       text,
       requestText,
-      ...(images.length > 0 ? { images } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
       isContext,
     });
   }
@@ -1140,14 +1138,6 @@ function toImageExtractionOptions(images?: ImagesConfig): { enabled: boolean; ma
     enabled: images?.enabled ?? true,
     maxBytes: safeMaxSizeMB * 1024 * 1024,
   };
-}
-
-function assignImageIds(images: ChatImageAttachment[], scope: string): void {
-  for (let i = 0; i < images.length; i += 1) {
-    const image = images[i];
-    if (!image || image.id) continue;
-    image.id = `${scope}-image-${i + 1}`;
-  }
 }
 
 interface PendingPatchGroup {

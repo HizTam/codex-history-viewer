@@ -20,7 +20,7 @@ Notes:
 | Cleanup Missing Pins | `codexHistoryViewer.cleanupMissingPins` | Removes pinned entries whose source files no longer exist. |
 | Delete Handoff Files | `codexHistoryViewer.cleanupHandoffs` | Deletes generated handoff files from extension global storage after confirmation. |
 | Empty Trash | `codexHistoryViewer.emptyTrash` | Clears internal trash/quarantine files and legacy cache/index generations after confirmation. |
-| Debug Info (Copy) | `codexHistoryViewer.debugInfo` | Copies runtime diagnostics and state summary to the clipboard. |
+| Copy Path | `codexHistoryViewer.copyStatusPath` | Copies the selected Status view path or value to the clipboard. |
 | Undo Last Action | `codexHistoryViewer.undoLastAction` | Reverts the latest undoable operation. |
 
 ## History and Source Filters
@@ -30,8 +30,13 @@ Notes:
 | Filter History... | `codexHistoryViewer.filterHistory` | Opens the History filter picker (date/project/source/tags). |
 | Filter History by Tags... | `codexHistoryViewer.filterHistoryByTag` | Applies a tag-based filter to the History view. |
 | Filter by Current Project | `codexHistoryViewer.filterHistoryCurrentProject` | Filters History to the active workspace project path. |
+| Show Latest First | `codexHistoryViewer.showHistoryLatestView` | Switches History to the latest-first list view. |
+| Show by Date | `codexHistoryViewer.showHistoryDateView` | Switches History to the date-grouped view. |
 | Show Codex History Only | `codexHistoryViewer.filterHistorySourceCodex` | Limits History to Codex sessions only. |
-| Show Claude History Only | `codexHistoryViewer.filterHistorySourceClaude` | Limits History to Claude sessions only. |
+| Show Claude Code History Only | `codexHistoryViewer.filterHistorySourceClaude` | Limits History to Claude Code sessions only. |
+| Toggle Codex Source Filter | `codexHistoryViewer.toggleHistorySourceCodex` | Toggles Codex in the active source filter. |
+| Toggle Claude Code Source Filter | `codexHistoryViewer.toggleHistorySourceClaude` | Toggles Claude Code in the active source filter. |
+| Cycle Source Filter (Codex + Claude Code -> Codex -> Claude Code) | `codexHistoryViewer.cycleHistorySourceFilter` | Cycles History through all enabled sources, Codex only, and Claude Code only. |
 | Show All Sources | `codexHistoryViewer.clearHistorySourceFilter` | Clears source-only filtering and shows enabled sources. |
 | Clear History Filters | `codexHistoryViewer.clearHistoryFilter` | Clears date/project/source filtering in History. |
 | Clear History Tag Filter | `codexHistoryViewer.clearHistoryTagFilter` | Removes the active History tag filter. |
@@ -52,6 +57,20 @@ Notes:
 | Save Current Search Preset... | `codexHistoryViewer.searchSavePreset` | Saves the current search conditions as a preset. |
 | Delete Saved Search... | `codexHistoryViewer.searchDeletePreset` | Deletes a saved search preset. |
 
+## Archive Actions
+
+| Command (EN label) | Command ID | Description |
+| --- | --- | --- |
+| Move to Codex History | `codexHistoryViewer.restoreArchivedSession` | Restores selected archived Codex sessions back to normal Codex History. |
+| Move to Archive | `codexHistoryViewer.archiveSession` | Moves selected active Codex sessions to the Codex archive location. |
+| Toggle Archive Visibility | `codexHistoryViewer.filterArchiveLocation` | Cycles History, Pinned, and Search between active-only, all, and archived-only Codex sessions. |
+
+## File Change History
+
+| Command (EN label) | Command ID | Description |
+| --- | --- | --- |
+| Show File AI Change History | `codexHistoryViewer.openFileChangeHistory` | Opens AI-related change history for a selected workspace file. |
+
 ## Session Actions
 
 | Command (EN label) | Command ID | Description |
@@ -65,6 +84,7 @@ Notes:
 | Pin | `codexHistoryViewer.pinSession` | Pins selected sessions for quick access. |
 | Unpin | `codexHistoryViewer.unpinSession` | Removes selected sessions from Pinned. |
 | Delete | `codexHistoryViewer.deleteSessions` | Deletes selected session files (trash-first behavior by default). |
+| Custom Title... | `codexHistoryViewer.manageCustomTitle` | Opens the shared custom-title picker for setting or clearing a session title. |
 | Set Custom Title... | `codexHistoryViewer.setCustomTitle` | Sets an extension-local display title for the selected session. |
 | Clear Custom Title | `codexHistoryViewer.clearCustomTitle` | Removes the extension-local custom title from the selected session. |
 | Edit Session Tags/Note... | `codexHistoryViewer.editSessionAnnotation` | Edits tags and note annotation for a selected session. |
@@ -75,6 +95,7 @@ Handoff context-menu actions are shown only when `codexHistoryViewer.handoff.ena
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
+| Handoff to OpenAI Codex | `codexHistoryViewer.handoffToCodex` | Creates or reuses a session handoff file, then opens OpenAI Codex with a prompt that points to it. |
 | Handoff to Claude Code | `codexHistoryViewer.handoffToClaude` | Creates or reuses a Codex session handoff file, then opens Claude Code with a prompt that points to it. |
 | Create Handoff File | `codexHistoryViewer.createHandoffFile` | Creates or reuses the selected session's `handoff.md` without opening another agent. |
 | Copy Handoff Prompt to Clipboard | `codexHistoryViewer.copyHandoffPrompt` | Copies a prompt that tells the target agent to read the selected session's handoff file, creating it first if needed. |

@@ -203,6 +203,32 @@ body.dateGuideScrolling .dateGuideHoverRail {
     0 0 0 1px color-mix(in srgb, var(--chv-bg) 72%, transparent);
 }
 
+.dateGuideTick-attachment,
+.dateGuideLensItem-attachment {
+  --dateGuideAttachmentAccent: var(--vscode-charts-green, #2f8a53);
+}
+
+.dateGuideTick-attachmentImage,
+.dateGuideLensItem-attachmentImage {
+  --dateGuideAttachmentAccent: var(--vscode-charts-purple, #b04f8f);
+}
+
+.dateGuideTick-attachmentMixed,
+.dateGuideLensItem-attachmentMixed {
+  --dateGuideAttachmentAccent: var(--vscode-charts-orange, #c2642d);
+}
+
+.dateGuideTick-attachment .dateGuideDot::after,
+.dateGuideLensItem-attachment .dateGuideLensDot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 1px solid color-mix(in srgb, var(--dateGuideAttachmentAccent) 58%, transparent);
+  border-radius: 999px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dateGuideAttachmentAccent) 12%, transparent);
+  pointer-events: none;
+}
+
 .dateGuideTick-bookmark .dateGuideHit {
   right: -8px;
   width: 38px;

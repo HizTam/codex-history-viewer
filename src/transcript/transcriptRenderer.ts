@@ -5,6 +5,11 @@ import { normalizeWhitespace } from "../utils/textUtils";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import type { SessionSource } from "../sessions/sessionTypes";
 import { formatYmdHmInTimeZone, formatYmdHmsInTimeZone } from "../utils/dateUtils";
+import {
+  buildAttachmentSummaryLines,
+  extractClaudeMessageContent,
+  extractCodexMessageContent,
+} from "../chat/chatAttachments";
 
 // Reads session JSONL and renders the conversation as Markdown.
 export async function renderTranscript(
@@ -57,7 +62,7 @@ export async function renderTranscript(
         continue;
       }
 
-      const codexResult = renderCodexRecord(lines, messageLineMap, {
+      const codexResult = await renderCodexRecord(lines, messageLineMap, {
         obj,
         timeZone,
         msgIndex,
@@ -69,7 +74,7 @@ export async function renderTranscript(
         continue;
       }
 
-      const claudeResult = renderClaudeRecord(lines, messageLineMap, {
+      const claudeResult = await renderClaudeRecord(lines, messageLineMap, {
         obj,
         timeZone,
         msgIndex,
@@ -93,11 +98,11 @@ export async function renderTranscript(
   return { content: lines.join("\n"), messageLineMap };
 }
 
-function renderCodexRecord(
+async function renderCodexRecord(
   lines: string[],
   messageLineMap: Map<number, number>,
   params: { obj: any; timeZone: string; msgIndex: number; lastToolCallId?: string },
-): { handled: boolean; msgIndex: number; lastToolCallId?: string } {
+): Promise<{ handled: boolean; msgIndex: number; lastToolCallId?: string }> {
   const { obj, timeZone } = params;
   let { msgIndex, lastToolCallId } = params;
 
@@ -109,9 +114,10 @@ function renderCodexRecord(
       return { handled: true, msgIndex, lastToolCallId };
     }
 
-    const textRaw = extractTextFromCodexContent(obj?.payload?.content);
-    const text = normalizeWhitespace(textRaw);
-    if (!text) return { handled: true, msgIndex, lastToolCallId };
+    const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false });
+    const text = normalizeWhitespace(extracted.text);
+    const attachmentLines = buildAttachmentSummaryLines(extracted.attachments);
+    if (!text && attachmentLines.length === 0) return { handled: true, msgIndex, lastToolCallId };
 
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
     const ctx = role !== "assistant" && isBoilerplateUserMessage(text) ? " (context)" : "";
@@ -125,8 +131,7 @@ function renderCodexRecord(
     }
     if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``);
     lines.push(``);
-    lines.push(text);
-    lines.push(``);
+    appendMessageBodyLines(lines, attachmentLines, text);
     lastToolCallId = undefined;
     return { handled: true, msgIndex, lastToolCallId };
   }
@@ -178,30 +183,32 @@ function renderCodexRecord(
   return { handled: true, msgIndex, lastToolCallId };
 }
 
-function renderClaudeRecord(
+async function renderClaudeRecord(
   lines: string[],
   messageLineMap: Map<number, number>,
   params: { obj: any; timeZone: string; msgIndex: number; lastToolCallId?: string },
-): { handled: boolean; msgIndex: number; lastToolCallId?: string } {
+): Promise<{ handled: boolean; msgIndex: number; lastToolCallId?: string }> {
   const { obj, timeZone } = params;
   let { msgIndex, lastToolCallId } = params;
 
   const role = detectClaudeMessageRole(obj);
   if (!role) return { handled: false, msgIndex, lastToolCallId };
 
-  const parsed = parseClaudeMessageContent(getClaudeMessageContent(obj));
-  const text = normalizeWhitespace(parsed.messageText);
+  const rawContent = getClaudeMessageContent(obj);
+  const parsed = parseClaudeMessageContent(rawContent);
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false });
+  const text = normalizeWhitespace(extracted.text);
+  const attachmentLines = buildAttachmentSummaryLines(extracted.attachments);
   const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
 
-  if (text) {
+  if (text || attachmentLines.length > 0) {
     const ctx = role !== "assistant" && isBoilerplateUserMessage(text) ? " (context)" : "";
     msgIndex += 1;
     messageLineMap.set(msgIndex, lines.length + 1);
     lines.push(`## [#${msgIndex}] ${capitalize(role)}${ctx}`);
     if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``);
     lines.push(``);
-    lines.push(text);
-    lines.push(``);
+    appendMessageBodyLines(lines, attachmentLines, text);
     lastToolCallId = undefined;
   }
 
@@ -248,6 +255,13 @@ function renderClaudeRecord(
   }
 
   return { handled: true, msgIndex, lastToolCallId };
+}
+
+function appendMessageBodyLines(lines: string[], attachmentLines: readonly string[], text: string): void {
+  for (const line of attachmentLines) lines.push(line);
+  if (attachmentLines.length > 0 && text) lines.push("");
+  if (text) lines.push(text);
+  lines.push("");
 }
 
 function parseClaudeMessageContent(content: unknown): {
@@ -366,17 +380,6 @@ function extractClaudeToolResultText(content: unknown): string {
   }
   if (content === undefined) return "";
   return safeJsonStringify(content);
-}
-
-function extractTextFromCodexContent(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  const texts: string[] = [];
-  for (const item of content) {
-    if (!item || typeof item !== "object") continue;
-    const maybeText = (item as { text?: unknown }).text;
-    if (typeof maybeText === "string") texts.push(maybeText);
-  }
-  return texts.join("");
 }
 
 function detectHistorySource(source: SessionSource | undefined, fsPath: string): SessionSource {

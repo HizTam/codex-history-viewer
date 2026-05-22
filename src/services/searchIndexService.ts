@@ -6,9 +6,14 @@ import type { SearchIndexToolContent } from "../settings";
 import type { HistoryIndex } from "../sessions/sessionTypes";
 import { readJson, writeJson } from "../storage/jsonStorage";
 import { normalizeWhitespace } from "../utils/textUtils";
+import {
+  buildAttachmentSearchText,
+  extractClaudeMessageContent,
+  extractCodexMessageContent,
+} from "../chat/chatAttachments";
 import type { DebugLogger } from "./logger";
 
-const SEARCH_INDEX_FILE_VERSION = 7;
+const SEARCH_INDEX_FILE_VERSION = 8;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
 
@@ -296,8 +301,8 @@ async function buildIndexedSession(
       } catch {
         continue;
       }
-      if (indexCodexRecord(obj, state)) continue;
-      if (indexClaudeRecord(obj, state)) continue;
+      if (await indexCodexRecord(obj, state)) continue;
+      if (await indexClaudeRecord(obj, state)) continue;
     }
   } finally {
     rl.close();
@@ -318,7 +323,7 @@ interface BuildState {
   indexToolContent: SearchIndexToolContent;
 }
 
-function indexCodexRecord(obj: any, state: BuildState): boolean {
+async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
   if (obj?.type === "event_msg") {
     const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
     if (payloadType === "patch_apply_end") {
@@ -346,13 +351,13 @@ function indexCodexRecord(obj: any, state: BuildState): boolean {
     const role = obj?.payload?.role;
     if (role !== "user" && role !== "assistant" && role !== "developer") return true;
 
-    const textRaw = extractTextFromCodexContent(obj?.payload?.content);
-    const text = normalizeWhitespace(textRaw);
-    if (!text) return true;
+    const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false });
+    const text = normalizeWhitespace([extracted.text, buildAttachmentSearchText(extracted.attachments)].filter(Boolean).join("\n"));
+    if (!text && extracted.attachments.length === 0) return true;
 
     if (role === "user" || role === "assistant") state.messageIndex += 1;
     const anchor = Math.max(1, state.messageIndex);
-    state.messages.push({ messageIndex: anchor, role, source: "message", text });
+    if (text) state.messages.push({ messageIndex: anchor, role, source: "message", text });
     return true;
   }
 
@@ -446,16 +451,18 @@ function indexCodexRecord(obj: any, state: BuildState): boolean {
   return true;
 }
 
-function indexClaudeRecord(obj: any, state: BuildState): boolean {
+async function indexClaudeRecord(obj: any, state: BuildState): Promise<boolean> {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
-  const parsed = parseClaudeMessageContent(getClaudeMessageContent(obj));
-  const messageText = normalizeWhitespace(parsed.messageText);
-  if (messageText) {
+  const rawContent = getClaudeMessageContent(obj);
+  const parsed = parseClaudeMessageContent(rawContent);
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false });
+  const messageText = normalizeWhitespace([extracted.text, buildAttachmentSearchText(extracted.attachments)].filter(Boolean).join("\n"));
+  if (messageText || extracted.attachments.length > 0) {
     state.messageIndex += 1;
     const anchor = Math.max(1, state.messageIndex);
-    state.messages.push({ messageIndex: anchor, role, source: "message", text: messageText });
+    if (messageText) state.messages.push({ messageIndex: anchor, role, source: "message", text: messageText });
   }
 
   const anchor = Math.max(1, state.messageIndex);
@@ -522,17 +529,6 @@ function indexClaudeRecord(obj: any, state: BuildState): boolean {
   }
 
   return true;
-}
-
-function extractTextFromCodexContent(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  const texts: string[] = [];
-  for (const item of content) {
-    if (!item || typeof item !== "object") continue;
-    const maybeText = (item as { text?: unknown }).text;
-    if (typeof maybeText === "string") texts.push(maybeText);
-  }
-  return texts.join("");
 }
 
 function parseClaudeMessageContent(content: unknown): {

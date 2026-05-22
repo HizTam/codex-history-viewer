@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.0] - 2026-05-22
+
+### Added
+
+- Added a unified chat attachment model so images, Claude documents, Claude IDE file and selection references, and Codex mentioned files are represented as `attachments`.
+- Added Claude Code document cards for PDF, text, and generic documents, including on-demand preview and Save As support without sending embedded binary payloads to the initial Webview model.
+- Added parsing for Claude Code `<ide_opened_file>` and `<ide_selection>` tags, rendering them as file reference and selection reference cards instead of raw inline tags.
+- Added parsing for Codex `# Files mentioned by the user:` blocks, rendering mentioned Word, Excel, PowerPoint, PDF, archive, text, and other files as file reference cards while keeping only the request body as message text.
+- Added compact attachment cards with file-kind badges, kind-specific icon accents, tooltip metadata for paths / MIME types / sizes, and action icons for preview, save, or open.
+- Added attachment indicators and localized attachment summaries to the chat date guide so messages with images, other attachments, or mixed attachment types are visible from the timeline tooltip.
+- Added attachment metadata to the search index, including labels, paths, MIME types, file kinds, and bounded text from Claude text documents.
+
+### Changed
+
+- Changed chat rendering to preserve attachment order while grouping only consecutive images into existing image groups.
+- Changed Markdown transcript, Resume, and Handoff generation to use clean text plus attachment summaries instead of repeating raw IDE tags or Codex mentioned-file blocks.
+- Changed search indexing to exclude PDF / Office / binary / base64 document contents and to avoid reading Codex referenced files automatically.
+- Bumped the search-index internal file version so existing indexes are rebuilt with attachment metadata.
+
 ## [2.2.0] - 2026-05-21
 
 ### Added

@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
@@ -21,6 +22,9 @@ import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 import type { DebugLogger } from "../services/logger";
 import type {
+  ChatAttachment,
+  ChatDocumentAttachment,
+  ChatDocumentPayload,
   ChatImageAttachment,
   ChatMessageItem,
   ChatPatchChangeType,
@@ -36,6 +40,12 @@ type SaveableChatImage = {
   src: string;
   mimeType: string;
   label: string;
+};
+type SaveableChatDocument = {
+  payload: ChatDocumentPayload;
+  mimeType?: string;
+  label: string;
+  documentKind: ChatDocumentAttachment["documentKind"];
 };
 type ChatSessionDetailMode = "summary" | "full";
 type ChatPerformanceStats = {
@@ -89,6 +99,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly bookmarkTargetsByPanel = new WeakMap<vscode.WebviewPanel, Map<string, BookmarkTarget>>();
   private readonly readyByPanel = new WeakMap<vscode.WebviewPanel, boolean>();
   private readonly imageDataByPanel = new WeakMap<vscode.WebviewPanel, Map<string, SaveableChatImage>>();
+  private readonly documentDataByPanel = new WeakMap<vscode.WebviewPanel, Map<string, SaveableChatDocument>>();
   private readonly patchEntryDetailRequestsByPanel = new WeakMap<vscode.WebviewPanel, Set<string>>();
   public readonly onDidChangeAutoRefreshConsumerVisibility = this.autoRefreshConsumerVisibilityEmitter.event;
 
@@ -278,6 +289,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const isSameSession = !!prevState && normalizeCacheKey(prevState.fsPath) === key;
     if (!isSameSession) {
       this.imageDataByPanel.delete(panel);
+      this.documentDataByPanel.delete(panel);
       this.patchEntryDetailRequestsByPanel.delete(panel);
     }
 
@@ -391,6 +403,8 @@ export class ChatPanelManager implements vscode.Disposable {
       if (this.panelsByKey.get(key) === panel) {
         this.panelsByKey.delete(key);
       }
+      this.imageDataByPanel.delete(panel);
+      this.documentDataByPanel.delete(panel);
     });
   }
 
@@ -586,6 +600,10 @@ export class ChatPanelManager implements vscode.Disposable {
         await this.saveImageFromPanel(panel, msg);
         return;
       }
+      case "saveAttachment": {
+        await this.saveAttachmentFromPanel(panel, msg);
+        return;
+      }
       case "requestImageData": {
         this.sendImageDataToPanel(panel, msg);
         return;
@@ -660,29 +678,11 @@ export class ChatPanelManager implements vscode.Disposable {
         return;
       }
       case "openLocalFile": {
-        const rawFsPath = typeof msg?.fsPath === "string" ? msg.fsPath.trim() : "";
-        if (!rawFsPath) return;
-
-        const requestedLine =
-          typeof msg?.line === "number" && Number.isFinite(msg.line) && msg.line >= 1
-            ? Math.floor(msg.line)
-            : undefined;
-        const requestedColumn =
-          typeof msg?.column === "number" && Number.isFinite(msg.column) && msg.column >= 1
-            ? Math.floor(msg.column)
-            : undefined;
-        const target = await resolveLocalFileLinkTarget(rawFsPath, {
-          requestedLine,
-          requestedColumn,
-          baseDirs: collectLocalLinkBaseDirs(
-            state.sessionCwd,
-            ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
-          ),
-        });
-
-        if (!target || !(await openLinkedFileInEditor(target))) {
-          void vscode.window.showErrorMessage(t("app.openLinkedFileFailed", rawFsPath));
-        }
+        await this.openAttachmentTargetFromPanel(panel, msg);
+        return;
+      }
+      case "openAttachment": {
+        await this.openAttachmentTargetFromPanel(panel, msg);
         return;
       }
       case "loadPatchEntryDetails": {
@@ -804,6 +804,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const performanceStats = await buildChatPerformanceStats(state.fsPath, model);
     statsMs = elapsedMs(statsStartedAt);
     this.imageDataByPanel.set(panel, collectSaveableImages(model));
+    this.documentDataByPanel.set(panel, collectSaveableDocuments(model));
     const annotation = this.annotationStore.get(state.fsPath);
     const dateTime = this.buildDateTime();
     const savedOpenMessageIndex =
@@ -1006,6 +1007,9 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private async saveImageFromPanel(panel: vscode.WebviewPanel, msg: any): Promise<void> {
+    const state = this.stateByPanel.get(panel);
+    if (!this.isCurrentPanelSessionRequest(state, msg, "saveImage")) return;
+
     const imageId = typeof msg?.imageId === "string" ? msg.imageId.trim() : "";
     if (!imageId) return;
 
@@ -1021,8 +1025,7 @@ export class ChatPanelManager implements vscode.Disposable {
       return;
     }
 
-    const state = this.stateByPanel.get(panel);
-    const defaultUri = buildDefaultImageSaveUri(state?.sessionCwd, image.label, decoded.extension);
+    const defaultUri = buildDefaultImageSaveUri(state.sessionCwd, image.label, decoded.extension);
     const targetUri = await vscode.window.showSaveDialog({
       title: t("chat.image.saveDialogTitle"),
       defaultUri,
@@ -1064,6 +1067,108 @@ export class ChatPanelManager implements vscode.Disposable {
       mimeType: image.mimeType,
       label: image.label,
     });
+  }
+
+  private async saveAttachmentFromPanel(panel: vscode.WebviewPanel, msg: any): Promise<void> {
+    const state = this.stateByPanel.get(panel);
+    if (!this.isCurrentPanelSessionRequest(state, msg, "saveAttachment")) return;
+
+    const attachmentId = typeof msg?.attachmentId === "string" ? msg.attachmentId.trim() : "";
+    if (!attachmentId) return;
+
+    const document = this.documentDataByPanel.get(panel)?.get(attachmentId);
+    if (!document) {
+      void vscode.window.showErrorMessage(t("chat.attachment.saveFailed", t("chat.attachment.saveUnavailable")));
+      return;
+    }
+
+    const decoded = decodeDocumentPayload(document);
+    if (!decoded) {
+      void vscode.window.showErrorMessage(t("chat.attachment.saveFailed", t("chat.attachment.saveUnavailable")));
+      return;
+    }
+
+    const defaultUri = buildDefaultAttachmentSaveUri(state.sessionCwd, document.label, decoded.extension);
+    const targetUri = await vscode.window.showSaveDialog({
+      title: t("chat.attachment.saveDialogTitle"),
+      defaultUri,
+      filters: {
+        [t("chat.attachment.saveFilter")]: [decoded.extension.slice(1)],
+      },
+    });
+    if (!targetUri) return;
+
+    try {
+      await vscode.workspace.fs.writeFile(targetUri, decoded.bytes);
+      void vscode.window.showInformationMessage(t("chat.attachment.saved"));
+    } catch (error) {
+      void vscode.window.showErrorMessage(t("chat.attachment.saveFailed", formatError(error)));
+    }
+  }
+
+  private isCurrentPanelSessionRequest(state: ChatPanelState | undefined, msg: any, operation: string): state is ChatPanelState {
+    if (!state) {
+      this.logger?.debug(formatDebugFields(`chatAttachment ${operation} ignored`, { reason: "missingState" }));
+      return false;
+    }
+
+    const requestedFsPath = typeof msg?.fsPath === "string" ? msg.fsPath.trim() : "";
+    if (!requestedFsPath) {
+      this.logger?.debug(
+        formatDebugFields(`chatAttachment ${operation} ignored`, {
+          session: safeDebugBasename(state.fsPath),
+          reason: "missingFsPath",
+        }),
+      );
+      return false;
+    }
+
+    if (normalizeCacheKey(requestedFsPath) !== normalizeCacheKey(state.fsPath)) {
+      this.logger?.debug(
+        formatDebugFields(`chatAttachment ${operation} ignored`, {
+          session: safeDebugBasename(state.fsPath),
+          requested: safeDebugBasename(requestedFsPath),
+          reason: "staleFsPath",
+        }),
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  private async openAttachmentTargetFromPanel(panel: vscode.WebviewPanel, msg: any): Promise<void> {
+    const state = this.stateByPanel.get(panel);
+    if (!state) return;
+
+    const rawFsPath = typeof msg?.fsPath === "string" ? msg.fsPath.trim() : "";
+    if (!rawFsPath) return;
+
+    const requestedLine =
+      typeof msg?.line === "number" && Number.isFinite(msg.line) && msg.line >= 1 ? Math.floor(msg.line) : undefined;
+    const requestedColumn =
+      typeof msg?.column === "number" && Number.isFinite(msg.column) && msg.column >= 1
+        ? Math.floor(msg.column)
+        : undefined;
+    const target = await resolveLocalFileLinkTarget(rawFsPath, {
+      requestedLine,
+      requestedColumn,
+      baseDirs: collectLocalLinkBaseDirs(
+        state.sessionCwd,
+        ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
+      ),
+    });
+
+    if (!target) {
+      void vscode.window.showErrorMessage(t("chat.attachment.openFailed", rawFsPath));
+      return;
+    }
+
+    const opened =
+      typeof target.line === "number" ? await openLinkedFileInEditor(target) : await openFileWithVsCodeOpenCommand(target.fsPath);
+    if (!opened) {
+      void vscode.window.showErrorMessage(t("chat.attachment.openFailed", rawFsPath));
+    }
   }
 
   private buildI18n(): Record<string, string> {
@@ -1173,6 +1278,27 @@ export class ChatPanelManager implements vscode.Disposable {
       imageNext: t("chat.image.next"),
       imageLoading: t("chat.image.loading"),
       imageAttachmentLabel: t("chat.image.attachmentLabel"),
+      attachmentOpen: t("chat.attachment.open"),
+      attachmentSave: t("chat.attachment.save"),
+      attachmentFileReference: t("chat.attachment.fileReference"),
+      attachmentOpenedFile: t("chat.attachment.openedFile"),
+      attachmentSelection: t("chat.attachment.selection"),
+      attachmentDocument: t("chat.attachment.document"),
+      attachmentPdf: t("chat.attachment.pdf"),
+      attachmentText: t("chat.attachment.text"),
+      attachmentCode: t("chat.attachment.code"),
+      attachmentImageReference: t("chat.attachment.imageReference"),
+      attachmentWord: t("chat.attachment.word"),
+      attachmentExcel: t("chat.attachment.excel"),
+      attachmentPowerPoint: t("chat.attachment.powerPoint"),
+      attachmentArchive: t("chat.attachment.archive"),
+      attachmentGenericFile: t("chat.attachment.genericFile"),
+      attachmentPreview: t("chat.attachment.preview"),
+      attachmentTooLarge: t("chat.attachment.tooLarge"),
+      attachmentUnsupported: t("chat.attachment.unsupported"),
+      attachmentMissing: t("chat.attachment.missing"),
+      attachmentUnavailable: t("chat.attachment.unavailable"),
+      attachmentTotalCount: t("chat.attachment.totalCount"),
       copy: t("chat.button.copy"),
       showMore: t("chat.button.showMore"),
       showLess: t("chat.button.showLess"),
@@ -1535,8 +1661,14 @@ function toSummaryTimelineItem(item: ChatTimelineItem): ChatTimelineItem {
 function toWebviewMessageItem(item: ChatMessageItem): ChatMessageItem {
   return {
     ...item,
-    images: item.images?.map((image) => toWebviewImageAttachment(image)),
+    attachments: item.attachments?.map((attachment) => toWebviewAttachment(attachment)),
   };
+}
+
+function toWebviewAttachment(attachment: ChatAttachment): ChatAttachment {
+  if (attachment.type === "image") return toWebviewImageAttachment(attachment);
+  if (attachment.type === "document") return toWebviewDocumentAttachment(attachment);
+  return { ...attachment };
 }
 
 function toWebviewImageAttachment(image: ChatImageAttachment): ChatImageAttachment {
@@ -1546,6 +1678,15 @@ function toWebviewImageAttachment(image: ChatImageAttachment): ChatImageAttachme
     webviewImage.dataOmitted = true;
   }
   return webviewImage;
+}
+
+function toWebviewDocumentAttachment(document: ChatDocumentAttachment): ChatDocumentAttachment {
+  const webviewDocument: ChatDocumentAttachment = { ...document };
+  if (webviewDocument.payload) {
+    delete webviewDocument.payload;
+    webviewDocument.dataOmitted = true;
+  }
+  return webviewDocument;
 }
 
 function toFullToolItem(item: ChatToolItem): ChatToolItem {
@@ -1627,7 +1768,9 @@ async function buildChatPerformanceStats(fsPath: string, model: ChatSessionModel
   for (const item of Array.isArray(model.items) ? model.items : []) {
     if (item.type === "message") {
       stats.messageChars += typeof item.text === "string" ? item.text.length : 0;
-      stats.imageCount += Array.isArray(item.images) ? item.images.length : 0;
+      stats.imageCount += Array.isArray(item.attachments)
+        ? item.attachments.filter((attachment) => attachment?.type === "image").length
+        : 0;
       continue;
     }
     if (item.type !== "patchGroup") continue;
@@ -1649,14 +1792,29 @@ function hasNonEmptyString(value: unknown): boolean {
 function collectSaveableImages(model: ChatSessionModel): Map<string, SaveableChatImage> {
   const images = new Map<string, SaveableChatImage>();
   for (const item of model.items) {
-    if (item.type !== "message" || !Array.isArray(item.images)) continue;
-    for (const image of item.images) {
+    if (item.type !== "message" || !Array.isArray(item.attachments)) continue;
+    for (const image of item.attachments.filter((attachment): attachment is ChatImageAttachment => attachment?.type === "image")) {
       const saveable = toSaveableImage(image);
       if (!saveable) continue;
       images.set(image.id!, saveable);
     }
   }
   return images;
+}
+
+function collectSaveableDocuments(model: ChatSessionModel): Map<string, SaveableChatDocument> {
+  const documents = new Map<string, SaveableChatDocument>();
+  for (const item of model.items) {
+    if (item.type !== "message" || !Array.isArray(item.attachments)) continue;
+    for (const document of item.attachments.filter(
+      (attachment): attachment is ChatDocumentAttachment => attachment?.type === "document",
+    )) {
+      const saveable = toSaveableDocument(document);
+      if (!saveable || !document.id) continue;
+      documents.set(document.id, saveable);
+    }
+  }
+  return documents;
 }
 
 function toSaveableImage(image: ChatImageAttachment): SaveableChatImage | null {
@@ -1670,6 +1828,16 @@ function toSaveableImage(image: ChatImageAttachment): SaveableChatImage | null {
     src,
     mimeType,
     label: image.label || "image-attachment",
+  };
+}
+
+function toSaveableDocument(document: ChatDocumentAttachment): SaveableChatDocument | null {
+  if (!document.id || document.status !== "available" || !document.payload) return null;
+  return {
+    payload: document.payload,
+    mimeType: document.mimeType,
+    label: document.label || "document-attachment",
+    documentKind: document.documentKind,
   };
 }
 
@@ -1701,6 +1869,29 @@ function decodeImageDataUri(src: string): { mimeType: string; extension: string;
   }
 }
 
+function decodeDocumentPayload(document: SaveableChatDocument): { extension: string; bytes: Uint8Array } | null {
+  const extension = documentExtensionForSave(document);
+  try {
+    if (document.payload.kind === "text") {
+      return { extension, bytes: Buffer.from(document.payload.text, "utf8") };
+    }
+    return { extension, bytes: Buffer.from(document.payload.data.replace(/\s/g, ""), "base64") };
+  } catch {
+    return null;
+  }
+}
+
+function documentExtensionForSave(document: SaveableChatDocument): string {
+  const existing = path.extname(document.label).toLowerCase();
+  if (existing && existing.length <= 12) return existing;
+  const mimeType = String(document.mimeType ?? "").toLowerCase();
+  if (mimeType === "application/pdf" || document.documentKind === "pdf") return ".pdf";
+  if (mimeType === "text/markdown") return ".md";
+  if (mimeType === "application/json") return ".json";
+  if (mimeType.startsWith("text/") || document.documentKind === "text") return ".txt";
+  return ".bin";
+}
+
 function normalizeImageMimeType(value: string | undefined): string {
   const normalized = String(value ?? "").trim().toLowerCase();
   return normalized === "image/jpg" ? "image/jpeg" : normalized;
@@ -1721,16 +1912,36 @@ function buildDefaultImageSaveUri(sessionCwd: string | undefined, label: string,
   return vscode.Uri.joinPath(vscode.Uri.file(baseDir), fileName);
 }
 
+function buildDefaultAttachmentSaveUri(sessionCwd: string | undefined, label: string, extension: string): vscode.Uri {
+  const fileName = buildSafeFileName(label, extension, "document-attachment");
+  const baseDir = typeof sessionCwd === "string" && sessionCwd.trim() ? sessionCwd.trim() : undefined;
+  if (!baseDir) return vscode.Uri.file(fileName);
+  return vscode.Uri.joinPath(vscode.Uri.file(baseDir), fileName);
+}
+
 function buildImageFileName(label: string, extension: string): string {
-  const withoutKnownExtension = String(label || "image-attachment").replace(/\.(png|jpe?g|gif|webp)$/iu, "");
+  return buildSafeFileName(String(label || "image-attachment").replace(/\.(png|jpe?g|gif|webp)$/iu, ""), extension, "image-attachment");
+}
+
+function buildSafeFileName(label: string, extension: string, fallbackBase: string): string {
+  const withoutKnownExtension = String(label || fallbackBase).replace(/\.[A-Za-z0-9]{1,12}$/u, "");
   let base = withoutKnownExtension
     .replace(/[<>:"/\\|?*\x00-\x1f]/g, "_")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/[. ]+$/g, "");
-  if (!base) base = "image-attachment";
-  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/iu.test(base)) base = `image-${base}`;
+  if (!base) base = fallbackBase;
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/iu.test(base)) base = `file-${base}`;
   return `${base}${extension}`;
+}
+
+async function openFileWithVsCodeOpenCommand(fsPath: string): Promise<boolean> {
+  try {
+    await vscode.commands.executeCommand("vscode.open", vscode.Uri.file(fsPath));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function formatError(error: unknown): string {

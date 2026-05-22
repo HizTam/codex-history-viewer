@@ -330,6 +330,7 @@
           tooltip: formatDateGuideTitle(entry.key, scale),
           bookmarked: entry.item.bookmarked === true || isGuideTargetBookmarked(targetElement),
           role: resolveGuideTargetRole(targetElement, entry.item.role),
+          attachmentKind: normalizeAttachmentGuideKind(entry.item.attachmentKind),
           targetElement,
         };
       });
@@ -361,6 +362,7 @@
         tooltip: formatTimelineTooltip(entry, timeZone),
         bookmarked: entry.bookmarked === true || isGuideTargetBookmarked(entry.element),
         role: resolveGuideTargetRole(entry.element, entry.role),
+        attachmentKind: normalizeAttachmentGuideKind(entry.attachmentKind),
         targetElement: entry.element,
       }));
       return thinGuideLabels(periods, this.estimateGuideHeight());
@@ -411,6 +413,9 @@
           period.major ? "dateGuideTick-major" : "dateGuideTick-minor",
           period.bookmarked ? "dateGuideTick-bookmark" : "",
           period.role === "user" ? "dateGuideTick-user" : "",
+          period.attachmentKind ? "dateGuideTick-attachment" : "",
+          period.attachmentKind === "image" ? "dateGuideTick-attachmentImage" : "",
+          period.attachmentKind === "mixed" ? "dateGuideTick-attachmentMixed" : "",
         ]
           .filter(Boolean)
           .join(" ");
@@ -778,6 +783,9 @@
           "dateGuideLensItem",
           period.bookmarked ? "dateGuideLensItem-bookmark" : "",
           period.role === "user" ? "dateGuideLensItem-user" : "",
+          period.attachmentKind ? "dateGuideLensItem-attachment" : "",
+          period.attachmentKind === "image" ? "dateGuideLensItem-attachmentImage" : "",
+          period.attachmentKind === "mixed" ? "dateGuideLensItem-attachmentMixed" : "",
           activeKey && period.key === activeKey ? "dateGuideLensItem-current" : "",
           isLensActive ? "dateGuideLensItem-active" : "",
         ]
@@ -964,8 +972,15 @@
       title: typeof item.title === "string" ? item.title.trim() : "",
       tooltip: typeof item.tooltip === "string" ? item.tooltip.trim() : "",
       tooltipOverride: typeof item.tooltipOverride === "string" ? item.tooltipOverride.trim() : "",
+      attachmentKind: normalizeAttachmentGuideKind(item.attachmentKind),
       itemIndex: Number.isFinite(Number(item.itemIndex)) ? Number(item.itemIndex) : index,
     };
+  }
+
+  function normalizeAttachmentGuideKind(value) {
+    const text = typeof value === "string" ? value.trim() : "";
+    if (text === "image" || text === "mixed" || text === "attachment") return text;
+    return "";
   }
 
   function isEventInsideRoot(event, root) {

@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-05-21
-- 対象バージョン: 2.2.0
+- 最終更新: 2026-05-22
+- 対象バージョン: 2.3.0
 
 ## 1. 概要
 
@@ -156,8 +156,11 @@
   - ツール引数 / ツール出力（`search.indexToolContent` の設定に従う）
   - セッションの表示タイトル / カスタムタイトル / オリジナルタイトル
   - セッション注釈のタグ / ノート
+  - 添付 / ファイル参照の label、path、MIME type、file kind
+  - Claude text document から抽出した上限内テキスト
 - Codex archived sessions は実効有効な場合に検索インデックスへ取り込み、表示時は `archiveLocationFilter` に従って hit を含める / 除外する
 - archived 非表示時は archived hit を先に除外してから `search.maxResults` を適用するため、表示件数が最大件数に達する
+- PDF / Office / binary / base64 document の内容や、Codex file reference の参照先ファイル内容は検索インデックスへ入れない
 - 保存済み検索:
   - 実行
   - 保存
@@ -191,6 +194,7 @@
   - 最大 120 文字を超える入力はエラーにする
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
+  - 内部 file version: 8
   - 用途: 繰り返し検索を高速化する増分インデックス
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
   - 再利用条件:
@@ -208,6 +212,9 @@
   - `custom_tool_call` の patch / diff 本文、巨大 JSON、base64 / data URI、secret / token / password 系キーの値は保存しない
   - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ、取得できる場合に status / exitCode / durationMs / success / error などの短い実行メタだけを保存する
   - ファイル履歴向けの `fileChangeHints` は関連セッションの優先付け補助として使う。最終的な diff 抽出結果の正しさは元のセッション JSONL の再解析で担保する
+  - Chat attachment metadata は label、path、MIME type、file kind を検索対象に含める
+  - Claude text document の text は上限内だけ検索対象にし、PDF / Office / binary / base64 document の本文は検索対象にしない
+  - Codex file reference は履歴に保存された label / path だけを検索対象にし、参照先ファイルは読み込まない
   - 保存形式: 整形なし JSON（サイズ削減のため）
 - Handoff 生成ファイル:
   - 保存先: `globalStorageUri/handoffs/<source>/<source-root-relative-path-with-final-stem>/`
@@ -263,8 +270,10 @@
 - 自動更新では Search 結果を消さない
 - 自動更新では検索インデックス再構築を行わない
 
-### 3.6 チャット表示 / 画像
+### 3.6 チャット表示 / 添付 / 画像
 
+- チャット表示では Codex / Claude のメッセージ内に含まれる添付 / ファイル参照を `attachments` に統合して扱う
+- `ChatMessageItem.images` は Chat model の出力としては使わず、画像も `attachments` の `type: "image"` として扱う
 - チャット表示では Codex / Claude のメッセージ内に含まれる対応画像をサムネイル表示する
 - 対応形式:
   - `image/png`
@@ -279,6 +288,29 @@
 - 対応画像の実データは初回描画では Webview に送らず、表示範囲に入ったサムネイルやプレビュー要求時にオンデマンドで読み込む
 - `images.maxSizeMB` はプレビュー表示と保存のために読み込む画像サイズ上限として扱う
 - `images.thumbnailSize` はチャット本文内のサムネイルサイズだけを切り替える
+- Claude Code の `type: "document"` は document card として表示する
+  - PDF は PDF document card として表示し、初期 Webview model へ base64 payload を渡さない
+  - text document は text document card として表示し、プレビュー表示には上限内の抜粋だけを使う
+  - unknown document は generic document card として表示する
+- Claude Code の `<ide_opened_file>` / `<ide_selection>` は本文から除去し、file reference / selection reference card として表示する
+- Codex の `# Files mentioned by the user:` block は file reference card に変換し、`## My request for Codex:` 以降だけを本文として残す
+- Codex の `## My request for Codex:` がない variant は、安全に file block と本文の境界を判定できる場合だけ分離する
+- Codex file reference は参照先ファイルを自動で読まず、履歴に保存された label / path / line 情報だけを表示する
+- Word / Excel / PowerPoint / PDF / zip / 任意拡張子は file reference として扱い、内容 preview はしない
+- document / file reference / selection card は、file kind badge、ファイル名、必要な action icon を中心にした compact card とする
+- path / MIME type / byte size は本文上に常時表示せず、card / badge / ファイル名の tooltip で確認できるようにする
+- file kind ごとに badge icon / accent を変える。PDF / Word / Excel / PowerPoint / Text / Code / Archive / Image reference / Selection / Generic file を区別する
+- Code / Image reference の badge text は generic `File` に落とさず、専用の l10n label で表示する
+- text document preview は本文中の大きな `<details>` として常時表示せず、保存ボタン左の preview action icon で開閉する
+- preview を開いた場合は同じ card 内の下段に full-width panel として展開する
+- embedded document の Save As は Webview から `saveAttachment` message を送り、extension host 側の payload store から保存する
+- local file reference の Open は Webview から `openAttachment` message を送り、extension host 側で VS Code API 経由で開く。shell command は使わない
+- 本文が空で添付だけの user message も、詳細非表示時に context / empty message と誤判定せず表示する
+- `attachments` は抽出時点から履歴 content の出現順を保つ。Webview 側でも kind 別に並べ替えず、連続する画像だけを image group としてまとめる
+- Search / Markdown / Resume / Handoff など画像 payload を読まない経路では、画像実データを読み込まずに MIME type / 推定 label などの軽量 metadata だけを保持する
+- `localimage` / `imageassetpointer` など normalize 後の image-like type も attachment-like 判定に含め、main path と patch detail path の messageIndex を揃える
+- Claude Code の `type: "document"` は document extractor を優先し、image extractor では処理しない。MIME type 欠落時も document と image の二重 attachment にしない
+- `saveImage` / `saveAttachment` は Webview から session `fsPath` を送り、extension host 側で現在の panel state と一致する場合だけ保存する。欠落 / stale request は保存せず、必要に応じて debug log に留める
 - サムネイルクリックで Webview 内の画像プレビューモーダルを開く
 - 画像プレビューモーダル:
   - 上部ヘッダーに、1 枚の場合も含めてサムネイルを表示する
@@ -392,6 +424,12 @@
 - 日付ガイド上のマーカー:
   - しおり位置は黄色の丸で表示する
   - user 位置は青系の丸で表示する
+  - 添付 / 画像付き message は dot 外側の控えめな ring で表示する
+  - 添付 indicator は通常添付、画像のみ、mixed を区別する
+  - 添付 indicator と tooltip は `attachments` metadata だけを使い、payload store / 参照先ファイル / binary data にはアクセスしない
+  - 添付あり message の tooltip には `user #18 (画像添付)` / `user #3 (PDF, テキスト)` のような attachment summary を含める
+  - attachment summary の種類 label は既存の `chat.image.attachmentLabel` と `chat.attachment.*` の l10n label を再利用する。総添付数 suffix で `件` / `attachments` などの語を出す場合は l10n key を追加する
+  - attachment summary は「種類の短い要約」と「総添付数」を分けて表示する。`+N` は hidden unique kind 数として残し、同一 kind が複数ある場合や 4 種類以上ある場合は `画像添付 ×5` / `PDF, テキスト, Word +1 / 4件` のように総添付数を別 suffix で出す
   - user としおりが同じ位置にある場合は、黄色丸を主表示しつつ青系の外周表現を残す
   - 現在位置は通常ドットとは別の最前面リングとして表示し、user / しおり / 密集マーカーに隠れないようにする
   - 日付ガイドの開閉条件や表示維持条件は、しおり有無では変えない
@@ -513,6 +551,7 @@
 
 - `src/services/searchIndexService.ts`
   - `search-index.v2.json` を管理する
+  - `SEARCH_INDEX_FILE_VERSION = 8` とし、attachment metadata 追加前の既存インデックスは再構築対象にする
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
   - index context に `codexArchivedSessionsRoot` と `includeCodexArchived` を含め、archived root / 有効状態の変更を検知する
@@ -521,6 +560,9 @@
   - Codex の `custom_tool_call` は既存 tool 検索と同じ `role: tool` / `source: toolArguments` 粒度で、軽量メタだけを入れる
   - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ `role: tool` / `source: toolOutput` として短い実行メタを入れる
   - `conversationOnly` のときは `custom_tool_call` の callId 紐付けだけを維持し、検索用メタ生成は行わない
+  - `extractCodexMessageContent()` / `extractClaudeMessageContent()` を使い、clean text と attachment metadata を検索対象へ入れる
+  - `buildAttachmentSearchText()` は attachment label、path、MIME type、file kind、Claude text document の上限内 text を返す
+  - PDF / Office / binary / base64 document の本文と、Codex file reference の参照先ファイル本文は検索インデックスへ入れない
   - 旧キャッシュに `indexToolContent` がない場合は `toolCallsAndOutputs` とみなし、既定設定のままなら不要な再作成を避ける
   - `cleanupOrphanEntries()` で現在の履歴に存在しない cacheKey を削除する
   - 実ファイルが消えている場合は `stat` 失敗時に該当エントリを削除する
@@ -627,6 +669,9 @@
   - Codex は `patch_apply_end` の `unified_diff` を復元可能なファイル変更として取り込む
   - Claude は `Edit` / `MultiEdit` / `Write` から復元可能な synthetic diff を作る
   - tool call / tool output 本文は Handoff ファイルへ含めない
+  - Codex の `Files mentioned by the user` block と Claude の IDE tag は raw のまま再出力せず、clean text と attachment summary を使う
+  - Codex 向け Handoff / Resume でも `# Files mentioned by the user:` block は再生成しない
+  - バイナリ添付や参照先ファイルは再添付 / 自動読み込みせず、過去セッションに存在した添付 / 参照の summary として扱う
   - secret / token / password 系に見える値は Handoff 用テキストへ入れる前に伏せる
   - `handoff.md` の保存先は元セッションパスから安定的に決め、同一セッションでは同じファイルを再利用または上書きする
   - `metadata.json` は Handoff ディレクトリの作成時刻、元セッション情報、生成サイズなどを保持する
@@ -678,6 +723,9 @@
   - 既存タブ検索では `session` タブを優先し、なければ同じセッションを表示中の `reusable` タブを使う
   - `ChatPanelManager` は `ChatOpenPositionStore` を使い、明示的な移動先がない場合だけ最後に見えていたメッセージ付近を復元する
   - `ChatPanelManager` は保存可能な画像をパネル単位で保持し、Webview からの保存要求時に `showSaveDialog` 経由で書き出す
+  - `ChatPanelManager` は保存可能な embedded document をパネル単位で保持し、Webview からの `saveAttachment` 要求時に `showSaveDialog` 経由で書き出す
+  - `ChatPanelManager` は `saveImage` / `saveAttachment` の session `fsPath` を検証し、現在の panel と一致しない stale request では保存処理を行わない
+  - `ChatPanelManager` は Webview からの `openAttachment` message を受け取り、file reference を VS Code API 経由で開く
   - `ChatPanelManager` は Webview からの `manageCustomTitle` message を受け取り、共通の `codexHistoryViewer.manageCustomTitle` コマンドを実行する
   - `ChatPanelManager` は表示詳細を `summary` / `full` で管理し、`summary` では tool 引数 / tool 出力 / patch diff 行を Webview model から省略する
   - `patchEntry` reveal target で開く場合は、`revealMessageIndex` があっても `summary` を維持する
@@ -689,8 +737,24 @@
   - `chatModelBuilder.ts` は `session_meta` などから CWD / Git ブランチ / Git コミット / dirty 状態を environment 行に変換し、同一 snapshot の重複表示を抑制する
   - `chatModelBuilder.ts` は Codex の `custom_tool_call` / `custom_tool_call_output` も tool カードとして扱う
   - `chatModelBuilder.ts` は Codex の `exec_command_end`、tool output の JSON / plain text、Claude の tool result から tool 実行メタ情報を抽出する
+  - `chatModelBuilder.ts` は `extractCodexMessageContent()` / `extractClaudeMessageContent()` の結果から clean text と `attachments` を message item へ設定する
+  - `chatTypes.ts` は `ChatImageAttachment` / `ChatDocumentAttachment` / `ChatFileReferenceAttachment` / `ChatSelectionReferenceAttachment` を `ChatAttachment` として定義する
+  - `chatAttachments.ts` は画像、Claude document、Claude IDE tag、Codex `Files mentioned by the user` block を統合して抽出する
+  - `chatAttachments.ts` は content item を出現順に走査し、image / document attachment の順序を保つ。IDE tag 由来の file / selection reference は clean text 抽出後の attachment として扱う
+  - `chatAttachments.ts` は `localimage` / `imageassetpointer` などの image-like type を patch detail 側の attachment-like 判定にも含め、messageIndex のドリフトを防ぐ
+  - Codex `Files mentioned by the user` block は file reference に変換し、raw block は本文に残さない
+  - Claude `<ide_opened_file>` / `<ide_selection>` は file reference / selection reference に変換し、raw tag は本文に残さない
+  - Claude text document は表示用抜粋と検索用テキストをそれぞれの上限内で保持し、Save As 用 payload は panel 側 store へ置く
+  - PDF / generic base64 document は初期 Webview model へ payload を渡さず、metadata と `dataOmitted` だけを渡す
   - `chatImageAttachments.ts` は Codex / Claude の画像データ、ローカル画像参照、画像プレースホルダーを正規化する
+  - `chatImageAttachments.ts` は `enabled: false` の抽出でも payload を読まずに MIME type / label などの metadata を保持し、検索や summary に利用できるようにする
+  - `chatImageAttachments.ts` は Claude `type: "document"` を image extraction から除外し、MIME type 欠落 base64 document の二重抽出を防ぐ
   - 未対応 / 欠損 / remote-only / サイズ超過 / 設定無効の画像は表示不能理由としてモデル化する
+  - `media/chatView.js` は `attachments` の順序を維持し、連続する画像だけを image group として描画する
+  - `media/chatView.js` は Code / Image reference の file kind badge を dedicated l10n label で表示し、generic file label へフォールバックさせない
+  - document / file reference / selection card は path / MIME type / byte size を本文上に常時表示せず、tooltip へ寄せる
+  - text document preview は action icon から開閉し、開いた preview は同じ card 内の下段に full-width panel として表示する
+  - 詳細非表示時の `canRenderMessage()` は `attachments` を見て、本文が空で添付だけの user message も描画対象にする
   - `user` / `assistant` / tool / note / diff などのカードは個別に最大幅展開できる
   - grouped diff カードは前後の diff へ移動する上下ナビゲーションを持つ
   - 画像プレビューは Webview 内モーダルとして実装し、ヘッダーのサムネイル列、前後ボタン、左右キー、fit / 原寸切替、保存、閉じる操作を持つ
@@ -704,13 +768,18 @@
   - Webview 側は usage 行を折りたたみ可能カードとして描画し、展開状態を同一セッション reload 中は保持する
   - Webview 側は environment 行を軽量メタカードとして描画し、CWD など長い値は表示崩れしないよう省略 / 折り返しする
   - Webview 側は tool 実行メタ情報を tool カードの meta tag として表示し、status はローカライズ済みラベルへ正規化する
+  - Webview 側は日付ガイド用 item に `attachmentKind` と attachment summary を渡し、添付あり message をガイド上で識別できるようにする
+  - Webview 側の日付ガイド attachment summary では、最大 3 種類の要約、hidden unique kind 数の `+N`、必要時の総添付数 suffix を分けて扱う
   - Webview 側は IntersectionObserver で表示範囲付近の画像だけ data URI を要求し、セッション切替時は画像データキャッシュを破棄する
+  - Webview 側の `saveImage` / `saveAttachment` message は現在の session `fsPath` を添えて送信し、host 側は stale / missing session request を保存処理から除外する
   - `follow` モードは、`#timeline` に描画済みの `.row` から追従対象を選ぶ。末尾が `patchGroup` の場合は直前の非 `patchGroup` 行を優先し、非 `patchGroup` 行がなければ最後の `patchGroup` 行へフォールバックする
   - チャット末尾ボタンは、`#timeline` に描画済みの最後の `.row` へスクロールする
   - patch group のカード幅保持キーは `turnId`、メッセージ index、変更ファイル情報などから安定的に作る
 - Markdown transcript: `src/transcript/*`
   - Codex session の `Location: Active` / `Location: Archived` を transcript metadata として表示する
   - Export した Markdown transcript でも同じ Location metadata を出力する
+  - 添付 / ファイル参照は本文へ raw tag / `Files mentioned` block を出さず、attachment summary として出力する
+  - Resume 用 text は clean text と attachment summary を使い、バイナリ再添付や raw block の再生成は行わない
 - Control / Status ビュー: `src/tree/utilityTrees.ts`
   - Status は Codex source と archived sessions が有効な場合だけ Codex archived 件数と Codex archived sessions root を表示する
   - Codex archived sessions root は、Codex source が無効な場合や archived sessions が無効な場合は表示しない
@@ -818,6 +887,8 @@
   - 日付ガイド用 item には `bookmarked` と user role を渡し、Webview DOM にも `data-bookmarked` / `data-time-guide-role` を反映する
 - `media/sharedTimeGuide.js` / `media/sharedTimeGuide.css`
   - 日付ガイド上で user / しおり / 現在位置を別表現として描画する
+  - Chat の日付ガイド item では `attachmentKind` を受け取り、添付あり / 画像のみ / mixed の dot ring を描画する
+  - 添付 indicator は user / しおり / 現在位置と同時に表示されても潰れないよう、dot の塗りではなく外側 ring を使う
   - 現在位置は独立した `dateGuideCurrentMarker` として描画し、通常 tick より前面に置く
   - 密集時だけ `dateGuideLens` を表示し、近辺 item を拡大表示する
   - レンズは右側の元レール hover 位置へ追従し、active item の tooltip とクリック移動対象を同期する
@@ -854,7 +925,41 @@ npm run package
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 
-### 5.4 v2.2.0 リリースメモ（2026-05-21）
+### 5.4 v2.3.0 リリースメモ（2026-05-22）
+
+- Chat message の添付モデルを `attachments` に統合し、画像も `type: "image"` の attachment として扱うようにした
+- Claude Code の `type: "document"` を document card として表示できるようにした
+- Claude Code の PDF document は PDF card、text document は text card、unknown document は generic document card として表示するようにした
+- Claude text document の preview / search / Save As に上限を設け、巨大 text / binary payload を初期 Webview model へ渡さないようにした
+- Claude Code の `<ide_opened_file>` / `<ide_selection>` を本文から除去し、file reference / selection reference card として表示するようにした
+- Claude Code 公式の `<ide_opened_file>The user opened the file ... in the IDE...</ide_opened_file>` 形式に対応し、拡張子なしの well-known text file を text kind として扱うようにした
+- Codex の `# Files mentioned by the user:` block を解析し、file reference card に変換するようにした
+- Codex の `## My request for Codex:` 以降だけを本文として残し、区切りがない variant は安全に判定できる場合だけ file block と本文を分離するようにした
+- Codex file reference は参照先ファイルを自動で読まず、履歴に保存された label / path / line 情報だけを使うようにした
+- Word / Excel / PowerPoint / PDF / zip / 任意拡張子を file reference として扱えるようにした
+- Chat attachment card は file kind badge、ファイル名、action icon 中心の compact 表示にし、path / MIME type / byte size は tooltip へ寄せた
+- text document preview は保存ボタン左の preview action icon から開閉し、開いた場合は同じ card 内の下段に full-width panel として表示するようにした
+- file kind ごとに badge icon / accent を変え、PDF / Word / Excel / PowerPoint / Text / Code / Archive / Image reference / Selection / Generic file を区別できるようにした
+- Code / Image reference の badge text が generic `File` に落ちないよう、専用 l10n label を追加した
+- 添付の表示順は `attachments` の順序を保ち、連続する画像だけを既存の image group としてまとめるようにした
+- 同一 message 内で画像 group が分かれても、画像 preview の前後移動は message 全体の previewable images を対象にするようにした
+- Search / Markdown / Resume / Handoff など画像 payload を読まない経路でも、画像の MIME type / 推定 label metadata を保持するようにした
+- `localimage` / `imageassetpointer` などの image-like type を attachment-like 判定に含め、main path と patch detail path の messageIndex がズレないようにした
+- Claude `type: "document"` を image extractor から除外し、MIME type 欠落時も document と image に二重抽出されないようにした
+- embedded document の Save As は panel 側 payload store から on-demand で保存するようにした
+- `saveImage` / `saveAttachment` は session `fsPath` を検証し、セッション切替直後の stale request で別セッションの payload を保存しないようにした
+- file reference の Open は shell command を使わず、VS Code API 経由で開くようにした
+- 詳細非表示時の描画可否判定を `attachments` ベースへ修正し、本文が空で添付だけの user message でも Webview 描画が止まらないようにした
+- 日付ガイドに添付あり message の indicator を追加し、tooltip に attachment summary を含めるようにした
+- 日付ガイドの添付 indicator は通常添付、画像のみ、mixed を dot 外側の控えめな ring で区別するようにした
+- 日付ガイドの attachment summary を、最大 3 種類の要約、hidden unique kind 数の `+N`、必要時の総添付数 suffix に分ける方針にした
+- Search index に attachment label、path、MIME type、file kind、Claude text document の上限内 text を含めるようにした
+- PDF / Office / binary / base64 document の本文と、Codex file reference の参照先ファイル本文は検索インデックスへ入れないようにした
+- Markdown transcript に attachment summary を出し、raw IDE tag や `Files mentioned` block をそのまま出さないようにした
+- Resume / Handoff では clean text と attachment summary を使い、raw tag / `Files mentioned` block の重複やバイナリ再添付を避けるようにした
+- `package.json` / `package-lock.json` のバージョンを `2.3.0` に更新した
+
+### 5.5 v2.2.0 リリースメモ（2026-05-21）
 
 - Codex の通常 `sessions` に加えて、任意で `archived_sessions` を読み込めるようにした
 - `codexHistoryViewer.codex.archivedSessions.enabled` と `codexHistoryViewer.codex.archivedSessionsRoot` を追加した
@@ -888,7 +993,7 @@ npm run package
 - 検索インデックスの context に archived root / archived 有効状態を含めるようにした
 - `package.json` のバージョンを `2.2.0` に更新した
 
-### 5.5 v2.1.0 リリースメモ（2026-05-19）
+### 5.6 v2.1.0 リリースメモ（2026-05-19）
 
 - Codex / Claude Code 間の Handoff を新規実装した
 - History / Pinned / Search のセッション右クリックに、`他のAIへ引継ぎ` 階層メニューを追加した
@@ -908,7 +1013,7 @@ npm run package
 - チャット表示内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
 - `package.json` / `package-lock.json` のバージョンを `2.1.0` に更新した
 
-### 5.6 v2.0.1 リリースメモ（2026-05-15）
+### 5.7 v2.0.1 リリースメモ（2026-05-15）
 
 - 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
 - しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
@@ -932,7 +1037,7 @@ npm run package
 - ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
 - `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
 
-### 5.7 v2.0.0 リリースメモ（2026-05-14）
+### 5.8 v2.0.0 リリースメモ（2026-05-14）
 
 - ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる AI Change History を追加した
 - カスタムタイトル操作を QuickPick 入口へ統一し、チャット履歴ビューアのヘッダーからも設定 / 消去できるようにした
@@ -950,7 +1055,7 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.8 v1.5.1 リリースメモ（2026-05-08）
+### 5.9 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
@@ -961,7 +1066,7 @@ npm run package
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.9 v1.5.0 リリースメモ（2026-05-07）
+### 5.10 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -970,7 +1075,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.10 v1.4.3 リリースメモ（2026-04-30）
+### 5.11 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -1045,6 +1150,11 @@ npm run package
 - `ui.timeGuide.enabled = false` のとき、通常履歴 Webview / ファイル履歴 Webview の date guide が表示されない
 - `ui.timeGuide.enabled = true` のとき、通常履歴 Webview / ファイル履歴 Webview の date guide が表示される
 - date guide は表示範囲に応じて、通常履歴では時刻 / 日付+時刻 / 日 / 月、ファイル履歴では day / month / year に自動スケールする
+- 通常履歴 Webview の date guide で、添付あり message に控えめな ring indicator が表示される
+- date guide の添付 indicator は通常添付、画像のみ、mixed を区別できる
+- date guide の tooltip に `user #N (PDF, テキスト)` のような attachment summary が表示される
+- date guide の attachment summary で、画像 5 件のみの message は `画像添付 ×5` のように総添付数が分かり、4 種類以上の mixed attachment は hidden unique kind 数の `+N` と総添付数 suffix が別々に読める
+- date guide の添付 indicator が user / しおり / 現在位置と重なっても視認性が崩れない
 - date guide はマウスオーバー、wheel / trackpad、scrollbar drag、スクロールキーで表示される
 - date guide は自動更新追従、先頭 / 末尾、前後 card 移動、reveal target への自動ジャンプでは表示されない
 - date guide の tooltip は目盛り近辺だけで表示され、カード操作ボタン付近では表示されない
@@ -1159,9 +1269,23 @@ npm run package
 - `Show details` ON 時は、tool カードに取得できる場合の status / exit code / duration / interruption / error が表示される
 - チャットのスクロールバーが固定ヘッダーの横ではなく、ヘッダー下のスクロール領域から始まる
 - Codex / Claude の画像付きセッションで、対応画像がサムネイル表示される
+- Claude の PDF document が document card として表示され、本文に混ざらない
+- Claude の text document が text document card として表示され、preview action icon から card 内 full-width preview を開閉できる
+- Claude の `<ide_opened_file>` / `<ide_selection>` が raw tag ではなく file reference / selection reference card として表示される
+- Claude 公式形式の `ide_opened_file` で拡張子なしファイルが file reference card として表示され、Open できる
+- Codex の `# Files mentioned by the user:` block が本文に残らず、PDF / txt / xlsx / docx などが file reference card として表示される
+- Codex の `## My request for Codex:` 以降だけが本文として表示される
+- document / file reference card では path / MIME type / byte size が本文上に常時表示されず、tooltip で確認できる
+- Codex `Files mentioned` の `.js` / `.ts` など code 系ファイル参照と `.png` / `.jpg` など image 系ファイル参照で、badge text が generic `File` ではなく `Code` / `Image` として表示される
+- 本文が空で添付だけの user message が、詳細 OFF でも表示される
+- 画像のみ / document のみ / file reference のみ / mixed attachments の message で表示順とレイアウトが崩れない
+- synthetic mixed content で `document -> image -> file reference` の順に現れる場合、抽出結果と Webview 表示が同じ順序になる
 - `<image></image>` だけが残るセッションで、プレースホルダー文字列が本文に残らず、表示不能状態の画像カードが出る
 - `images.enabled = false` のとき、画像は読み込まれず表示不能状態になる
+- `images.enabled = false` または Search / Markdown / Resume / Handoff 用抽出でも、画像 payload を読み込まずに MIME type / 推定 label metadata が残る
 - `images.maxSizeMB` を超える画像は読み込まれず、サイズ超過として表示される
+- `localimage` / `imageassetpointer` を含む synthetic content で、main path と patch detail path の messageIndex がズレない
+- MIME type 欠落の Claude base64 document が、document と image の二重 attachment として抽出されない
 - `images.thumbnailSize` を `small` / `medium` / `large` で切り替えると本文内サムネイルサイズが変わる
 - 画像サムネイルをクリックするとプレビューモーダルが開く
 - 画像が 1 枚だけのときも、プレビューモーダル上部にサムネイルが表示される
@@ -1170,6 +1294,13 @@ npm run package
 - 画像が多いとき、プレビューモーダル上部のサムネイル列を横スクロールできる
 - プレビューモーダルで fit / 原寸表示を切り替えられる
 - プレビューモーダルで表示中の画像を保存できる
+- embedded document の Save As が Webview から実行できる
+- stale / missing `fsPath` の `saveImage` / `saveAttachment` request で、別セッションの payload が保存されない
+- file reference の Open が VS Code API 経由で実行され、shell command を使わない
+- 検索で添付ファイル名 / path / MIME type / file kind に hit する
+- PDF / Office / binary / base64 document の本文や、Codex file reference の参照先ファイル本文が検索に入らない
+- Markdown transcript に attachment summary が出て、raw IDE tag や `Files mentioned` block が出ない
+- Resume / Handoff の context に raw tag / `Files mentioned` block が重複せず、バイナリ添付が再添付されない
 - プレビューモーダルを開いたまま別セッションを開くと、モーダルが閉じる
 - `patch_apply_end` を含むセッションで差分カードが表示される（`Show details` OFF でも出る）
 - 差分カードの折りたたみ展開、hunk ごとの折り返し切り替え、行ジャンプが動く

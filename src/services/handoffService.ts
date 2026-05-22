@@ -5,6 +5,12 @@ import * as readline from "node:readline";
 import * as vscode from "vscode";
 import { t } from "../i18n";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
+import {
+  buildAttachmentSummaryLines,
+  extractClaudeMessageContent,
+  extractCodexMessageContent,
+} from "../chat/chatAttachments";
+import type { ChatAttachment } from "../chat/chatTypes";
 
 export type HandoffTarget = "codex" | "claude";
 
@@ -289,11 +295,11 @@ async function parseSessionForHandoff(session: SessionSummary): Promise<ParsedSe
         continue;
       }
 
-      if (collectCodexMessage(obj, messages)) {
+      if (await collectCodexMessage(obj, messages)) {
         collectCodexDiffBlocks(obj, diffBlocks);
         continue;
       }
-      collectClaudeMessage(obj, messages);
+      await collectClaudeMessage(obj, messages);
       collectClaudeDiffBlocks(obj, diffBlocks);
       collectCodexDiffBlocks(obj, diffBlocks);
     }
@@ -305,14 +311,15 @@ async function parseSessionForHandoff(session: SessionSummary): Promise<ParsedSe
   return { messages, diffBlocks, invalidJsonLines, totalLines };
 }
 
-function collectCodexMessage(obj: any, messages: HandoffMessage[]): boolean {
+async function collectCodexMessage(obj: any, messages: HandoffMessage[]): Promise<boolean> {
   if (obj?.type !== "response_item") return false;
   if (obj?.payload?.type !== "message") return true;
 
   const role = obj?.payload?.role;
   if (role !== "user" && role !== "assistant" && role !== "developer") return true;
 
-  const text = sanitizeMessageText(extractTextFromCodexContent(obj?.payload?.content));
+  const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false });
+  const text = sanitizeMessageText(combineHandoffText(buildHandoffAttachmentSummary(extracted.attachments), extracted.text));
   if (!text) return true;
 
   messages.push({
@@ -322,11 +329,12 @@ function collectCodexMessage(obj: any, messages: HandoffMessage[]): boolean {
   return true;
 }
 
-function collectClaudeMessage(obj: any, messages: HandoffMessage[]): boolean {
+async function collectClaudeMessage(obj: any, messages: HandoffMessage[]): Promise<boolean> {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
-  const text = sanitizeMessageText(extractTextFromClaudeContent(getClaudeMessageContent(obj)));
+  const extracted = await extractClaudeMessageContent(getClaudeMessageContent(obj), undefined, { enabled: false });
+  const text = sanitizeMessageText(combineHandoffText(buildHandoffAttachmentSummary(extracted.attachments), extracted.text));
   if (!text) return true;
 
   messages.push({
@@ -507,6 +515,18 @@ function renderMessageBlock(message: HandoffMessage): string {
   return lines.join("\n");
 }
 
+function buildHandoffAttachmentSummary(attachments: readonly ChatAttachment[]): string {
+  const lines = buildAttachmentSummaryLines(attachments);
+  if (lines.length === 0) return "";
+  return ["Attachments and referenced files from previous session:", ...lines].join("\n");
+}
+
+function combineHandoffText(attachmentSummary: string, text: string): string {
+  const cleanText = String(text ?? "").trim();
+  if (!attachmentSummary) return cleanText;
+  return cleanText ? `${attachmentSummary}\n\n${cleanText}` : attachmentSummary;
+}
+
 function buildDiffSection(diffBlocks: readonly HandoffDiffBlock[]): string {
   if (diffBlocks.length === 0) return "";
   const lines: string[] = [];
@@ -533,33 +553,6 @@ function findLatestUserMessage(messages: readonly HandoffMessage[]): string | nu
     if (message.role === "user" && message.text.trim().length > 0) return message.text.trim();
   }
   return null;
-}
-
-function extractTextFromCodexContent(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  const texts: string[] = [];
-  for (const item of content) {
-    if (!item || typeof item !== "object") continue;
-    const maybeText = (item as { text?: unknown }).text;
-    if (typeof maybeText === "string") texts.push(maybeText);
-  }
-  return texts.join("");
-}
-
-function extractTextFromClaudeContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  const items = Array.isArray(content) ? content : content && typeof content === "object" ? [content] : [];
-  if (items.length === 0) return "";
-
-  const texts: string[] = [];
-  for (const item of items) {
-    if (!item || typeof item !== "object") continue;
-    const type = typeof (item as { type?: unknown }).type === "string" ? (item as { type: string }).type : "";
-    if (type !== "text" && type !== "input_text" && type !== "output_text") continue;
-    const maybeText = (item as { text?: unknown }).text;
-    if (typeof maybeText === "string") texts.push(maybeText);
-  }
-  return texts.join("");
 }
 
 function extractClaudeToolCalls(content: unknown): ClaudeToolCall[] {

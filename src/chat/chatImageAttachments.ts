@@ -73,6 +73,29 @@ export async function extractClaudeImageAttachments(
   return images;
 }
 
+export async function extractImageAttachmentFromItem(
+  item: object,
+  sessionCwd?: string,
+  options?: ChatImageExtractionOptions,
+): Promise<ChatImageAttachment | null> {
+  return extractImageAttachment(item, sessionCwd, normalizeImageExtractionOptions(options));
+}
+
+export function isPotentialImageAttachmentItem(item: object): boolean {
+  const type = normalizeType(readStringField(item, "type"));
+  if (type === "document") return false;
+  const contentType = normalizeType(readStringField(item, "content_type"));
+  const source = readObjectField(item, "source");
+  return (
+    hasBase64ImageSource(source, type, contentType) ||
+    !!readImageUrlCandidate(item, type, contentType) ||
+    !!readLocalPathCandidate(item, type, contentType) ||
+    type === "imageassetpointer" ||
+    contentType === "imageassetpointer" ||
+    hasReferenceOnlyImagePointer(item)
+  );
+}
+
 export function stripImagePlaceholders(text: string): { text: string; placeholderCount: number } {
   let placeholderCount = 0;
   const stripped = String(text ?? "").replace(IMAGE_PLACEHOLDER_RE, () => {
@@ -97,6 +120,8 @@ async function extractImageAttachment(
   options: Required<ChatImageExtractionOptions>,
 ): Promise<ChatImageAttachment | null> {
   const type = normalizeType(readStringField(item, "type"));
+  if (type === "document") return null;
+
   const contentType = normalizeType(readStringField(item, "content_type"));
   const source = readObjectField(item, "source");
   const hasBase64Source = hasBase64ImageSource(source, type, contentType);
@@ -107,7 +132,7 @@ async function extractImageAttachment(
 
   if (!options.enabled) {
     return hasBase64Source || imageUrl || localPath || hasReferenceOnlyPointer
-      ? createUnavailableImageAttachment("disabled")
+      ? createMetadataOnlyImageAttachment(item, source, imageUrl, localPath)
       : null;
   }
 
@@ -123,6 +148,20 @@ async function extractImageAttachment(
   }
 
   return null;
+}
+
+function createMetadataOnlyImageAttachment(
+  item: object,
+  source: Record<string, unknown> | null,
+  imageUrl: string | undefined,
+  localPath: string | undefined,
+): ChatImageAttachment {
+  const mimeType =
+    normalizeMimeType(readStringField(source, "media_type") || readStringField(source, "mime_type")) ||
+    mimeTypeFromReference(imageUrl) ||
+    mimeTypeFromReference(localPath);
+  const label = readImageLabelCandidate(item) || labelFromReference(localPath) || labelFromReference(imageUrl);
+  return createUnavailableImageAttachment("disabled", mimeType, label || DEFAULT_IMAGE_ATTACHMENT_LABEL);
 }
 
 function normalizeImageExtractionOptions(options?: ChatImageExtractionOptions): Required<ChatImageExtractionOptions> {
@@ -323,6 +362,22 @@ function mimeTypeFromPath(fsPath: string): string | undefined {
   return IMAGE_MIME_BY_EXTENSION.get(path.extname(fsPath).toLowerCase());
 }
 
+function mimeTypeFromReference(value: string | undefined): string | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  if (text.toLowerCase().startsWith("data:")) {
+    const commaIndex = text.indexOf(",");
+    const metadata = commaIndex >= 0 ? text.slice(5, commaIndex) : text.slice(5);
+    return normalizeMimeType(metadata.split(";")[0]);
+  }
+  try {
+    const url = new URL(text);
+    return mimeTypeFromPath(url.pathname);
+  } catch {
+    return mimeTypeFromPath(text);
+  }
+}
+
 function normalizeMimeType(value: string | undefined): string | undefined {
   const normalized = value?.trim().toLowerCase();
   if (!normalized) return undefined;
@@ -346,6 +401,28 @@ function hasReferenceOnlyImagePointer(item: object): boolean {
   );
 }
 
+function readImageLabelCandidate(item: object): string | undefined {
+  return (
+    readStringField(item, "title") ||
+    readStringField(item, "name") ||
+    readStringField(item, "file_name") ||
+    readStringField(item, "filename") ||
+    readStringField(item, "label")
+  );
+}
+
+function labelFromReference(value: string | undefined): string | undefined {
+  const text = value?.trim();
+  if (!text || text.toLowerCase().startsWith("data:")) return undefined;
+  try {
+    const url = new URL(text);
+    const decoded = decodeURIComponentSafe(url.pathname);
+    return path.basename(decoded) || undefined;
+  } catch {
+    return path.basename(text) || undefined;
+  }
+}
+
 function createUnavailableImageAttachment(
   reason: ChatImageAttachmentReason,
   mimeType?: string,
@@ -366,11 +443,11 @@ function readObjectField(item: object, key: string): Record<string, unknown> | n
   return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
-function readStringField(item: object, key: string): string | undefined {
+function readStringField(item: object | null, key: string): string | undefined {
   const value = readUnknownField(item, key);
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-function readUnknownField(item: object, key: string): unknown {
-  return (item as Record<string, unknown>)[key];
+function readUnknownField(item: object | null, key: string): unknown {
+  return item ? (item as Record<string, unknown>)[key] : undefined;
 }
