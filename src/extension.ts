@@ -4,7 +4,7 @@ import { resolveUiLanguage, t } from "./i18n";
 import { getConfig, type CodexHistoryViewerConfig } from "./settings";
 import { HistoryService } from "./services/historyService";
 import type { ArchiveLocationFilter, SessionSourceFilter, SessionSummary } from "./sessions/sessionTypes";
-import { PinnedTreeDataProvider } from "./tree/pinnedTree";
+import { PinnedTreeDataProvider, type PinnedSortMode } from "./tree/pinnedTree";
 import { HistoryTreeDataProvider, type HistoryViewMode } from "./tree/historyTree";
 import { SearchTreeDataProvider } from "./tree/searchTree";
 import { TranscriptContentProvider } from "./transcript/transcriptProvider";
@@ -62,7 +62,7 @@ import { FileChangeHistoryService } from "./fileHistory/fileChangeHistoryService
 import { getDateScopeValue, sanitizeDateScope, type DateScope } from "./types/dateScope";
 import { resolveDateTimeSettings } from "./utils/dateTimeSettings";
 import { safeDisplayPath } from "./utils/textUtils";
-import { normalizeCacheKey, pathExists } from "./utils/fsUtils";
+import { normalizeCacheKey, normalizeProjectKey, pathExists } from "./utils/fsUtils";
 
 const SEARCH_ROLE_ORDER: IndexedSearchRole[] = ["user", "assistant", "developer", "tool"];
 
@@ -72,18 +72,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const HISTORY_FILTER_KEY = "codexHistoryViewer.historyFilter.v1";
   const HISTORY_VIEW_MODE_KEY = "codexHistoryViewer.historyViewMode.v1";
   const HISTORY_PROJECT_FILTER_KEY = "codexHistoryViewer.historyProjectFilter.v1";
+  const HISTORY_PROJECT_GROUPED_KEY = "codexHistoryViewer.historyProjectGrouped.v1";
   const HISTORY_SOURCE_FILTER_KEY = "codexHistoryViewer.historySourceFilter.v1";
   const HISTORY_TAG_FILTER_KEY = "codexHistoryViewer.historyTagFilter.v1";
+  const PINNED_FILTER_KEY = "codexHistoryViewer.pinnedFilter.v1";
+  const PINNED_SOURCE_FILTER_KEY = "codexHistoryViewer.pinnedSourceFilter.v1";
+  const PINNED_PROJECT_FILTER_KEY = "codexHistoryViewer.pinnedProjectFilter.v1";
+  const PINNED_PROJECT_GROUPED_KEY = "codexHistoryViewer.pinnedProjectGrouped.v1";
+  const PINNED_ARCHIVE_LOCATION_FILTER_KEY = "codexHistoryViewer.pinnedArchiveLocationFilter.v1";
+  const PINNED_SORT_MODE_KEY = "codexHistoryViewer.pinnedSortMode.v1";
   const PINNED_TAG_FILTER_KEY = "codexHistoryViewer.pinnedTagFilter.v1";
   const SEARCH_TAG_FILTER_KEY = "codexHistoryViewer.searchTagFilter.v1";
   const LAST_SEARCH_REQUEST_KEY = "codexHistoryViewer.lastSearchRequest.v1";
   const ARCHIVE_LOCATION_FILTER_KEY = "codexHistoryViewer.archiveLocationFilter.v1";
   const LEGACY_SHOW_ARCHIVED_SESSIONS_KEY = "codexHistoryViewer.showArchivedSessions.v1";
   const SEARCH_DEFAULT_ROLES_CONFIG = "search.defaultRoles";
+  const logger = new OutputChannelLogger();
+  context.subscriptions.push(logger);
   let archiveLocationFilter: ArchiveLocationFilter = sanitizeArchiveLocationFilter(
     context.workspaceState.get(ARCHIVE_LOCATION_FILTER_KEY),
     context.workspaceState.get(LEGACY_SHOW_ARCHIVED_SESSIONS_KEY),
   );
+  const pinnedArchiveLocationRaw = context.workspaceState.get(PINNED_ARCHIVE_LOCATION_FILTER_KEY);
+  let pinnedArchiveLocationFilter: ArchiveLocationFilter = sanitizeArchiveLocationFilter(
+    pinnedArchiveLocationRaw === undefined ? archiveLocationFilter : pinnedArchiveLocationRaw,
+  );
+  if (pinnedArchiveLocationRaw === undefined) {
+    try {
+      await context.workspaceState.update(PINNED_ARCHIVE_LOCATION_FILTER_KEY, pinnedArchiveLocationFilter);
+    } catch (error) {
+      logger.debug(`pinned.archiveLocation.migration failed error=${sanitizeDebugError(error)}`);
+    }
+  }
+  let pinnedSortMode: PinnedSortMode = sanitizePinnedSortMode(context.workspaceState.get(PINNED_SORT_MODE_KEY));
 
   const updateUiLanguageContext = (): void => {
     // Keep the UI language context up to date for menu visibility switching.
@@ -130,6 +151,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       "codexHistoryViewer.archivedOnly",
       archiveLocationFilter === "archivedOnly",
     );
+    void vscode.commands.executeCommand(
+      "setContext",
+      "codexHistoryViewer.pinnedArchiveLocationFilter",
+      pinnedArchiveLocationFilter,
+    );
   };
   updateArchivedSessionsContext();
 
@@ -139,14 +165,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const titleOverrideStore = new SessionTitleOverrideStore(context.globalState);
   const searchPresetStore = new SearchPresetStore(context.globalState);
   const chatOpenPositionStore = new ChatOpenPositionStore(context.globalState);
-  const logger = new OutputChannelLogger();
   const sessionReferenceRelocator = new SessionReferenceRelocator(
     annotationStore,
     bookmarkStore,
     chatOpenPositionStore,
     logger,
   );
-  context.subscriptions.push(logger);
   const historyService = new HistoryService(context.globalStorageUri, config, titleOverrideStore, logger);
   const searchIndexService = new SearchIndexService(context.globalStorageUri, logger);
   const transcriptProvider = new TranscriptContentProvider(historyService, annotationStore);
@@ -200,6 +224,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasSearchResults", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyTagFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyViewMode", "date");
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectMode", "none");
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedProjectMode", "none");
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSortMode", pinnedSortMode);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceFilter", "all");
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceFiltered", false);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceSwitchable", true);
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedTagFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.searchTagFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceCodexEnabled", true);
@@ -211,23 +242,45 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.canRestoreArchivedSelection", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasMixedArchiveSelection", false);
 
-  let pinnedTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(PINNED_TAG_FILTER_KEY));
   let historyViewMode: HistoryViewMode = sanitizeHistoryViewMode(context.workspaceState.get(HISTORY_VIEW_MODE_KEY));
   let historyFilter: DateScope = sanitizeDateScope(context.workspaceState.get(HISTORY_FILTER_KEY));
   let historyProjectCwd: string | null = sanitizeProjectCwd(context.workspaceState.get(HISTORY_PROJECT_FILTER_KEY));
+  let historyProjectGrouped: boolean = sanitizeProjectGrouped(context.workspaceState.get(HISTORY_PROJECT_GROUPED_KEY));
+  if (historyProjectGrouped) historyProjectCwd = null;
   let historySourceFilter: SessionSourceFilter = resolveConstrainedHistorySourceFilter(
     sanitizeHistorySourceFilter(context.workspaceState.get(HISTORY_SOURCE_FILTER_KEY)),
     config,
   );
   let historyTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(HISTORY_TAG_FILTER_KEY));
+  let pinnedFilter: DateScope = sanitizeDateScope(context.workspaceState.get(PINNED_FILTER_KEY));
+  const pinnedSourceFilterRaw = context.workspaceState.get(PINNED_SOURCE_FILTER_KEY);
+  let pinnedSourceFilter: SessionSourceFilter = resolveConstrainedHistorySourceFilter(
+    sanitizeHistorySourceFilter(pinnedSourceFilterRaw === undefined ? historySourceFilter : pinnedSourceFilterRaw),
+    config,
+  );
+  if (pinnedSourceFilterRaw === undefined) {
+    try {
+      await context.workspaceState.update(PINNED_SOURCE_FILTER_KEY, pinnedSourceFilter);
+    } catch (error) {
+      logger.debug(`pinned.sourceFilter.migration failed error=${sanitizeDebugError(error)}`);
+    }
+  }
+  let pinnedTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(PINNED_TAG_FILTER_KEY));
+  let pinnedProjectCwd: string | null = sanitizeProjectCwd(context.workspaceState.get(PINNED_PROJECT_FILTER_KEY));
+  let pinnedProjectGrouped: boolean = sanitizeProjectGrouped(context.workspaceState.get(PINNED_PROJECT_GROUPED_KEY));
+  if (pinnedProjectGrouped) pinnedProjectCwd = null;
   let searchTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(SEARCH_TAG_FILTER_KEY));
   const pinnedProvider = new PinnedTreeDataProvider(
     historyService,
     pinStore,
     annotationStore,
-    historySourceFilter,
+    pinnedFilter,
+    pinnedSourceFilter,
     pinnedTagFilter,
-    historySourceFilter === "claude" ? "all" : archiveLocationFilter,
+    pinnedSourceFilter === "claude" ? "all" : pinnedArchiveLocationFilter,
+    pinnedProjectCwd,
+    pinnedProjectGrouped,
+    pinnedSortMode,
     context.extensionUri,
   );
   const historyProvider = new HistoryTreeDataProvider(
@@ -237,6 +290,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyViewMode,
     historyFilter,
     historyProjectCwd,
+    historyProjectGrouped,
     historySourceFilter,
     historyTagFilter,
     historySourceFilter === "claude" ? "all" : archiveLocationFilter,
@@ -253,11 +307,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const resolveEffectiveArchiveLocationFilter = (): ArchiveLocationFilter =>
     historySourceFilter === "claude" ? "all" : archiveLocationFilter;
 
+  const resolveEffectivePinnedArchiveLocationFilter = (): ArchiveLocationFilter =>
+    pinnedSourceFilter === "claude" ? "all" : pinnedArchiveLocationFilter;
+
   const syncArchiveLocationFilterToProviders = (): void => {
-    const effectiveArchiveLocationFilter = resolveEffectiveArchiveLocationFilter();
-    pinnedProvider.setArchiveLocationFilter(effectiveArchiveLocationFilter);
-    historyProvider.setArchiveLocationFilter(effectiveArchiveLocationFilter);
-    searchProvider.setArchiveLocationFilter(effectiveArchiveLocationFilter);
+    historyProvider.setArchiveLocationFilter(resolveEffectiveArchiveLocationFilter());
+    searchProvider.setArchiveLocationFilter(resolveEffectiveArchiveLocationFilter());
+    pinnedProvider.setArchiveLocationFilter(resolveEffectivePinnedArchiveLocationFilter());
   };
 
   const isCodexSourceEnabled = (sourceFilter: SessionSourceFilter): boolean =>
@@ -281,24 +337,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return out;
   };
 
-  const buildSourceFilterSummary = (): string => {
-    if (historySourceFilter === "all") return "";
+  const buildSourceFilterSummary = (sourceFilter: SessionSourceFilter = historySourceFilter): string => {
+    if (sourceFilter === "all") return "";
     const sourceLabel =
-      historySourceFilter === "codex" ? t("history.filter.source.codex") : t("history.filter.source.claude");
+      sourceFilter === "codex" ? t("history.filter.source.codex") : t("history.filter.source.claude");
     return t("history.filter.sourceLabel", sourceLabel);
   };
 
-  const buildArchiveLocationFilterSummary = (): string => {
-    if (historySourceFilter === "claude") return "";
-    if (archiveLocationFilter === "activeOnly") return "";
-    return t("archiveLocation.summary", getArchiveLocationLabel(archiveLocationFilter));
+  const buildArchiveLocationFilterSummary = (
+    value: ArchiveLocationFilter = archiveLocationFilter,
+    sourceFilter: SessionSourceFilter = historySourceFilter,
+  ): string => {
+    if (sourceFilter === "claude") return "";
+    if (value === "activeOnly") return "";
+    return t("archiveLocation.summary", getArchiveLocationLabel(value));
   };
 
-  const buildHistoryFilterSummary = (): string => {
+  const resolveHistoryProjectMode = (): "none" | "currentProject" | "grouped" => {
+    if (historyProjectGrouped) return "grouped";
+    return historyProjectCwd ? "currentProject" : "none";
+  };
+
+  const resolvePinnedProjectMode = (): "none" | "currentProject" | "grouped" => {
+    if (pinnedProjectGrouped) return "grouped";
+    return pinnedProjectCwd ? "currentProject" : "none";
+  };
+
+  const buildHistoryFilterSummary = (options: { includeProjectMode?: boolean } = {}): string => {
+    const includeProjectMode = options.includeProjectMode ?? true;
     const parts: string[] = [];
     const dateValue = getDateScopeValue(historyFilter);
     if (dateValue) parts.push(dateValue);
     if (historyProjectCwd) parts.push(t("history.filter.projectLabel", safeDisplayPath(historyProjectCwd, 60)));
+    if (includeProjectMode && historyProjectGrouped) parts.push(t("history.project.mode.summary.grouped"));
     const sourceSummary = buildSourceFilterSummary();
     if (sourceSummary) parts.push(sourceSummary);
     const archiveLocationSummary = buildArchiveLocationFilterSummary();
@@ -641,11 +712,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const updateHistoryViewDescription = (): void => {
-    const v = buildHistoryFilterSummary();
-    historyView.description = v ? t("history.filter.active", v) : "";
-    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyFiltered", v.length > 0);
+    const v = buildHistoryFilterSummary({ includeProjectMode: true });
+    const filterOnly = buildHistoryFilterSummary({ includeProjectMode: false });
+    historyView.description =
+      historyProjectGrouped && filterOnly.length === 0 ? t("history.project.mode.summary.grouped") : v ? t("history.filter.active", v) : "";
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyFiltered", filterOnly.length > 0);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyTagFiltered", historyTagFilter.length > 0);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyViewMode", historyViewMode);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectMode", resolveHistoryProjectMode());
     void vscode.commands.executeCommand(
       "setContext",
       "codexHistoryViewer.sourceCodexEnabled",
@@ -675,9 +749,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const buildPinnedFilterSummary = (): string => {
     const parts: string[] = [];
-    const sourceSummary = buildSourceFilterSummary();
+    const dateValue = getDateScopeValue(pinnedFilter);
+    if (dateValue) parts.push(dateValue);
+    if (pinnedProjectCwd) parts.push(t("pinned.filter.projectLabel", safeDisplayPath(pinnedProjectCwd, 60)));
+    if (pinnedProjectGrouped) parts.push(t("pinned.project.mode.summary.grouped"));
+    const sourceSummary = buildSourceFilterSummary(pinnedSourceFilter);
     if (sourceSummary) parts.push(sourceSummary);
-    const archiveLocationSummary = buildArchiveLocationFilterSummary();
+    const archiveLocationSummary = buildArchiveLocationFilterSummary(pinnedArchiveLocationFilter, pinnedSourceFilter);
     if (archiveLocationSummary) parts.push(archiveLocationSummary);
     if (pinnedTagFilter.length > 0) {
       parts.push(`tags: ${pinnedTagFilter.map((tag) => `#${tag}`).join(", ")}`);
@@ -685,10 +763,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return parts.join(" / ");
   };
 
+  const isPinnedFiltered = (): boolean =>
+    !!getDateScopeValue(pinnedFilter) ||
+    !!pinnedProjectCwd ||
+    pinnedSourceFilter !== "all" ||
+    pinnedArchiveLocationFilter !== "activeOnly" ||
+    pinnedTagFilter.length > 0;
+
   const updatePinnedViewDescription = (): void => {
     const v = buildPinnedFilterSummary();
     pinnedView.description = v;
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedFiltered", isPinnedFiltered());
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedTagFiltered", pinnedTagFilter.length > 0);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedProjectMode", resolvePinnedProjectMode());
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSortMode", pinnedSortMode);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceFilter", pinnedSourceFilter);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceFiltered", pinnedSourceFilter !== "all");
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceSwitchable", isHistorySourceSwitchable());
   };
 
   const buildSearchTagFilterSummary = (): string => {
@@ -745,6 +836,133 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   };
 
+  const applyPinnedFilters = async (
+    next: {
+      date: DateScope;
+      projectCwd: string | null;
+      projectGrouped?: boolean;
+      source: SessionSourceFilter;
+      tags: string[];
+      archiveLocation: ArchiveLocationFilter;
+    },
+    opts: { persist: boolean },
+  ): Promise<void> => {
+    pinnedFilter = sanitizeDateScope(next.date);
+    const nextProjectGrouped = next.projectGrouped ?? pinnedProjectGrouped;
+    pinnedProjectCwd = nextProjectGrouped ? null : sanitizeProjectCwd(next.projectCwd);
+    pinnedProjectGrouped = nextProjectGrouped && !pinnedProjectCwd;
+    pinnedSourceFilter = constrainHistorySourceFilter(next.source);
+    pinnedTagFilter = sanitizeTagFilter(next.tags);
+    pinnedArchiveLocationFilter = sanitizeArchiveLocationFilter(next.archiveLocation);
+    pinnedProvider.setFilters(
+      pinnedFilter,
+      pinnedProjectCwd,
+      pinnedSourceFilter,
+      pinnedTagFilter,
+      resolveEffectivePinnedArchiveLocationFilter(),
+    );
+    pinnedProvider.setProjectGrouped(pinnedProjectGrouped);
+    pinnedProvider.refresh();
+    updateArchivedSessionsContext();
+    updatePinnedViewDescription();
+    statusProvider.refresh();
+    if (opts.persist) {
+      await context.workspaceState.update(PINNED_FILTER_KEY, pinnedFilter);
+      await context.workspaceState.update(PINNED_PROJECT_FILTER_KEY, pinnedProjectCwd ?? "");
+      await context.workspaceState.update(PINNED_PROJECT_GROUPED_KEY, pinnedProjectGrouped);
+      await context.workspaceState.update(PINNED_SOURCE_FILTER_KEY, pinnedSourceFilter);
+      await context.workspaceState.update(PINNED_TAG_FILTER_KEY, pinnedTagFilter);
+      await context.workspaceState.update(PINNED_ARCHIVE_LOCATION_FILTER_KEY, pinnedArchiveLocationFilter);
+    }
+  };
+
+  const applyPinnedSourceFilter = async (nextSource: SessionSourceFilter, opts: { persist: boolean }): Promise<void> => {
+    const normalized = constrainHistorySourceFilter(nextSource);
+    if (pinnedSourceFilter === normalized) {
+      updatePinnedViewDescription();
+      return;
+    }
+
+    pinnedSourceFilter = normalized;
+    pinnedProvider.setSourceFilter(pinnedSourceFilter);
+    pinnedProvider.setArchiveLocationFilter(resolveEffectivePinnedArchiveLocationFilter());
+    pinnedProvider.refresh();
+    updateArchivedSessionsContext();
+    updatePinnedViewDescription();
+    statusProvider.refresh();
+    if (opts.persist) {
+      await context.workspaceState.update(PINNED_SOURCE_FILTER_KEY, pinnedSourceFilter);
+    }
+  };
+
+  const applyPinnedProjectState = async (
+    next: { projectCwd: string | null; grouped: boolean },
+    opts: { persist: boolean },
+  ): Promise<void> => {
+    const projectCwd = next.grouped ? null : sanitizeProjectCwd(next.projectCwd);
+    pinnedProjectCwd = projectCwd;
+    pinnedProjectGrouped = next.grouped && !projectCwd;
+    pinnedProvider.setProjectFilter(pinnedProjectCwd);
+    pinnedProvider.setProjectGrouped(pinnedProjectGrouped);
+    pinnedProvider.refresh();
+    updatePinnedViewDescription();
+    statusProvider.refresh();
+    if (opts.persist) {
+      await context.workspaceState.update(PINNED_PROJECT_FILTER_KEY, pinnedProjectCwd ?? "");
+      await context.workspaceState.update(PINNED_PROJECT_GROUPED_KEY, pinnedProjectGrouped);
+    }
+  };
+
+  const applyPinnedSortMode = async (nextMode: PinnedSortMode, opts: { persist: boolean }): Promise<void> => {
+    const normalized = sanitizePinnedSortMode(nextMode);
+    if (pinnedSortMode === normalized) return;
+
+    pinnedSortMode = normalized;
+    pinnedProvider.setSortMode(pinnedSortMode);
+    pinnedProvider.refresh();
+    updatePinnedViewDescription();
+    statusProvider.refresh();
+    if (opts.persist) {
+      await context.workspaceState.update(PINNED_SORT_MODE_KEY, pinnedSortMode);
+    }
+  };
+
+  const clearPinnedFilters = async (opts: { persist: boolean }): Promise<void> => {
+    const dateFilterChanged = !!getDateScopeValue(pinnedFilter);
+    const projectCwdChanged = pinnedProjectCwd !== null;
+    const sourceFilterChanged = pinnedSourceFilter !== "all";
+    const tagFilterChanged = pinnedTagFilter.length > 0;
+    const archiveLocationChanged = pinnedArchiveLocationFilter !== "activeOnly";
+    if (!dateFilterChanged && !projectCwdChanged && !sourceFilterChanged && !tagFilterChanged && !archiveLocationChanged) {
+      updatePinnedViewDescription();
+      return;
+    }
+
+    pinnedFilter = { kind: "all" };
+    pinnedProjectCwd = null;
+    pinnedSourceFilter = constrainHistorySourceFilter("all");
+    pinnedTagFilter = [];
+    pinnedArchiveLocationFilter = "activeOnly";
+
+    pinnedProvider.setFilter(pinnedFilter);
+    pinnedProvider.setProjectFilter(null);
+    pinnedProvider.setSourceFilter(pinnedSourceFilter);
+    pinnedProvider.setTagFilter(pinnedTagFilter);
+    pinnedProvider.setArchiveLocationFilter(resolveEffectivePinnedArchiveLocationFilter());
+    pinnedProvider.refresh();
+    updateArchivedSessionsContext();
+    updatePinnedViewDescription();
+    statusProvider.refresh();
+
+    if (opts.persist) {
+      await context.workspaceState.update(PINNED_FILTER_KEY, pinnedFilter);
+      await context.workspaceState.update(PINNED_PROJECT_FILTER_KEY, "");
+      await context.workspaceState.update(PINNED_SOURCE_FILTER_KEY, pinnedSourceFilter);
+      await context.workspaceState.update(PINNED_TAG_FILTER_KEY, pinnedTagFilter);
+      await context.workspaceState.update(PINNED_ARCHIVE_LOCATION_FILTER_KEY, pinnedArchiveLocationFilter);
+    }
+  };
+
   const applyHistoryViewMode = async (nextMode: HistoryViewMode, opts: { persist: boolean }): Promise<void> => {
     const normalized = sanitizeHistoryViewMode(nextMode);
     if (historyViewMode === normalized) return;
@@ -758,25 +976,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   };
 
+  const applyHistoryProjectState = async (
+    next: { projectCwd: string | null; grouped: boolean },
+    opts: { persist: boolean },
+  ): Promise<void> => {
+    const projectCwd = next.grouped ? null : sanitizeProjectCwd(next.projectCwd);
+    historyProjectCwd = projectCwd;
+    historyProjectGrouped = next.grouped && !projectCwd;
+    historyProvider.setProjectFilter(historyProjectCwd);
+    historyProvider.setProjectGrouped(historyProjectGrouped);
+    historyProvider.refresh();
+    updateHistoryViewDescription();
+    statusProvider.refresh();
+    if (opts.persist) {
+      await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, historyProjectCwd ?? "");
+      await context.workspaceState.update(HISTORY_PROJECT_GROUPED_KEY, historyProjectGrouped);
+    }
+  };
+
   const applyHistoryFilters = async (
     next: { date: DateScope; projectCwd: string | null; source: SessionSourceFilter; tags: string[] },
     opts: { persist: boolean },
   ): Promise<void> => {
     historyFilter = next.date;
     historyProjectCwd = next.projectCwd;
+    if (historyProjectCwd) historyProjectGrouped = false;
     historySourceFilter = constrainHistorySourceFilter(next.source);
     historyTagFilter = sanitizeTagFilter(next.tags);
     historyProvider.setFilters(historyFilter, historyProjectCwd, historySourceFilter, historyTagFilter);
+    historyProvider.setProjectGrouped(historyProjectGrouped);
     historyProvider.refresh();
-    pinnedProvider.setSourceFilter(historySourceFilter);
     syncArchiveLocationFilterToProviders();
-    pinnedProvider.refresh();
     updateHistoryViewDescription();
-    updatePinnedViewDescription();
     statusProvider.refresh();
     if (opts.persist) {
       await context.workspaceState.update(HISTORY_FILTER_KEY, next.date);
       await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, next.projectCwd ?? "");
+      await context.workspaceState.update(HISTORY_PROJECT_GROUPED_KEY, historyProjectGrouped);
       await context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
       await context.workspaceState.update(HISTORY_TAG_FILTER_KEY, historyTagFilter);
     }
@@ -819,6 +1055,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
       { persist: true },
     );
+  };
+
+  const cyclePinnedSourceFilter = async (): Promise<void> => {
+    const nextSource: SessionSourceFilter =
+      pinnedSourceFilter === "all" ? "codex" : pinnedSourceFilter === "codex" ? "claude" : "all";
+    await applyPinnedSourceFilter(nextSource, { persist: true });
   };
 
   updateViewTitles();
@@ -922,9 +1164,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (constrained !== historySourceFilter) {
           historySourceFilter = constrained;
           historyProvider.setSourceFilter(historySourceFilter);
-          pinnedProvider.setSourceFilter(historySourceFilter);
           syncArchiveLocationFilterToProviders();
           void context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
+        }
+        const constrainedPinned = constrainHistorySourceFilter(pinnedSourceFilter);
+        if (constrainedPinned !== pinnedSourceFilter) {
+          pinnedSourceFilter = constrainedPinned;
+          pinnedProvider.setSourceFilter(pinnedSourceFilter);
+          syncArchiveLocationFilterToProviders();
+          pinnedProvider.refresh();
+          void context.workspaceState.update(PINNED_SOURCE_FILTER_KEY, pinnedSourceFilter);
         }
       }
 
@@ -1565,8 +1814,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (constrainedSource !== historySourceFilter) {
       historySourceFilter = constrainedSource;
       historyProvider.setSourceFilter(historySourceFilter);
-      pinnedProvider.setSourceFilter(historySourceFilter);
       await context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
+    }
+    const constrainedPinnedSource = resolveConstrainedHistorySourceFilter(pinnedSourceFilter, latestConfig);
+    if (constrainedPinnedSource !== pinnedSourceFilter) {
+      pinnedSourceFilter = constrainedPinnedSource;
+      pinnedProvider.setSourceFilter(pinnedSourceFilter);
+      pinnedProvider.setArchiveLocationFilter(resolveEffectivePinnedArchiveLocationFilter());
+      pinnedProvider.refresh();
+      await context.workspaceState.update(PINNED_SOURCE_FILTER_KEY, pinnedSourceFilter);
     }
     await historyService.refresh({ forceRebuildCache });
     const reconciledPins = await pinStore.reconcile(historyService.getIndex());
@@ -1642,6 +1898,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await executeSearch(lastSearchRequest);
     } else {
       refreshViews();
+    }
+    return true;
+  };
+
+  const applyPinnedArchiveLocationFilter = async (
+    nextArchiveLocationFilter: ArchiveLocationFilter,
+    options: { persist: boolean },
+  ): Promise<boolean> => {
+    const nextValue = sanitizeArchiveLocationFilter(nextArchiveLocationFilter);
+    if (pinnedArchiveLocationFilter === nextValue) return false;
+
+    pinnedArchiveLocationFilter = nextValue;
+    pinnedProvider.setArchiveLocationFilter(resolveEffectivePinnedArchiveLocationFilter());
+    pinnedProvider.refresh();
+    updateArchivedSessionsContext();
+    updatePinnedViewDescription();
+    statusProvider.refresh();
+
+    if (options.persist) {
+      await context.workspaceState.update(PINNED_ARCHIVE_LOCATION_FILTER_KEY, pinnedArchiveLocationFilter);
     }
     return true;
   };
@@ -2020,6 +2296,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.togglePinnedSortMode", async () => {
+      await applyPinnedSortMode(nextPinnedSortMode(pinnedSortMode), { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.refreshHistoryPane", async () => {
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Window, title: t("app.loadingHistoryPane") },
@@ -2059,6 +2341,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         persist: true,
         rerunSearch: true,
       });
+      return true;
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.filterPinnedArchiveLocation", async () => {
+      if (pinnedSourceFilter === "claude") return false;
+      await applyPinnedArchiveLocationFilter(nextArchiveLocationFilter(pinnedArchiveLocationFilter), { persist: true });
       return true;
     }),
   );
@@ -2431,6 +2721,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.filterPinned", async () => {
+      const idx = historyService.getIndex();
+      const change = await promptHistoryFilter(idx, {
+        date: pinnedFilter,
+        projectCwd: pinnedProjectCwd,
+        source: pinnedSourceFilter,
+        sourceOptions: getHistorySourceOptionsForPrompt(),
+        archiveLocation: pinnedArchiveLocationFilter,
+        tags: pinnedTagFilter,
+        availableTags: annotationStore.listTagStats().map((x) => x.tag),
+        placeholder: t("pinned.filter.placeholder"),
+        allDateLabel: t("pinned.filter.all"),
+      });
+      if (!change) return;
+      const next = {
+        date: change.kind === "date" ? change.date : pinnedFilter,
+        projectCwd: change.kind === "project" ? change.projectCwd : pinnedProjectCwd,
+        projectGrouped: change.kind === "project" ? false : pinnedProjectGrouped,
+        source: change.kind === "source" ? change.source : pinnedSourceFilter,
+        archiveLocation: change.kind === "archiveLocation" ? change.archiveLocation : pinnedArchiveLocationFilter,
+        tags: change.kind === "tags" ? change.tags : pinnedTagFilter,
+      };
+      await applyPinnedFilters(next, { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.filterPinnedByTag", async (tagArg?: unknown) => {
       const singleTag = typeof tagArg === "string" ? tagArg.trim() : "";
       if (singleTag) {
@@ -2482,6 +2799,46 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.clearPinnedTagFilter", async () => {
       if (pinnedTagFilter.length === 0) return;
       await applyPinnedTagFilter([], { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.clearPinnedFilter", async () => {
+      await clearPinnedFilters({ persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.filterPinnedCurrentProject", async () => {
+      const workspaceFolder = resolveCurrentWorkspaceFolder();
+      if (!workspaceFolder) {
+        void vscode.window.showInformationMessage(t("pinned.project.current.noWorkspaceGrouped"));
+        await applyPinnedProjectState({ projectCwd: null, grouped: true }, { persist: true });
+        return;
+      }
+
+      const idx = historyService.getIndex();
+      const targetProjectCwd = resolveCurrentProjectFilterCwd(idx, workspaceFolder.uri.fsPath);
+      const sameProject =
+        !pinnedProjectGrouped &&
+        !!pinnedProjectCwd &&
+        normalizeProjectKey(pinnedProjectCwd) === normalizeProjectKey(targetProjectCwd);
+
+      await applyPinnedProjectState({ projectCwd: sameProject ? null : targetProjectCwd, grouped: false }, { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.showPinnedProjectGrouped", async () => {
+      if (pinnedProjectGrouped) return;
+      await applyPinnedProjectState({ projectCwd: null, grouped: true }, { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.clearPinnedProjectMode", async () => {
+      if (!pinnedProjectGrouped && !pinnedProjectCwd) return;
+      await applyPinnedProjectState({ projectCwd: null, grouped: false }, { persist: true });
     }),
   );
 
@@ -3300,31 +3657,46 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.filterHistoryCurrentProject", async () => {
       const workspaceFolder = resolveCurrentWorkspaceFolder();
       if (!workspaceFolder) {
-        void vscode.window.showInformationMessage(t("history.project.current.noWorkspace"));
+        void vscode.window.showInformationMessage(t("history.project.current.noWorkspaceGrouped"));
+        await applyHistoryProjectState({ projectCwd: null, grouped: true }, { persist: true });
         return;
       }
 
       const idx = historyService.getIndex();
       const targetProjectCwd = resolveCurrentProjectFilterCwd(idx, workspaceFolder.uri.fsPath);
       const sameProject =
-        !!historyProjectCwd && normalizeCacheKey(historyProjectCwd) === normalizeCacheKey(targetProjectCwd);
+        !historyProjectGrouped &&
+        !!historyProjectCwd &&
+        normalizeProjectKey(historyProjectCwd) === normalizeProjectKey(targetProjectCwd);
 
-      await applyHistoryFilters(
-        {
-          date: historyFilter,
-          // If the same project filter is already active, allow toggling it off with a second invocation.
-          projectCwd: sameProject ? null : targetProjectCwd,
-          source: historySourceFilter,
-          tags: historyTagFilter,
-        },
-        { persist: true },
-      );
+      // If the same project filter is already active, allow toggling it off with a second invocation.
+      await applyHistoryProjectState({ projectCwd: sameProject ? null : targetProjectCwd, grouped: false }, { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.showHistoryProjectGrouped", async () => {
+      if (historyProjectGrouped) return;
+      await applyHistoryProjectState({ projectCwd: null, grouped: true }, { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.clearHistoryProjectMode", async () => {
+      if (!historyProjectGrouped && !historyProjectCwd) return;
+      await applyHistoryProjectState({ projectCwd: null, grouped: false }, { persist: true });
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.cycleHistorySourceFilter", async () => {
       await cycleHistorySourceFilter();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.cyclePinnedSourceFilter", async () => {
+      await cyclePinnedSourceFilter();
     }),
   );
 
@@ -3713,6 +4085,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.archiveLocationArchivedOnly", "codexHistoryViewer.filterArchiveLocation");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.archiveLocationDisabled", "codexHistoryViewer.filterArchiveLocation");
   registerUiCommandAlias("codexHistoryViewer.ui.en.archiveLocationDisabled", "codexHistoryViewer.filterArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.pinnedArchiveLocationActiveOnly", "codexHistoryViewer.filterPinnedArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedArchiveLocationActiveOnly", "codexHistoryViewer.filterPinnedArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.pinnedArchiveLocationAll", "codexHistoryViewer.filterPinnedArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedArchiveLocationAll", "codexHistoryViewer.filterPinnedArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.pinnedArchiveLocationArchivedOnly", "codexHistoryViewer.filterPinnedArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedArchiveLocationArchivedOnly", "codexHistoryViewer.filterPinnedArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.pinnedArchiveLocationDisabled", "codexHistoryViewer.filterPinnedArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedArchiveLocationDisabled", "codexHistoryViewer.filterPinnedArchiveLocation");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.pinnedSortPinnedAt", "codexHistoryViewer.togglePinnedSortMode");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedSortPinnedAt", "codexHistoryViewer.togglePinnedSortMode");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.pinnedSortHistoryDate", "codexHistoryViewer.togglePinnedSortMode");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedSortHistoryDate", "codexHistoryViewer.togglePinnedSortMode");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.pinSession", "codexHistoryViewer.pinSession");
   registerUiCommandAlias("codexHistoryViewer.ui.en.pinSession", "codexHistoryViewer.pinSession");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.unpinSession", "codexHistoryViewer.unpinSession");
@@ -3741,10 +4125,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.searchFilterByTag", "codexHistoryViewer.searchFilterByTag");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.clearSearchTagFilter", "codexHistoryViewer.clearSearchTagFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.en.clearSearchTagFilter", "codexHistoryViewer.clearSearchTagFilter");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.filterPinned", "codexHistoryViewer.filterPinned");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.filterPinned", "codexHistoryViewer.filterPinned");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.filterPinnedByTag", "codexHistoryViewer.filterPinnedByTag");
   registerUiCommandAlias("codexHistoryViewer.ui.en.filterPinnedByTag", "codexHistoryViewer.filterPinnedByTag");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.clearPinnedTagFilter", "codexHistoryViewer.clearPinnedTagFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.en.clearPinnedTagFilter", "codexHistoryViewer.clearPinnedTagFilter");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.clearPinnedFilter", "codexHistoryViewer.clearPinnedFilter");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.clearPinnedFilter", "codexHistoryViewer.clearPinnedFilter");
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.ja.filterPinnedCurrentProject",
+    "codexHistoryViewer.filterPinnedCurrentProject",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.en.filterPinnedCurrentProject",
+    "codexHistoryViewer.filterPinnedCurrentProject",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.ja.showPinnedProjectGrouped",
+    "codexHistoryViewer.showPinnedProjectGrouped",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.en.showPinnedProjectGrouped",
+    "codexHistoryViewer.showPinnedProjectGrouped",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.ja.clearPinnedProjectMode",
+    "codexHistoryViewer.clearPinnedProjectMode",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.en.clearPinnedProjectMode",
+    "codexHistoryViewer.clearPinnedProjectMode",
+  );
   registerUiCommandAlias("codexHistoryViewer.ui.ja.filterHistory", "codexHistoryViewer.filterHistory");
   registerUiCommandAlias("codexHistoryViewer.ui.en.filterHistory", "codexHistoryViewer.filterHistory");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.filterHistoryByTag", "codexHistoryViewer.filterHistoryByTag");
@@ -3759,9 +4171,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     "codexHistoryViewer.ui.en.filterHistoryCurrentProject",
     "codexHistoryViewer.filterHistoryCurrentProject",
   );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.ja.showHistoryProjectGrouped",
+    "codexHistoryViewer.showHistoryProjectGrouped",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.en.showHistoryProjectGrouped",
+    "codexHistoryViewer.showHistoryProjectGrouped",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.ja.clearHistoryProjectMode",
+    "codexHistoryViewer.clearHistoryProjectMode",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.en.clearHistoryProjectMode",
+    "codexHistoryViewer.clearHistoryProjectMode",
+  );
   registerUiCommandAlias("codexHistoryViewer.ui.cycleHistorySourceAll", "codexHistoryViewer.cycleHistorySourceFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.cycleHistorySourceCodex", "codexHistoryViewer.cycleHistorySourceFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.cycleHistorySourceClaude", "codexHistoryViewer.cycleHistorySourceFilter");
+  registerUiCommandAlias("codexHistoryViewer.ui.pinnedSourceAll", "codexHistoryViewer.cyclePinnedSourceFilter");
+  registerUiCommandAlias("codexHistoryViewer.ui.pinnedSourceCodex", "codexHistoryViewer.cyclePinnedSourceFilter");
+  registerUiCommandAlias("codexHistoryViewer.ui.pinnedSourceClaude", "codexHistoryViewer.cyclePinnedSourceFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.clearHistoryFilter", "codexHistoryViewer.clearHistoryFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.en.clearHistoryFilter", "codexHistoryViewer.clearHistoryFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.openSettings", "codexHistoryViewer.openSettings");
@@ -3850,6 +4281,14 @@ function sanitizeProjectCwd(value: unknown): string | null {
   return s.length > 0 ? s : null;
 }
 
+function sanitizeProjectGrouped(value: unknown): boolean {
+  return value === true;
+}
+
+function sanitizePinnedSortMode(value: unknown): PinnedSortMode {
+  return value === "historyDate" ? "historyDate" : "pinnedAt";
+}
+
 function sanitizeBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
@@ -3932,6 +4371,10 @@ function nextArchiveLocationFilter(value: ArchiveLocationFilter): ArchiveLocatio
   }
 }
 
+function nextPinnedSortMode(value: PinnedSortMode): PinnedSortMode {
+  return value === "pinnedAt" ? "historyDate" : "pinnedAt";
+}
+
 function matchesArchiveLocationFilter(session: SessionSummary, archiveLocationFilter: ArchiveLocationFilter): boolean {
   switch (archiveLocationFilter) {
     case "all":
@@ -4006,6 +4449,8 @@ async function promptHistoryFilter(
     archiveLocation: ArchiveLocationFilter;
     tags: string[];
     availableTags: string[];
+    placeholder?: string;
+    allDateLabel?: string;
   },
 ): Promise<HistoryFilterChange | null> {
   const years = Array.from(idx.byY.keys()).sort((a, b) => (a < b ? 1 : -1));
@@ -4026,7 +4471,7 @@ async function promptHistoryFilter(
   for (const s of idx.sessions) {
     const cwd = typeof s.meta?.cwd === "string" ? s.meta.cwd.trim() : "";
     if (!cwd) continue;
-    const key = normalizeCacheKey(cwd);
+    const key = normalizeProjectKey(cwd);
     if (seenProjects.has(key)) continue;
     seenProjects.add(key);
     projectCwds.push(cwd);
@@ -4035,7 +4480,7 @@ async function promptHistoryFilter(
 
   const dateItemsBase: HistoryFilterPick[] = [
     { label: t("history.filter.section.date"), kind: vscode.QuickPickItemKind.Separator },
-    { label: t("history.filter.all"), pickKind: "date", date: { kind: "all" } },
+    { label: current.allDateLabel ?? t("history.filter.all"), pickKind: "date", date: { kind: "all" } },
     ...years.map((y) => ({ label: y, pickKind: "date" as const, date: { kind: "year" as const, yyyy: y } })),
     ...yms.map((ym) => ({ label: ym, pickKind: "date" as const, date: { kind: "month" as const, ym } })),
   ];
@@ -4102,7 +4547,7 @@ async function promptHistoryFilter(
     const qp = vscode.window.createQuickPick<HistoryFilterPick>();
     qp.matchOnDescription = true;
     qp.matchOnDetail = true;
-    qp.placeholder = t("history.filter.placeholder");
+    qp.placeholder = current.placeholder ?? t("history.filter.placeholder");
     qp.items = baseItems;
 
     // Default to year-month options; only while typing add year-month-day (YYYY-MM-DD) suggestions.
@@ -4173,11 +4618,11 @@ async function promptHistoryFilter(
     qp.onDidHide(() => finish(null));
 
     // Set initial focus based on the current filters.
-    const currentProjectKey = current.projectCwd ? normalizeCacheKey(current.projectCwd) : null;
+    const currentProjectKey = current.projectCwd ? normalizeProjectKey(current.projectCwd) : null;
     const activeDateItem = dateItemsBase.find((it) => it.pickKind === "date" && it.date && isSameDateScope(it.date, current.date));
     const activeProjectItem = currentProjectKey
       ? projectItemsBase.find(
-          (it) => it.pickKind === "project" && it.projectCwd && normalizeCacheKey(it.projectCwd) === currentProjectKey,
+          (it) => it.pickKind === "project" && it.projectCwd && normalizeProjectKey(it.projectCwd) === currentProjectKey,
         )
       : undefined;
     const activeSourceItem = sourceItemsBase.find((it) => it.pickKind === "source" && it.source === current.source);
@@ -4286,7 +4731,7 @@ function resolveCurrentProjectFilterCwd(
 }
 
 function normalizePathForPrefixMatch(fsPath: string): string {
-  const normalized = normalizeCacheKey(fsPath).replace(/\\/g, "/");
+  const normalized = normalizeProjectKey(fsPath);
   if (normalized === "/") return normalized;
   if (/^[a-z]:\/$/i.test(normalized)) return normalized;
   return normalized.replace(/\/+$/g, "");

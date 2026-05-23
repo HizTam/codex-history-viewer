@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.0] - 2026-05-23
+
+### Added
+
+- Added project display modes to the History view: No Project Filter, Current Project, and Group by Project.
+- Added project-grouped History trees that preserve the existing latest-first and date-grouped layouts.
+- Added independent Pinned project display modes, separate from the History project state.
+- Added independent Pinned filtering for date scope, project, source, archive visibility, and tags.
+- Added a Pinned source switch for All, Codex, and Claude Code.
+- Added independent Pinned archive visibility controls for Active Only, All, and Archived Only.
+- Added a Pinned sort mode switch between pinned date order and session date order.
+- Added a Pinned clear-filters action.
+
+### Changed
+
+- Changed project matching to use case-insensitive normalized project keys across platforms.
+- Changed History clear-filter toolbar behavior so the action remains visible and is disabled when no filters can be cleared.
+- Changed project-mode toolbar icons to represent the current project display state.
+- Changed Pinned archived-session visibility so it follows Pinned-specific source and archive filters instead of the History/Search archive state.
+- Changed the Pinned archive visibility toggle to show as disabled when Pinned source is set to Claude Code only.
+- Changed Pinned project tooltips to distinguish the latest pinned time from the latest session time depending on the active sort mode.
+- Changed Search toolbar ordering so Clear Results appears before Rerun Search.
+
+### Fixed
+
+- Fixed Codex `# Files mentioned by the user:` blocks appearing after IDE context not being rendered as file-reference attachments.
+
 ## [2.3.0] - 2026-05-22
 
 ### Added

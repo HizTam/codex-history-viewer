@@ -1,17 +1,32 @@
+import * as path from "node:path";
 import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
-import { HistoryEmptyNode, SessionNode, DayNode, MonthNode, TreeNode, YearNode, toTreeItemContextValue } from "./treeNodes";
+import {
+  HistoryEmptyNode,
+  SessionNode,
+  DayNode,
+  MonthNode,
+  ProjectDayNode,
+  ProjectMonthNode,
+  ProjectNode,
+  ProjectYearNode,
+  TreeNode,
+  YearNode,
+  toTreeItemContextValue,
+} from "./treeNodes";
 import type { ArchiveLocationFilter, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
 import type { DateScope } from "../types/dateScope";
 import { getConfig } from "../settings";
-import { normalizeCacheKey } from "../utils/fsUtils";
-import { truncateByDisplayWidth } from "../utils/textUtils";
+import { normalizeProjectKey } from "../utils/fsUtils";
+import { safeDisplayPath, truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
 import { buildSessionHoverTooltip } from "./sessionTooltipUtils";
 
 export type HistoryViewMode = "date" | "latest";
+
+const NO_CWD_PROJECT_KEY = "__no_cwd__";
 
 // Provides the history tree (year -> month -> day -> session).
 export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
@@ -21,6 +36,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private viewMode: HistoryViewMode;
   private filter: DateScope;
   private projectCwd: string | null;
+  private projectGrouped: boolean;
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
   private archiveLocationFilter: ArchiveLocationFilter;
@@ -37,6 +53,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     viewMode: HistoryViewMode,
     filter: DateScope,
     projectCwd: string | null,
+    projectGrouped: boolean,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
     archiveLocationFilter: ArchiveLocationFilter,
@@ -48,6 +65,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.viewMode = viewMode;
     this.filter = filter;
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
+    this.projectGrouped = projectGrouped;
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
     this.archiveLocationFilter = archiveLocationFilter;
@@ -83,6 +101,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
   }
 
+  public setProjectGrouped(projectGrouped: boolean): void {
+    this.projectGrouped = projectGrouped;
+  }
+
   public setSourceFilter(sourceFilter: SessionSourceFilter): void {
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
   }
@@ -113,7 +135,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     if (!projectCwd) return true;
     const cwd = session.meta?.cwd;
     if (typeof cwd !== "string" || cwd.trim().length === 0) return false;
-    return normalizeCacheKey(cwd) === normalizeCacheKey(projectCwd);
+    return normalizeProjectKey(cwd) === normalizeProjectKey(projectCwd);
   }
 
   private matchesTags(session: SessionSummary): boolean {
@@ -201,6 +223,38 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   public getTreeItem(element: TreeNode): vscode.TreeItem {
+    if (element instanceof ProjectNode) {
+      const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Collapsed);
+      item.description = element.description;
+      item.contextValue = toTreeItemContextValue(element);
+      item.iconPath = new vscode.ThemeIcon("root-folder");
+      item.tooltip = t(
+        "tree.tooltip.project",
+        element.cwd ?? t("tree.project.noCwd"),
+        element.sessionCount,
+        element.latestLabel,
+      );
+      return item;
+    }
+    if (element instanceof ProjectYearNode) {
+      const item = new vscode.TreeItem(element.year, vscode.TreeItemCollapsibleState.Collapsed);
+      item.contextValue = toTreeItemContextValue(element);
+      item.tooltip = t("tree.tooltip.year", element.year);
+      return item;
+    }
+    if (element instanceof ProjectMonthNode) {
+      const item = new vscode.TreeItem(element.month, vscode.TreeItemCollapsibleState.Collapsed);
+      item.contextValue = toTreeItemContextValue(element);
+      item.tooltip = t("tree.tooltip.month", `${element.year}-${element.month}`);
+      return item;
+    }
+    if (element instanceof ProjectDayNode) {
+      const item = new vscode.TreeItem(element.day, vscode.TreeItemCollapsibleState.Collapsed);
+      item.description = element.ymd;
+      item.contextValue = toTreeItemContextValue(element);
+      item.tooltip = t("tree.tooltip.day", element.ymd);
+      return item;
+    }
     if (element instanceof YearNode) {
       const item = new vscode.TreeItem(element.year, vscode.TreeItemCollapsibleState.Collapsed);
       item.contextValue = toTreeItemContextValue(element);
@@ -269,6 +323,102 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     return source === "claude" ? this.claudeIconPath : this.codexIconPath;
   }
 
+  private getFilteredSessions(): SessionSummary[] {
+    return this.historyService.getIndex().sessions.filter((s) => this.matchesSession(s));
+  }
+
+  private buildProjectNodes(sessions: readonly SessionSummary[]): ProjectNode[] {
+    const groups = new Map<string, { cwd: string | null; sessions: SessionSummary[] }>();
+
+    for (const session of sessions) {
+      const cwd = getSessionCwd(session);
+      const key = cwd ? normalizeProjectKey(cwd) : NO_CWD_PROJECT_KEY;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.sessions.push(session);
+        continue;
+      }
+      groups.set(key, { cwd, sessions: [session] });
+    }
+
+    const nodes = Array.from(groups.entries()).map(([key, group]) => {
+      const latest = group.sessions[0];
+      const label = buildProjectLabel(group.cwd);
+      const description = buildProjectDescription(group.cwd, group.sessions.length);
+      return new ProjectNode({
+        key,
+        label,
+        cwd: group.cwd,
+        sessionCount: group.sessions.length,
+        latestLabel: latest ? `${latest.localDate} ${latest.timeLabel}` : "",
+        description,
+      });
+    });
+
+    nodes.sort((a, b) => {
+      if (a.latestLabel !== b.latestLabel) return a.latestLabel < b.latestLabel ? 1 : -1;
+      return a.label.localeCompare(b.label);
+    });
+    return nodes;
+  }
+
+  private getProjectSessions(projectKey: string): SessionSummary[] {
+    return this.getFilteredSessions().filter((session) => getSessionProjectKey(session) === projectKey);
+  }
+
+  private buildProjectChildren(element: TreeNode | undefined, shouldFilterSessions: boolean): TreeNode[] {
+    if (!element) {
+      const nodes = this.buildProjectNodes(this.getFilteredSessions());
+      return this.withFilteredEmptyFallback(nodes, shouldFilterSessions);
+    }
+
+    if (element instanceof ProjectNode) {
+      const sessions = this.getProjectSessions(element.key);
+      if (this.viewMode === "latest") return sessions.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+
+      const filter = this.filter;
+      switch (filter.kind) {
+        case "all":
+          return uniqueDateParts(sessions, "year").map((year) => new ProjectYearNode(element.key, year));
+        case "year":
+          return uniqueDateParts(sessions, "month").map((month) => new ProjectMonthNode(element.key, filter.yyyy, month));
+        case "month": {
+          const [yyyy, mm] = filter.ym.split("-");
+          if (!yyyy || !mm) return [];
+          return uniqueDateParts(sessions, "day").map((day) => new ProjectDayNode(element.key, yyyy, mm, day));
+        }
+        case "day":
+          return sessions.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+        default:
+          return [];
+      }
+    }
+
+    if (element instanceof ProjectYearNode) {
+      const sessions = this
+        .getProjectSessions(element.projectKey)
+        .filter((session) => session.localDate.startsWith(`${element.year}-`));
+      return uniqueDateParts(sessions, "month").map((month) => new ProjectMonthNode(element.projectKey, element.year, month));
+    }
+
+    if (element instanceof ProjectMonthNode) {
+      const ym = `${element.year}-${element.month}`;
+      const sessions = this
+        .getProjectSessions(element.projectKey)
+        .filter((session) => session.localDate.startsWith(`${ym}-`));
+      return uniqueDateParts(sessions, "day").map((day) => new ProjectDayNode(element.projectKey, element.year, element.month, day));
+    }
+
+    if (element instanceof ProjectDayNode) {
+      const sessions = this
+        .getProjectSessions(element.projectKey)
+        .filter((session) => session.localDate === element.ymd);
+      return sessions.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+    }
+
+    return [];
+  }
+
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
     if (!element && !this.initialLoadComplete) {
       return [new HistoryEmptyNode(t("history.empty.loading"), "sync~spin")];
@@ -283,6 +433,9 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       !!this.projectCwd ||
       this.sourceFilter !== "all" ||
       this.tagFilter.length > 0;
+    if (this.projectGrouped) {
+      return this.buildProjectChildren(element, shouldFilterSessions);
+    }
     if (this.viewMode === "latest") {
       if (element) return [];
       const nodes = idx.sessions
@@ -444,4 +597,40 @@ function normalizeSourceFilter(value: SessionSourceFilter): SessionSourceFilter 
 
 function normalizeHistoryViewMode(value: HistoryViewMode): HistoryViewMode {
   return value === "latest" ? "latest" : "date";
+}
+
+function getSessionCwd(session: SessionSummary): string | null {
+  const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
+  return cwd.length > 0 ? cwd : null;
+}
+
+function getSessionProjectKey(session: SessionSummary): string {
+  const cwd = getSessionCwd(session);
+  return cwd ? normalizeProjectKey(cwd) : NO_CWD_PROJECT_KEY;
+}
+
+function buildProjectLabel(cwd: string | null): string {
+  if (!cwd) return t("tree.project.noCwd");
+  const normalized = cwd.replace(/[\\/]+/g, path.sep);
+  const base = path.basename(path.normalize(normalized)).trim();
+  return base.length > 0 ? base : safeDisplayPath(cwd, 60);
+}
+
+function buildProjectDescription(cwd: string | null, sessionCount: number): string {
+  if (!cwd) return String(sessionCount);
+  return `${sessionCount}  ${safeDisplayPath(cwd, 56)}`;
+}
+
+function uniqueDateParts(sessions: readonly SessionSummary[], part: "year" | "month" | "day"): string[] {
+  const values: string[] = [];
+  const seen = new Set<string>();
+  for (const session of sessions) {
+    const [year, month, day] = session.localDate.split("-");
+    const value = part === "year" ? year : part === "month" ? month : day;
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    values.push(value);
+  }
+  values.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  return values;
 }

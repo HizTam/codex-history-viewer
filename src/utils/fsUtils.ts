@@ -46,3 +46,15 @@ export function normalizeCacheKey(fsPath: string): string {
   const normalized = path.normalize(fsPath);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
+
+export function normalizeProjectKey(fsPath: string): string {
+  const raw = String(fsPath ?? "").trim();
+  if (!raw) return "";
+
+  const nativeLike = raw.replace(/[\\/]+/g, path.sep);
+  let normalized = path.normalize(nativeLike).replace(/\\/g, "/");
+  if (normalized !== "/" && !/^[a-z]:\/?$/i.test(normalized)) {
+    normalized = normalized.replace(/\/+$/g, "");
+  }
+  return normalized.toLowerCase();
+}

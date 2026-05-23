@@ -291,16 +291,22 @@ export function buildAttachmentSearchText(attachments: readonly ChatAttachment[]
 
 export function extractCodexFilesMentionedFromText(text: string): ExtractedMessageContent {
   const normalized = normalizeNewlines(text);
-  const headerMatch = /^(\s*)# Files mentioned by the user:\s*(?:\n|$)/u.exec(normalized);
-  if (!headerMatch) return { text, attachments: [] };
+  const header = findCodexFilesMentionedHeader(normalized);
+  if (!header) return { text, attachments: [] };
 
-  const headerEnd = headerMatch[0].length;
-  const rest = normalized.slice(headerEnd);
+  const prefix = normalized.slice(0, header.start);
+  const rest = normalized.slice(header.end);
   const requestMatch = /(?:^|\n)## My request for Codex:\s*(?:\n|$)/u.exec(rest);
   if (requestMatch) {
     const block = rest.slice(0, requestMatch.index);
     const parsed = parseCodexFileReferenceLines(block);
     if (parsed.attachments.length === 0 || parsed.failed) return { text, attachments: [] };
+    if (prefix.trim().length > 0) {
+      return {
+        text: joinCodexTextAroundFilesBlock(prefix, rest.slice(requestMatch.index + requestMatch[0].length)),
+        attachments: parsed.attachments,
+      };
+    }
     return {
       text: rest.slice(requestMatch.index + requestMatch[0].length),
       attachments: parsed.attachments,
@@ -310,9 +316,27 @@ export function extractCodexFilesMentionedFromText(text: string): ExtractedMessa
   const parsed = parseCodexFileReferencePrefix(rest);
   if (parsed.attachments.length === 0 || parsed.failed) return { text, attachments: [] };
   return {
-    text: parsed.remainingText,
+    text: joinCodexTextAroundFilesBlock(prefix, parsed.remainingText),
     attachments: parsed.attachments,
   };
+}
+
+function findCodexFilesMentionedHeader(text: string): { start: number; end: number } | null {
+  const match = /(^|\n)[ \t]*# Files mentioned by the user:[ \t]*(?:\n|$)/u.exec(text);
+  if (!match) return null;
+  const leadingNewline = match[1] ?? "";
+  return {
+    start: match.index + leadingNewline.length,
+    end: match.index + match[0].length,
+  };
+}
+
+function joinCodexTextAroundFilesBlock(prefix: string, suffix: string): string {
+  const cleanPrefix = prefix.replace(/\n+$/u, "");
+  const cleanSuffix = suffix.replace(/^\n+/u, "");
+  if (!cleanPrefix.trim()) return cleanSuffix;
+  if (!cleanSuffix.trim()) return cleanPrefix;
+  return `${cleanPrefix}\n\n${cleanSuffix}`;
 }
 
 function parseCodexFileReferencePrefix(text: string): {

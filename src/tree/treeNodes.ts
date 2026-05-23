@@ -8,6 +8,10 @@ export type TreeNode =
   | YearNode
   | MonthNode
   | DayNode
+  | ProjectNode
+  | ProjectYearNode
+  | ProjectMonthNode
+  | ProjectDayNode
   | SessionNode
   | SearchRootNode
   | SearchSessionNode
@@ -44,6 +48,75 @@ export class DayNode {
   public readonly day: string;
 
   constructor(year: string, month: string, day: string) {
+    this.year = year;
+    this.month = month;
+    this.day = day;
+  }
+
+  public get ymd(): string {
+    return `${this.year}-${this.month}-${this.day}`;
+  }
+}
+
+export class ProjectNode {
+  public readonly kind = "project";
+  public readonly key: string;
+  public readonly label: string;
+  public readonly cwd: string | null;
+  public readonly sessionCount: number;
+  public readonly latestLabel: string;
+  public readonly description: string;
+
+  constructor(params: {
+    key: string;
+    label: string;
+    cwd: string | null;
+    sessionCount: number;
+    latestLabel: string;
+    description: string;
+  }) {
+    this.key = params.key;
+    this.label = params.label;
+    this.cwd = params.cwd;
+    this.sessionCount = params.sessionCount;
+    this.latestLabel = params.latestLabel;
+    this.description = params.description;
+  }
+}
+
+export class ProjectYearNode {
+  public readonly kind = "projectYear";
+  public readonly projectKey: string;
+  public readonly year: string;
+
+  constructor(projectKey: string, year: string) {
+    this.projectKey = projectKey;
+    this.year = year;
+  }
+}
+
+export class ProjectMonthNode {
+  public readonly kind = "projectMonth";
+  public readonly projectKey: string;
+  public readonly year: string;
+  public readonly month: string;
+
+  constructor(projectKey: string, year: string, month: string) {
+    this.projectKey = projectKey;
+    this.year = year;
+    this.month = month;
+  }
+}
+
+export class ProjectDayNode {
+  public readonly kind = "projectDay";
+  public readonly projectKey: string;
+  public readonly year: string;
+  public readonly month: string;
+  public readonly day: string;
+
+  constructor(projectKey: string, year: string, month: string, day: string) {
+    this.projectKey = projectKey;
     this.year = year;
     this.month = month;
     this.day = day;
@@ -154,6 +227,14 @@ export function toTreeItemContextValue(node: TreeNode): string {
       return "codexHistoryViewer.month";
     case "day":
       return "codexHistoryViewer.day";
+    case "project":
+      return "codexHistoryViewer.project";
+    case "projectYear":
+      return "codexHistoryViewer.projectYear";
+    case "projectMonth":
+      return "codexHistoryViewer.projectMonth";
+    case "projectDay":
+      return "codexHistoryViewer.projectDay";
     case "session":
       return withCustomTitleMarker(
         node.pinned

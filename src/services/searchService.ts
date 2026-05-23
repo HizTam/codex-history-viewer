@@ -5,7 +5,7 @@ import { t } from "../i18n";
 import { safeDisplayPath, singleLineSnippet } from "../utils/textUtils";
 import { SearchRootNode, SearchSessionNode, type SearchHit } from "../tree/treeNodes";
 import { getDateScopeValue, sanitizeDateScope, type DateScope } from "../types/dateScope";
-import { normalizeCacheKey } from "../utils/fsUtils";
+import { normalizeProjectKey } from "../utils/fsUtils";
 import { type IndexedSearchRole, SearchIndexService } from "./searchIndexService";
 import type { SessionAnnotationStore } from "./sessionAnnotationStore";
 
@@ -209,7 +209,7 @@ function matchProject(session: SessionSummary, projectCwd: string | null): boole
   if (!projectCwd) return true;
   const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
   if (!cwd) return false;
-  return normalizeCacheKey(cwd) === normalizeCacheKey(projectCwd);
+  return normalizeProjectKey(cwd) === normalizeProjectKey(projectCwd);
 }
 
 function matchSource(session: SessionSummary, sourceFilter: SessionSourceFilter): boolean {

@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -187,6 +187,12 @@
         "icon": "$(tag)"
       },
       {
+        "command": "codexHistoryViewer.filterPinned",
+        "title": "%cmd.filterPinned%",
+        "category": "%cmd.category%",
+        "icon": "$(filter)"
+      },
+      {
         "command": "codexHistoryViewer.clearPinnedTagFilter",
         "title": "%cmd.clearPinnedTagFilter%",
         "category": "%cmd.category%",
@@ -196,10 +202,46 @@
         }
       },
       {
+        "command": "codexHistoryViewer.clearPinnedFilter",
+        "title": "%cmd.clearPinnedFilter%",
+        "category": "%cmd.category%",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "codexHistoryViewer.filterPinnedCurrentProject",
+        "title": "%cmd.filterPinnedCurrentProject%",
+        "category": "%cmd.category%",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "codexHistoryViewer.showPinnedProjectGrouped",
+        "title": "%cmd.showPinnedProjectGrouped%",
+        "category": "%cmd.category%",
+        "icon": "$(root-folder)"
+      },
+      {
+        "command": "codexHistoryViewer.clearPinnedProjectMode",
+        "title": "%cmd.clearPinnedProjectMode%",
+        "category": "%cmd.category%",
+        "icon": "$(clear-all)"
+      },
+      {
         "command": "codexHistoryViewer.filterHistoryCurrentProject",
         "title": "%cmd.filterHistoryCurrentProject%",
         "category": "%cmd.category%",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "codexHistoryViewer.showHistoryProjectGrouped",
+        "title": "%cmd.showHistoryProjectGrouped%",
+        "category": "%cmd.category%",
+        "icon": "$(root-folder)"
+      },
+      {
+        "command": "codexHistoryViewer.clearHistoryProjectMode",
+        "title": "%cmd.clearHistoryProjectMode%",
+        "category": "%cmd.category%",
+        "icon": "$(clear-all)"
       },
       {
         "command": "codexHistoryViewer.showHistoryLatestView",
@@ -301,6 +343,18 @@
         "title": "%cmd.filterArchiveLocation%",
         "category": "%cmd.category%",
         "icon": "$(filter)"
+      },
+      {
+        "command": "codexHistoryViewer.filterPinnedArchiveLocation",
+        "title": "%cmd.filterPinnedArchiveLocation%",
+        "category": "%cmd.category%",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "codexHistoryViewer.togglePinnedSortMode",
+        "title": "%cmd.togglePinnedSortMode%",
+        "category": "%cmd.category%",
+        "icon": "$(pinned)"
       },
       {
         "command": "codexHistoryViewer.pinSession",
@@ -504,6 +558,68 @@
         "enablement": "false"
       },
       {
+        "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationActiveOnly",
+        "title": "ピン留めアーカイブ表示: 通常のみ",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationActiveOnly",
+        "title": "Pinned Archive Visibility: Active Only",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationAll",
+        "title": "ピン留めアーカイブ表示: すべて",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationAll",
+        "title": "Pinned Archive Visibility: All",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationArchivedOnly",
+        "title": "ピン留めアーカイブ表示: アーカイブのみ",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationArchivedOnly",
+        "title": "Pinned Archive Visibility: Archived Only",
+        "icon": "$(archive)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationDisabled",
+        "title": "ピン留めアーカイブ表示: Claude Code のみでは無効",
+        "icon": "$(eye-closed)",
+        "enablement": "false"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationDisabled",
+        "title": "Pinned Archive Visibility: Disabled for Claude Code Only",
+        "icon": "$(eye-closed)",
+        "enablement": "false"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.pinnedSortPinnedAt",
+        "title": "ピン留め表示順: ピン留め日順",
+        "icon": "$(pinned)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.pinnedSortPinnedAt",
+        "title": "Pinned Sort: Pin Date",
+        "icon": "$(pinned)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.pinnedSortHistoryDate",
+        "title": "ピン留め表示順: セッション日付順",
+        "icon": "$(calendar)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.pinnedSortHistoryDate",
+        "title": "Pinned Sort: Session Date",
+        "icon": "$(calendar)"
+      },
+      {
         "command": "codexHistoryViewer.ui.ja.pinSession",
         "title": "ピン留め",
         "icon": {
@@ -678,6 +794,58 @@
         }
       },
       {
+        "command": "codexHistoryViewer.ui.ja.filterPinned",
+        "title": "ピン留めを絞り込む...",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.filterPinned",
+        "title": "Filter Pinned...",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.clearPinnedFilter",
+        "title": "ピン留め絞り込みを解除",
+        "icon": "$(clear-all)",
+        "enablement": "codexHistoryViewer.pinnedFiltered"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.clearPinnedFilter",
+        "title": "Clear Pinned Filters",
+        "icon": "$(clear-all)",
+        "enablement": "codexHistoryViewer.pinnedFiltered"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.filterPinnedCurrentProject",
+        "title": "ピン留めプロジェクト表示: 絞り込みなし",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.filterPinnedCurrentProject",
+        "title": "Pinned Project Mode: None",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.showPinnedProjectGrouped",
+        "title": "ピン留めプロジェクト表示: 現在のプロジェクト",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.showPinnedProjectGrouped",
+        "title": "Pinned Project Mode: Current Project",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.clearPinnedProjectMode",
+        "title": "ピン留めプロジェクト表示: プロジェクト単位",
+        "icon": "$(root-folder)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.clearPinnedProjectMode",
+        "title": "Pinned Project Mode: Grouped by Project",
+        "icon": "$(root-folder)"
+      },
+      {
         "command": "codexHistoryViewer.ui.en.search",
         "title": "Search...",
         "icon": {
@@ -707,23 +875,45 @@
       },
       {
         "command": "codexHistoryViewer.ui.ja.filterHistoryCurrentProject",
-        "title": "現在のプロジェクトで絞り込む",
-        "icon": "$(folder-opened)"
+        "title": "プロジェクト表示: 絞り込みなし",
+        "icon": "$(folder)"
       },
       {
         "command": "codexHistoryViewer.ui.en.filterHistoryCurrentProject",
-        "title": "Filter by Current Project",
+        "title": "Project Mode: None",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.showHistoryProjectGrouped",
+        "title": "プロジェクト表示: 現在のプロジェクト",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.showHistoryProjectGrouped",
+        "title": "Project Mode: Current Project",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.clearHistoryProjectMode",
+        "title": "プロジェクト表示: プロジェクト単位",
+        "icon": "$(root-folder)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.clearHistoryProjectMode",
+        "title": "Project Mode: Grouped by Project",
+        "icon": "$(root-folder)"
       },
       {
         "command": "codexHistoryViewer.ui.ja.clearHistoryFilter",
         "title": "絞り込みを解除",
-        "icon": "$(clear-all)"
+        "icon": "$(clear-all)",
+        "enablement": "codexHistoryViewer.historyFiltered"
       },
       {
         "command": "codexHistoryViewer.ui.en.clearHistoryFilter",
         "title": "Clear History Filters",
-        "icon": "$(clear-all)"
+        "icon": "$(clear-all)",
+        "enablement": "codexHistoryViewer.historyFiltered"
       },
       {
         "command": "codexHistoryViewer.ui.ja.clearHistoryTagFilter",
@@ -1072,6 +1262,11 @@
         "category": "%cmd.category%"
       },
       {
+        "command": "codexHistoryViewer.cyclePinnedSourceFilter",
+        "title": "%cmd.cyclePinnedSourceFilter%",
+        "category": "%cmd.category%"
+      },
+      {
         "command": "codexHistoryViewer.ui.cycleHistorySourceAll",
         "title": "Codex + Claude Code",
         "icon": {
@@ -1089,6 +1284,30 @@
       },
       {
         "command": "codexHistoryViewer.ui.cycleHistorySourceClaude",
+        "title": "Claude Code",
+        "icon": {
+          "light": "resources/icons/light/source-claude.svg",
+          "dark": "resources/icons/dark/source-claude.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.pinnedSourceAll",
+        "title": "Codex + Claude Code",
+        "icon": {
+          "light": "resources/icons/light/source-both.svg",
+          "dark": "resources/icons/dark/source-both.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.pinnedSourceCodex",
+        "title": "Codex",
+        "icon": {
+          "light": "resources/icons/light/source-codex.svg",
+          "dark": "resources/icons/dark/source-codex.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.pinnedSourceClaude",
         "title": "Claude Code",
         "icon": {
           "light": "resources/icons/light/source-claude.svg",
@@ -1244,6 +1463,18 @@
           "when": "false"
         },
         {
+          "command": "codexHistoryViewer.filterPinnedArchiveLocation",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.cyclePinnedSourceFilter",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.togglePinnedSortMode",
+          "when": "false"
+        },
+        {
           "command": "codexHistoryViewer.ui.ja.archiveLocationActiveOnly",
           "when": "codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'activeOnly' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang == 'ja'"
         },
@@ -1273,6 +1504,54 @@
         },
         {
           "command": "codexHistoryViewer.ui.en.archiveLocationDisabled",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationActiveOnly",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationActiveOnly",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationAll",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationAll",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationArchivedOnly",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationArchivedOnly",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationDisabled",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationDisabled",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedSortPinnedAt",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedSortPinnedAt",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedSortHistoryDate",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedSortHistoryDate",
           "when": "false"
         },
         {
@@ -1380,11 +1659,51 @@
           "when": "false"
         },
         {
+          "command": "codexHistoryViewer.ui.ja.filterPinned",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.filterPinned",
+          "when": "false"
+        },
+        {
           "command": "codexHistoryViewer.ui.ja.clearPinnedTagFilter",
           "when": "false"
         },
         {
           "command": "codexHistoryViewer.ui.en.clearPinnedTagFilter",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.clearPinnedFilter",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearPinnedFilter",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.filterPinnedCurrentProject",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.filterPinnedCurrentProject",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.showPinnedProjectGrouped",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.showPinnedProjectGrouped",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.clearPinnedProjectMode",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearPinnedProjectMode",
           "when": "false"
         },
         {
@@ -1417,6 +1736,22 @@
         },
         {
           "command": "codexHistoryViewer.ui.en.filterHistoryCurrentProject",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.showHistoryProjectGrouped",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.showHistoryProjectGrouped",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.clearHistoryProjectMode",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearHistoryProjectMode",
           "when": "false"
         },
         {
@@ -1642,6 +1977,18 @@
         {
           "command": "codexHistoryViewer.ui.cycleHistorySourceClaude",
           "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.pinnedSourceAll",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.pinnedSourceCodex",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.pinnedSourceClaude",
+          "when": "false"
         }
       ],
       "codexHistoryViewer.handoffSubmenu.ja": [
@@ -1740,34 +2087,104 @@
           "group": "navigation@3"
         },
         {
+          "command": "codexHistoryViewer.ui.ja.clearPinnedFilter",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@3"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearPinnedFilter",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@3"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.filterPinned",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.filterPinned",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@2"
+        },
+        {
           "command": "codexHistoryViewer.ui.ja.refreshPinned",
           "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation@1"
+          "group": "navigation@4"
         },
         {
           "command": "codexHistoryViewer.ui.en.refreshPinned",
           "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@4"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedSortPinnedAt",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedSortMode == 'pinnedAt' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@5"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedSortPinnedAt",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedSortMode == 'pinnedAt' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@5"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedSortHistoryDate",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedSortMode == 'historyDate' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@5"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedSortHistoryDate",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedSortMode == 'historyDate' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@5"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.filterPinnedCurrentProject",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedProjectMode == 'none' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.filterPinnedCurrentProject",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedProjectMode == 'none' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.showPinnedProjectGrouped",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedProjectMode == 'currentProject' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.showPinnedProjectGrouped",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedProjectMode == 'currentProject' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.clearPinnedProjectMode",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedProjectMode == 'grouped' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearPinnedProjectMode",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedProjectMode == 'grouped' && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@1"
         },
         {
           "command": "codexHistoryViewer.ui.ja.filterPinnedByTag",
           "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation@2"
+          "group": "navigation@6"
         },
         {
           "command": "codexHistoryViewer.ui.en.filterPinnedByTag",
           "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.uiLang != 'ja'",
-          "group": "navigation@2"
+          "group": "navigation@6"
         },
         {
           "command": "codexHistoryViewer.ui.ja.clearPinnedTagFilter",
           "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedTagFiltered && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation@3"
+          "group": "navigation@7"
         },
         {
           "command": "codexHistoryViewer.ui.en.clearPinnedTagFilter",
           "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedTagFiltered && codexHistoryViewer.uiLang != 'ja'",
-          "group": "navigation@3"
+          "group": "navigation@7"
         },
         {
           "command": "codexHistoryViewer.ui.ja.refreshHistoryPane",
@@ -1831,22 +2248,42 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.filterHistoryCurrentProject",
-          "when": "view == codexHistoryViewer.historyView && workspaceFolderCount > 0 && codexHistoryViewer.uiLang == 'ja'",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyProjectMode == 'none' && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@1"
         },
         {
           "command": "codexHistoryViewer.ui.en.filterHistoryCurrentProject",
-          "when": "view == codexHistoryViewer.historyView && workspaceFolderCount > 0 && codexHistoryViewer.uiLang != 'ja'",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyProjectMode == 'none' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.showHistoryProjectGrouped",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyProjectMode == 'currentProject' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.showHistoryProjectGrouped",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyProjectMode == 'currentProject' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.clearHistoryProjectMode",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyProjectMode == 'grouped' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearHistoryProjectMode",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyProjectMode == 'grouped' && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@1"
         },
         {
           "command": "codexHistoryViewer.ui.ja.clearHistoryFilter",
-          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyFiltered && codexHistoryViewer.uiLang == 'ja'",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@3"
         },
         {
           "command": "codexHistoryViewer.ui.en.clearHistoryFilter",
-          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyFiltered && codexHistoryViewer.uiLang != 'ja'",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@3"
         },
         {
@@ -1862,12 +2299,12 @@
         {
           "command": "codexHistoryViewer.ui.ja.searchRerun",
           "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation@2"
+          "group": "navigation@3"
         },
         {
           "command": "codexHistoryViewer.ui.en.searchRerun",
           "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang != 'ja'",
-          "group": "navigation@2"
+          "group": "navigation@3"
         },
         {
           "command": "codexHistoryViewer.ui.ja.search",
@@ -1882,12 +2319,12 @@
         {
           "command": "codexHistoryViewer.ui.ja.searchClearResults",
           "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang == 'ja'",
-          "group": "navigation@3"
+          "group": "navigation@2"
         },
         {
           "command": "codexHistoryViewer.ui.en.searchClearResults",
           "when": "view == codexHistoryViewer.searchView && codexHistoryViewer.uiLang != 'ja'",
-          "group": "navigation@3"
+          "group": "navigation@2"
         },
         {
           "command": "codexHistoryViewer.ui.ja.searchFilterByTag",
@@ -1911,43 +2348,98 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.archiveLocationActiveOnly",
-          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'activeOnly' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang == 'ja'",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'activeOnly' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@8"
         },
         {
           "command": "codexHistoryViewer.ui.en.archiveLocationActiveOnly",
-          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'activeOnly' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang != 'ja'",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'activeOnly' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@8"
         },
         {
           "command": "codexHistoryViewer.ui.ja.archiveLocationAll",
-          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'all' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang == 'ja'",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'all' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@8"
         },
         {
           "command": "codexHistoryViewer.ui.en.archiveLocationAll",
-          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'all' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang != 'ja'",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'all' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@8"
         },
         {
           "command": "codexHistoryViewer.ui.ja.archiveLocationArchivedOnly",
-          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'archivedOnly' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang == 'ja'",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'archivedOnly' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@8"
         },
         {
           "command": "codexHistoryViewer.ui.en.archiveLocationArchivedOnly",
-          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'archivedOnly' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang != 'ja'",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.archiveLocationFilter == 'archivedOnly' && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@8"
         },
         {
           "command": "codexHistoryViewer.ui.ja.archiveLocationDisabled",
-          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.historySourceFilter == 'claude' && codexHistoryViewer.uiLang == 'ja'",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.historySourceFilter == 'claude' && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@8"
         },
         {
           "command": "codexHistoryViewer.ui.en.archiveLocationDisabled",
-          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.historySourceFilter == 'claude' && codexHistoryViewer.uiLang != 'ja'",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.searchView) && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.historySourceFilter == 'claude' && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@8"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationActiveOnly",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.pinnedArchiveLocationFilter == 'activeOnly' && codexHistoryViewer.pinnedSourceFilter != 'claude' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@8"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationActiveOnly",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.pinnedArchiveLocationFilter == 'activeOnly' && codexHistoryViewer.pinnedSourceFilter != 'claude' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@8"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationAll",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.pinnedArchiveLocationFilter == 'all' && codexHistoryViewer.pinnedSourceFilter != 'claude' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@8"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationAll",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.pinnedArchiveLocationFilter == 'all' && codexHistoryViewer.pinnedSourceFilter != 'claude' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@8"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationArchivedOnly",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.pinnedArchiveLocationFilter == 'archivedOnly' && codexHistoryViewer.pinnedSourceFilter != 'claude' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@8"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationArchivedOnly",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.pinnedArchiveLocationFilter == 'archivedOnly' && codexHistoryViewer.pinnedSourceFilter != 'claude' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@8"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.pinnedArchiveLocationDisabled",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.pinnedSourceFilter == 'claude' && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@8"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.pinnedArchiveLocationDisabled",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.codexSourceConfigured && codexHistoryViewer.pinnedSourceFilter == 'claude' && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@8"
+        },
+        {
+          "command": "codexHistoryViewer.ui.pinnedSourceAll",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedSourceSwitchable && codexHistoryViewer.pinnedSourceFilter == 'all'",
+          "group": "navigation@9"
+        },
+        {
+          "command": "codexHistoryViewer.ui.pinnedSourceCodex",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedSourceSwitchable && codexHistoryViewer.pinnedSourceFilter == 'codex'",
+          "group": "navigation@9"
+        },
+        {
+          "command": "codexHistoryViewer.ui.pinnedSourceClaude",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedSourceSwitchable && codexHistoryViewer.pinnedSourceFilter == 'claude'",
+          "group": "navigation@9"
         },
         {
           "command": "codexHistoryViewer.ui.ja.undoLastAction",

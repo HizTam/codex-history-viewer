@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **2.3.0** (2026-05-22).
+Latest release: **2.4.0** (2026-05-23).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -15,7 +15,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 ## Highlights
 
 - **Revisit past Codex CLI and Claude Code sessions** that are no longer easy to access from the active editor flow.
-- Browse sessions in a year / month / day tree or a latest-first list.
+- Browse sessions in a year / month / day tree, a latest-first list, or project-grouped views.
 - Optionally include Codex `archived_sessions` when the Codex source is enabled, and switch archive visibility instantly.
 - Show valid cached History and Pinned data immediately at startup while local session files refresh in the background.
 - Search across prompts, responses, tool output, tags, notes, and attachment metadata.
@@ -24,7 +24,8 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Bookmark important history cards and use date-guide markers to revisit them quickly.
 - Keep open chat tabs up to date with header-controlled auto-refresh modes.
 - Show supported image attachments, Claude documents, and file references from Codex / Claude sessions as compact cards.
-- Organize sessions with pins, tags, notes, custom titles, saved searches, and filters.
+- Organize sessions with pins, tags, notes, custom titles, saved searches, project modes, and filters.
+- Keep Pinned filters independent from History/Search, including project, source, archive visibility, tags, and sort mode.
 - Resume past sessions through the official Codex and Claude Code VS Code extensions.
 - Create handoff files and prompts when moving work to another AI tool.
 
@@ -32,13 +33,20 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 
 1. Open the Activity Bar and select **Codex History**.
 2. Use **Control** for global actions such as settings, import, rebuild cache, empty trash, and search defaults.
-3. Browse sessions under **History** and filter by date, project, source, archive location, or tags.
+3. Browse sessions under **History** and switch between date, latest, and project-grouped views.
 4. Select a session to open the reusable chat tab, or run **Open in New Tab (Chat)** to keep it in its own tab.
-5. Run **Search...** and refine with roles, query syntax, presets, and search tag filters.
-6. Use context menus or chat header actions to edit tags/notes and run bulk tag operations when needed.
-7. Enable **File Change History > Explorer Context Menu: Enabled** when you want file-level AI diff history from file right-click menus.
-8. Keep Codex enabled in **Sources: Enabled**, then turn on Codex archived sessions if you want archived Codex history included.
-9. Resume a same-source session through the official Codex or Claude Code extension, or use **Handoff to Other AI** when moving work between agents.
+5. Use **Pinned** for saved sessions with its own date, project, source, archive, tag, and sort controls.
+6. Run **Search...** and refine with roles, query syntax, presets, and search tag filters.
+7. Use context menus or chat header actions to edit tags/notes and run bulk tag operations when needed.
+8. Enable **File Change History > Explorer Context Menu: Enabled** when you want file-level AI diff history from file right-click menus.
+9. Keep Codex enabled in **Sources: Enabled**, then turn on Codex archived sessions if you want archived Codex history included.
+10. Resume a same-source session through the official Codex or Claude Code extension, or use **Handoff to Other AI** when moving work between agents.
+
+## History and Pinned Organization
+
+History supports three project modes: **No Project Filter**, **Current Project**, and **Group by Project**. Project matching is case-insensitive across platforms. Grouped project views preserve the existing layout choice: latest-first history becomes `Project -> Session`, while date-grouped history becomes `Project -> Year -> Month -> Day -> Session`.
+
+Pinned has its own project, source, archive visibility, date, and tag filters. It does not follow History/Search filter state, so saved sessions can stay focused on a different project or source while you browse and search elsewhere. Pinned can also switch between pinned-date order and session-date order.
 
 ## Chat Viewer
 
@@ -55,7 +63,7 @@ The chat viewer keeps attachments and file references out of the message body an
 - Supported images from Codex / Claude sessions are loaded on demand and can be previewed or saved.
 - Claude Code PDF, text, and generic documents render as document cards. Text document previews open inside the card, and embedded payloads are saved on demand.
 - Claude Code IDE opened-file and selection markers render as file/selection reference cards instead of raw inline tags.
-- Codex mentioned-file blocks render as file reference cards while the actual request body remains as message text.
+- Codex mentioned-file blocks render as file reference cards while the actual request body remains as message text, including blocks that appear after IDE context.
 - File reference cards can open local files through VS Code. Referenced files are not read automatically for rendering, search, resume, or handoff.
 - Card metadata such as path, MIME type, and size is available from tooltips instead of taking over the conversation layout.
 - Markdown transcripts, resume text, and handoff files use clean text plus attachment summaries instead of repeating raw tags or file blocks.
@@ -65,6 +73,8 @@ The chat viewer keeps attachments and file references out of the message body an
 Search is local, cancellable, and backed by an incremental search index. It can search conversation text, configured tool metadata, titles, tags, notes, and attachment metadata.
 
 Supported query forms include normal substring search, `exact:...`, `re:...`, `/regex/`, and boolean `AND` / `OR` / `NOT`.
+
+Search follows the History date, project, source, and archive-visibility filters. It does not follow Pinned filters.
 
 The search index can be tuned with `codexHistoryViewer.search.indexToolContent`:
 
@@ -76,7 +86,7 @@ Attachment indexing includes labels, paths, MIME types, file kinds, and bounded 
 
 ## Codex Archived Sessions
 
-Codex History Viewer can optionally read Codex `archived_sessions` in addition to normal Codex `sessions`. Archived sessions can be shown as active only, archived only, or all. Active Codex sessions expose **Move to Archive**, while archived Codex sessions expose **Move to Codex History**.
+Codex History Viewer can optionally read Codex `archived_sessions` in addition to normal Codex `sessions`. Archived sessions can be shown as active only, archived only, or all. History/Search and Pinned keep separate archive-visibility state. Active Codex sessions expose **Move to Archive**, while archived Codex sessions expose **Move to Codex History**.
 
 Archive and restore operations prefer the official Codex provider. Moving archived sessions back to normal Codex history can fall back to a filesystem move when the official provider is unavailable. Pins, annotations, bookmarks, and saved chat positions are relocated when the session path changes.
 
@@ -136,13 +146,14 @@ For the full command list with per-command descriptions, see:
 - If the official Codex extension stops reopening a conversation, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.3.0
+## What's New in 2.4.0
 
-- Unified chat attachments so images, Claude documents, Claude IDE references, and Codex mentioned files render as attachment/reference cards instead of being mixed into message text.
-- Added Claude document cards for PDF, text, and generic documents, with compact previews and on-demand Save As handling.
-- Added Codex mentioned-file parsing for Word, Excel, PowerPoint, PDF, archive, text, and other file references without automatically reading referenced file contents.
-- Added compact attachment cards with file-kind badges, tooltips for path/MIME/size metadata, and action icons for preview, save, or open.
-- Added attachment-aware search metadata, Markdown transcript summaries, Resume/Handoff summaries, and date-guide attachment indicators.
+- Added History project modes for no project filter, current project, and grouped-by-project views.
+- Added independent Pinned project, source, archive, date, tag, and sort controls.
+- Added Pinned sorting by pinned date or original session date.
+- Changed project matching to be case-insensitive across platforms.
+- Changed Search toolbar ordering so **Clear Results** appears before **Rerun Search**.
+- Fixed Codex mentioned-file blocks after IDE context so HTML, log, JSON, and other references render as file-reference attachments.
 
 ## Changelog
 
