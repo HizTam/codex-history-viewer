@@ -27,6 +27,9 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4.25 2A1.25 1.25 0 0 1 5.5.75h5A1.25 1.25 0 0 1 11.75 2v11.8a.75.75 0 0 1-1.14.64L8 12.86l-2.61 1.58a.75.75 0 0 1-1.14-.64V2Zm1.5.25v10.22l1.86-1.13a.75.75 0 0 1 .78 0l1.86 1.13V2.25h-4.5Z"/></svg>';
 
   const MIN_PAGE_SEARCH_WIDTH = 280;
+  const PAGE_SEARCH_HORIZONTAL_MARGIN = 16;
+  const PAGE_SEARCH_REFRESH_DEBOUNCE_MS = 180;
+  const RESTORE_POSITION_SAVE_DEBOUNCE_MS = 500;
   const RESTORE_COVER_HIDE_DELAY_MS = 140;
   const RESTORE_COVER_MIN_VISIBLE_MS = 220;
   const RESTORE_COVER_MAX_WAIT_MS = 900;
@@ -48,7 +51,9 @@
   let pageSearchMatches = [];
   let pageSearchResults = [];
   let activePageSearchResultIndex = -1;
+  let pageSearchRefreshTimer = 0;
   let pageSearchResizeState = null;
+  let restorePositionSaveTimer = 0;
   let restoreCoverActive = false;
   let restoreCoverFrame = 0;
   let restoreCoverTimer = 0;
@@ -124,8 +129,9 @@
         });
       }
       render();
-      if (reloadScrollAnchor) restoreReloadScrollAnchor(reloadScrollAnchor, scrollTop);
-      else restoreScroll(scrollTop);
+      if (reloadScrollAnchor) restoreReloadScrollAnchor(reloadScrollAnchor, scrollTop, persistRestoreState);
+      else if (msg.scrollAnchor) restoreReloadScrollAnchor(msg.scrollAnchor, scrollTop, persistRestoreState);
+      else restoreScroll(scrollTop, persistRestoreState);
       return;
     }
     if (msg.type === "bookmarkState") {
@@ -221,19 +227,22 @@
   });
 
   window.addEventListener("resize", () => {
-    pageSearchPanelWidth = normalizePageSearchPanelWidth(pageSearchPanelWidth);
     applyPageSearchPanelWidth();
     updateToolbarHeight(document.getElementById("toolbar"));
     updateDateGuide();
   });
   window.addEventListener("pagehide", () => {
     showRestoreCover();
+    persistRestorePosition({ immediate: true });
   });
   window.addEventListener("pageshow", () => {
     scheduleRestoreCoverRelease();
   });
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") showRestoreCover();
+    if (document.visibilityState === "hidden") {
+      showRestoreCover();
+      persistRestorePosition({ immediate: true });
+    }
     else if (document.visibilityState === "visible") scheduleRestoreCoverRelease();
   });
 
@@ -407,7 +416,7 @@
     input.value = pageSearchQuery;
     input.addEventListener("input", () => {
       pageSearchQuery = input.value || "";
-      refreshPageSearchResults({ reveal: true });
+      schedulePageSearchRefresh({ reveal: true });
     });
     input.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
@@ -711,6 +720,7 @@
   }
 
   function resetPageSearchState() {
+    cancelPageSearchRefresh();
     cancelPageSearchResize();
     pageSearchOpen = false;
     pageSearchQuery = "";
@@ -745,10 +755,39 @@
     const bar = document.getElementById("pageSearchBar");
     if (bar instanceof HTMLElement) bar.hidden = true;
     document.body.classList.remove("pageSearchOpen");
+    cancelPageSearchRefresh();
     cancelPageSearchResize();
     clearPageSearchHighlights();
     renderPageSearchResults();
     updatePageSearchStatus();
+  }
+
+  function schedulePageSearchRefresh(options) {
+    const query = pageSearchQuery.trim();
+    if (!query) {
+      cancelPageSearchRefresh();
+      refreshPageSearchResults({ ...options, reveal: false });
+      return;
+    }
+    if (pageSearchRefreshTimer) window.clearTimeout(pageSearchRefreshTimer);
+    pageSearchRefreshTimer = window.setTimeout(() => {
+      pageSearchRefreshTimer = 0;
+      refreshPageSearchResults(options);
+    }, PAGE_SEARCH_REFRESH_DEBOUNCE_MS);
+  }
+
+  function flushPageSearchRefresh(options) {
+    if (!pageSearchRefreshTimer) return false;
+    window.clearTimeout(pageSearchRefreshTimer);
+    pageSearchRefreshTimer = 0;
+    refreshPageSearchResults(options);
+    return true;
+  }
+
+  function cancelPageSearchRefresh() {
+    if (!pageSearchRefreshTimer) return;
+    window.clearTimeout(pageSearchRefreshTimer);
+    pageSearchRefreshTimer = 0;
   }
 
   function refreshPageSearchResults(options) {
@@ -944,7 +983,9 @@
 
   function navigatePageSearchResults(delta) {
     if (!pageSearchOpen) openPageSearch();
-    refreshPageSearchResults({ preserveIndex: true, reveal: false });
+    if (!flushPageSearchRefresh({ preserveIndex: true, reveal: false })) {
+      refreshPageSearchResults({ preserveIndex: true, reveal: false });
+    }
     if (pageSearchResults.length === 0) return;
     const current = activePageSearchResultIndex >= 0 ? activePageSearchResultIndex : delta > 0 ? -1 : 0;
     let next = current + delta;
@@ -1045,7 +1086,7 @@
     };
   }
 
-  function restoreReloadScrollAnchor(anchor, fallbackScrollTop) {
+  function restoreReloadScrollAnchor(anchor, fallbackScrollTop, onRestored) {
     requestAnimationFrame(() => {
       const method = restoreCardAnchor(anchor);
       if (!method) {
@@ -1054,6 +1095,7 @@
       }
       debugWebview("reloadAnchor", "restored", { method: method || "scrollTop" });
       updateDateGuideCurrent();
+      if (typeof onRestored === "function") onRestored();
     });
   }
 
@@ -1149,8 +1191,41 @@
     if (typeof vscode.setState === "function") vscode.setState(webviewState);
   }
 
+  function persistRestoreState() {
+    if (typeof vscode.setState !== "function") return;
+    if (!model || !model.target || typeof model.target !== "object") return;
+    const cards = Array.isArray(model.cards) ? model.cards : [];
+    webviewState = {
+      ...webviewState,
+      restore: {
+        version: 1,
+        target: model.target,
+        cardCount: cards.length,
+        scrollAnchor: captureVisibleCardAnchor(),
+      },
+    };
+    vscode.setState(webviewState);
+  }
+
   function handleScrollRootScroll() {
+    schedulePersistRestorePosition();
     if (timeGuideEnabled && dateGuide) dateGuide.handleScroll();
+  }
+
+  function schedulePersistRestorePosition() {
+    if (restorePositionSaveTimer) window.clearTimeout(restorePositionSaveTimer);
+    restorePositionSaveTimer = window.setTimeout(() => {
+      restorePositionSaveTimer = 0;
+      persistRestoreState();
+    }, RESTORE_POSITION_SAVE_DEBOUNCE_MS);
+  }
+
+  function persistRestorePosition(options) {
+    if (restorePositionSaveTimer && options && options.immediate) {
+      window.clearTimeout(restorePositionSaveTimer);
+      restorePositionSaveTimer = 0;
+    }
+    persistRestoreState();
   }
 
   function updateDateGuide() {
@@ -1500,7 +1575,6 @@
     handle.addEventListener("pointerdown", (event) => {
       const bar = document.getElementById("pageSearchBar");
       if (!(bar instanceof HTMLElement)) return;
-      if (window.innerWidth <= 860) return;
       event.preventDefault();
       event.stopPropagation();
       pageSearchResizeState = {
@@ -1514,9 +1588,11 @@
     handle.addEventListener("pointermove", (event) => {
       if (!pageSearchResizeState || pageSearchResizeState.pointerId !== event.pointerId) return;
       event.preventDefault();
-      pageSearchPanelWidth = normalizePageSearchPanelWidth(
+      const nextWidth = normalizePageSearchPanelWidth(
         pageSearchResizeState.startWidth + (pageSearchResizeState.startX - event.clientX),
       );
+      if (nextWidth == null) return;
+      pageSearchPanelWidth = nextWidth;
       applyPageSearchPanelWidth();
     });
     const finishResize = (event) => {
@@ -1552,17 +1628,21 @@
 
   function normalizePageSearchPanelWidth(value) {
     const numeric = Number(value);
-    if (!Number.isFinite(numeric) || window.innerWidth <= 860) return null;
-    const max = Math.max(MIN_PAGE_SEARCH_WIDTH, window.innerWidth - 20);
-    return Math.min(max, Math.max(MIN_PAGE_SEARCH_WIDTH, Math.round(numeric)));
+    if (!Number.isFinite(numeric) || numeric <= 0) return null;
+    const availableWidth = Math.max(1, window.innerWidth - PAGE_SEARCH_HORIZONTAL_MARGIN);
+    const minimumWidth = Math.min(MIN_PAGE_SEARCH_WIDTH, availableWidth);
+    return Math.max(minimumWidth, Math.min(Math.round(numeric), availableWidth));
   }
 
   function applyPageSearchPanelWidth() {
     const bar = document.getElementById("pageSearchBar");
     if (!(bar instanceof HTMLElement)) return;
-    const width = normalizePageSearchPanelWidth(pageSearchPanelWidth);
-    if (width == null) bar.style.removeProperty("--chv-page-search-width");
-    else bar.style.setProperty("--chv-page-search-width", `${width}px`);
+    const preferredWidth = Number(pageSearchPanelWidth);
+    if (!Number.isFinite(preferredWidth) || preferredWidth <= 0) {
+      bar.style.removeProperty("--chv-page-search-width");
+      return;
+    }
+    bar.style.setProperty("--chv-page-search-width", `${Math.max(MIN_PAGE_SEARCH_WIDTH, Math.round(preferredWidth))}px`);
   }
 
   function persistPageSearchPanelWidth() {
@@ -1586,10 +1666,11 @@
     return rows > 800 || Number(card.added || 0) + Number(card.removed || 0) > 1000;
   }
 
-  function restoreScroll(scrollTop) {
+  function restoreScroll(scrollTop, onRestored) {
     requestAnimationFrame(() => {
       getScrollRoot().scrollTo(0, Math.max(0, Number(scrollTop || 0)));
       updateDateGuideCurrent();
+      if (typeof onRestored === "function") onRestored();
     });
   }
 
@@ -1771,5 +1852,11 @@
     return node;
   }
 
-  vscode.postMessage({ type: "ready" });
+  vscode.postMessage({
+    type: "ready",
+    cardCount:
+      webviewState && webviewState.restore && Number.isFinite(Number(webviewState.restore.cardCount))
+        ? Number(webviewState.restore.cardCount)
+        : undefined,
+  });
 })();

@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-05-23
-- 対象バージョン: 2.4.0
+- 最終更新: 2026-05-26
+- 対象バージョン: 2.4.1
 
 ## 1. 概要
 
@@ -44,6 +44,7 @@
 - **Pinned**: ピン留め済みセッション一覧
   - 絞り込み: 日付スコープ / プロジェクト (`cwd`) / ソース / アーカイブ表示 / タグ
   - プロジェクト表示: `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位`
+  - プロジェクト (`cwd`) に別名が設定されている場合は、プロジェクト見出し、セッション行の CWD 表示、tooltip、絞り込み表示で別名を優先する
   - 表示順: `ピン留め日順` / `セッション日付順`
   - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、再読み込み、表示順切替、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、エクスポート、Undo
   - `History` / `Search` の絞り込み、ソース、アーカイブ表示とは独立して状態を保持する
@@ -56,6 +57,7 @@
   - 表示モード: `日付別` / `最新順`
   - 絞り込み: 日付スコープ / プロジェクト (`cwd`) / ソース / アーカイブ表示 / タグ
   - プロジェクト表示: `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位`
+  - プロジェクト (`cwd`) に別名が設定されている場合は、プロジェクト見出し、セッション行の CWD 表示、tooltip、絞り込み表示で別名を優先する
   - `プロジェクト単位` では、`最新順` は `Project -> Session`、`日付別` は `Project -> Year -> Month -> Day -> Session` として表示する
   - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、再読み込み、表示モード切替、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、エクスポート、Undo など
   - `絞り込み解除` は日付 / プロジェクト CWD / ソース / アーカイブ表示 / タグを解除し、プロジェクト単位表示は表示状態として維持する
@@ -69,6 +71,7 @@
   - ヘッダー操作: `Search...`、`Clear Results`、`Rerun Search`、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、保存済み検索、エクスポート、Undo
   - 既定ロール設定は Control view / Command Palette / settings から管理する
   - 検索対象は History 側の「日付 / プロジェクト / ソース / アーカイブ表示」絞り込みに追従し、Pinned 側の独立した絞り込みには追従しない
+  - 検索結果のセッション行と tooltip ではプロジェクト別名を表示に反映するが、検索 hit 対象には含めない
   - Search 独自のタグ絞り込みも別途持つ
   - アーカイブ非表示時は archived hit を候補から除外し、`search.maxResults` は表示される hit 数として扱う
   - アーカイブ表示を切り替えた時点で検索結果がある場合は、最後の検索条件で再検索する
@@ -80,6 +83,7 @@
   - Handoff 件数 / 容量
   - ゴミ箱件数（`undo-delete` + `deleted` の合算）
   - 現在の検索ロール / 検索タグ / 履歴絞り込み / 現在プロジェクト / 最終更新時刻
+  - `Current project` はプロジェクト別名が設定されている場合、実パスではなく別名を表示名に使う
   - 有効ソースごとのセッションルート
   - Codex archived sessions root は、Codex source と archived sessions が有効な場合だけ表示する
   - 拡張機能バージョン
@@ -89,6 +93,7 @@
 
 - `Open in New Tab (Chat)`: Webview で会話をセッションタブとして表示
 - `Custom Title...`: QuickPick からカスタムタイトルの設定 / 消去を選択する
+- `Project Alias...`: History / Pinned のプロジェクトノード右クリックから、プロジェクト別名の設定 / 消去を選択する
 - `Open Session (Markdown)`: 仮想ドキュメントとして Markdown 化して表示
 - `Copy Quick Prompt`: チャット表示内で、タスクと直近メッセージだけの軽量な再開用プロンプトをクリップボードへコピー
 - `Resume in OpenAI Codex`: OpenAI Codex 拡張へ引き継ぐ
@@ -177,6 +182,7 @@
   - 削除
 - `Rerun Search` は最後に使った検索条件を再実行する
 - カスタムタイトルは検索対象に含め、検索結果の表示タイトルにも反映する
+- プロジェクト別名は大量 hit を避けるため検索対象に含めない。検索 scope label と検索結果の表示には反映する
 
 ### 3.4 キャッシュ / インデックス / 保守
 
@@ -202,6 +208,12 @@
   - 用途: 本家履歴ファイルを変更せず、この拡張機能内だけで表示タイトルを上書きする
   - 保存キーは可能な限り `source:id:<sessionId>` を使い、ID がない場合のみ `source:path:<fsPath>` にフォールバックする
   - 最大 120 文字を超える入力はエラーにする
+- プロジェクト別名:
+  - 保存先: VS Code `globalState`
+  - 用途: 本家履歴ファイルを変更せず、この拡張機能内だけでプロジェクト (`cwd`) の表示名を上書きする
+  - 保存キーは `normalizeProjectKey(cwd)` の結果を使い、Codex / Claude Code で同じ CWD は同じ別名を共有する
+  - CWD が空、または `CWD なし` の疑似プロジェクトには別名を保存しない
+  - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
   - 内部 file version: 8
@@ -527,6 +539,11 @@
   - カスタムタイトルを VS Code `globalState` に保存する
   - 本家の Codex / Claude 履歴ファイルは変更しない
   - セッション ID が取れる場合は `source:id:<sessionId>`、取れない場合は `source:path:<fsPath>` をキーにする
+- `src/services/projectAliasStore.ts`
+  - プロジェクト別名を VS Code `globalState` に保存する
+  - 本家の Codex / Claude 履歴ファイルは変更しない
+  - `normalizeProjectKey(cwd)` をキーにし、source に依存せず同じ CWD の別名を共有する
+  - CWD 空、`CWD なし` 疑似プロジェクト、最大長超過、payload 不整合を保存 / 復元時に拒否し、入力中の制御文字はサニタイズする
 - `src/services/codexTitleStore.ts`
   - Codex の `session_index.jsonl` と `codex-title-cache.v1.json` を使ってネイティブタイトルを解決する
   - 既知セッションだけを保持しつつ、古い Codex タイトルを軽量キャッシュとして残す
@@ -549,11 +566,18 @@
 - `src/extension.ts`
   - 自動更新 consumer は `History` view が表示中、または `ChatPanelManager` に自動更新オンの開いているチャットタブがある場合に存在するとみなす
   - `historyView.onDidChangeVisibility`、チャット consumer 変更イベント、`onDidChangeWindowState` で `AutoRefreshService` の実行条件を更新する
+  - `codexHistoryViewer.manageProjectAlias` / `setProjectAlias` / `clearProjectAlias` を登録し、Project node 文脈がない direct / UI command では active project を推定せず no-op にする
+  - プロジェクト別名の変更後は view description と tree view を更新し、`refreshHistoryIndex(false)` と `chatPanels.refreshTitles()` は呼ばない
 - `src/chat/chatPanelManager.ts`
   - チャットタブごとに `autoRefreshMode` と `pendingAutoRefresh` を保持する
+  - `codexHistoryViewer.webview.restoreAfterReload = true` のときだけ `codexHistoryViewer.chat` の `WebviewPanelSerializer` を登録し、Reload Window / VS Code 再起動後も session path、panel kind、detail mode、自動更新 mode を復元する
+  - Webview serializer 復元時は、最後に見ていた scroll 位置も `scrollY` / `topMessageIndex` として保存し、復元後に同じ message 付近へ戻す
+  - Webview 復元設定は実験的な opt-in 設定として既定無効にし、VS Code の復元遅延により同じ履歴を再度開いたときにタブが重複する場合があることを設定説明で明示する
+  - serializer 復元時も通常生成と同じ `webview.options`、HTML、`onDidReceiveMessage`、`onDidChangeViewState`、`onDidDispose` を再アタッチする
   - 開いているチャットタブは裏タブでも自動更新対象にする
   - `refreshAutoRefreshPanels(changedFsPaths)` は変更されたセッションファイルに対応するチャットタブだけ再読み込みする
   - Webview がまだ ready でない場合のみ `pendingAutoRefresh` として保持し、ready 後に 1 回反映する
+  - Webview 内検索は入力ごとの即時 DOM 全走査を避けるため短い debounce を入れ、Enter / 前へ / 次へ / query クリアは即時反映する
   - 新規チャットタブ、または別セッションへ差し替えた再利用チャットタブは `off` から開始する
   - 同じセッションの既存タブは自動更新モードを維持する
 
@@ -591,6 +615,9 @@
   - Windows では大小文字差と区切り文字差を吸収する
 - `src/fileHistory/fileChangeHistoryPanelManager.ts`
   - ファイル履歴 Webview の作成、再利用、reload、load more、通常履歴 Webview への reveal を担当する
+  - `codexHistoryViewer.webview.restoreAfterReload = true` のときだけ `codexHistoryViewer.fileChangeHistory` の `WebviewPanelSerializer` を登録し、Reload Window / VS Code 再起動後も対象ファイルと読み込み済みカード件数を元に再読み込みする
+  - Webview serializer 復元時は、最後に見ていた card anchor を `scrollAnchor` として保存し、復元後に同じ card 付近へ戻す
+  - serializer 復元時は対象ファイルが存在し、保存された workspace root が現在の workspace に含まれる場合だけ復元する
   - panel key は workspace folder + file path で構築し、同じファイルは既存 Webview を再利用する
   - 同じファイルで再実行した場合は検索状態、scroll、cursor を初期化する
   - hidden から戻っただけでは Webview state を保持する
@@ -605,7 +632,9 @@
   - diff card は通常履歴 Webview の diff card と同じ before / after column、行番号、追加 / 削除表示を使う
   - loading 表示の fallback はタイトル文言を流用せず、`l10n/bundle.l10n.*` の loading 文言を使う
   - 検索は読み込み済み card だけを対象にし、追加読み込み後は自動で再検索する
+  - Webview 内検索の Enter / 前へ / 次へでは pending debounce を flush し、flush 済みの場合は同じ検索 refresh を二重実行しない
   - 追加読み込み成功後も scroll 位置を維持する
+  - `model` message 受信時は `render()` / scroll 復元前に restore state を保存せず、`restoreReloadScrollAnchor()` / `restoreScroll()` の適用後に `scrollAnchor` を保存する
   - 初回 / 再読み込み後に `hasMore` が残る場合は `続きを読み込む` の存在を toast で案内し、load more 後も続きがある場合は追加件数と同じ toast にまとめる
   - 前 / 次 card ナビゲーションは、source toggle 適用後の表示中 card 配列を基準にする
 - `media/sharedTimeGuide.js` / `media/sharedTimeGuide.css`
@@ -633,6 +662,7 @@
   - 削除済みファイルに対応してインデックスから不要エントリを落とす
   - 候補絞り込みは「日付 / プロジェクト / ソース / Search タグ」の順で適用する
   - `includeArchivedSessions` に従って archived session を除外し、除外後に `search.maxResults` を適用する
+  - プロジェクト別名は検索 hit 対象には含めず、検索実行時に SearchRootNode の scope label へだけ反映する
   - 進捗表示とキャンセルに対応する
 
 ### 4.7 削除とゴミ箱
@@ -769,6 +799,11 @@
   - 未対応 / 欠損 / remote-only / サイズ超過 / 設定無効の画像は表示不能理由としてモデル化する
   - `media/chatView.js` は `attachments` の順序を維持し、連続する画像だけを image group として描画する
   - `media/chatView.js` は Code / Image reference の file kind badge を dedicated l10n label で表示し、generic file label へフォールバックさせない
+  - `media/chatView.js` は assistant message 内の `::code-comment{...}` directive を Markdown 本文から分離し、レビューコメントカードとして表示する
+  - code comment directive parser は `file` / `title` / `body` / `start` / `end` / `priority` の既知キーを string 外で検出し、属性順序、optional comma、raw 改行、未知 segment の揺れを許容する
+  - `start` / `end` は先頭の正整数部分を採用し、負数など正整数で始まらない値は不正として扱う
+  - `::code-comment{...}` の範囲を特定できる parse 失敗は未解析カードへ fallback し、範囲を特定できない場合だけ raw text fallback にする
+  - code comment card の本文は HTML / Markdown として解釈せず `textContent` で表示し、directive 由来文字列を `innerHTML` に渡さない
   - document / file reference / selection card は path / MIME type / byte size を本文上に常時表示せず、tooltip へ寄せる
   - text document preview は action icon から開閉し、開いた preview は同じ card 内の下段に full-width panel として表示する
   - 詳細非表示時の `canRenderMessage()` は `attachments` を見て、本文が空で添付だけの user message も描画対象にする
@@ -800,8 +835,11 @@
 - Control / Status ビュー: `src/tree/utilityTrees.ts`
   - Status は Codex source と archived sessions が有効な場合だけ Codex archived 件数と Codex archived sessions root を表示する
   - Codex archived sessions root は、Codex source が無効な場合や archived sessions が無効な場合は表示しない
+  - Current project 表示は、プロジェクト別名がある場合に alias label を使う
 - History / Pinned / Search ツリー: `src/tree/*`
   - History は `date` / `latest` の表示モードを持ち、`latest` ではセッションをフラットに降順表示する
+  - プロジェクト別名がある場合は、Project node、session description、tooltip、Search の session 行表示に alias を反映する
+  - Project node の contextValue は CWD 有無で `codexHistoryViewer.project.withCwd` / `codexHistoryViewer.project.noCwd` に分け、CWD なしには alias menu を出さない
   - archived Codex session は description / tooltip / icon 色で通常履歴と区別する
   - `archiveLocationFilter="activeOnly"` のときは archived Codex session を History / Pinned / Search から除外する
 
@@ -825,8 +863,9 @@
 
 - `src/settings.ts`
   - 拡張設定の読み取りヘルパーをまとめる
-  - `codex.archivedSessions.enabled`、`codex.archivedSessionsRoot`、`preview.*`、`search.*`、`history.titleSource`、`autoRefresh.*`、`chat.openPosition`、`chat.toolDisplayMode`、`images.*` などの設定もここで管理する
+  - `codex.archivedSessions.enabled`、`codex.archivedSessionsRoot`、`preview.*`、`search.*`、`history.titleSource`、`autoRefresh.*`、`chat.openPosition`、`chat.toolDisplayMode`、`images.*`、`webview.restoreAfterReload` などの設定もここで管理する
   - 数値設定は下限 / 上限を丸め、想定外の enum 値は既定値へ戻す
+  - `webview.restoreAfterReload` は実験的な opt-in 設定として既定 `false` とし、変更は次回の Reload Window / VS Code 再起動後に反映する
   - `preview.maxMessages` は `1..50`、`search.maxResults` は `1..10000` に丸め、`package.json` の `minimum` / `maximum` と一致させる
   - `codex.archivedSessionsRoot` が空の場合は `sessionsRoot` の兄弟 `archived_sessions` を使う
   - `sources.enabled` は最上位の親設定であり、`codex` が含まれない場合は `codex.archivedSessions.enabled` が true でも archived sessions を無効扱いにする
@@ -842,6 +881,7 @@
 - `l10n/bundle.l10n.json` / `l10n/bundle.l10n.ja.json`
   - `src/i18n.ts` の `t(...)` から参照する実行時 UI 文言を担当する
   - 通知、QuickPick、InputBox、Webview に渡すラベル/tooltip などを置く
+  - code comment card の通常 / 未解析時の表示ラベル (`Code Comment` / `File` / `Lines` / `Code comment (unparsed)` / `(empty directive)`) もここで管理する
 - `package.json` の `codexHistoryViewer.ui.ja.*` / `codexHistoryViewer.ui.en.*`
   - `codexHistoryViewer.ui.language` に合わせてメニュー文言を切り替えるための alias command
   - VS Code の表示言語ではなく拡張独自設定に従う必要があるため、例外的に言語別タイトルを直接持つ
@@ -942,7 +982,20 @@ npm run package
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 
-### 5.4 v2.4.0 リリースメモ（2026-05-23）
+### 5.4 v2.4.1 リリースメモ（2026-05-26）
+
+- プロジェクト (`cwd`) に、この拡張機能内だけの別名を設定 / 消去できるようにした
+- プロジェクト別名は History / Pinned のプロジェクト見出し、セッション行、tooltip、絞り込み表示、Status、Search の scope / セッション表示に反映する
+- プロジェクト別名は検索 hit 対象には含めず、検索結果 root の scope label は次回検索または `Rerun Search` 時に更新する
+- Project node の contextValue を CWD 有無で分け、CWD なしプロジェクトには別名メニューを出さないようにした
+- 実験的な opt-in 設定 `webview.restoreAfterReload = true` で、通常履歴 Webview とファイル履歴 Webview を Reload Window / VS Code 再起動後に復元できるようにした
+- Webview 内検索の入力を debounce し、通常履歴 Webview / ファイル履歴 Webview の検索中の入力負荷を抑えた
+- 通常履歴 Webview / ファイル履歴 Webview の検索パネルがウィンドウ幅 860px 以下で強制的に画面全幅になり、リサイズハンドルが消える挙動を修正した
+- Webview 復元時に、通常履歴 Webview は最後に見ていた message 付近、ファイル履歴 Webview は最後に見ていた card 付近へ戻るようにした
+- Chat Webview で `::code-comment{...}` directive をレビューコメントカードとして表示し、comma 区切りや複数行、未知 segment を含む出力も既知キーから復元できるようにした
+- `package.json` のバージョンを `2.4.1` に更新した
+
+### 5.5 v2.4.0 リリースメモ（2026-05-23）
 
 - History に `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位` のプロジェクト表示 mode を追加した
 - プロジェクト判定用 key を全 OS で大文字小文字非区別に統一した
@@ -960,7 +1013,7 @@ npm run package
 - Codex の `# Files mentioned by the user:` block が IDE context 後ろにある場合も、HTML / log / JSON などの file reference attachment として表示されるように修正した
 - `package.json` / `package-lock.json` のバージョンを `2.4.0` に更新した
 
-### 5.5 v2.3.0 リリースメモ（2026-05-22）
+### 5.6 v2.3.0 リリースメモ（2026-05-22）
 
 - Chat message の添付モデルを `attachments` に統合し、画像も `type: "image"` の attachment として扱うようにした
 - Claude Code の `type: "document"` を document card として表示できるようにした
@@ -994,7 +1047,7 @@ npm run package
 - Resume / Handoff では clean text と attachment summary を使い、raw tag / `Files mentioned` block の重複やバイナリ再添付を避けるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.3.0` に更新した
 
-### 5.6 v2.2.0 リリースメモ（2026-05-21）
+### 5.7 v2.2.0 リリースメモ（2026-05-21）
 
 - Codex の通常 `sessions` に加えて、任意で `archived_sessions` を読み込めるようにした
 - `codexHistoryViewer.codex.archivedSessions.enabled` と `codexHistoryViewer.codex.archivedSessionsRoot` を追加した
@@ -1028,7 +1081,7 @@ npm run package
 - 検索インデックスの context に archived root / archived 有効状態を含めるようにした
 - `package.json` のバージョンを `2.2.0` に更新した
 
-### 5.7 v2.1.0 リリースメモ（2026-05-19）
+### 5.8 v2.1.0 リリースメモ（2026-05-19）
 
 - Codex / Claude Code 間の Handoff を新規実装した
 - History / Pinned / Search のセッション右クリックに、`他のAIへ引継ぎ` 階層メニューを追加した
@@ -1048,7 +1101,7 @@ npm run package
 - チャット表示内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
 - `package.json` / `package-lock.json` のバージョンを `2.1.0` に更新した
 
-### 5.8 v2.0.1 リリースメモ（2026-05-15）
+### 5.9 v2.0.1 リリースメモ（2026-05-15）
 
 - 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
 - しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
@@ -1072,7 +1125,7 @@ npm run package
 - ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
 - `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
 
-### 5.9 v2.0.0 リリースメモ（2026-05-14）
+### 5.10 v2.0.0 リリースメモ（2026-05-14）
 
 - ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる AI Change History を追加した
 - カスタムタイトル操作を QuickPick 入口へ統一し、チャット履歴ビューアのヘッダーからも設定 / 消去できるようにした
@@ -1090,7 +1143,7 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.10 v1.5.1 リリースメモ（2026-05-08）
+### 5.11 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
@@ -1101,7 +1154,7 @@ npm run package
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.11 v1.5.0 リリースメモ（2026-05-07）
+### 5.12 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -1110,7 +1163,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.12 v1.4.3 リリースメモ（2026-04-30）
+### 5.13 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -1160,6 +1213,10 @@ npm run package
 - カスタムタイトル未設定のセッションでは QuickPick に消去アクションが出ない
 - チャット履歴ビューアのピン留めボタン右にある pencil アイコンから、同じ QuickPick でカスタムタイトルを設定 / 消去できる
 - チャット履歴ビューアからカスタムタイトルを設定 / 消去した後、タブタイトルと History / Pinned / Search の表示が更新される
+- History / Pinned のプロジェクトノード右クリックで `Project Alias...` が表示され、QuickPick から設定 / 消去を選べる
+- CWD なしプロジェクトには `Project Alias...` が表示されない
+- プロジェクト別名は History / Pinned / Search / Status の表示に反映されるが、検索 hit 対象にはならない
+- プロジェクト別名の設定 / 消去を `Undo Last Action` で戻せる
 - `fileChangeHistory.explorerContextMenu.enabled = true` のとき、Explorer のファイル右クリックに `Show File AI Change History` が表示される
 - ワークスペース外ファイル、ディレクトリ、存在しないファイルではファイル履歴 Webview が安全に開かれない、または分かりやすいエラーになる
 - Codex のみ有効 / Claude のみ有効 / 両方有効で、ファイル履歴の候補抽出、件数表示、source toggle が期待どおり動く
@@ -1246,6 +1303,11 @@ npm run package
 - History / Pinned の右クリックから QuickPick 経由でカスタムタイトルを設定 / 消去でき、History / Pinned / チャット Webview タイトルへ反映される
 - カスタムタイトルがあるセッションの詳細ツールチップにオリジナルタイトルが表示される
 - 121 文字以上のカスタムタイトル入力ではエラーになり、保存されない
+- History / Pinned のプロジェクトノード右クリックからプロジェクト別名を設定 / 消去でき、Project 見出し、session description、tooltip、filter 表示、Status、Search scope / session 表示へ反映される
+- プロジェクト別名は検索 hit 対象には含まれず、既存検索結果 root の scope label は alias 変更だけでは書き換わらない
+- CWD なしプロジェクトノードにはプロジェクト別名メニューが表示されず、direct / UI command でも active project 推定を行わない
+- 121 文字以上のプロジェクト別名入力ではエラーになり、保存されない
+- プロジェクト別名の設定 / 消去を `Undo Last Action` で戻せる
 - `preview.tooltipMode` を `full` / `compact` / `titleOnly` で切り替えると、ツリー項目ツールチップの表示量が変わる
 - `full` / `compact` のツールチップでは、カスタムタイトルがなくても履歴ペイン表示と同じタイトルが表示される
 - 履歴の自動更新設定が有効なとき、履歴ファイル作成 / 変更 / 削除で History が自動更新される
@@ -1355,14 +1417,37 @@ npm run package
 - 差分ハイライトが VS Code テーマに追従する
 - 検索サイドバーがツールバー右端ボタンおよび `Ctrl+F` / `Cmd+F` で開閉する
 - 検索サイドバーの幅をドラッグで変更でき、再表示後も保持される
+- Webview 内検索の文字入力では連続入力中に検索が連発せず、短い待ち時間の後に最新 query で検索される
+- Webview 内検索で query を空にすると、待ち時間なしで highlight と検索結果 status が消える
+- Webview 内検索で Enter / 前へ / 次へを押すと、待ち時間なしで現在 query の結果へ移動できる
+- ファイル履歴 Webview の Webview 内検索で debounce pending 中に Enter / 前へ / 次へを押しても、検索 refresh が二重実行されない
+- Webview 内検索の幅をドラッグで狭めた状態でウィンドウ幅を 860px 以下に縮めても、検索パネルが現在幅より広がらず、リサイズハンドルで幅を変更できる
+- 極端に狭い viewport でも検索パネルが画面外にはみ出さず、検索 input / close button を操作できる
 - 未入力・一致なし時ともにカウントが `0/0` と表示される
 - チャットヘッダーの先頭・末尾ボタンで、実際に表示されている最初 / 最後のカードへスクロールできる
 - 自動更新 `follow` で最後が diff カードのとき、直前の非 diff カードへ追従し、チャット末尾ボタンでは最後の diff カードへ移動できる
 - 自動更新 `follow` が pending のカードアンカー復元や reload 後のレイアウト更新に上書きされず、追従後の位置が最後に見ていた位置として保存される
 - `Show details` OFF のとき、描画されていない詳細カードへ先頭 / 末尾スクロールしない
+- assistant message 内の `::code-comment{...}` が raw directive ではなくレビューコメントカードとして表示される
+- 複数の `::code-comment{...}` が出現順に複数カードとして表示される
+- comma 区切り、複数行、未知 segment を含む `::code-comment{...}` でも、既知キーから `file` / `title` / `body` を復元できれば通常カードとして表示される
+- `::code-comment{...}` の string value 内の comma や `file=` 風文字列が属性 separator / key と誤認されない
+- `start=3.14` は `start=3` として扱われ、`start=-5` は未解析カードへ fallback する
+- directive の前後に通常 Markdown がある場合、表示順と Markdown 描画が維持される
+- 範囲を特定できる壊れた `::code-comment{...}` は未解析カードへ fallback し、closing brace 欠落など範囲を特定できない場合だけ raw text fallback になる
+- code comment card の本文に HTML 風文字列が含まれても、HTML として実行されずテキスト表示になる
+- code comment card の表示ラベルが日本語 / 英語 UI でローカライズされる
 - ヘッダー幅が狭くなるとラベルボタンが自動的にアイコンのみに切り替わる
-- Reload 後にスクロール位置と選択メッセージが復元される
-- Reload 後に開いているカード、diff 展開、diff 折り返し、検索サイドバー状態が維持される
+- `webview.restoreAfterReload = false` のとき、`Developer: Reload Window` 後に通常履歴 Webview とファイル履歴 Webview が自動復元されない
+- `webview.restoreAfterReload = true` のとき、`Show details` を切り替えた直後に `Developer: Reload Window` を実行しても、切り替え後の詳細表示状態で復元される
+- `webview.restoreAfterReload = true` のとき、Reload 後にスクロール位置と選択メッセージが復元される
+- `webview.restoreAfterReload = true` のとき、通常履歴 Webview は Reload Window / VS Code 再起動後に最後に見ていた message 付近へ戻る
+- `webview.restoreAfterReload = true` のとき、ファイル履歴 Webview は Reload Window / VS Code 再起動後に最後に見ていた card 付近へ戻る
+- ファイル履歴 Webview 復元直後に再度 Reload Window / VS Code 再起動しても、復元前の DOM 位置で `scrollAnchor` が上書きされず、最後に見ていた card 付近へ戻る
+- `webview.restoreAfterReload = true` のとき、Reload 後に開いているカード、diff 展開、diff 折り返し、検索サイドバー状態が維持される
+- `webview.restoreAfterReload = true` のとき、通常履歴 Webview とファイル履歴 Webview を同時に開いた状態で `Developer: Reload Window` を実行しても、両方が個別に復元される
+- `webview.restoreAfterReload = true` のとき、VS Code を完全再起動しても、通常履歴 Webview とファイル履歴 Webview が保存済み state から再読み込みされる
+- Webview 復元設定の説明から、実験的な設定であることと、復元遅延によって同じ履歴を再度開いたときにタブが重複する場合があることが分かる
 - diff カードを最大幅にした状態が、再読み込み後も同じ diff グループで維持される
 - ローカルファイルリンク（相対パス・行番号指定）が VS Code 内で正しく開く
 - `package.nls.*` と `l10n/bundle.l10n.*` のキー所有が混ざっていない

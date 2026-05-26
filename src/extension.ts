@@ -30,6 +30,12 @@ import {
   normalizeCustomTitle,
   SessionTitleOverrideStore,
 } from "./services/sessionTitleOverrideStore";
+import {
+  getMaxProjectAliasLength,
+  isProjectAliasTooLong,
+  normalizeProjectAlias,
+  ProjectAliasStore,
+} from "./services/projectAliasStore";
 import { AutoRefreshService } from "./services/autoRefreshService";
 import { ChatOpenPositionStore } from "./services/chatOpenPositionStore";
 import { SessionReferenceRelocator } from "./services/sessionReferenceRelocator";
@@ -51,7 +57,7 @@ import {
   resolveHandoffLocation,
 } from "./services/handoffService";
 import type { TreeNode } from "./tree/treeNodes";
-import { DayNode, MissingPinnedNode, MonthNode, SearchHitNode, YearNode, isSessionNode } from "./tree/treeNodes";
+import { DayNode, MissingPinnedNode, MonthNode, ProjectNode, SearchHitNode, YearNode, isSessionNode } from "./tree/treeNodes";
 import {
   ControlTreeDataProvider,
   StatusTreeDataProvider,
@@ -163,6 +169,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const bookmarkStore = new BookmarkStore(context.globalState);
   const annotationStore = new SessionAnnotationStore(context.globalState);
   const titleOverrideStore = new SessionTitleOverrideStore(context.globalState);
+  const projectAliasStore = new ProjectAliasStore(context.globalState);
   const searchPresetStore = new SearchPresetStore(context.globalState);
   const chatOpenPositionStore = new ChatOpenPositionStore(context.globalState);
   const sessionReferenceRelocator = new SessionReferenceRelocator(
@@ -196,6 +203,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     bookmarkStore,
     logger,
   );
+  if (config.webviewRestoreAfterReload) {
+    chatPanels.registerSerializer(context.subscriptions);
+    fileChangeHistoryPanels.registerSerializer(context.subscriptions);
+  }
   context.subscriptions.push(bookmarkStore, fileChangeHistoryPanels);
   let storageStats: StorageStats = {
     globalStorageBytes: 0,
@@ -274,6 +285,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyService,
     pinStore,
     annotationStore,
+    projectAliasStore,
     pinnedFilter,
     pinnedSourceFilter,
     pinnedTagFilter,
@@ -287,6 +299,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyService,
     pinStore,
     annotationStore,
+    projectAliasStore,
     historyViewMode,
     historyFilter,
     historyProjectCwd,
@@ -299,6 +312,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const searchProvider = new SearchTreeDataProvider(
     pinStore,
     annotationStore,
+    projectAliasStore,
     historySourceFilter === "claude" ? "all" : archiveLocationFilter,
     context.extensionUri,
   );
@@ -353,6 +367,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return t("archiveLocation.summary", getArchiveLocationLabel(value));
   };
 
+  const getProjectDisplayName = (projectCwd: string | null | undefined, maxPathLength = 60): string => {
+    const alias = projectAliasStore.getAliasByCwd(projectCwd);
+    if (alias) return alias;
+    return safeDisplayPath(String(projectCwd ?? ""), maxPathLength);
+  };
+
   const resolveHistoryProjectMode = (): "none" | "currentProject" | "grouped" => {
     if (historyProjectGrouped) return "grouped";
     return historyProjectCwd ? "currentProject" : "none";
@@ -368,7 +388,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const parts: string[] = [];
     const dateValue = getDateScopeValue(historyFilter);
     if (dateValue) parts.push(dateValue);
-    if (historyProjectCwd) parts.push(t("history.filter.projectLabel", safeDisplayPath(historyProjectCwd, 60)));
+    if (historyProjectCwd) parts.push(t("history.filter.projectLabel", getProjectDisplayName(historyProjectCwd, 60)));
     if (includeProjectMode && historyProjectGrouped) parts.push(t("history.project.mode.summary.grouped"));
     const sourceSummary = buildSourceFilterSummary();
     if (sourceSummary) parts.push(sourceSummary);
@@ -468,6 +488,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       currentSearchTagFilter: searchTagFilter,
       filterSummary: buildHistoryFilterSummary(),
       currentProjectCwd: resolveStatusCurrentProjectCwd(),
+      currentProjectLabel: getProjectDisplayName(resolveStatusCurrentProjectCwd(), 64),
       codexSessionsRoot: cfg.sessionsRoot,
       codexArchivedSessionsRoot: cfg.codexArchivedSessionsRoot,
       claudeSessionsRoot: cfg.claudeSessionsRoot,
@@ -751,7 +772,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const parts: string[] = [];
     const dateValue = getDateScopeValue(pinnedFilter);
     if (dateValue) parts.push(dateValue);
-    if (pinnedProjectCwd) parts.push(t("pinned.filter.projectLabel", safeDisplayPath(pinnedProjectCwd, 60)));
+    if (pinnedProjectCwd) parts.push(t("pinned.filter.projectLabel", getProjectDisplayName(pinnedProjectCwd, 60)));
     if (pinnedProjectGrouped) parts.push(t("pinned.project.mode.summary.grouped"));
     const sourceSummary = buildSourceFilterSummary(pinnedSourceFilter);
     if (sourceSummary) parts.push(sourceSummary);
@@ -2037,6 +2058,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     chatPanels.refreshTitles();
   };
 
+  const refreshAfterProjectAliasChange = (): void => {
+    updatePinnedViewDescription();
+    updateHistoryViewDescription();
+    updateSearchViewDescription();
+    refreshViews();
+  };
+
   const executeSearch = async (request?: SearchRequest): Promise<boolean> => {
     const latestConfig = getConfig();
     historyService.updateConfig(latestConfig);
@@ -2054,6 +2082,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         defaultRoleFilter: getConfiguredDefaultSearchRoles(),
         tagFilter: searchTagFilter,
         archiveLocationFilter: resolveEffectiveArchiveLocationFilter(),
+        getProjectDisplayName: (projectCwd) => getProjectDisplayName(projectCwd, 50),
       },
     );
     if (!results) return false;
@@ -2731,6 +2760,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         archiveLocation: pinnedArchiveLocationFilter,
         tags: pinnedTagFilter,
         availableTags: annotationStore.listTagStats().map((x) => x.tag),
+        getProjectDisplayName: (projectCwd) => getProjectDisplayName(projectCwd, 80),
         placeholder: t("pinned.filter.placeholder"),
         allDateLabel: t("pinned.filter.all"),
       });
@@ -3228,6 +3258,131 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return picked.action === "clear" ? clearCustomTitleForSession(session) : setCustomTitleForSession(session);
   };
 
+  const resolveProjectAliasTarget = (element?: unknown): ProjectNode | null => {
+    // Project alias commands only accept an explicit project node to avoid guessing the wrong workspace.
+    return element instanceof ProjectNode && element.cwd ? element : null;
+  };
+
+  const clearProjectAliasForProject = async (project: ProjectNode): Promise<boolean> => {
+    const cwd = project.cwd;
+    if (!cwd) {
+      void vscode.window.showInformationMessage(t("projectAlias.noProjectSelected"));
+      return false;
+    }
+
+    const previous = projectAliasStore.getByCwd(cwd);
+    const changed = await projectAliasStore.clearByCwd(cwd);
+    if (!changed) {
+      void vscode.window.showInformationMessage(t("projectAlias.noChanges"));
+      return false;
+    }
+
+    refreshAfterProjectAliasChange();
+    logger.debug(
+      formatDebugFields("projectAlias clear done", {
+        project: safeDebugBasename(cwd),
+        hadAlias: !!previous?.alias,
+      }),
+    );
+    if (previous?.alias) {
+      pushUndoAction(
+        t("undo.label.projectAliasClear"),
+        async () => {
+          await projectAliasStore.set(cwd, previous.alias);
+          refreshAfterProjectAliasChange();
+        },
+        undefined,
+        { postUndoRefresh: "none" },
+      );
+      offerUndo(t("projectAlias.cleared"));
+    } else {
+      void vscode.window.showInformationMessage(t("projectAlias.cleared"));
+    }
+    return true;
+  };
+
+  const setProjectAliasForProject = async (project: ProjectNode): Promise<boolean> => {
+    const cwd = project.cwd;
+    if (!cwd) {
+      void vscode.window.showInformationMessage(t("projectAlias.noProjectSelected"));
+      return false;
+    }
+
+    const currentAlias = normalizeProjectAlias(projectAliasStore.getAliasByCwd(cwd) ?? "");
+    const fallbackLabel = normalizeProjectAlias(project.fallbackLabel || project.label);
+    const input = await vscode.window.showInputBox({
+      title: t("projectAlias.input.title"),
+      prompt: t("projectAlias.input.prompt"),
+      value: currentAlias || fallbackLabel,
+      validateInput: (value) => {
+        const normalized = normalizeProjectAlias(value);
+        return isProjectAliasTooLong(normalized)
+          ? t("projectAlias.error.tooLong", getMaxProjectAliasLength())
+          : undefined;
+      },
+    });
+    if (input === undefined) return false;
+
+    const nextAlias = normalizeProjectAlias(input);
+    if (isProjectAliasTooLong(nextAlias)) {
+      void vscode.window.showErrorMessage(t("projectAlias.error.tooLong", getMaxProjectAliasLength()));
+      return false;
+    }
+
+    if (!nextAlias || (fallbackLabel && nextAlias === fallbackLabel)) {
+      return clearProjectAliasForProject(project);
+    }
+    if (currentAlias === nextAlias) {
+      void vscode.window.showInformationMessage(t("projectAlias.noChanges"));
+      return false;
+    }
+
+    await projectAliasStore.set(cwd, nextAlias);
+    refreshAfterProjectAliasChange();
+    logger.debug(
+      formatDebugFields("projectAlias set done", {
+        project: safeDebugBasename(cwd),
+        hadAlias: !!currentAlias,
+        length: nextAlias.length,
+      }),
+    );
+    pushUndoAction(
+      t("undo.label.projectAliasSet"),
+      async () => {
+        if (currentAlias) await projectAliasStore.set(cwd, currentAlias);
+        else await projectAliasStore.clearByCwd(cwd);
+        refreshAfterProjectAliasChange();
+      },
+      undefined,
+      { postUndoRefresh: "none" },
+    );
+    offerUndo(t("projectAlias.saved"));
+    return true;
+  };
+
+  const manageProjectAliasForProject = async (project: ProjectNode): Promise<boolean> => {
+    const items: Array<vscode.QuickPickItem & { action: "set" | "clear" }> = [
+      {
+        label: t("projectAlias.action.set"),
+        action: "set",
+      },
+    ];
+    if (projectAliasStore.getAliasByCwd(project.cwd)) {
+      items.push({
+        label: t("projectAlias.action.clear"),
+        description: t("projectAlias.action.clear.description"),
+        action: "clear",
+      });
+    }
+
+    const picked = await vscode.window.showQuickPick(items, {
+      title: t("projectAlias.manage.title"),
+      placeHolder: t("projectAlias.manage.placeholder"),
+    });
+    if (!picked) return false;
+    return picked.action === "clear" ? clearProjectAliasForProject(project) : setProjectAliasForProject(project);
+  };
+
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.setCustomTitle", async (element?: unknown) => {
       const session = resolveCustomTitleSession(element);
@@ -3258,6 +3413,39 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return false;
       }
       return manageCustomTitleForSession(session);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.setProjectAlias", async (element?: unknown) => {
+      const project = resolveProjectAliasTarget(element);
+      if (!project) {
+        void vscode.window.showInformationMessage(t("projectAlias.noProjectSelected"));
+        return false;
+      }
+      return setProjectAliasForProject(project);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.clearProjectAlias", async (element?: unknown) => {
+      const project = resolveProjectAliasTarget(element);
+      if (!project) {
+        void vscode.window.showInformationMessage(t("projectAlias.noProjectSelected"));
+        return false;
+      }
+      return clearProjectAliasForProject(project);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.manageProjectAlias", async (element?: unknown) => {
+      const project = resolveProjectAliasTarget(element);
+      if (!project) {
+        void vscode.window.showInformationMessage(t("projectAlias.noProjectSelected"));
+        return false;
+      }
+      return manageProjectAliasForProject(project);
     }),
   );
 
@@ -3550,6 +3738,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         archiveLocation: archiveLocationFilter,
         tags: historyTagFilter,
         availableTags: annotationStore.listTagStats().map((x) => x.tag),
+        getProjectDisplayName: (projectCwd) => getProjectDisplayName(projectCwd, 80),
       });
       if (!change) return;
       if (change.kind === "archiveLocation") {
@@ -4221,6 +4410,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.setCustomTitle", "codexHistoryViewer.setCustomTitle");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.clearCustomTitle", "codexHistoryViewer.clearCustomTitle");
   registerUiCommandAlias("codexHistoryViewer.ui.en.clearCustomTitle", "codexHistoryViewer.clearCustomTitle");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.manageProjectAlias", "codexHistoryViewer.manageProjectAlias");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.manageProjectAlias", "codexHistoryViewer.manageProjectAlias");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.setProjectAlias", "codexHistoryViewer.setProjectAlias");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.setProjectAlias", "codexHistoryViewer.setProjectAlias");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.clearProjectAlias", "codexHistoryViewer.clearProjectAlias");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.clearProjectAlias", "codexHistoryViewer.clearProjectAlias");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.editSessionAnnotation", "codexHistoryViewer.editSessionAnnotation");
   registerUiCommandAlias("codexHistoryViewer.ui.en.editSessionAnnotation", "codexHistoryViewer.editSessionAnnotation");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.renameTagGlobally", "codexHistoryViewer.renameTagGlobally");
@@ -4449,6 +4644,7 @@ async function promptHistoryFilter(
     archiveLocation: ArchiveLocationFilter;
     tags: string[];
     availableTags: string[];
+    getProjectDisplayName?: (projectCwd: string) => string;
     placeholder?: string;
     allDateLabel?: string;
   },
@@ -4489,7 +4685,7 @@ async function promptHistoryFilter(
     { label: t("history.filter.section.project"), kind: vscode.QuickPickItemKind.Separator },
     { label: t("history.project.clear"), pickKind: "project" as const, projectCwd: null },
     ...projectCwds.map((cwd) => ({
-      label: safeDisplayPath(cwd, 80),
+      label: current.getProjectDisplayName?.(cwd) ?? safeDisplayPath(cwd, 80),
       description: t("history.filter.project"),
       detail: cwd,
       pickKind: "project" as const,

@@ -152,6 +152,7 @@ export interface StatusSnapshot {
   currentSearchTagFilter: readonly string[];
   filterSummary: string;
   currentProjectCwd: string | null;
+  currentProjectLabel?: string | null;
   codexSessionsRoot: string;
   codexArchivedSessionsRoot: string;
   claudeSessionsRoot: string;
@@ -181,6 +182,10 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
     if (element) return [];
     const s = this.getSnapshot();
     const currentProject = typeof s.currentProjectCwd === "string" && s.currentProjectCwd.trim().length > 0 ? s.currentProjectCwd : null;
+    const currentProjectLabel =
+      typeof s.currentProjectLabel === "string" && s.currentProjectLabel.trim().length > 0
+        ? s.currentProjectLabel.trim()
+        : null;
     const currentSearchRoles = s.currentSearchRoles.map((x) => String(x).trim()).filter((x) => x.length > 0);
     const currentSearchTags = s.currentSearchTagFilter.map((x) => String(x).trim()).filter((x) => x.length > 0);
     const refreshed =
@@ -248,7 +253,7 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
       makeInfo(
         "status.currentProject",
         t("status.label.currentProject"),
-        currentProject ? safeDisplayPath(currentProject, 64) : t("status.value.none"),
+        currentProject ? currentProjectLabel ?? safeDisplayPath(currentProject, 64) : t("status.value.none"),
         new vscode.ThemeIcon("folder-library"),
         currentProject ? makeCopyPathTooltip(currentProject) : undefined,
         currentProject ?? undefined,

@@ -262,8 +262,9 @@ body.pageSearchResizing {
   bottom: 10px;
   z-index: 3;
   display: flex;
-  width: var(--chv-page-search-width);
+  width: min(var(--chv-page-search-width), calc(100vw - 16px));
   flex-direction: column;
+  contain: layout paint;
   overflow: hidden;
   border: 1px solid var(--chv-search-border);
   border-radius: 12px;
@@ -302,6 +303,10 @@ body.pageSearchResizing #pageSearchResizeHandle::after {
 
 body.pageSearchResizing #pageSearchResizeHandle::after {
   background: color-mix(in srgb, var(--chv-search-accent) 62%, transparent);
+}
+
+body.pageSearchResizing #pageSearchBar {
+  will-change: width;
 }
 
 #pageSearchInner {
@@ -1069,16 +1074,10 @@ mark.pageSearchMatch-active {
 }
 
 @media (max-width: 860px) {
-  #pageSearchResizeHandle {
-    display: none;
-  }
-
   #pageSearchBar {
     top: calc(var(--chv-toolbar-height, 44px) + 6px);
     right: 8px;
     bottom: 8px;
-    left: 8px;
-    width: auto;
   }
 }
 

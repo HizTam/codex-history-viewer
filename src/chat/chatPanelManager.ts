@@ -69,12 +69,26 @@ type ChatPanelState = {
   fsPath: string;
   revealMessageIndex?: number;
   revealTarget?: FileChangeHistoryRevealTarget;
+  restoreScrollY?: number;
+  restoreTopMessageIndex?: number;
   sessionCwd?: string;
   kind: ChatPanelKind;
   autoRefreshMode: ChatWebviewAutoRefreshMode;
+  detailMode?: ChatSessionDetailMode;
   pendingAutoRefresh: boolean;
 };
 type ExistingChatPanel = { panel: vscode.WebviewPanel; kind: ChatPanelKind };
+type ChatPanelRestoreState = {
+  version: 1;
+  kind: ChatPanelKind;
+  fsPath: string;
+  revealMessageIndex?: number;
+  revealTarget?: FileChangeHistoryRevealTarget;
+  scrollY?: number;
+  topMessageIndex?: number;
+  autoRefreshMode: ChatWebviewAutoRefreshMode;
+  detailMode?: ChatSessionDetailMode;
+};
 const DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE: ChatWebviewAutoRefreshMode = "off";
 const DEFAULT_CHAT_SESSION_DETAIL_MODE: ChatSessionDetailMode = "summary";
 
@@ -137,6 +151,16 @@ export class ChatPanelManager implements vscode.Disposable {
   public dispose(): void {
     this.bookmarkSubscription.dispose();
     this.autoRefreshConsumerVisibilityEmitter.dispose();
+  }
+
+  public registerSerializer(subscriptions: vscode.Disposable[]): void {
+    subscriptions.push(
+      vscode.window.registerWebviewPanelSerializer("codexHistoryViewer.chat", {
+        deserializeWebviewPanel: async (panel, rawState) => {
+          await this.restoreSerializedPanel(panel, rawState);
+        },
+      }),
+    );
   }
 
   public refreshI18n(): void {
@@ -300,6 +324,7 @@ export class ChatPanelManager implements vscode.Disposable {
       sessionCwd: isSameSession ? prevState?.sessionCwd : undefined,
       kind: options.kind,
       autoRefreshMode: isSameSession ? prevState.autoRefreshMode : DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE,
+      detailMode: isSameSession ? prevState.detailMode : undefined,
       pendingAutoRefresh: false,
     });
     panel.title = buildPanelTitle(session);
@@ -360,12 +385,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private getOrCreateReusablePanel(): vscode.WebviewPanel {
     if (this.reusablePanel) return this.reusablePanel;
     const panel = this.createPanel({ kind: "reusable" });
-    this.reusablePanel = panel;
-    panel.onDidDispose(() => {
-      if (this.reusablePanel === panel) {
-        this.reusablePanel = null;
-      }
-    });
+    this.registerReusablePanel(panel);
     return panel;
   }
 
@@ -373,10 +393,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const existing = this.panelsByKey.get(key);
     if (existing) return existing;
     const panel = this.createPanel({ kind: "session" });
-    this.panelsByKey.set(key, panel);
-    panel.onDidDispose(() => {
-      this.panelsByKey.delete(key);
-    });
+    this.registerSessionPanel(key, panel);
     return panel;
   }
 
@@ -413,16 +430,32 @@ export class ChatPanelManager implements vscode.Disposable {
       "codexHistoryViewer.chat",
       "Codex Session",
       { viewColumn: vscode.ViewColumn.Active, preserveFocus: params.kind === "reusable" },
-      {
-        enableScripts: true,
-        localResourceRoots: [
-          vscode.Uri.joinPath(this.extensionUri, "media"),
-          vscode.Uri.joinPath(this.extensionUri, "node_modules", "markdown-it", "dist"),
-        ],
-        retainContextWhenHidden: true,
-      },
+      this.buildWebviewPanelOptions(),
     );
 
+    this.initializePanel(panel);
+    return panel;
+  }
+
+  private buildWebviewOptions(): vscode.WebviewOptions {
+    return {
+      enableScripts: true,
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.extensionUri, "media"),
+        vscode.Uri.joinPath(this.extensionUri, "node_modules", "markdown-it", "dist"),
+      ],
+    };
+  }
+
+  private buildWebviewPanelOptions(): vscode.WebviewOptions & vscode.WebviewPanelOptions {
+    return {
+      ...this.buildWebviewOptions(),
+      retainContextWhenHidden: true,
+    };
+  }
+
+  private initializePanel(panel: vscode.WebviewPanel): void {
+    panel.webview.options = this.buildWebviewOptions();
     panel.webview.html = this.buildHtml(panel.webview);
     this.readyByPanel.set(panel, false);
 
@@ -440,8 +473,74 @@ export class ChatPanelManager implements vscode.Disposable {
     panel.onDidDispose(() => {
       this.notifyAutoRefreshConsumerVisibilityChanged();
     });
+  }
 
-    return panel;
+  private registerReusablePanel(panel: vscode.WebviewPanel): void {
+    this.reusablePanel = panel;
+    panel.onDidDispose(() => {
+      if (this.reusablePanel === panel) {
+        this.reusablePanel = null;
+      }
+    });
+  }
+
+  private registerSessionPanel(key: string, panel: vscode.WebviewPanel): void {
+    this.panelsByKey.set(key, panel);
+    panel.onDidDispose(() => {
+      if (this.panelsByKey.get(key) === panel) {
+        this.panelsByKey.delete(key);
+      }
+      this.imageDataByPanel.delete(panel);
+      this.documentDataByPanel.delete(panel);
+      this.patchEntryDetailRequestsByPanel.delete(panel);
+    });
+  }
+
+  private async restoreSerializedPanel(panel: vscode.WebviewPanel, rawState: unknown): Promise<void> {
+    const restored = sanitizeChatPanelRestoreState(rawState);
+    if (!restored) {
+      this.disposePanel(panel);
+      return;
+    }
+    if (!(await this.ensureSessionFileAvailable(restored.fsPath))) {
+      await this.handleMissingSession(panel, restored.fsPath);
+      return;
+    }
+
+    if (restored.kind === "reusable") {
+      if (this.reusablePanel && this.reusablePanel !== panel) {
+        this.disposePanel(panel);
+        return;
+      }
+      this.registerReusablePanel(panel);
+    } else {
+      const key = normalizeCacheKey(restored.fsPath);
+      const existing = this.panelsByKey.get(key);
+      if (existing && existing !== panel) {
+        this.disposePanel(panel);
+        return;
+      }
+      this.registerSessionPanel(key, panel);
+    }
+
+    this.initializePanel(panel);
+    this.stateByPanel.set(panel, {
+      fsPath: restored.fsPath,
+      revealMessageIndex: restored.revealMessageIndex,
+      revealTarget: restored.revealTarget,
+      restoreScrollY: restored.scrollY,
+      restoreTopMessageIndex: restored.topMessageIndex,
+      kind: restored.kind,
+      autoRefreshMode: restored.autoRefreshMode,
+      detailMode: restored.detailMode,
+      pendingAutoRefresh: false,
+    });
+    const session = this.historyService.findByFsPath(restored.fsPath);
+    if (session) {
+      panel.title = buildPanelTitle(session);
+      panel.iconPath = this.resolveSourceIconPath(session.source);
+    }
+    this.notifyAutoRefreshConsumerVisibilityChanged();
   }
 
   private buildHtml(webview: vscode.Webview): string {
@@ -554,7 +653,24 @@ export class ChatPanelManager implements vscode.Disposable {
     switch (type) {
       case "ready": {
         this.readyByPanel.set(panel, true);
-        await this.sendSessionData(panel);
+        const detailMode = normalizeChatSessionDetailMode(msg?.detailMode);
+        const restoreState = this.stateByPanel.get(panel);
+        const shouldRestorePosition =
+          restoreState?.restoreScrollY !== undefined || restoreState?.restoreTopMessageIndex !== undefined;
+        await this.sendSessionData(panel, {
+          detailMode,
+          restoreScrollY: restoreState?.restoreScrollY,
+          restoreSelectedMessageIndex: restoreState?.restoreTopMessageIndex,
+          preserveUiState: shouldRestorePosition,
+        });
+        const latest = this.stateByPanel.get(panel);
+        if (latest) {
+          this.stateByPanel.set(panel, {
+            ...latest,
+            restoreScrollY: undefined,
+            restoreTopMessageIndex: undefined,
+          });
+        }
         return;
       }
       case "openMarkdown": {
@@ -799,6 +915,7 @@ export class ChatPanelManager implements vscode.Disposable {
     this.stateByPanel.set(panel, {
       ...state,
       sessionCwd: typeof model.meta?.cwd === "string" ? model.meta.cwd : undefined,
+      detailMode,
     });
     const statsStartedAt = nowMs();
     const performanceStats = await buildChatPerformanceStats(state.fsPath, model);
@@ -1353,6 +1470,11 @@ export class ChatPanelManager implements vscode.Disposable {
       annotationShowMore: t("chat.annotation.showMore"),
       annotationShowLess: t("chat.annotation.showLess"),
       detailsLoading: t("chat.details.loading"),
+      codeCommentLabel: t("chat.codeComment.label"),
+      codeCommentFile: t("chat.codeComment.file"),
+      codeCommentLines: t("chat.codeComment.lines"),
+      codeCommentUnparsedTitle: t("chat.codeComment.unparsedTitle"),
+      codeCommentUnparsedEmptyBody: t("chat.codeComment.unparsedEmptyBody"),
     };
   }
 
@@ -1506,6 +1628,70 @@ function resolveSessionDetailMode(
 
 function normalizeChatWebviewAutoRefreshMode(value: unknown): ChatWebviewAutoRefreshMode {
   return value === "preserve" || value === "follow" ? value : "off";
+}
+
+function normalizeChatSessionDetailMode(value: unknown): ChatSessionDetailMode | undefined {
+  return value === "full" || value === "summary" ? value : undefined;
+}
+
+function sanitizeChatPanelRestoreState(value: unknown): ChatPanelRestoreState | null {
+  const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const restore = source.restore && typeof source.restore === "object" ? (source.restore as Record<string, unknown>) : source;
+  if (restore.version !== 1) return null;
+
+  const fsPath = typeof restore.fsPath === "string" ? restore.fsPath.trim() : "";
+  if (!fsPath || fsPath.length > 4096) return null;
+  if (restore.kind !== "session" && restore.kind !== "reusable") return null;
+  const kind: ChatPanelKind = restore.kind;
+  const revealMessageIndex =
+    typeof restore.revealMessageIndex === "number" && Number.isFinite(restore.revealMessageIndex)
+      ? Math.max(0, Math.floor(restore.revealMessageIndex))
+      : undefined;
+  const revealTarget = sanitizeFileChangeHistoryRevealTarget(restore.revealTarget);
+  const scrollY =
+    typeof restore.scrollY === "number" && Number.isFinite(restore.scrollY)
+      ? Math.max(0, Math.floor(restore.scrollY))
+      : undefined;
+  const topMessageIndex =
+    typeof restore.topMessageIndex === "number" && Number.isFinite(restore.topMessageIndex)
+      ? Math.max(0, Math.floor(restore.topMessageIndex))
+      : undefined;
+  const autoRefreshMode = normalizeChatWebviewAutoRefreshMode(restore.autoRefreshMode);
+  const detailMode = normalizeChatSessionDetailMode(restore.detailMode);
+  return {
+    version: 1,
+    kind,
+    fsPath,
+    ...(revealMessageIndex !== undefined ? { revealMessageIndex } : {}),
+    ...(revealTarget ? { revealTarget } : {}),
+    ...(scrollY !== undefined ? { scrollY } : {}),
+    ...(topMessageIndex !== undefined ? { topMessageIndex } : {}),
+    autoRefreshMode,
+    ...(detailMode ? { detailMode } : {}),
+  };
+}
+
+function sanitizeFileChangeHistoryRevealTarget(value: unknown): FileChangeHistoryRevealTarget | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Record<string, unknown>;
+  if (source.kind !== "patchEntry") return undefined;
+  const filePath = sanitizePatchDetailText(source.filePath, 4096);
+  if (!filePath) return undefined;
+  const movePath = sanitizePatchDetailText(source.movePath, 4096);
+  const entryId = sanitizePatchDetailText(source.entryId, 512);
+  const timestampIso = sanitizePatchDetailText(source.timestampIso, 128);
+  const messageIndex =
+    typeof source.messageIndex === "number" && Number.isFinite(source.messageIndex)
+      ? Math.max(0, Math.floor(source.messageIndex))
+      : undefined;
+  return {
+    kind: "patchEntry",
+    filePath,
+    ...(movePath ? { movePath } : {}),
+    ...(entryId ? { entryId } : {}),
+    ...(timestampIso ? { timestampIso } : {}),
+    ...(messageIndex !== undefined ? { messageIndex } : {}),
+  };
 }
 
 function sanitizePatchEntryDetailTarget(value: unknown): ChatPatchEntryDetailTarget | null {

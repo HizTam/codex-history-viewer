@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.1] - 2026-05-26
+
+### Added
+
+- Added project aliases for project `cwd` values, stored in extension state without modifying Codex or Claude Code history files.
+- Added project alias display across History and Pinned project headings, session descriptions, tooltips, filter summaries, Status, and Search scope/session display.
+- Added Undo support for setting and clearing project aliases.
+- Added an experimental opt-in **Restore Webview Tabs After Reload** setting to restore chat and file change history Webview tabs after Reload Window or VS Code restart. It is disabled by default because VS Code can defer Webview restoration and may occasionally create duplicate tabs when the same history is opened again.
+- Added rendering for Codex code review comments as readable cards in the chat Webview.
+
+### Changed
+
+- Changed archive visibility summaries from `Location` to `Archive` to avoid confusing them with project paths.
+- Improved in-Webview search responsiveness by debouncing search updates while typing.
+
+### Fixed
+
+- Preserved the in-Webview search panel width when the window is resized below 860px. The panel no longer forces full width or hides the resize handle in narrow viewports.
+
 ## [2.4.0] - 2026-05-23
 
 ### Added

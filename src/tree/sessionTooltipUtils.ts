@@ -19,15 +19,16 @@ export function buildSessionHoverTooltip(params: {
   label: string;
   description?: string;
   mode: PreviewTooltipMode;
+  projectAlias?: string;
 }): string | vscode.MarkdownString {
-  const { session, annotation, label, description, mode } = params;
+  const { session, annotation, label, description, mode, projectAlias } = params;
   if (mode === "titleOnly") return buildTreeRowTooltip(label, description);
 
   const md = new vscode.MarkdownString(undefined, true);
   md.isTrusted = false;
   appendSessionTooltipTitleLines(md, session);
   appendSessionTooltipDateLines(md, session);
-  appendSessionMetadataLines(md, session, annotation);
+  appendSessionMetadataLines(md, session, annotation, projectAlias);
 
   if (mode === "compact") return md;
 
@@ -73,6 +74,7 @@ function appendSessionMetadataLines(
   md: vscode.MarkdownString,
   session: SessionSummary,
   annotation: SessionTooltipAnnotation | null,
+  projectAlias?: string,
 ): void {
   md.appendMarkdown(`Source: ${sourceName(session.source)}  \n`);
   if (session.storage.archiveState === "archived") {
@@ -80,7 +82,14 @@ function appendSessionMetadataLines(
       `${escapeForMarkdown(t("tree.tooltip.location"))}: ${escapeForMarkdown(t("session.location.archived"))}  \n`,
     );
   }
-  if (session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(session.cwdShort)}  \n`);
+  const alias = String(projectAlias ?? "").trim();
+  const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
+  if (alias && cwd) {
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.projectLabel"))}: ${escapeForMarkdown(alias)}  \n`);
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.cwdLabel"))}: ${escapeForMarkdown(cwd)}  \n`);
+  } else if (session.cwdShort) {
+    md.appendMarkdown(`${escapeForMarkdown(session.cwdShort)}  \n`);
+  }
   if (annotation && annotation.tags.length > 0) {
     md.appendMarkdown(`Tags: ${escapeForMarkdown(annotation.tags.join(", "))}  \n`);
   }

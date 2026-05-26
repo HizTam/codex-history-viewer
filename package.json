@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -30,6 +30,10 @@
     "Chat"
   ],
   "main": "./dist/extension.js",
+  "activationEvents": [
+    "onWebviewPanel:codexHistoryViewer.chat",
+    "onWebviewPanel:codexHistoryViewer.fileChangeHistory"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/hiztam/codex-history-viewer"
@@ -1056,6 +1060,24 @@
         "icon": "$(clear-all)"
       },
       {
+        "command": "codexHistoryViewer.manageProjectAlias",
+        "title": "%cmd.manageProjectAlias%",
+        "category": "%cmd.category%",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "codexHistoryViewer.setProjectAlias",
+        "title": "%cmd.setProjectAlias%",
+        "category": "%cmd.category%",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "codexHistoryViewer.clearProjectAlias",
+        "title": "%cmd.clearProjectAlias%",
+        "category": "%cmd.category%",
+        "icon": "$(clear-all)"
+      },
+      {
         "command": "codexHistoryViewer.editSessionAnnotation",
         "title": "%cmd.editSessionAnnotation%",
         "category": "%cmd.category%",
@@ -1167,6 +1189,36 @@
       {
         "command": "codexHistoryViewer.ui.en.clearCustomTitle",
         "title": "Clear Custom Title",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.manageProjectAlias",
+        "title": "プロジェクト別名...",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.manageProjectAlias",
+        "title": "Project Alias...",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.setProjectAlias",
+        "title": "プロジェクト別名を設定...",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.setProjectAlias",
+        "title": "Set Project Alias...",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.clearProjectAlias",
+        "title": "プロジェクト別名を消去",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.clearProjectAlias",
+        "title": "Clear Project Alias",
         "icon": "$(clear-all)"
       },
       {
@@ -1880,6 +1932,30 @@
         },
         {
           "command": "codexHistoryViewer.ui.en.clearCustomTitle",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.manageProjectAlias",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.manageProjectAlias",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.setProjectAlias",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.setProjectAlias",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.clearProjectAlias",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.clearProjectAlias",
           "when": "false"
         },
         {
@@ -2699,6 +2775,16 @@
           "group": "1_actions@6"
         },
         {
+          "command": "codexHistoryViewer.ui.ja.manageProjectAlias",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView) && viewItem == codexHistoryViewer.project.withCwd && codexHistoryViewer.uiLang == 'ja'",
+          "group": "1_actions@6"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.manageProjectAlias",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView) && viewItem == codexHistoryViewer.project.withCwd && codexHistoryViewer.uiLang != 'ja'",
+          "group": "1_actions@6"
+        },
+        {
           "command": "codexHistoryViewer.ui.ja.editSessionAnnotation",
           "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
           "group": "1_actions"
@@ -2936,6 +3022,13 @@
           "description": "%cfg.fileChangeHistoryExplorerContextMenuEnabled%",
           "scope": "resource",
           "order": 66
+        },
+        "codexHistoryViewer.webview.restoreAfterReload": {
+          "type": "boolean",
+          "default": false,
+          "description": "%cfg.webview.restoreAfterReload%",
+          "scope": "window",
+          "order": 67
         },
         "codexHistoryViewer.autoRefresh.enabled": {
           "type": "boolean",

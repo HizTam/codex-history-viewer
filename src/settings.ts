@@ -33,6 +33,7 @@ export interface CodexHistoryViewerConfig {
   enableClaudeSource: boolean;
   handoffEnabled: boolean;
   fileChangeHistoryExplorerContextMenuEnabled: boolean;
+  webviewRestoreAfterReload: boolean;
   previewOpenOnSelection: boolean;
   previewMaxMessages: number;
   previewTooltipMode: PreviewTooltipMode;
@@ -180,6 +181,7 @@ export function getConfig(): CodexHistoryViewerConfig {
     handoffEnabled: cfg.get<boolean>("handoff.enabled") ?? true,
     fileChangeHistoryExplorerContextMenuEnabled:
       cfg.get<boolean>("fileChangeHistory.explorerContextMenu.enabled") ?? false,
+    webviewRestoreAfterReload: cfg.get<boolean>("webview.restoreAfterReload") ?? false,
     previewOpenOnSelection: cfg.get<boolean>("preview.openOnSelection") ?? true,
     previewMaxMessages: parseBoundedNumber(cfg.get<number>("preview.maxMessages"), 6, 1, 50),
     previewTooltipMode: parsePreviewTooltipMode(cfg.get<string>("preview.tooltipMode") ?? "full"),

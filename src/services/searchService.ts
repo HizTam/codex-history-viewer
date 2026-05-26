@@ -59,6 +59,7 @@ export async function runSearchFlow(
     tagFilter?: readonly string[];
     archiveLocationFilter?: ArchiveLocationFilter;
     includeArchivedSessions?: boolean;
+    getProjectDisplayName?: (projectCwd: string) => string;
   },
 ): Promise<SearchFlowResult | null> {
   if (index.sessions.length === 0) {
@@ -147,7 +148,7 @@ export async function runSearchFlow(
   const scopeParts: string[] = [];
   const datePart = effectiveScope.kind === "all" ? t("search.filter.all") : getDateScopeValue(effectiveScope);
   if (datePart) scopeParts.push(datePart);
-  if (project) scopeParts.push(t("history.filter.projectLabel", safeDisplayPath(project, 50)));
+  if (project) scopeParts.push(t("history.filter.projectLabel", options?.getProjectDisplayName?.(project) ?? safeDisplayPath(project, 50)));
   if (effectiveSourceFilter !== "all") {
     scopeParts.push(t("history.filter.sourceLabel", getSourceFilterLabel(effectiveSourceFilter)));
   }

@@ -31,6 +31,13 @@
   const restoreCoverEl = document.getElementById("restoreCover");
 
   const md = createMarkdownRenderer();
+  const CODE_COMMENT_DIRECTIVE_PREFIX = "::code-comment{";
+  const MAX_CODE_COMMENT_DIRECTIVES_PER_MESSAGE = 50;
+  const MAX_CODE_COMMENT_DIRECTIVE_LENGTH = 20000;
+  const MAX_CODE_COMMENT_FILE_LENGTH = 4096;
+  const MAX_CODE_COMMENT_TITLE_LENGTH = 512;
+  const MAX_CODE_COMMENT_BODY_LENGTH = 20000;
+  const CODE_COMMENT_ATTRIBUTE_KEYS = new Set(["file", "title", "body", "start", "end", "priority"]);
   const COPY_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 1.5H6A1.5 1.5 0 0 0 4.5 3H3.75A1.75 1.75 0 0 0 2 4.75v8.5C2 14.216 2.784 15 3.75 15h8.5c.966 0 1.75-.784 1.75-1.75v-8.5C14 3.784 13.216 3 12.25 3H11.5A1.5 1.5 0 0 0 10 1.5Zm-4 1H10a.5.5 0 0 1 .5.5V3H5.5V3a.5.5 0 0 1 .5-.5ZM3.75 4h8.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-8.5a.75.75 0 0 1-.75-.75v-8.5A.75.75 0 0 1 3.75 4Z"/></svg>';
   const RELOAD_ICON_SVG =
@@ -151,6 +158,9 @@
     makefile: "makefile",
   });
   const MIN_PAGE_SEARCH_WIDTH = 280;
+  const PAGE_SEARCH_HORIZONTAL_MARGIN = 16;
+  const PAGE_SEARCH_REFRESH_DEBOUNCE_MS = 180;
+  const RESTORE_POSITION_SAVE_DEBOUNCE_MS = 500;
   const OPEN_POSITION_SAVE_DEBOUNCE_MS = 800;
   const MAX_CACHED_IMAGE_DATA = 64;
   const TIME_GUIDE_REBUILD_IDLE_TIMEOUT_MS = 900;
@@ -212,9 +222,11 @@
   let pageSearchMatches = [];
   let pageSearchResults = [];
   let activePageSearchResultIndex = -1;
+  let pageSearchRefreshTimer = 0;
   let pageSearchPanelWidth = null;
   let pageSearchResizeState = null;
   let openPositionSaveTimer = 0;
+  let restorePositionSaveTimer = 0;
   let toolbarCompactFrame = 0;
   let patchLayoutFrame = 0;
   let timeGuideEnabled = false;
@@ -277,10 +289,12 @@
   }
   window.addEventListener("blur", () => {
     persistCurrentChatOpenPosition({ immediate: true });
+    persistRestorePosition({ immediate: true });
   });
   window.addEventListener("pagehide", () => {
     showRestoreCover();
     persistCurrentChatOpenPosition({ immediate: true });
+    persistRestorePosition({ immediate: true });
   });
   window.addEventListener("pageshow", () => {
     scheduleRestoreCoverRelease();
@@ -290,6 +304,7 @@
     if (document.visibilityState === "hidden") {
       showRestoreCover();
       persistCurrentChatOpenPosition({ immediate: true });
+      persistRestorePosition({ immediate: true });
     } else if (document.visibilityState === "visible") {
       scheduleRestoreCoverRelease();
       if (!isRestoreCoverBlockingTimeGuide()) resumeDeferredRenderWork();
@@ -367,6 +382,7 @@
     autoRefreshMode = cycleAutoRefreshMode(autoRefreshMode);
     updateToolbar();
     vscode.postMessage({ type: "setAutoRefreshMode", mode: autoRefreshMode });
+    persistRestoreState();
     showToast(getAutoRefreshToast(autoRefreshMode), { key: "autoRefresh" });
   });
 
@@ -387,6 +403,7 @@
 
     showDetails = nextShowDetails;
     updateToolbar();
+    persistRestoreState();
     if (showDetails) requestFullDetailsIfNeeded({ restoreByCard: true });
     else requestReload({ includeDetails: false, preserveUiState: true, restoreByCard: true });
     render();
@@ -402,7 +419,7 @@
     closePageSearch();
   });
   pageSearchInputEl.addEventListener("input", () => {
-    refreshPageSearchResults({ reveal: true });
+    schedulePageSearchRefresh({ reveal: true });
   });
   pageSearchInputEl.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -418,7 +435,6 @@
   if (pageSearchResizeHandleEl instanceof HTMLElement) {
     pageSearchResizeHandleEl.addEventListener("pointerdown", (event) => {
       if (!(pageSearchBarEl instanceof HTMLElement)) return;
-      if (window.innerWidth <= 860) return;
       event.preventDefault();
       event.stopPropagation();
       pageSearchResizeState = {
@@ -457,7 +473,6 @@
   }
 
   window.addEventListener("resize", () => {
-    pageSearchPanelWidth = normalizePageSearchPanelWidth(pageSearchPanelWidth);
     applyPageSearchPanelWidth();
     scheduleToolbarCompactMode();
     schedulePatchLayoutSync();
@@ -623,34 +638,68 @@
       showDetails = shouldPreserveUiState ? prevShowDetails : shouldAutoShowDetails(model, selectedMessageIndex, revealTarget);
       updateToolbar();
       render();
+      let pendingRestoreCompletions = 0;
+      let restoreStatePersisted = false;
+      const persistAfterRestore = () => {
+        if (restoreStatePersisted) return;
+        restoreStatePersisted = true;
+        persistRestoreState({
+          revealTarget,
+          revealMessageIndex: typeof selectedMessageIndex === "number" ? selectedMessageIndex : undefined,
+        });
+      };
+      const createRestoreCompletion = () => {
+        pendingRestoreCompletions += 1;
+        let active = true;
+        return {
+          callback: () => {
+            if (!active) return;
+            active = false;
+            pendingRestoreCompletions = Math.max(0, pendingRestoreCompletions - 1);
+            if (pendingRestoreCompletions === 0) persistAfterRestore();
+          },
+          cancel: () => {
+            if (!active) return;
+            active = false;
+            pendingRestoreCompletions = Math.max(0, pendingRestoreCompletions - 1);
+          },
+        };
+      };
+      const detailRestoreCompletion = createRestoreCompletion();
       const restoredDetailAnchor = autoScrollToBottom
         ? clearPendingDetailScrollAnchor()
-        : restorePendingDetailScrollAnchorAfterRender({ clear: true });
+        : restorePendingDetailScrollAnchorAfterRender({ clear: true, onRestored: detailRestoreCompletion.callback });
+      if (!restoredDetailAnchor) detailRestoreCompletion.cancel();
       if (isImagePreviewOpen()) syncImagePreviewControls();
 
       if (shouldPreserveUiState) {
         if (typeof selectedMessageIndex === "number") restoreHighlight(selectedMessageIndex);
         if (autoScrollToBottom) {
-          restoreScrollToBottom();
+          restoreScrollToBottom(createRestoreCompletion().callback);
         } else if (!restoredDetailAnchor) {
-          if (typeof restoreScrollY === "number") restoreScroll(restoreScrollY);
+          if (typeof restoreScrollY === "number") restoreScroll(restoreScrollY, createRestoreCompletion().callback);
         }
       } else if (revealTarget) {
-        revealPatchTarget(revealTarget);
+        revealPatchTarget(revealTarget, createRestoreCompletion().callback);
       } else if (typeof msg.revealMessageIndex === "number") {
-        revealMessage(msg.revealMessageIndex);
+        revealMessage(msg.revealMessageIndex, createRestoreCompletion().callback);
       } else if (chatOpenPosition === "top") {
         debugChatOpenPosition("restoreTop", { reason: "mode", session: getDebugSessionName(nextModelPath) });
-        restoreScroll(0);
+        restoreScroll(0, createRestoreCompletion().callback);
       } else if (chatOpenPosition === "latest") {
         debugChatOpenPosition("restoreLatest", { reason: "mode", session: getDebugSessionName(nextModelPath) });
-        restoreScrollToLatestBoundary();
+        restoreScrollToLatestBoundary(createRestoreCompletion().callback);
       } else {
-        const restoredIndex = restoreSavedChatOpenPosition(nextModelPath, savedOpenMessageIndex);
+        const restoredIndex = restoreSavedChatOpenPosition(
+          nextModelPath,
+          savedOpenMessageIndex,
+          createRestoreCompletion().callback,
+        );
         if (typeof restoredIndex === "number") {
           selectedMessageIndex = restoredIndex;
         }
       }
+      if (pendingRestoreCompletions === 0) persistAfterRestore();
       return;
     }
     if (msg.type === "i18n") {
@@ -728,7 +777,11 @@
     true,
   );
 
-  vscode.postMessage({ type: "ready" });
+  vscode.postMessage({
+    type: "ready",
+    detailMode:
+      webviewState && webviewState.restore && webviewState.restore.detailMode === "full" ? "full" : "summary",
+  });
 
   function looksLikeMojibake(text) {
     return (
@@ -1095,8 +1148,25 @@
 
   function handleScrollRootScroll() {
     schedulePersistChatOpenPosition();
+    schedulePersistRestorePosition();
     if (isSimplifiedPerformanceMode()) restoreHibernatedPatchBodies();
     if (timeGuideEnabled && timeGuide) timeGuide.handleScroll();
+  }
+
+  function schedulePersistRestorePosition() {
+    if (restorePositionSaveTimer) window.clearTimeout(restorePositionSaveTimer);
+    restorePositionSaveTimer = window.setTimeout(() => {
+      restorePositionSaveTimer = 0;
+      persistRestoreState({ preserveReveal: true });
+    }, RESTORE_POSITION_SAVE_DEBOUNCE_MS);
+  }
+
+  function persistRestorePosition(options = {}) {
+    if (restorePositionSaveTimer && options.immediate) {
+      window.clearTimeout(restorePositionSaveTimer);
+      restorePositionSaveTimer = 0;
+    }
+    persistRestoreState({ preserveReveal: true });
   }
 
   function schedulePersistChatOpenPosition() {
@@ -1222,7 +1292,7 @@
   function restorePendingDetailScrollAnchorAfterRender(options = {}) {
     const anchor = pendingDetailScrollAnchor;
     if (!anchor) return false;
-    restoreTimelineScrollAnchorAfterLayout(anchor);
+    restoreTimelineScrollAnchorAfterLayout(anchor, options.onRestored);
     if (options.clear === true) pendingDetailScrollAnchor = null;
     return true;
   }
@@ -1232,26 +1302,36 @@
     return false;
   }
 
-  function restoreTimelineScrollAnchorAfterLayout(anchor) {
+  function restoreTimelineScrollAnchorAfterLayout(anchor, onRestored) {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        restoreTimelineScrollAnchor(anchor);
+        restoreTimelineScrollAnchor(anchor, onRestored);
       });
     });
   }
 
-  function restoreTimelineScrollAnchor(anchor) {
-    if (!anchor || typeof anchor !== "object") return false;
+  function restoreTimelineScrollAnchor(anchor, onRestored) {
+    const finish = () => {
+      if (typeof onRestored === "function") onRestored();
+    };
+    if (!anchor || typeof anchor !== "object") {
+      finish();
+      return false;
+    }
     const currentPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
-    if (anchor.fsPath && currentPath && anchor.fsPath !== currentPath) return false;
+    if (anchor.fsPath && currentPath && anchor.fsPath !== currentPath) {
+      finish();
+      return false;
+    }
 
     const target = findTimelineRowForAnchor(anchor);
     if (target) {
       scrollElementIntoRootView(target, { behavior: "auto", block: "start" });
+      finish();
       return true;
     }
 
-    restoreScroll(0);
+    restoreScroll(0, finish);
     return false;
   }
 
@@ -1347,19 +1427,22 @@
   function normalizePageSearchPanelWidth(value) {
     const width = Number(value);
     if (!Number.isFinite(width) || width <= 0) return null;
-    if (window.innerWidth <= 860) return null;
-    const maxWidth = Math.max(MIN_PAGE_SEARCH_WIDTH, window.innerWidth - 36);
-    return Math.max(MIN_PAGE_SEARCH_WIDTH, Math.min(Math.round(width), maxWidth));
+    const availableWidth = Math.max(1, window.innerWidth - PAGE_SEARCH_HORIZONTAL_MARGIN);
+    const minimumWidth = Math.min(MIN_PAGE_SEARCH_WIDTH, availableWidth);
+    return Math.max(minimumWidth, Math.min(Math.round(width), availableWidth));
   }
 
   function applyPageSearchPanelWidth() {
-    const normalized = normalizePageSearchPanelWidth(pageSearchPanelWidth);
-    pageSearchPanelWidth = normalized;
-    if (normalized == null) {
-      document.documentElement.style.removeProperty("--chv-page-search-width");
+    if (!(pageSearchBarEl instanceof HTMLElement)) return;
+    const preferredWidth = Number(pageSearchPanelWidth);
+    if (!Number.isFinite(preferredWidth) || preferredWidth <= 0) {
+      pageSearchBarEl.style.removeProperty("--chv-page-search-width");
       return;
     }
-    document.documentElement.style.setProperty("--chv-page-search-width", `${normalized}px`);
+    pageSearchBarEl.style.setProperty(
+      "--chv-page-search-width",
+      `${Math.max(MIN_PAGE_SEARCH_WIDTH, Math.round(preferredWidth))}px`,
+    );
   }
 
   function persistPageSearchPanelWidth() {
@@ -1367,6 +1450,43 @@
     webviewState = {
       ...(webviewState && typeof webviewState === "object" ? webviewState : {}),
       pageSearchPanelWidth,
+    };
+    vscode.setState(webviewState);
+  }
+
+  function persistRestoreState(options = {}) {
+    if (typeof vscode.setState !== "function") return;
+    if (!model || typeof model.fsPath !== "string" || !model.fsPath) return;
+    const previousRestore =
+      webviewState && webviewState.restore && typeof webviewState.restore === "object" ? webviewState.restore : {};
+    const revealMessageIndex =
+      typeof options.revealMessageIndex === "number" && Number.isFinite(options.revealMessageIndex)
+        ? Math.max(0, Math.floor(options.revealMessageIndex))
+        : options.preserveReveal === true &&
+            typeof previousRestore.revealMessageIndex === "number" &&
+            Number.isFinite(previousRestore.revealMessageIndex)
+          ? Math.max(0, Math.floor(previousRestore.revealMessageIndex))
+          : options.preserveReveal !== true && typeof selectedMessageIndex === "number" && Number.isFinite(selectedMessageIndex)
+          ? Math.max(0, Math.floor(selectedMessageIndex))
+          : undefined;
+    const revealTarget = normalizeRevealTarget(options.revealTarget) || (
+      options.preserveReveal === true ? normalizeRevealTarget(previousRestore.revealTarget) : null
+    );
+    const topMessageIndex = findTopVisibleMessageIndex();
+    const restore = {
+      version: 1,
+      kind: panelKind === "reusable" ? "reusable" : "session",
+      fsPath: model.fsPath,
+      autoRefreshMode: normalizeAutoRefreshMode(autoRefreshMode),
+      detailMode: showDetails ? "full" : "summary",
+      scrollY: getScrollTop(),
+      ...(typeof topMessageIndex === "number" ? { topMessageIndex } : {}),
+      ...(revealMessageIndex !== undefined ? { revealMessageIndex } : {}),
+      ...(revealTarget ? { revealTarget } : {}),
+    };
+    webviewState = {
+      ...(webviewState && typeof webviewState === "object" ? webviewState : {}),
+      restore,
     };
     vscode.setState(webviewState);
   }
@@ -1450,6 +1570,7 @@
   }
 
   function resetPageSearchState() {
+    cancelPageSearchRefresh();
     cancelPageSearchResize();
     if (pageSearchBarEl instanceof HTMLElement) pageSearchBarEl.hidden = true;
     document.body.classList.remove("pageSearchOpen");
@@ -1491,10 +1612,39 @@
     if (!(pageSearchBarEl instanceof HTMLElement)) return;
     pageSearchBarEl.hidden = true;
     document.body.classList.remove("pageSearchOpen");
+    cancelPageSearchRefresh();
     cancelPageSearchResize();
     clearPageSearchHighlights();
     renderPageSearchResults();
     updatePageSearchStatus();
+  }
+
+  function schedulePageSearchRefresh(options = {}) {
+    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    if (!query) {
+      cancelPageSearchRefresh();
+      refreshPageSearchResults({ ...options, reveal: false });
+      return;
+    }
+    if (pageSearchRefreshTimer) window.clearTimeout(pageSearchRefreshTimer);
+    pageSearchRefreshTimer = window.setTimeout(() => {
+      pageSearchRefreshTimer = 0;
+      refreshPageSearchResults(options);
+    }, PAGE_SEARCH_REFRESH_DEBOUNCE_MS);
+  }
+
+  function flushPageSearchRefresh(options = {}) {
+    if (!pageSearchRefreshTimer) return false;
+    window.clearTimeout(pageSearchRefreshTimer);
+    pageSearchRefreshTimer = 0;
+    refreshPageSearchResults(options);
+    return true;
+  }
+
+  function cancelPageSearchRefresh() {
+    if (!pageSearchRefreshTimer) return;
+    window.clearTimeout(pageSearchRefreshTimer);
+    pageSearchRefreshTimer = 0;
   }
 
   function refreshPageSearchResults(options = {}) {
@@ -1608,10 +1758,12 @@
       openPageSearch();
       return;
     }
-    if (pageSearchResults.length === 0) {
+    const flushed = flushPageSearchRefresh({ preserveIndex: true, reveal: false });
+    if (!flushed && pageSearchResults.length === 0) {
       refreshPageSearchResults({ reveal: false });
       if (pageSearchResults.length === 0) return;
     }
+    if (pageSearchResults.length === 0) return;
     const total = pageSearchResults.length;
     const currentIndex = activePageSearchResultIndex >= 0 ? activePageSearchResultIndex : 0;
     const nextIndex = (currentIndex + delta + total) % total;
@@ -2345,7 +2497,7 @@
     const content = el("div", { className: role === "assistant" ? "messageBodyContent markdown" : "messageBodyContent" });
     if (textToRender.trim()) {
       if (role === "assistant") {
-        renderMarkdownInto(content, textToRender);
+        renderAssistantMarkdownInto(content, textToRender);
       } else {
         const blocks = splitFencedCode(textToRender);
         for (const b of blocks) {
@@ -5181,8 +5333,14 @@
     }, 1800);
   }
 
-  function revealPatchTarget(target) {
-    if (!target) return;
+  function revealPatchTarget(target, onRestored) {
+    const finish = () => {
+      if (typeof onRestored === "function") onRestored();
+    };
+    if (!target) {
+      finish();
+      return;
+    }
     const patch = findPatchTargetElement(target);
     if (patch && patch.entry) {
       const details = patch.entry.closest("details.patchEntry");
@@ -5197,12 +5355,14 @@
     const nextPatch = findPatchTargetElement(target);
     const elTarget = nextPatch && (nextPatch.entry || nextPatch.group);
     if (!elTarget) {
-      if (typeof target.messageIndex === "number") revealMessage(target.messageIndex);
+      if (typeof target.messageIndex === "number") revealMessage(target.messageIndex, finish);
+      else finish();
       return;
     }
     clearHighlights();
     elTarget.classList.add("highlight");
     elTarget.scrollIntoView({ block: "center" });
+    finish();
     setTimeout(() => {
       elTarget.classList.remove("highlight");
     }, 2000);
@@ -5283,13 +5443,20 @@
       .toLowerCase();
   }
 
-  function revealMessage(messageIndex) {
+  function revealMessage(messageIndex, onRestored) {
+    const finish = () => {
+      if (typeof onRestored === "function") onRestored();
+    };
     expandedMessageIndexes.add(messageIndex);
     render();
     const elTarget = document.getElementById(`msg-${messageIndex}`);
-    if (!elTarget) return;
+    if (!elTarget) {
+      finish();
+      return;
+    }
     elTarget.classList.add("highlight");
     elTarget.scrollIntoView({ block: "center" });
+    finish();
     setTimeout(() => {
       elTarget.classList.remove("highlight");
     }, 1800);
@@ -5303,29 +5470,31 @@
     elTarget.classList.add("highlight");
   }
 
-  function restoreScroll(scrollY) {
+  function restoreScroll(scrollY, onRestored) {
     // Restore scroll after DOM updates (wait 2 frames so layout is settled).
     const y = Math.max(0, Math.floor(Number(scrollY) || 0));
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         getScrollRoot().scrollTo(0, y);
+        if (typeof onRestored === "function") onRestored();
       });
     });
   }
 
-  function restoreScrollToBottom() {
+  function restoreScrollToBottom(onRestored) {
     // Follow the latest content card after DOM updates finish.
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         scrollToLatestFollowTarget({ persist: false });
         requestAnimationFrame(() => {
           scrollToLatestFollowTarget({ persist: true });
+          if (typeof onRestored === "function") onRestored();
         });
       });
     });
   }
 
-  function restoreScrollToLatestBoundary() {
+  function restoreScrollToLatestBoundary(onRestored) {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         const target = getTimelineBoundaryCard("bottom");
@@ -5335,7 +5504,10 @@
           const root = getScrollRoot();
           root.scrollTo(0, root.scrollHeight);
         }
-        requestAnimationFrame(() => persistCurrentChatOpenPosition({ immediate: true }));
+        requestAnimationFrame(() => {
+          persistCurrentChatOpenPosition({ immediate: true });
+          if (typeof onRestored === "function") onRestored();
+        });
       });
     });
   }
@@ -5394,14 +5566,19 @@
     root.scrollTo({ top: Math.max(0, Math.floor(nextTop)), behavior });
   }
 
-  function restoreSavedChatOpenPosition(fsPath, hostMessageIndex) {
+  function restoreSavedChatOpenPosition(fsPath, hostMessageIndex, onRestored) {
+    const finish = () => {
+      if (typeof onRestored === "function") onRestored();
+    };
     if (chatOpenPosition !== "lastMessage") {
       debugChatOpenPosition("restoreSkip", { reason: "mode", mode: chatOpenPosition });
+      finish();
       return null;
     }
     const key = typeof fsPath === "string" ? fsPath : "";
     if (!key) {
       debugChatOpenPosition("restoreSkip", { reason: "noPath" });
+      finish();
       return null;
     }
     const positions =
@@ -5421,7 +5598,7 @@
         session: getDebugSessionName(key),
         hostIndex: hostMessageIndex,
       });
-      restoreScroll(0);
+      restoreScroll(0, finish);
       return null;
     }
     if (messageIndex <= 0 || isFirstRenderedMessageIndex(messageIndex)) {
@@ -5431,7 +5608,7 @@
         index: messageIndex,
         hostIndex: hostMessageIndex,
       });
-      restoreScroll(0);
+      restoreScroll(0, finish);
       return null;
     }
     let elTarget = document.getElementById(`msg-${messageIndex}`);
@@ -5447,7 +5624,7 @@
         index: messageIndex,
         hostIndex: hostMessageIndex,
       });
-      restoreScroll(0);
+      restoreScroll(0, finish);
       return null;
     }
     if (targetMessageIndex !== messageIndex && isFirstRenderedMessageIndex(targetMessageIndex)) {
@@ -5458,7 +5635,7 @@
         fallbackIndex: targetMessageIndex,
         hostIndex: hostMessageIndex,
       });
-      restoreScroll(0);
+      restoreScroll(0, finish);
       return null;
     }
     debugChatOpenPosition("restoreApply", {
@@ -5477,6 +5654,7 @@
           scrollTop: getScrollTop(),
         });
         showToast(i18n.restoredLastPosition || "Restored last viewed position.", { key: "restoredLastPosition" });
+        finish();
       });
     });
     return targetMessageIndex;
@@ -5585,6 +5763,277 @@
     }
     container.innerHTML = md.render(String(markdownText ?? ""));
     enhanceMarkdownCodeBlocks(container);
+  }
+
+  function renderAssistantMarkdownInto(container, markdownText) {
+    const parts = splitCodeCommentDirectives(markdownText);
+    if (parts.length === 1 && parts[0].type === "markdown") {
+      renderMarkdownInto(container, parts[0].text);
+      return;
+    }
+    for (const part of parts) {
+      if (part.type === "codeComment") {
+        container.appendChild(renderCodeCommentDirective(part.comment));
+        continue;
+      }
+      if (!String(part.text || "").trim()) continue;
+      const segment = el("div", { className: "markdownSegment" });
+      renderMarkdownInto(segment, part.text);
+      container.appendChild(segment);
+    }
+  }
+
+  function splitCodeCommentDirectives(markdownText) {
+    const text = String(markdownText ?? "");
+    const parts = [];
+    let cursor = 0;
+    let searchFrom = 0;
+    let converted = 0;
+
+    while (converted < MAX_CODE_COMMENT_DIRECTIVES_PER_MESSAGE) {
+      const start = text.indexOf(CODE_COMMENT_DIRECTIVE_PREFIX, searchFrom);
+      if (start < 0) break;
+      const parsed = parseCodeCommentDirectiveAt(text, start);
+      if (!parsed) {
+        searchFrom = start + CODE_COMMENT_DIRECTIVE_PREFIX.length;
+        continue;
+      }
+      if (start > cursor) parts.push({ type: "markdown", text: text.slice(cursor, start) });
+      parts.push({ type: "codeComment", comment: parsed.comment });
+      cursor = parsed.endIndex;
+      searchFrom = cursor;
+      converted += 1;
+    }
+
+    if (cursor < text.length) parts.push({ type: "markdown", text: text.slice(cursor) });
+    return parts.length > 0 ? parts : [{ type: "markdown", text }];
+  }
+
+  function parseCodeCommentDirectiveAt(text, start) {
+    if (!text.startsWith(CODE_COMMENT_DIRECTIVE_PREFIX, start)) return null;
+    const contentStart = start + CODE_COMMENT_DIRECTIVE_PREFIX.length;
+    let inString = false;
+    let escaped = false;
+    for (let i = contentStart; i < text.length; i += 1) {
+      if (i - start > MAX_CODE_COMMENT_DIRECTIVE_LENGTH) return null;
+      const ch = text[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        continue;
+      }
+      if (ch === "}") {
+        const rawContent = text.slice(contentStart, i);
+        const attrs = parseCodeCommentAttributes(rawContent);
+        if (!attrs) {
+          return { comment: buildUnparsedCodeComment(rawContent), endIndex: i + 1 };
+        }
+        const comment = normalizeCodeCommentAttributes(attrs);
+        if (!comment) {
+          return { comment: buildUnparsedCodeComment(rawContent), endIndex: i + 1 };
+        }
+        return { comment, endIndex: i + 1 };
+      }
+    }
+    return null;
+  }
+
+  function parseCodeCommentAttributes(source) {
+    const attrs = {};
+    const seenKeys = new Set();
+    let index = 0;
+    while (index < source.length) {
+      const found = findNextCodeCommentAttributeKey(source, index);
+      if (!found) break;
+      if (seenKeys.has(found.key)) return null;
+      seenKeys.add(found.key);
+
+      if (source[found.valueIndex] === '"') {
+        const parsed = parseCodeCommentString(source, found.valueIndex);
+        if (!parsed) return null;
+        attrs[found.key] = parsed.value;
+        index = parsed.nextIndex;
+        continue;
+      }
+
+      const numberMatch = /^[0-9]+/.exec(source.slice(found.valueIndex));
+      if (!numberMatch) return null;
+      attrs[found.key] = Number(numberMatch[0]);
+      index = found.valueIndex + numberMatch[0].length;
+    }
+    return attrs;
+  }
+
+  function findNextCodeCommentAttributeKey(source, startIndex) {
+    let index = startIndex;
+    let inString = false;
+    let escaped = false;
+    while (index < source.length) {
+      const ch = source[index];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        index += 1;
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+        index += 1;
+        continue;
+      }
+      if (!isCodeCommentIdentifierStart(ch)) {
+        index += 1;
+        continue;
+      }
+      const keyStart = index;
+      index += 1;
+      while (index < source.length && isCodeCommentIdentifierPart(source[index])) index += 1;
+      const key = source.slice(keyStart, index);
+      const separatorIndex = skipCodeCommentWhitespace(source, index);
+      if (source[separatorIndex] === "=" && CODE_COMMENT_ATTRIBUTE_KEYS.has(key)) {
+        return { key, valueIndex: skipCodeCommentWhitespace(source, separatorIndex + 1) };
+      }
+    }
+    return null;
+  }
+
+  function isCodeCommentIdentifierStart(ch) {
+    return /^[A-Za-z_]$/.test(ch || "");
+  }
+
+  function isCodeCommentIdentifierPart(ch) {
+    return /^[A-Za-z0-9_-]$/.test(ch || "");
+  }
+
+  function parseCodeCommentString(source, start) {
+    let out = "";
+    let index = start + 1;
+    while (index < source.length) {
+      const ch = source[index];
+      if (ch === '"') return { value: out, nextIndex: index + 1 };
+      if (ch === "\r" || ch === "\n") {
+        if (ch === "\r" && source[index + 1] === "\n") index += 1;
+        out += "\n";
+        index += 1;
+        continue;
+      }
+      if (ch !== "\\") {
+        out += ch;
+        index += 1;
+        continue;
+      }
+      const next = source[index + 1];
+      if (next === '"' || next === "\\") out += next;
+      else if (next === "n") out += "\n";
+      else if (next === "r") out += "\r";
+      else if (next === "t") out += "\t";
+      else if (next === "\r" || next === "\n") {
+        out += "\\";
+        if (next === "\r" && source[index + 2] === "\n") index += 1;
+        out += "\n";
+      } else return null;
+      index += 2;
+    }
+    return null;
+  }
+
+  function skipCodeCommentWhitespace(source, index) {
+    let out = index;
+    while (out < source.length && /[ \t\r\n]/.test(source[out])) out += 1;
+    return out;
+  }
+
+  function normalizeCodeCommentAttributes(attrs) {
+    const file = truncateCodeCommentText(attrs.file, MAX_CODE_COMMENT_FILE_LENGTH);
+    const title = truncateCodeCommentText(attrs.title, MAX_CODE_COMMENT_TITLE_LENGTH);
+    const body = truncateCodeCommentText(attrs.body, MAX_CODE_COMMENT_BODY_LENGTH);
+    if (!file || !title || !body) return null;
+    const start = normalizePositiveLineNumber(attrs.start);
+    const rawEnd = normalizePositiveLineNumber(attrs.end);
+    const end = start && rawEnd && rawEnd >= start ? rawEnd : undefined;
+    const priority = truncateCodeCommentText(attrs.priority, 32);
+    return {
+      file,
+      title,
+      body,
+      ...(start ? { start } : {}),
+      ...(end ? { end } : {}),
+      ...(priority ? { priority } : {}),
+    };
+  }
+
+  function buildUnparsedCodeComment(rawContent) {
+    const rawBody = truncateCodeCommentText(rawContent, MAX_CODE_COMMENT_BODY_LENGTH);
+    return {
+      unparsed: true,
+      rawBody,
+    };
+  }
+
+  function truncateCodeCommentText(value, maxLength) {
+    if (typeof value !== "string") return "";
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    return Array.from(trimmed).slice(0, Math.max(1, maxLength)).join("");
+  }
+
+  function normalizePositiveLineNumber(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+    const out = Math.floor(value);
+    return out > 0 ? out : undefined;
+  }
+
+  function renderCodeCommentDirective(comment) {
+    const card = el("section", { className: "codeCommentCard" });
+    const header = el("div", { className: "codeCommentHeader" });
+    const label = el("span", { className: "codeCommentLabel" });
+    label.textContent = i18n.codeCommentLabel || "Code Comment";
+    header.appendChild(label);
+    if (comment.priority) {
+      const badge = el("span", { className: "codeCommentBadge" });
+      badge.textContent = comment.priority;
+      header.appendChild(badge);
+    }
+    card.appendChild(header);
+
+    const title = el("div", { className: "codeCommentTitle" });
+    title.textContent = comment.unparsed ? i18n.codeCommentUnparsedTitle || "Code comment (unparsed)" : comment.title;
+    card.appendChild(title);
+
+    if (!comment.unparsed) {
+      const location = el("div", { className: "codeCommentLocation" });
+      const locationParts = [`${i18n.codeCommentFile || "File"}: ${comment.file}`];
+      const lineLabel = formatCodeCommentLineRange(comment);
+      if (lineLabel) locationParts.push(`${i18n.codeCommentLines || "Lines"}: ${lineLabel}`);
+      location.textContent = locationParts.join("  ");
+      card.appendChild(location);
+    }
+
+    const body = el("div", { className: "codeCommentBody" });
+    body.textContent = comment.unparsed
+      ? comment.rawBody || i18n.codeCommentUnparsedEmptyBody || "(empty directive)"
+      : comment.body;
+    card.appendChild(body);
+    return card;
+  }
+
+  function formatCodeCommentLineRange(comment) {
+    if (!comment.start) return "";
+    return comment.end && comment.end !== comment.start ? `${comment.start}-${comment.end}` : String(comment.start);
   }
 
   function enhanceMarkdownCodeBlocks(root) {

@@ -30,6 +30,8 @@ type StaleReason = "indexToolContent" | "sources";
 
 interface FileChangeHistoryPanelState {
   target: FileChangeHistoryTarget;
+  restoreCardCount?: number;
+  restoreScrollAnchor?: FileChangeHistoryScrollAnchor;
   generation: number;
   candidates: FileChangeHistoryCandidate[];
   cards: FileChangeHistoryCard[];
@@ -49,6 +51,21 @@ interface SourceIconUris {
 interface FileChangeBookmarkState {
   cards: FileChangeHistoryCard[];
   bookmarkKeys: string[];
+}
+
+interface FileChangeHistoryRestoreState {
+  version: 1;
+  target: FileChangeHistoryTarget;
+  cardCount?: number;
+  scrollAnchor?: FileChangeHistoryScrollAnchor;
+}
+
+interface FileChangeHistoryScrollAnchor {
+  scrollTop?: number;
+  cardId?: string;
+  cardIndex?: number;
+  focusLineOffset?: number;
+  focusOffsetInCard?: number;
 }
 
 export class FileChangeHistoryPanelManager implements vscode.Disposable {
@@ -99,6 +116,16 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       panel.dispose();
     }
     this.panelsByKey.clear();
+  }
+
+  public registerSerializer(subscriptions: vscode.Disposable[]): void {
+    subscriptions.push(
+      vscode.window.registerWebviewPanelSerializer("codexHistoryViewer.fileChangeHistory", {
+        deserializeWebviewPanel: async (panel, rawState) => {
+          await this.restoreSerializedPanel(panel, rawState);
+        },
+      }),
+    );
   }
 
   public refreshI18n(): void {
@@ -189,31 +216,102 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       "codexHistoryViewer.fileChangeHistory",
       t("fileChangeHistory.title"),
       { viewColumn: vscode.ViewColumn.Active, preserveFocus: false },
-      {
-        enableScripts: true,
-        localResourceRoots: [
-          vscode.Uri.joinPath(this.extensionUri, "media"),
-          vscode.Uri.joinPath(this.extensionUri, "resources"),
-        ],
-        retainContextWhenHidden: true,
-      },
+      this.buildWebviewPanelOptions(),
     );
-    panel.webview.html = this.buildHtml(panel.webview);
+    this.initializePanel(panel);
     panel.iconPath = this.resolvePanelIconPath(config);
-    this.readyByPanel.set(panel, false);
-    this.panelsByKey.set(key, panel);
+    this.registerPanel(key, panel);
+    return panel;
+  }
 
+  private buildWebviewOptions(): vscode.WebviewOptions {
+    return {
+      enableScripts: true,
+      localResourceRoots: [
+        vscode.Uri.joinPath(this.extensionUri, "media"),
+        vscode.Uri.joinPath(this.extensionUri, "resources"),
+      ],
+    };
+  }
+
+  private buildWebviewPanelOptions(): vscode.WebviewOptions & vscode.WebviewPanelOptions {
+    return {
+      ...this.buildWebviewOptions(),
+      retainContextWhenHidden: true,
+    };
+  }
+
+  private initializePanel(panel: vscode.WebviewPanel): void {
+    panel.webview.options = this.buildWebviewOptions();
+    panel.webview.html = this.buildHtml(panel.webview);
+    this.readyByPanel.set(panel, false);
     panel.webview.onDidReceiveMessage(async (msg) => {
       await this.handleMessage(panel, msg);
     });
     panel.onDidChangeViewState(() => {
       void panel.webview.postMessage({ type: "viewState", visible: panel.visible });
     });
+  }
+
+  private registerPanel(key: string, panel: vscode.WebviewPanel): void {
+    this.panelsByKey.set(key, panel);
     panel.onDidDispose(() => {
       this.cancelLoadMore(panel, true);
-      this.panelsByKey.delete(key);
+      if (this.panelsByKey.get(key) === panel) {
+        this.panelsByKey.delete(key);
+      }
     });
-    return panel;
+  }
+
+  private async restoreSerializedPanel(panel: vscode.WebviewPanel, rawState: unknown): Promise<void> {
+    const restored = sanitizeFileChangeHistoryRestoreState(rawState);
+    if (!restored || !(await this.canRestoreTarget(restored.target))) {
+      this.disposePanel(panel);
+      return;
+    }
+
+    const key = buildPanelKey(restored.target);
+    const existing = this.panelsByKey.get(key);
+    if (existing && existing !== panel) {
+      this.disposePanel(panel);
+      return;
+    }
+
+    this.initializePanel(panel);
+    this.registerPanel(key, panel);
+    panel.title = t("fileChangeHistory.panelTitle", restored.target.fileName);
+    panel.iconPath = this.resolvePanelIconPath(getConfig());
+    this.stateByPanel.set(panel, {
+      target: restored.target,
+      restoreCardCount: restored.cardCount,
+      restoreScrollAnchor: restored.scrollAnchor,
+      generation: 1,
+      candidates: [],
+      cards: [],
+      pendingCards: [],
+      nextCandidateIndex: 0,
+      hasMore: false,
+      loading: false,
+    });
+  }
+
+  private async canRestoreTarget(target: FileChangeHistoryTarget): Promise<boolean> {
+    try {
+      const stat = await vscode.workspace.fs.stat(vscode.Uri.file(target.fsPath));
+      if ((stat.type & vscode.FileType.File) === 0) return false;
+    } catch {
+      return false;
+    }
+    const targetKey = normalizeCacheKey(target.workspaceRoot);
+    return (vscode.workspace.workspaceFolders ?? []).some((folder) => normalizeCacheKey(folder.uri.fsPath) === targetKey);
+  }
+
+  private disposePanel(panel: vscode.WebviewPanel): void {
+    try {
+      panel.dispose();
+    } catch {
+      // Ignore dispose failures; the panel may already be closed.
+    }
   }
 
   private resetPanelState(panel: vscode.WebviewPanel, target: FileChangeHistoryTarget): void {
@@ -469,7 +567,14 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
         this.readyByPanel.set(panel, true);
         await this.sendLoading(panel, "syncIndex");
         // A fresh webview script instance should rebuild from extension-side state.
-        void this.loadInitial(panel, FILE_CHANGE_HISTORY_PAGE_SIZE, "initial");
+        {
+          const state = this.stateByPanel.get(panel);
+          const requestedCardCount =
+            typeof msg?.cardCount === "number" && Number.isFinite(msg.cardCount)
+              ? Math.max(FILE_CHANGE_HISTORY_PAGE_SIZE, Math.floor(msg.cardCount))
+              : state?.restoreCardCount;
+          void this.loadInitial(panel, requestedCardCount ?? FILE_CHANGE_HISTORY_PAGE_SIZE, "initial");
+        }
         return;
       case "loadMore":
         await this.loadMore(panel);
@@ -633,6 +738,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     const config = getConfig();
     const bookmarkState = this.withBookmarkState(state.cards, panel);
     const cards = bookmarkState.cards;
+    const restoreScrollAnchor = options.reason === "initial" ? state.restoreScrollAnchor : undefined;
     const model: FileChangeHistoryWebviewModel = {
       target: state.target,
       cards,
@@ -654,7 +760,12 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       bookmarks: bookmarkState.bookmarkKeys,
       timeGuideEnabled: config.timeGuideEnabled,
       debugLoggingEnabled: this.logger?.isDebugEnabled() ?? false,
+      scrollAnchor: restoreScrollAnchor,
     });
+    if (restoreScrollAnchor) {
+      const latest = this.stateByPanel.get(panel);
+      if (latest) this.stateByPanel.set(panel, { ...latest, restoreScrollAnchor: undefined });
+    }
   }
 
   private withBookmarkState(cards: readonly FileChangeHistoryCard[], panel: vscode.WebviewPanel): FileChangeBookmarkState {
@@ -848,6 +959,62 @@ function buildFileChangeBookmarkTarget(card: FileChangeHistoryCard): BookmarkTar
 
 function buildPanelKey(target: FileChangeHistoryTarget): string {
   return `${normalizeCacheKey(target.workspaceRoot)}\u0000${normalizeCacheKey(target.fsPath)}`;
+}
+
+function sanitizeFileChangeHistoryRestoreState(value: unknown): FileChangeHistoryRestoreState | null {
+  const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const restore = source.restore && typeof source.restore === "object" ? (source.restore as Record<string, unknown>) : source;
+  if (restore.version !== 1) return null;
+  const target = sanitizeFileChangeHistoryTarget(restore.target);
+  if (!target) return null;
+  const cardCount =
+    typeof restore.cardCount === "number" && Number.isFinite(restore.cardCount)
+      ? Math.max(FILE_CHANGE_HISTORY_PAGE_SIZE, Math.floor(restore.cardCount))
+      : undefined;
+  const scrollAnchor = sanitizeFileChangeHistoryScrollAnchor(restore.scrollAnchor);
+  return {
+    version: 1,
+    target,
+    ...(cardCount !== undefined ? { cardCount } : {}),
+    ...(scrollAnchor ? { scrollAnchor } : {}),
+  };
+}
+
+function sanitizeFileChangeHistoryScrollAnchor(value: unknown): FileChangeHistoryScrollAnchor | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Record<string, unknown>;
+  const out: FileChangeHistoryScrollAnchor = {};
+  const scrollTop = sanitizeNonNegativeNumber(source.scrollTop);
+  const cardIndex = sanitizeNonNegativeNumber(source.cardIndex);
+  const focusLineOffset = sanitizeNonNegativeNumber(source.focusLineOffset);
+  const focusOffsetInCard = sanitizeNonNegativeNumber(source.focusOffsetInCard);
+  const cardId = sanitizeRestoreText(source.cardId, 256);
+  if (scrollTop !== undefined) out.scrollTop = scrollTop;
+  if (cardIndex !== undefined) out.cardIndex = cardIndex;
+  if (focusLineOffset !== undefined) out.focusLineOffset = focusLineOffset;
+  if (focusOffsetInCard !== undefined) out.focusOffsetInCard = focusOffsetInCard;
+  if (cardId) out.cardId = cardId;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function sanitizeNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : undefined;
+}
+
+function sanitizeFileChangeHistoryTarget(value: unknown): FileChangeHistoryTarget | null {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Record<string, unknown>;
+  const fsPath = sanitizeRestoreText(source.fsPath, 4096);
+  const workspaceRoot = sanitizeRestoreText(source.workspaceRoot, 4096);
+  if (!fsPath || !workspaceRoot) return null;
+  const fileName = sanitizeRestoreText(source.fileName, 512) || path.basename(fsPath);
+  const workspaceName = sanitizeRestoreText(source.workspaceName, 512) || path.basename(workspaceRoot);
+  return { fsPath, workspaceRoot, workspaceName, fileName };
+}
+
+function sanitizeRestoreText(value: unknown, maxLength: number): string {
+  const text = typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]/g, "").trim() : "";
+  return text.slice(0, Math.max(1, maxLength));
 }
 
 function randomNonce(): string {

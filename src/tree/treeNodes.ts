@@ -63,6 +63,8 @@ export class ProjectNode {
   public readonly key: string;
   public readonly label: string;
   public readonly cwd: string | null;
+  public readonly alias: string | null;
+  public readonly fallbackLabel: string;
   public readonly sessionCount: number;
   public readonly latestLabel: string;
   public readonly description: string;
@@ -71,6 +73,8 @@ export class ProjectNode {
     key: string;
     label: string;
     cwd: string | null;
+    alias?: string | null;
+    fallbackLabel?: string;
     sessionCount: number;
     latestLabel: string;
     description: string;
@@ -78,6 +82,8 @@ export class ProjectNode {
     this.key = params.key;
     this.label = params.label;
     this.cwd = params.cwd;
+    this.alias = params.alias ?? null;
+    this.fallbackLabel = params.fallbackLabel ?? params.label;
     this.sessionCount = params.sessionCount;
     this.latestLabel = params.latestLabel;
     this.description = params.description;
@@ -228,7 +234,7 @@ export function toTreeItemContextValue(node: TreeNode): string {
     case "day":
       return "codexHistoryViewer.day";
     case "project":
-      return "codexHistoryViewer.project";
+      return node.cwd ? "codexHistoryViewer.project.withCwd" : "codexHistoryViewer.project.noCwd";
     case "projectYear":
       return "codexHistoryViewer.projectYear";
     case "projectMonth":

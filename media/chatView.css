@@ -290,9 +290,10 @@ body.pageSearchResizing {
   right: 10px;
   bottom: 10px;
   z-index: 3;
-  width: var(--chv-page-search-width);
+  width: min(var(--chv-page-search-width), calc(100vw - 16px));
   display: flex;
   flex-direction: column;
+  contain: layout paint;
   overflow: hidden;
   border: 1px solid var(--chv-search-border);
   border-radius: 12px;
@@ -331,6 +332,10 @@ body.pageSearchResizing #pageSearchResizeHandle::after {
 
 body.pageSearchResizing #pageSearchResizeHandle::after {
   background: color-mix(in srgb, var(--chv-search-accent) 62%, transparent);
+}
+
+body.pageSearchResizing #pageSearchBar {
+  will-change: width;
 }
 
 #pageSearchInner {
@@ -751,6 +756,69 @@ mark.pageSearchMatch-active {
 
 .bubble.tool {
   background: var(--chv-tool-bg);
+}
+
+.markdownSegment + .codeCommentCard,
+.codeCommentCard + .markdownSegment,
+.codeCommentCard + .codeCommentCard {
+  margin-top: 10px;
+}
+
+.codeCommentCard {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border: 1px solid var(--chv-border);
+  border-left: 4px solid color-mix(in srgb, var(--vscode-textLink-foreground, #4ea1ff) 72%, var(--chv-border) 28%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--chv-tool-bg) 78%, var(--chv-assistant-bg) 22%);
+  padding: 9px 10px;
+  overflow-wrap: anywhere;
+}
+
+.codeCommentHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.codeCommentLabel {
+  color: var(--chv-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.codeCommentBadge {
+  flex-shrink: 0;
+  border: 1px solid var(--chv-border);
+  border-radius: 999px;
+  padding: 1px 7px;
+  color: var(--chv-muted);
+  background: color-mix(in srgb, var(--chv-bg) 72%, var(--chv-border) 28%);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.codeCommentTitle {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.codeCommentLocation {
+  color: var(--chv-muted);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.codeCommentBody {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .toolCard {
@@ -2195,6 +2263,14 @@ body.vscode-high-contrast-light .imagePreviewOverlay {
   margin-bottom: 0;
 }
 
+.markdownSegment > :first-child {
+  margin-top: 0;
+}
+
+.markdownSegment > :last-child {
+  margin-bottom: 0;
+}
+
 .markdown p {
   margin: 0 0 8px 0;
 }
@@ -2403,16 +2479,10 @@ details > summary {
 }
 
 @media (max-width: 860px) {
-  #pageSearchResizeHandle {
-    display: none;
-  }
-
   #pageSearchBar {
     top: calc(var(--chv-toolbar-height, 44px) + 6px);
     right: 8px;
-    left: 8px;
     bottom: 8px;
-    width: auto;
   }
 
   .patchDiffColumnLabels {

@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { PinEntry, PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
+import type { ProjectAliasStore } from "../services/projectAliasStore";
 import type { ArchiveLocationFilter, SessionSource, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
 import type { DateScope } from "../types/dateScope";
 import {
@@ -21,6 +22,7 @@ import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { normalizeProjectKey } from "../utils/fsUtils";
 import { safeDisplayPath, truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
+import { buildSessionDescription } from "./sessionDescriptionUtils";
 import { buildSessionHoverTooltip } from "./sessionTooltipUtils";
 
 const NO_CWD_PROJECT_KEY = "__no_cwd__";
@@ -41,6 +43,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   private readonly historyService: HistoryService;
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;
+  private readonly projectAliasStore: ProjectAliasStore;
   private filter: DateScope;
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
@@ -58,6 +61,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     historyService: HistoryService,
     pinStore: PinStore,
     annotationStore: SessionAnnotationStore,
+    projectAliasStore: ProjectAliasStore,
     filter: DateScope,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
@@ -70,6 +74,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     this.historyService = historyService;
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
+    this.projectAliasStore = projectAliasStore;
     this.filter = filter;
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
@@ -208,22 +213,37 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       item.description = element.description;
       item.contextValue = toTreeItemContextValue(element);
       item.iconPath = new vscode.ThemeIcon("root-folder");
-      item.tooltip = t(
-        this.sortMode === "historyDate" ? "tree.tooltip.pinnedProject.historyDate" : "tree.tooltip.pinnedProject.pinnedAt",
-        element.cwd ?? t("tree.project.noCwd"),
-        element.sessionCount,
-        element.latestLabel,
-      );
+      if (element.alias) {
+        item.tooltip = t(
+          this.sortMode === "historyDate"
+            ? "tree.tooltip.pinnedProject.historyDateWithAlias"
+            : "tree.tooltip.pinnedProject.pinnedAtWithAlias",
+          element.alias,
+          element.cwd ?? t("tree.project.noCwd"),
+          element.sessionCount,
+          element.latestLabel,
+        );
+      } else {
+        item.tooltip = t(
+          this.sortMode === "historyDate"
+            ? "tree.tooltip.pinnedProject.historyDate"
+            : "tree.tooltip.pinnedProject.pinnedAt",
+          element.cwd ?? t("tree.project.noCwd"),
+          element.sessionCount,
+          element.latestLabel,
+        );
+      }
       return item;
     }
     if (element instanceof SessionNode) {
       // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
       const shortTitle = truncateByDisplayWidth(element.session.displayTitle, 40, "...");
       const annotation = this.annotationStore.get(element.session.fsPath);
+      const projectAlias = this.projectAliasStore.getAliasByCwd(getSessionCwd(element.session));
       const item = new vscode.TreeItem(
         `${element.session.localDate} ${element.session.timeLabel} ${shortTitle}`,
       );
-      item.description = buildSessionDescription(element.session, annotation?.tags ?? []);
+      item.description = buildSessionDescription(element.session, annotation?.tags ?? [], projectAlias);
       item.contextValue = toTreeItemContextValue(element);
       // Show source-specific icons (Codex/Claude) in the list row.
       item.iconPath = this.resolveSourceIconPath(element.session.source);
@@ -242,6 +262,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         label: String(item.label ?? ""),
         description: typeof item.description === "string" ? item.description : undefined,
         mode: getConfig().previewTooltipMode,
+        projectAlias,
       });
       return item;
     }
@@ -352,10 +373,14 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     return Array.from(groups.entries()).map(([key, group]) => {
       const first = group.entries[0] ?? null;
       const latestLabel = formatProjectLatestLabel(first, this.sortMode);
+      const fallbackLabel = buildProjectLabel(group.cwd);
+      const alias = this.projectAliasStore.getAliasByCwd(group.cwd) ?? null;
       return new ProjectNode({
         key,
-        label: buildProjectLabel(group.cwd),
+        label: alias ?? fallbackLabel,
         cwd: group.cwd,
+        alias,
+        fallbackLabel,
         sessionCount: group.entries.length,
         latestLabel,
         description: buildProjectDescription(group.cwd, group.entries.length),
@@ -427,14 +452,6 @@ function formatProjectLatestLabel(entry: PinnedVisibleEntry | null, sortMode: Pi
 function formatPinnedAtLabel(pinnedAt: number): string {
   if (!Number.isFinite(pinnedAt) || pinnedAt <= 0) return "-";
   return formatYmdHmInTimeZone(new Date(pinnedAt), resolveDateTimeSettings().timeZone);
-}
-
-function buildSessionDescription(session: SessionSummary, tags: readonly string[]): string {
-  const parts: string[] = [];
-  if (session.storage.archiveState === "archived") parts.push(t("tree.description.archived"));
-  if (session.cwdShort) parts.push(session.cwdShort);
-  if (tags.length > 0) parts.push(`#${tags.join(" #")}`);
-  return parts.join("  ");
 }
 
 function getSessionCwd(session: SessionSummary): string | null {

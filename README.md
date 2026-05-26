@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **2.4.0** (2026-05-23).
+Latest release: **2.4.1** (2026-05-26).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -24,8 +24,9 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Bookmark important history cards and use date-guide markers to revisit them quickly.
 - Keep open chat tabs up to date with header-controlled auto-refresh modes.
 - Show supported image attachments, Claude documents, and file references from Codex / Claude sessions as compact cards.
-- Organize sessions with pins, tags, notes, custom titles, saved searches, project modes, and filters.
+- Organize sessions with pins, tags, notes, custom titles, project aliases, saved searches, project modes, and filters.
 - Keep Pinned filters independent from History/Search, including project, source, archive visibility, tags, and sort mode.
+- Experimental opt-in restoration for chat and file-change history Webviews after Reload Window or VS Code restart.
 - Resume past sessions through the official Codex and Claude Code VS Code extensions.
 - Create handoff files and prompts when moving work to another AI tool.
 
@@ -46,6 +47,8 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 
 History supports three project modes: **No Project Filter**, **Current Project**, and **Group by Project**. Project matching is case-insensitive across platforms. Grouped project views preserve the existing layout choice: latest-first history becomes `Project -> Session`, while date-grouped history becomes `Project -> Year -> Month -> Day -> Session`.
 
+Project folders can have extension-local aliases from the History or Pinned project context menu. Aliases are stored in VS Code extension state without changing Codex or Claude Code history files. When set, aliases appear in project headings, session descriptions, tooltips, filter summaries, Status, and Search scope/session display while the original path remains available in detailed metadata.
+
 Pinned has its own project, source, archive visibility, date, and tag filters. It does not follow History/Search filter state, so saved sessions can stay focused on a different project or source while you browse and search elsewhere. Pinned can also switch between pinned-date order and session-date order.
 
 ## Chat Viewer
@@ -54,7 +57,7 @@ The chat viewer renders local session files as readable conversation timelines. 
 
 Large histories can use the `auto`, `normal`, or `simplified` performance mode. Heavy tool details and large diff rows can be deferred until **Show details** is enabled or an individual entry is expanded.
 
-Chat tabs preserve useful state across reload and auto-refresh, including scroll position, selected message, expanded cards/diffs, detail visibility, diff wrapping, and in-page search state.
+Chat tabs preserve useful state across reload and auto-refresh, including scroll position, selected message, expanded cards/diffs, detail visibility, diff wrapping, and in-page search state. The experimental opt-in **Restore Webview Tabs After Reload** setting can also restore chat and file-change history panels after **Developer: Reload Window** or VS Code restart. It is disabled by default because VS Code can defer Webview restoration and may occasionally create duplicate tabs when the same history is opened again.
 
 ## Attachments and References
 
@@ -75,6 +78,8 @@ Search is local, cancellable, and backed by an incremental search index. It can 
 Supported query forms include normal substring search, `exact:...`, `re:...`, `/regex/`, and boolean `AND` / `OR` / `NOT`.
 
 Search follows the History date, project, source, and archive-visibility filters. It does not follow Pinned filters.
+
+Project aliases are shown in Search scope and result display, but they are not added to the search index or treated as searchable hit text.
 
 The search index can be tuned with `codexHistoryViewer.search.indexToolContent`:
 
@@ -126,6 +131,7 @@ Most settings are available from VS Code Settings under **Codex History Viewer**
 - `codexHistoryViewer.autoRefresh.enabled`: refresh History and opt-in chat tabs when local session files change.
 - `codexHistoryViewer.chat.openPosition`: open chat at top, last viewed message, or latest rendered card.
 - `codexHistoryViewer.chat.performanceMode`: choose default chat rendering performance mode.
+- `codexHistoryViewer.webview.restoreAfterReload`: experimental opt-in to restoring chat and file-change history Webview tabs after Reload Window or VS Code restart.
 - `codexHistoryViewer.images.enabled`: show supported image attachments.
 - `codexHistoryViewer.ui.timeGuide.enabled`: enable compact date guides and bookmark controls.
 - `codexHistoryViewer.ui.language`: choose `auto`, `en`, or `ja`.
@@ -146,14 +152,15 @@ For the full command list with per-command descriptions, see:
 - If the official Codex extension stops reopening a conversation, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.4.0
+## What's New in 2.4.1
 
-- Added History project modes for no project filter, current project, and grouped-by-project views.
-- Added independent Pinned project, source, archive, date, tag, and sort controls.
-- Added Pinned sorting by pinned date or original session date.
-- Changed project matching to be case-insensitive across platforms.
-- Changed Search toolbar ordering so **Clear Results** appears before **Rerun Search**.
-- Fixed Codex mentioned-file blocks after IDE context so HTML, log, JSON, and other references render as file-reference attachments.
+- Added project aliases for project folders, stored only in VS Code extension state.
+- Project aliases appear in History, Pinned, Search, tooltips, filter summaries, and Status without becoming searchable hit text.
+- Added Undo support for setting and clearing project aliases.
+- Added the experimental opt-in **Restore Webview Tabs After Reload** setting for restoring chat and file-change history panels after Reload Window or VS Code restart.
+- Added rendering for Codex code review comments as readable cards in the chat Webview.
+- Changed archive visibility summaries from `Location` to `Archive` to avoid confusing them with project paths.
+- Fixed the in-Webview search panel forcing full width and hiding its resize handle in narrow windows.
 
 ## Changelog
 

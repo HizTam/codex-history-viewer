@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
+import type { ProjectAliasStore } from "../services/projectAliasStore";
 import {
   HistoryEmptyNode,
   SessionNode,
@@ -22,6 +23,7 @@ import { getConfig } from "../settings";
 import { normalizeProjectKey } from "../utils/fsUtils";
 import { safeDisplayPath, truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
+import { buildSessionDescription } from "./sessionDescriptionUtils";
 import { buildSessionHoverTooltip } from "./sessionTooltipUtils";
 
 export type HistoryViewMode = "date" | "latest";
@@ -33,6 +35,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private readonly historyService: HistoryService;
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;
+  private readonly projectAliasStore: ProjectAliasStore;
   private viewMode: HistoryViewMode;
   private filter: DateScope;
   private projectCwd: string | null;
@@ -50,6 +53,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     historyService: HistoryService,
     pinStore: PinStore,
     annotationStore: SessionAnnotationStore,
+    projectAliasStore: ProjectAliasStore,
     viewMode: HistoryViewMode,
     filter: DateScope,
     projectCwd: string | null,
@@ -62,6 +66,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.historyService = historyService;
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
+    this.projectAliasStore = projectAliasStore;
     this.viewMode = viewMode;
     this.filter = filter;
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
@@ -228,12 +233,22 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       item.description = element.description;
       item.contextValue = toTreeItemContextValue(element);
       item.iconPath = new vscode.ThemeIcon("root-folder");
-      item.tooltip = t(
-        "tree.tooltip.project",
-        element.cwd ?? t("tree.project.noCwd"),
-        element.sessionCount,
-        element.latestLabel,
-      );
+      if (element.alias) {
+        item.tooltip = t(
+          "tree.tooltip.projectWithAlias",
+          element.alias,
+          element.cwd ?? t("tree.project.noCwd"),
+          element.sessionCount,
+          element.latestLabel,
+        );
+      } else {
+        item.tooltip = t(
+          "tree.tooltip.project",
+          element.cwd ?? t("tree.project.noCwd"),
+          element.sessionCount,
+          element.latestLabel,
+        );
+      }
       return item;
     }
     if (element instanceof ProjectYearNode) {
@@ -295,7 +310,8 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const label = `${prefix} ${shortTitle}`;
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
     const annotation = this.annotationStore.get(session.fsPath);
-    item.description = buildSessionDescription(session, annotation?.tags ?? []);
+    const projectAlias = this.projectAliasStore.getAliasByCwd(getSessionCwd(session));
+    item.description = buildSessionDescription(session, annotation?.tags ?? [], projectAlias);
     const node = new SessionNode(session, pinned);
     item.contextValue = toTreeItemContextValue(node);
     // Show source-specific icons (Codex/Claude) in the list row.
@@ -315,6 +331,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       label,
       description: typeof item.description === "string" ? item.description : undefined,
       mode: getConfig().previewTooltipMode,
+      projectAlias,
     });
     return item;
   }
@@ -343,12 +360,16 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
     const nodes = Array.from(groups.entries()).map(([key, group]) => {
       const latest = group.sessions[0];
-      const label = buildProjectLabel(group.cwd);
+      const fallbackLabel = buildProjectLabel(group.cwd);
+      const alias = this.projectAliasStore.getAliasByCwd(group.cwd) ?? null;
+      const label = alias ?? fallbackLabel;
       const description = buildProjectDescription(group.cwd, group.sessions.length);
       return new ProjectNode({
         key,
         label,
         cwd: group.cwd,
+        alias,
+        fallbackLabel,
         sessionCount: group.sessions.length,
         latestLabel: latest ? `${latest.localDate} ${latest.timeLabel}` : "",
         description,
@@ -563,14 +584,6 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     }
     return [];
   }
-}
-
-function buildSessionDescription(session: SessionSummary, tags: readonly string[]): string {
-  const parts: string[] = [];
-  if (session.storage.archiveState === "archived") parts.push(t("tree.description.archived"));
-  if (session.cwdShort) parts.push(session.cwdShort);
-  if (tags.length > 0) parts.push(`#${tags.join(" #")}`);
-  return parts.join("  ");
 }
 
 function normalizeTagFilter(values: readonly string[]): string[] {

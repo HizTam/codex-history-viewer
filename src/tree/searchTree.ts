@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
+import type { ProjectAliasStore } from "../services/projectAliasStore";
 import type { ArchiveLocationFilter, SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import {
   SearchHelpNode,
@@ -15,12 +16,14 @@ import {
 import { t } from "../i18n";
 import { getConfig } from "../settings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
+import { buildSessionDescription } from "./sessionDescriptionUtils";
 import { appendSessionTooltipDateLines, appendSessionTooltipTitleLines, buildTreeRowTooltip } from "./sessionTooltipUtils";
 
 // Provides the Search view (root -> session -> hit).
 export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;
+  private readonly projectAliasStore: ProjectAliasStore;
   private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
@@ -34,11 +37,13 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   constructor(
     pinStore: PinStore,
     annotationStore: SessionAnnotationStore,
+    projectAliasStore: ProjectAliasStore,
     archiveLocationFilter: ArchiveLocationFilter,
     extensionUri: vscode.Uri,
   ) {
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
+    this.projectAliasStore = projectAliasStore;
     this.archiveLocationFilter = archiveLocationFilter;
     this.codexIconPath = {
       light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
@@ -96,12 +101,13 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       const annotation = this.annotationStore.get(element.session.fsPath);
       // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
       const shortTitle = truncateByDisplayWidth(element.session.displayTitle, 40, "...");
+      const projectAlias = this.projectAliasStore.getAliasByCwd(getSessionCwd(element.session));
       const label = `${element.session.localDate} ${element.session.timeLabel} ${shortTitle} (${element.hits.length})`;
       const item = new vscode.TreeItem(
         label,
         vscode.TreeItemCollapsibleState.Collapsed,
       );
-      item.description = buildSessionDescription(element.session, annotation?.tags ?? []);
+      item.description = buildSessionDescription(element.session, annotation?.tags ?? [], projectAlias);
       const node = new SessionNode(element.session, pinned);
       item.contextValue = toTreeItemContextValue(node);
       // Show source-specific icons (Codex/Claude) in the list row.
@@ -120,6 +126,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         annotation?.note ?? "",
         label,
         typeof item.description === "string" ? item.description : undefined,
+        projectAlias,
       );
       return item;
     }
@@ -214,6 +221,7 @@ function buildSearchSessionTooltip(
   note: string,
   label: string,
   description?: string,
+  projectAlias?: string,
 ): string | vscode.MarkdownString {
   const mode = getConfig().previewTooltipMode;
   if (mode === "titleOnly") return buildTreeRowTooltip(label, description);
@@ -226,7 +234,14 @@ function buildSearchSessionTooltip(
   if (node.session.storage.archiveState === "archived") {
     md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.location"))}: ${escapeForMarkdown(t("session.location.archived"))}  \n`);
   }
-  if (node.session.cwdShort) md.appendMarkdown(`${escapeForMarkdown(node.session.cwdShort)}  \n`);
+  const alias = String(projectAlias ?? "").trim();
+  const cwd = typeof node.session.meta?.cwd === "string" ? node.session.meta.cwd.trim() : "";
+  if (alias && cwd) {
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.projectLabel"))}: ${escapeForMarkdown(alias)}  \n`);
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.cwdLabel"))}: ${escapeForMarkdown(cwd)}  \n`);
+  } else if (node.session.cwdShort) {
+    md.appendMarkdown(`${escapeForMarkdown(node.session.cwdShort)}  \n`);
+  }
   if (tags.length > 0) md.appendMarkdown(`Tags: ${escapeForMarkdown(tags.join(", "))}  \n`);
   if (note.trim().length > 0) md.appendMarkdown(`Note: ${escapeForMarkdown(note.trim())}  \n`);
   md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.searchSession", node.hits.length))}\n`);
@@ -290,14 +305,6 @@ function formatLocationLabel(hit: {
   return `[#${hit.messageIndex}]`;
 }
 
-function buildSessionDescription(session: SessionSummary, tags: readonly string[]): string {
-  const parts: string[] = [];
-  if (session.storage.archiveState === "archived") parts.push(t("tree.description.archived"));
-  if (session.cwdShort) parts.push(session.cwdShort);
-  if (tags.length > 0) parts.push(`#${tags.join(" #")}`);
-  return parts.join("  ");
-}
-
 function isSameSearchHit(
   a: {
     messageIndex: number;
@@ -317,4 +324,9 @@ function isSameSearchHit(
 
 function sourceName(source: SessionSource): string {
   return source === "claude" ? "Claude Code" : "Codex";
+}
+
+function getSessionCwd(session: SessionSummary): string | null {
+  const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
+  return cwd.length > 0 ? cwd : null;
 }
