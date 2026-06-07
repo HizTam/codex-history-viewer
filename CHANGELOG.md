@@ -2,6 +2,34 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.0] - 2026-06-07
+
+### Added
+
+- Added **Project Association** so history from another project can be linked into the current project view or grouped together as related projects.
+- Added **List / Project** display switching and **All / Current Project Group** scope switching to the History and Pinned views.
+- Added shared search history for global search, in-history search, and file change history search.
+- Added search handoff from Search results into in-history search using the same query.
+- Added more flexible query expressions, including regular expressions and exact matching, to in-history search and file change history search.
+- Added search history suggestions, selection, and deletion to in-history search and file change history search.
+- Added collapsible display for Codex memory citation information in the history view.
+- Added a sticky current user prompt display at the top of chat history.
+- Added project-association awareness to handoff generation so handoff content follows the associated project display.
+
+### Changed
+
+- Reworked project display controls in the History and Pinned views so display mode and target scope can be switched independently.
+- Changed global search to follow the current History view target, including project scope, tags, Codex/Claude source, archive visibility, and date filters.
+- Improved the global search input so manual search, rerunning from search history, and per-item search history deletion are available from the same QuickPick.
+- Changed saved searches to store, display, and reuse only the search query. Role filters and case sensitivity are taken from the current settings when the saved search is run. Saved searches remain shared globally instead of being separated by project, and can be removed individually from the run QuickPick with a trash button.
+- Changed the Search view so filter controls live in the History view. Search uses the current History target as its scope, does not generate results from filters alone, and only re-evaluates existing results when the History scope changes.
+- Changed file change history so it follows the project-associated display when resolving related history.
+
+### Fixed
+
+- Fixed file change history search so “No more history” is not matched by page search.
+- Fixed Pinned project ordering when multiple projects are updated at the same time.
+
 ## [2.4.1] - 2026-05-26
 
 ### Added
@@ -116,7 +144,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added file-level **AI Change History** for workspace files, available from the opt-in **File Change History > Explorer Context Menu: Enabled** setting, with source toggles, in-view search, paging, source-aware card navigation, and links back to the matching diff card in the original session view.
+- Added file-level **File AI Change History** for workspace files, available from the opt-in **File Change History > Explorer Context Menu: Enabled** setting, with source toggles, in-page search, paging, source-aware card navigation, and links back to the matching diff card in the original session view.
 - Added history-view performance modes for large histories, including a simplified mode that loads heavy diff/detail sections on demand.
 - Added the `latest` option to `codexHistoryViewer.chat.openPosition` so chat sessions can open at the latest rendered card.
 - Added optional compact date guides for history and file-change views that can be enabled or disabled from settings.

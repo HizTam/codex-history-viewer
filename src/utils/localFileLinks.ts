@@ -1,11 +1,13 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/projectPathMapper";
 import { normalizeCacheKey, pathExists } from "./fsUtils";
 
 export type LinkedFileTarget = {
   fsPath: string;
   line?: number;
   column?: number;
+  relocatedFrom?: string;
 };
 
 type ParsedLocalFileLink = LinkedFileTarget & {
@@ -27,7 +29,12 @@ export function tryParseLocalFileLink(rawHref: string): ParsedLocalFileLink | nu
 
 export async function resolveLocalFileLinkTarget(
   rawFsPath: string,
-  options?: { requestedLine?: number; requestedColumn?: number; baseDirs?: readonly string[] },
+  options?: {
+    requestedLine?: number;
+    requestedColumn?: number;
+    baseDirs?: readonly string[];
+    projectPathMappings?: readonly ProjectPathMapping[];
+  },
 ): Promise<LinkedFileTarget | null> {
   const parsed = splitPathAndLocation(rawFsPath);
   if (!parsed) return null;
@@ -36,10 +43,28 @@ export async function resolveLocalFileLinkTarget(
   const requestedColumn = sanitizePositiveInteger(options?.requestedColumn);
 
   if (parsed.kind === "absolute") {
-    // Prefer the original absolute path when it exists so filenames that literally contain
-    // fragments such as `#L39` are not misinterpreted as line suffixes.
-    if (await pathExists(rawFsPath)) {
-      return { fsPath: rawFsPath, line: requestedLine, column: requestedColumn };
+    const rawPathLiteral = String(rawFsPath ?? "").trim();
+    // Try the raw literal only when suffix parsing changed the path, so filenames that
+    // literally contain fragments such as `#L39` are not misinterpreted as line suffixes.
+    if (rawPathLiteral !== parsed.fsPath && (await pathExists(rawPathLiteral))) {
+      return { fsPath: rawPathLiteral, line: requestedLine, column: requestedColumn };
+    }
+    const relocated = mapAssociatedProjectPath(parsed.fsPath, options?.projectPathMappings ?? []);
+    if (relocated && (await pathExists(relocated.fsPath))) {
+      return {
+        fsPath: relocated.fsPath,
+        line: requestedLine ?? parsed.line,
+        column: requestedColumn ?? parsed.column,
+        relocatedFrom: parsed.fsPath,
+      };
+    }
+    // Fall back to the original path after relocation so relocate uses the current target first.
+    if (await pathExists(parsed.fsPath)) {
+      return {
+        fsPath: parsed.fsPath,
+        line: requestedLine ?? parsed.line,
+        column: requestedColumn ?? parsed.column,
+      };
     }
     return {
       fsPath: parsed.fsPath,

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
+import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { renderTranscript } from "./transcriptRenderer";
 import { t } from "../i18n";
@@ -12,14 +13,20 @@ export class TranscriptContentProvider implements vscode.TextDocumentContentProv
 
   private readonly historyService: HistoryService;
   private readonly annotationStore: SessionAnnotationStore;
+  private readonly projectAssociationStore: ProjectAssociationStore;
   private readonly onDidChangeEmitter = new vscode.EventEmitter<vscode.Uri>();
   public readonly onDidChange = this.onDidChangeEmitter.event;
 
   private readonly cache = new Map<string, { content: string; messageLineMap: Map<number, number> }>();
 
-  constructor(historyService: HistoryService, annotationStore: SessionAnnotationStore) {
+  constructor(
+    historyService: HistoryService,
+    annotationStore: SessionAnnotationStore,
+    projectAssociationStore: ProjectAssociationStore,
+  ) {
     this.historyService = historyService;
     this.annotationStore = annotationStore;
+    this.projectAssociationStore = projectAssociationStore;
   }
 
   public provideTextDocumentContent(uri: vscode.Uri): string {
@@ -35,10 +42,13 @@ export class TranscriptContentProvider implements vscode.TextDocumentContentProv
       const uri = this.buildUri(session.fsPath);
       const { timeZone } = resolveDateTimeSettings();
       const ann = this.annotationStore.get(session.fsPath);
+      const displayCwd =
+        typeof session.meta?.cwd === "string" ? this.projectAssociationStore.getDisplayCwd(session.meta.cwd) : null;
       const { content, messageLineMap } = await renderTranscript(session.fsPath, {
         timeZone,
         locationLabel:
           session.storage.archiveState === "archived" ? t("session.location.archived") : t("session.location.active"),
+        displayCwd,
         annotation: {
           tags: ann?.tags ?? [],
           note: ann?.note ?? "",

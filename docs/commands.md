@@ -50,12 +50,12 @@ Notes:
 | Search... | `codexHistoryViewer.search` | Opens the search input flow and runs a full-text search. |
 | Configure Default Search Roles... | `codexHistoryViewer.searchConfigureDefaultRoles` | Selects default roles included in Search. |
 | Rerun Search | `codexHistoryViewer.searchRerun` | Re-runs Search with the last saved query and filters. |
-| Filter Search by Tags... | `codexHistoryViewer.searchFilterByTag` | Applies a tag filter to Search results. |
-| Clear Search Tag Filter | `codexHistoryViewer.clearSearchTagFilter` | Removes the active Search tag filter. |
-| Run Saved Search... | `codexHistoryViewer.searchRunPreset` | Executes a saved search preset. |
+| Filter Search by Tags... | `codexHistoryViewer.searchFilterByTag` | Updates the History tag filter used as the Search scope. |
+| Clear Search Tag Filter | `codexHistoryViewer.clearSearchTagFilter` | Clears the History tag filter used as the Search scope. |
+| Run Saved Search... | `codexHistoryViewer.searchRunPreset` | Executes a saved search. |
 | Initialize Search Pane | `codexHistoryViewer.searchClearResults` | Clears current Search results and resets the Search root node. |
-| Save Current Search Preset... | `codexHistoryViewer.searchSavePreset` | Saves the current search conditions as a preset. |
-| Delete Saved Search... | `codexHistoryViewer.searchDeletePreset` | Deletes a saved search preset. |
+| Save Current Search... | `codexHistoryViewer.searchSavePreset` | Saves the current search query as a saved search. |
+| Run or Delete Saved Search... | `codexHistoryViewer.searchDeletePreset` | Opens the saved-search picker; selecting an item runs it, and the trash button deletes that saved search. |
 
 ## Archive Actions
 
@@ -65,7 +65,7 @@ Notes:
 | Move to Archive | `codexHistoryViewer.archiveSession` | Moves selected active Codex sessions to the Codex archive location. |
 | Toggle Archive Visibility | `codexHistoryViewer.filterArchiveLocation` | Cycles History, Pinned, and Search between active-only, all, and archived-only Codex sessions. |
 
-## File Change History
+## File AI Change History
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |

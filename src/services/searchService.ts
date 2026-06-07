@@ -5,9 +5,9 @@ import { t } from "../i18n";
 import { safeDisplayPath, singleLineSnippet } from "../utils/textUtils";
 import { SearchRootNode, SearchSessionNode, type SearchHit } from "../tree/treeNodes";
 import { getDateScopeValue, sanitizeDateScope, type DateScope } from "../types/dateScope";
-import { normalizeProjectKey } from "../utils/fsUtils";
 import { type IndexedSearchRole, SearchIndexService } from "./searchIndexService";
 import type { SessionAnnotationStore } from "./sessionAnnotationStore";
+import { matchProjectByCanonicalKey, resolveCanonicalProjectKey } from "./projectPathMapper";
 
 type SearchMode = "plain" | "exact" | "regex";
 
@@ -36,6 +36,7 @@ interface PlainClause {
 export interface SearchRequest {
   queryInput: string;
   roleFilter: IndexedSearchRole[];
+  caseSensitive?: boolean;
 }
 
 export interface SearchFlowResult {
@@ -59,7 +60,9 @@ export async function runSearchFlow(
     tagFilter?: readonly string[];
     archiveLocationFilter?: ArchiveLocationFilter;
     includeArchivedSessions?: boolean;
+    projectScopeCwd?: string | null;
     getProjectDisplayName?: (projectCwd: string) => string;
+    getCanonicalProjectKey?: (projectCwd: string) => string | null;
   },
 ): Promise<SearchFlowResult | null> {
   if (index.sessions.length === 0) {
@@ -76,6 +79,8 @@ export async function runSearchFlow(
 
   let queryInput = "";
   let roleFilter = new Set<IndexedSearchRole>(["user", "assistant"]);
+  const effectiveCaseSensitive =
+    typeof request?.caseSensitive === "boolean" ? request.caseSensitive : config.searchCaseSensitive;
   if (request) {
     queryInput = typeof request.queryInput === "string" ? request.queryInput.trim() : "";
     if (!queryInput) {
@@ -93,17 +98,22 @@ export async function runSearchFlow(
     roleFilter = sanitizeRoleFilter(options?.defaultRoleFilter ?? ["user", "assistant"]);
   }
 
-  const compiled = compileSearchQuery(queryInput, config.searchCaseSensitive);
+  const compiled = compileSearchQuery(queryInput, effectiveCaseSensitive);
   if (!compiled) {
     void vscode.window.showErrorMessage(t("search.error.invalidQueryFormatDetailed"));
     return null;
   }
 
   const project = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
+  const rawProjectScopeCwd = options?.projectScopeCwd;
+  const projectScope =
+    typeof rawProjectScopeCwd === "string" && rawProjectScopeCwd.trim().length > 0 ? rawProjectScopeCwd.trim() : null;
+  const projectKey = project ? resolveCanonicalProjectKey(project, options?.getCanonicalProjectKey) : null;
+  const projectScopeKey = projectScope ? resolveCanonicalProjectKey(projectScope, options?.getCanonicalProjectKey) : null;
   const candidates = index.sessions.filter(
     (s) =>
       matchScope(s, effectiveScope) &&
-      matchProject(s, project) &&
+      matchProjectByCanonicalKey(s.meta?.cwd, { projectKey, projectScopeKey }, options?.getCanonicalProjectKey) &&
       matchSource(s, effectiveSourceFilter) &&
       matchArchiveLocation(s, archiveLocationFilter) &&
       matchAnnotationTags(s, tagFilter, annotationStore),
@@ -148,6 +158,7 @@ export async function runSearchFlow(
   const scopeParts: string[] = [];
   const datePart = effectiveScope.kind === "all" ? t("search.filter.all") : getDateScopeValue(effectiveScope);
   if (datePart) scopeParts.push(datePart);
+  if (projectScope) scopeParts.push(t("history.project.scope.summary.currentGroup"));
   if (project) scopeParts.push(t("history.filter.projectLabel", options?.getProjectDisplayName?.(project) ?? safeDisplayPath(project, 50)));
   if (effectiveSourceFilter !== "all") {
     scopeParts.push(t("history.filter.sourceLabel", getSourceFilterLabel(effectiveSourceFilter)));
@@ -156,21 +167,38 @@ export async function runSearchFlow(
   if (!isDefaultRoleFilter(roleFilter)) scopeParts.push(`roles: ${Array.from(roleFilter).join(",")}`);
   const scopeValue = scopeParts.join(" / ");
 
+  const rootPageSearchSeed = {
+    queryInput,
+    caseSensitive: effectiveCaseSensitive,
+  };
   const root = new SearchRootNode({
     query: compiled.displayQuery,
     scopeKind: effectiveScope.kind,
     scopeValue,
     totalHits: results.totalHits,
+    pageSearchSeed: rootPageSearchSeed,
   });
-  const sessionNodes = results.sessions.map((s) => new SearchSessionNode(s.session, s.hits));
+  const sessionNodes = results.sessions.map((s) => {
+    const preferredMessageIndex = resolveFirstPageSearchMessageIndex(s.hits);
+    return new SearchSessionNode(s.session, s.hits, {
+      ...rootPageSearchSeed,
+      autoOpen: false,
+      ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
+    });
+  });
   return {
     root,
     sessions: sessionNodes,
     request: {
       queryInput,
       roleFilter: Array.from(roleFilter),
+      ...(effectiveCaseSensitive !== config.searchCaseSensitive ? { caseSensitive: effectiveCaseSensitive } : {}),
     },
   };
+}
+
+function resolveFirstPageSearchMessageIndex(hits: readonly SearchHit[]): number | undefined {
+  return hits.find((hit) => hit.role === "user" || hit.role === "assistant")?.messageIndex;
 }
 
 function sanitizeRoleFilter(input: readonly IndexedSearchRole[]): Set<IndexedSearchRole> {
@@ -204,13 +232,6 @@ function matchScope(session: SessionSummary, scope: DateScope): boolean {
     default:
       return true;
   }
-}
-
-function matchProject(session: SessionSummary, projectCwd: string | null): boolean {
-  if (!projectCwd) return true;
-  const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
-  if (!cwd) return false;
-  return normalizeProjectKey(cwd) === normalizeProjectKey(projectCwd);
 }
 
 function matchSource(session: SessionSummary, sourceFilter: SessionSourceFilter): boolean {
@@ -410,9 +431,11 @@ function buildAround(text: string, hitAt: number, needleLen: number): string {
 }
 
 function compileSearchQuery(rawInput: string, caseSensitive: boolean): CompiledSearchQuery | null {
+  // Keep this grammar in sync with media/pageSearchCore.js.
   const raw = rawInput.trim();
   if (!raw) return null;
 
+  const slashRegexLike = isSlashRegexLike(raw);
   const slashRegex = parseSlashRegex(raw, caseSensitive);
   if (slashRegex) {
     const firstRegex = makeRegex(slashRegex.body, removeFlag(slashRegex.flags, "g"));
@@ -425,6 +448,7 @@ function compileSearchQuery(rawInput: string, caseSensitive: boolean): CompiledS
       locateAll: (text, maxMatches) => locateAllByRegex(text, allRegex, maxMatches),
     };
   }
+  if (slashRegexLike) return null;
 
   if (raw.toLowerCase().startsWith("re:")) {
     const body = raw.slice(3).trim();
@@ -475,6 +499,10 @@ function parseSlashRegex(raw: string, caseSensitive: boolean): { body: string; f
   const flags = caseSensitive ? flagsRaw : addFlag(flagsRaw, "i");
   if (!makeRegex(body, flags)) return null;
   return { body, flags };
+}
+
+function isSlashRegexLike(raw: string): boolean {
+  return /^\/(.+)\/([a-z]*)$/i.test(raw);
 }
 
 function makeRegex(body: string, flags: string): RegExp | null {

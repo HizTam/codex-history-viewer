@@ -1,15 +1,18 @@
 import { URLSearchParams } from "url";
 import * as vscode from "vscode";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
+import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import { collectLocalLinkBaseDirs, resolveLocalFileLinkTarget, tryParseLocalFileLink } from "../utils/localFileLinks";
 
 const MARKDOWN_LINK_PATTERN = /\[[^\]\r\n]+\]\(([^)\r\n]+)\)/g;
 
 export class TranscriptDocumentLinkProvider implements vscode.DocumentLinkProvider {
   private readonly transcriptScheme: string;
+  private readonly projectAssociationStore: ProjectAssociationStore;
 
-  constructor(transcriptScheme: string) {
+  constructor(transcriptScheme: string, projectAssociationStore: ProjectAssociationStore) {
     this.transcriptScheme = transcriptScheme;
+    this.projectAssociationStore = projectAssociationStore;
   }
 
   public async provideDocumentLinks(document: vscode.TextDocument): Promise<vscode.DocumentLink[]> {
@@ -19,8 +22,12 @@ export class TranscriptDocumentLinkProvider implements vscode.DocumentLinkProvid
     if (!sessionFsPath) return [];
 
     const meta = await tryReadSessionMeta(sessionFsPath);
+    const cwd = typeof meta?.cwd === "string" ? meta.cwd.trim() : "";
+    const displayCwd = cwd ? (this.projectAssociationStore.getDisplayCwd(cwd) ?? cwd) : "";
+    const projectPathMappings = cwd && displayCwd && cwd !== displayCwd ? [{ sourceCwd: cwd, targetCwd: displayCwd }] : [];
     const baseDirs = collectLocalLinkBaseDirs(
-      meta?.cwd,
+      displayCwd,
+      cwd,
       ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
     );
 
@@ -41,7 +48,7 @@ export class TranscriptDocumentLinkProvider implements vscode.DocumentLinkProvid
         const rawTarget = extractMarkdownLinkDestination(match[1]);
         if (!rawTarget || !tryParseLocalFileLink(rawTarget)) continue;
 
-        const resolved = await resolveLocalFileLinkTarget(rawTarget, { baseDirs });
+        const resolved = await resolveLocalFileLinkTarget(rawTarget, { baseDirs, projectPathMappings });
         if (!resolved) continue;
 
         const range = new vscode.Range(
@@ -49,9 +56,12 @@ export class TranscriptDocumentLinkProvider implements vscode.DocumentLinkProvid
           new vscode.Position(lineNumber, match.index + match[0].length),
         );
         const link = new vscode.DocumentLink(range, buildFileUriWithLocation(resolved));
+        const targetLabel = resolved.relocatedFrom
+          ? `${resolved.relocatedFrom} -> ${resolved.fsPath}`
+          : resolved.fsPath;
         link.tooltip = resolved.line
-          ? `Open ${resolved.fsPath}:${resolved.line}${resolved.column ? `:${resolved.column}` : ""}`
-          : `Open ${resolved.fsPath}`;
+          ? `Open ${targetLabel}:${resolved.line}${resolved.column ? `:${resolved.column}` : ""}`
+          : `Open ${targetLabel}`;
         links.push(link);
       }
     }

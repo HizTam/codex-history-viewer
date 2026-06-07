@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { ProjectAliasStore } from "../services/projectAliasStore";
+import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import type { ArchiveLocationFilter, SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import {
   SearchHelpNode,
@@ -24,6 +25,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;
   private readonly projectAliasStore: ProjectAliasStore;
+  private readonly projectAssociationStore: ProjectAssociationStore;
   private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
@@ -38,12 +40,14 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     pinStore: PinStore,
     annotationStore: SessionAnnotationStore,
     projectAliasStore: ProjectAliasStore,
+    projectAssociationStore: ProjectAssociationStore,
     archiveLocationFilter: ArchiveLocationFilter,
     extensionUri: vscode.Uri,
   ) {
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
     this.projectAliasStore = projectAliasStore;
+    this.projectAssociationStore = projectAssociationStore;
     this.archiveLocationFilter = archiveLocationFilter;
     this.codexIconPath = {
       light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
@@ -101,13 +105,14 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       const annotation = this.annotationStore.get(element.session.fsPath);
       // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
       const shortTitle = truncateByDisplayWidth(element.session.displayTitle, 40, "...");
-      const projectAlias = this.projectAliasStore.getAliasByCwd(getSessionCwd(element.session));
+      const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(element.session));
+      const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
       const label = `${element.session.localDate} ${element.session.timeLabel} ${shortTitle} (${element.hits.length})`;
       const item = new vscode.TreeItem(
         label,
         vscode.TreeItemCollapsibleState.Collapsed,
       );
-      item.description = buildSessionDescription(element.session, annotation?.tags ?? [], projectAlias);
+      item.description = buildSessionDescription(element.session, annotation?.tags ?? [], projectAlias, projectDisplayCwd);
       const node = new SessionNode(element.session, pinned);
       item.contextValue = toTreeItemContextValue(node);
       // Show source-specific icons (Codex/Claude) in the list row.
@@ -118,7 +123,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       item.command = {
         command: previewOnSelection ? "codexHistoryViewer.openSessionReusable" : "codexHistoryViewer.openSession",
         title: "",
-        arguments: [node],
+        arguments: [element],
       };
       item.tooltip = buildSearchSessionTooltip(
         element,
@@ -127,6 +132,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         label,
         typeof item.description === "string" ? item.description : undefined,
         projectAlias,
+        projectDisplayCwd,
       );
       return item;
     }
@@ -168,7 +174,20 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     if (!element) return this.rootNode ? [this.rootNode] : [this.helpNode];
     if (element instanceof SearchRootNode) return this.getVisibleSessionNodes();
     if (element instanceof SearchSessionNode) {
-      return element.hits.map((h) => new SearchHitNode(element.session, h, this.rootNode?.query ?? ""));
+      return element.hits.map((h) => {
+        const preferredMessageIndex =
+          h.role === "user" || h.role === "assistant" ? h.messageIndex : undefined;
+        const baseSeed = element.pageSearchSeed ?? {
+          queryInput: this.rootNode?.query ?? "",
+          caseSensitive: false,
+        };
+        return new SearchHitNode(element.session, h, this.rootNode?.query ?? "", {
+          queryInput: baseSeed.queryInput,
+          caseSensitive: baseSeed.caseSensitive,
+          autoOpen: false,
+          ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
+        });
+      });
     }
     return [];
   }
@@ -206,6 +225,11 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {
     return source === "claude" ? this.claudeIconPath : this.codexIconPath;
   }
+
+  private getProjectDisplayCwd(cwd: string | null): string | null {
+    if (!cwd) return null;
+    return this.projectAssociationStore.getDisplayCwd(cwd) ?? cwd;
+  }
 }
 
 function formatScopeLabel(root: SearchRootNode): string {
@@ -222,6 +246,7 @@ function buildSearchSessionTooltip(
   label: string,
   description?: string,
   projectAlias?: string,
+  projectDisplayCwd?: string | null,
 ): string | vscode.MarkdownString {
   const mode = getConfig().previewTooltipMode;
   if (mode === "titleOnly") return buildTreeRowTooltip(label, description);
@@ -236,8 +261,14 @@ function buildSearchSessionTooltip(
   }
   const alias = String(projectAlias ?? "").trim();
   const cwd = typeof node.session.meta?.cwd === "string" ? node.session.meta.cwd.trim() : "";
-  if (alias && cwd) {
+  const displayCwd = typeof projectDisplayCwd === "string" ? projectDisplayCwd.trim() : "";
+  if (alias) {
     md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.projectLabel"))}: ${escapeForMarkdown(alias)}  \n`);
+  }
+  if (displayCwd && cwd && displayCwd !== cwd) {
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.displayCwdLabel"))}: ${escapeForMarkdown(displayCwd)}  \n`);
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.originalCwdLabel"))}: ${escapeForMarkdown(cwd)}  \n`);
+  } else if (alias && cwd) {
     md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.cwdLabel"))}: ${escapeForMarkdown(cwd)}  \n`);
   } else if (node.session.cwdShort) {
     md.appendMarkdown(`${escapeForMarkdown(node.session.cwdShort)}  \n`);

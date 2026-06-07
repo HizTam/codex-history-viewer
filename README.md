@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **2.4.1** (2026-05-26).
+Latest release: **2.5.0** (2026-06-07).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -15,17 +15,17 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 ## Highlights
 
 - **Revisit past Codex CLI and Claude Code sessions** that are no longer easy to access from the active editor flow.
-- Browse sessions in a year / month / day tree, a latest-first list, or project-grouped views.
+- Browse sessions in a year / month / day tree, a latest-first list, or project views with related project groups.
 - Optionally include Codex `archived_sessions` when the Codex source is enabled, and switch archive visibility instantly.
 - Show valid cached History and Pinned data immediately at startup while local session files refresh in the background.
-- Search across prompts, responses, tool output, tags, notes, and attachment metadata.
+- Search across prompts, responses, tool output, tags, notes, and attachment metadata, with shared search history.
 - View sessions in a chat-like UI with Markdown, code highlighting, math rendering, tool cards, and file-change diffs.
-- Open **AI Change History** for a workspace file to review Codex / Claude diffs that touched that file.
+- Open **File AI Change History** for a workspace file to review Codex / Claude diffs that touched that file.
 - Bookmark important history cards and use date-guide markers to revisit them quickly.
 - Keep open chat tabs up to date with header-controlled auto-refresh modes.
 - Show supported image attachments, Claude documents, and file references from Codex / Claude sessions as compact cards.
-- Organize sessions with pins, tags, notes, custom titles, project aliases, saved searches, project modes, and filters.
-- Keep Pinned filters independent from History/Search, including project, source, archive visibility, tags, and sort mode.
+- Organize sessions with pins, tags, notes, custom titles, project aliases, project associations, saved searches, search history, display modes, and filters.
+- Keep Pinned filters independent from History/Search, including project scope, source, archive visibility, tags, and sort mode.
 - Experimental opt-in restoration for chat and file-change history Webviews after Reload Window or VS Code restart.
 - Resume past sessions through the official Codex and Claude Code VS Code extensions.
 - Create handoff files and prompts when moving work to another AI tool.
@@ -34,10 +34,10 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 
 1. Open the Activity Bar and select **Codex History**.
 2. Use **Control** for global actions such as settings, import, rebuild cache, empty trash, and search defaults.
-3. Browse sessions under **History** and switch between date, latest, and project-grouped views.
+3. Browse sessions under **History** and switch between date-grouped/latest-first layouts, List/Project display, and All/Current Project Group scope.
 4. Select a session to open the reusable chat tab, or run **Open in New Tab (Chat)** to keep it in its own tab.
 5. Use **Pinned** for saved sessions with its own date, project, source, archive, tag, and sort controls.
-6. Run **Search...** and refine with roles, query syntax, presets, and search tag filters.
+6. Run **Search...** and refine with roles, query syntax, search history, saved searches, and the current History filters.
 7. Use context menus or chat header actions to edit tags/notes and run bulk tag operations when needed.
 8. Enable **File Change History > Explorer Context Menu: Enabled** when you want file-level AI diff history from file right-click menus.
 9. Keep Codex enabled in **Sources: Enabled**, then turn on Codex archived sessions if you want archived Codex history included.
@@ -45,11 +45,13 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 
 ## History and Pinned Organization
 
-History supports three project modes: **No Project Filter**, **Current Project**, and **Group by Project**. Project matching is case-insensitive across platforms. Grouped project views preserve the existing layout choice: latest-first history becomes `Project -> Session`, while date-grouped history becomes `Project -> Year -> Month -> Day -> Session`.
+History and Pinned separate project organization into display and scope controls. Display can switch between **List** and **Project** views, while scope can switch between **All** and **Current Project Group**. Project matching is case-insensitive across platforms. Project views preserve the existing layout choice: latest-first history becomes `Project -> Session`, while date-grouped history becomes `Project -> Year -> Month -> Day -> Session`.
 
 Project folders can have extension-local aliases from the History or Pinned project context menu. Aliases are stored in VS Code extension state without changing Codex or Claude Code history files. When set, aliases appear in project headings, session descriptions, tooltips, filter summaries, Status, and Search scope/session display while the original path remains available in detailed metadata.
 
-Pinned has its own project, source, archive visibility, date, and tag filters. It does not follow History/Search filter state, so saved sessions can stay focused on a different project or source while you browse and search elsewhere. Pinned can also switch between pinned-date order and session-date order.
+Project associations can link another project's history into the current project display or group related projects together without moving the original history files. Associations are available from project context menus and are reflected in History, Pinned, Search, File AI Change History, and handoff content.
+
+Pinned has its own project scope, source, archive visibility, date, and tag filters. It does not follow History/Search filter state, so saved sessions can stay focused on a different project or source while you browse and search elsewhere. Pinned can also switch between pinned-date order and session-date order.
 
 ## Chat Viewer
 
@@ -58,6 +60,8 @@ The chat viewer renders local session files as readable conversation timelines. 
 Large histories can use the `auto`, `normal`, or `simplified` performance mode. Heavy tool details and large diff rows can be deferred until **Show details** is enabled or an individual entry is expanded.
 
 Chat tabs preserve useful state across reload and auto-refresh, including scroll position, selected message, expanded cards/diffs, detail visibility, diff wrapping, and in-page search state. The experimental opt-in **Restore Webview Tabs After Reload** setting can also restore chat and file-change history panels after **Developer: Reload Window** or VS Code restart. It is disabled by default because VS Code can defer Webview restoration and may occasionally create duplicate tabs when the same history is opened again.
+
+Chat history can keep the current user prompt visible at the top while you scroll. Codex memory citation information is rendered as a collapsible section instead of being left as raw metadata in the message body.
 
 ## Attachments and References
 
@@ -77,7 +81,11 @@ Search is local, cancellable, and backed by an incremental search index. It can 
 
 Supported query forms include normal substring search, `exact:...`, `re:...`, `/regex/`, and boolean `AND` / `OR` / `NOT`.
 
-Search follows the History date, project, source, and archive-visibility filters. It does not follow Pinned filters.
+Search follows the current History target, including date, project scope, project filter, source, archive visibility, and tags. It does not follow Pinned filters, and it does not create Search results from filters alone.
+
+The global search input combines manual search and search history. Search history is shared with in-page search in the chat viewer and File AI Change History, stores only query text, and can be selected to run or removed individually with the trash button. Saved searches also store and reuse only query text; role filters and case sensitivity are taken from the current settings when the saved search is run, and saved searches can be removed individually from the run picker.
+
+Opening a Search result can pass the same query into the chat viewer's in-page search. In-page search in the chat viewer and File AI Change History supports the same query forms, including exact matching and regular expressions, and can show search-history suggestions below the search input.
 
 Project aliases are shown in Search scope and result display, but they are not added to the search index or treated as searchable hit text.
 
@@ -91,7 +99,7 @@ Attachment indexing includes labels, paths, MIME types, file kinds, and bounded 
 
 ## Codex Archived Sessions
 
-Codex History Viewer can optionally read Codex `archived_sessions` in addition to normal Codex `sessions`. Archived sessions can be shown as active only, archived only, or all. History/Search and Pinned keep separate archive-visibility state. Active Codex sessions expose **Move to Archive**, while archived Codex sessions expose **Move to Codex History**.
+Codex History Viewer can optionally read Codex `archived_sessions` in addition to normal Codex `sessions`. Archived sessions can be shown as active only, archived only, or all. Search follows the History archive-visibility scope, while Pinned keeps its own independent archive-visibility state. Active Codex sessions expose **Move to Archive**, while archived Codex sessions expose **Move to Codex History**.
 
 Archive and restore operations prefer the official Codex provider. Moving archived sessions back to normal Codex history can fall back to a filesystem move when the official provider is unavailable. Pins, annotations, bookmarks, and saved chat positions are relocated when the session path changes.
 
@@ -101,11 +109,13 @@ Handoff actions appear under **Handoff to Other AI** for visible Codex / Claude 
 
 Handoff files are stored in this extension's VS Code global storage and include a tail-prioritized transcript excerpt, the latest user request, the source session path, recoverable file changes, and attachment summaries. Tool calls, tool outputs, and binary attachment payloads are intentionally omitted.
 
-## AI Change History
+When project associations are configured, handoff generation follows the associated project display and includes path mapping context for the receiving AI.
 
-AI Change History starts from a workspace file and shows the Codex / Claude changes that touched that file over time.
+## File AI Change History
 
-![AI Change History screenshot](media/screenshot_2.png)
+File AI Change History starts from a workspace file and shows the Codex / Claude changes that touched that file over time.
+
+![File AI Change History screenshot](media/screenshot_2.png)
 
 Use it when you want to answer questions such as:
 
@@ -115,7 +125,9 @@ Use it when you want to answer questions such as:
 
 The Explorer file context menu entry is opt-in. Enable **File Change History > Explorer Context Menu: Enabled**, then right-click a file in VS Code Explorer and run **Show File AI Change History**.
 
-The view is scoped to the current workspace and selected file. It supports Codex / Claude source toggles, in-view search, incremental **Load more**, previous/next navigation, and **Open in History** links back to the matching diff card in the original session.
+The view is scoped to the current workspace and selected file. It supports Codex / Claude source toggles, in-page search with shared query history and richer query syntax, incremental **Load more**, previous/next navigation, and **Open in History** links back to the matching diff card in the original session.
+
+File AI Change History follows project associations when resolving related history, so associated project displays and path mappings are reflected when possible.
 
 ## Configuration
 
@@ -130,6 +142,7 @@ Most settings are available from VS Code Settings under **Codex History Viewer**
 - `codexHistoryViewer.fileChangeHistory.explorerContextMenu.enabled`: show **File AI Change History** in Explorer.
 - `codexHistoryViewer.autoRefresh.enabled`: refresh History and opt-in chat tabs when local session files change.
 - `codexHistoryViewer.chat.openPosition`: open chat at top, last viewed message, or latest rendered card.
+- `codexHistoryViewer.chat.stickyUserPrompt`: keep the current user prompt visible while scrolling chat history.
 - `codexHistoryViewer.chat.performanceMode`: choose default chat rendering performance mode.
 - `codexHistoryViewer.webview.restoreAfterReload`: experimental opt-in to restoring chat and file-change history Webview tabs after Reload Window or VS Code restart.
 - `codexHistoryViewer.images.enabled`: show supported image attachments.
@@ -152,15 +165,16 @@ For the full command list with per-command descriptions, see:
 - If the official Codex extension stops reopening a conversation, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.4.1
+## What's New in 2.5.0
 
-- Added project aliases for project folders, stored only in VS Code extension state.
-- Project aliases appear in History, Pinned, Search, tooltips, filter summaries, and Status without becoming searchable hit text.
-- Added Undo support for setting and clearing project aliases.
-- Added the experimental opt-in **Restore Webview Tabs After Reload** setting for restoring chat and file-change history panels after Reload Window or VS Code restart.
-- Added rendering for Codex code review comments as readable cards in the chat Webview.
-- Changed archive visibility summaries from `Location` to `Archive` to avoid confusing them with project paths.
-- Fixed the in-Webview search panel forcing full width and hiding its resize handle in narrow windows.
+- Added **Project Association** so related project histories can be linked or grouped without moving the original history files.
+- Added separate **List / Project** display and **All / Current Project Group** scope controls to History and Pinned.
+- Added **shared search history** across global search and in-page search (chat viewer and File AI Change History).
+- Added **regular expression search** and richer query syntax to in-page search (chat viewer and File AI Change History), including exact matching and search-history suggestions.
+- Added Codex memory citation display and a sticky current user prompt in chat history.
+- Changed global search to follow the current History target, including project scope, tags, Codex/Claude source, archive visibility, and date filters.
+- Changed search history and saved searches to store, display, and reuse only query text, with per-item deletion from their QuickPicks.
+- Fixed File AI Change History in-page search so the “No more history” label is not matched, and fixed Pinned project ordering for same-time updates.
 
 ## Changelog
 

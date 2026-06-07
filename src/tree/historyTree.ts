@@ -4,11 +4,15 @@ import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { ProjectAliasStore } from "../services/projectAliasStore";
+import { NO_CWD_PROJECT_KEY, type ProjectAssociationStore } from "../services/projectAssociationStore";
 import {
   HistoryEmptyNode,
   SessionNode,
   DayNode,
   MonthNode,
+  type ProjectAssociatedSource,
+  type ProjectParentAssociation,
+  RelatedGroupNode,
   ProjectDayNode,
   ProjectMonthNode,
   ProjectNode,
@@ -25,10 +29,28 @@ import { safeDisplayPath, truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
 import { buildSessionDescription } from "./sessionDescriptionUtils";
 import { buildSessionHoverTooltip } from "./sessionTooltipUtils";
+import { matchProjectByCanonicalKey } from "../services/projectPathMapper";
+import {
+  appendAssociatedSourceLines,
+  buildAssociatedSources,
+  buildDirectGroupOnlySourcesByTargetKey,
+  buildProjectGroupTreeNodes,
+  compareProjectTreeNodes,
+  type ProjectGroupTreeBuildContext,
+} from "./projectGroupTreeBuilder";
 
 export type HistoryViewMode = "date" | "latest";
 
-const NO_CWD_PROJECT_KEY = "__no_cwd__";
+type HistoryProjectBucket = {
+  key: string;
+  groupKey: string;
+  cwd: string | null;
+  sessions: SessionSummary[];
+  associatedSourceCwds: Map<string, string>;
+  hasTargetSession: boolean;
+};
+
+type HistoryProjectBuildContext = ProjectGroupTreeBuildContext<HistoryProjectBucket>;
 
 // Provides the history tree (year -> month -> day -> session).
 export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
@@ -36,9 +58,13 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;
   private readonly projectAliasStore: ProjectAliasStore;
+  private readonly projectAssociationStore: ProjectAssociationStore;
   private viewMode: HistoryViewMode;
   private filter: DateScope;
   private projectCwd: string | null;
+  private projectCwdKey: string | null = null;
+  private projectScopeCwd: string | null;
+  private projectScopeCwdKey: string | null = null;
   private projectGrouped: boolean;
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
@@ -46,6 +72,9 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private initialLoadComplete = false;
   private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly canonicalProjectKeyCache = new Map<string, string>();
+  private filteredSessionsCache: SessionSummary[] | null = null;
+  private projectSessionsByRelocationKey = new Map<string, SessionSummary[]>();
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   public readonly onDidChangeTreeData = this.emitter.event;
 
@@ -54,9 +83,11 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     pinStore: PinStore,
     annotationStore: SessionAnnotationStore,
     projectAliasStore: ProjectAliasStore,
+    projectAssociationStore: ProjectAssociationStore,
     viewMode: HistoryViewMode,
     filter: DateScope,
     projectCwd: string | null,
+    projectScopeCwd: string | null,
     projectGrouped: boolean,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
@@ -67,9 +98,12 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
     this.projectAliasStore = projectAliasStore;
+    this.projectAssociationStore = projectAssociationStore;
     this.viewMode = viewMode;
     this.filter = filter;
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
+    this.projectScopeCwd =
+      typeof projectScopeCwd === "string" && projectScopeCwd.trim().length > 0 ? projectScopeCwd.trim() : null;
     this.projectGrouped = projectGrouped;
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
@@ -82,10 +116,19 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-claude.svg"),
       dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-claude.svg"),
     };
+    this.recomputeProjectFilterKeys();
   }
 
   public refresh(): void {
+    this.canonicalProjectKeyCache.clear();
+    this.clearSessionDerivedCaches();
+    this.recomputeProjectFilterKeys();
     this.emitter.fire();
+  }
+
+  private clearSessionDerivedCaches(): void {
+    this.filteredSessionsCache = null;
+    this.projectSessionsByRelocationKey.clear();
   }
 
   public markInitialLoadComplete(): void {
@@ -96,6 +139,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public setFilter(filter: DateScope): void {
     this.filter = filter;
+    this.clearSessionDerivedCaches();
   }
 
   public setViewMode(viewMode: HistoryViewMode): void {
@@ -104,6 +148,17 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public setProjectFilter(projectCwd: string | null): void {
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
+    this.canonicalProjectKeyCache.clear();
+    this.clearSessionDerivedCaches();
+    this.recomputeProjectFilterKeys();
+  }
+
+  public setProjectScopeFilter(projectScopeCwd: string | null): void {
+    this.projectScopeCwd =
+      typeof projectScopeCwd === "string" && projectScopeCwd.trim().length > 0 ? projectScopeCwd.trim() : null;
+    this.canonicalProjectKeyCache.clear();
+    this.clearSessionDerivedCaches();
+    this.recomputeProjectFilterKeys();
   }
 
   public setProjectGrouped(projectGrouped: boolean): void {
@@ -112,35 +167,39 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public setSourceFilter(sourceFilter: SessionSourceFilter): void {
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
+    this.clearSessionDerivedCaches();
   }
 
   public setTagFilter(tags: readonly string[]): void {
     this.tagFilter = normalizeTagFilter(tags);
+    this.clearSessionDerivedCaches();
   }
 
   public setArchiveLocationFilter(archiveLocationFilter: ArchiveLocationFilter): void {
     this.archiveLocationFilter = archiveLocationFilter;
+    this.clearSessionDerivedCaches();
   }
 
   public setFilters(
     filter: DateScope,
     projectCwd: string | null,
+    projectScopeCwd: string | null,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
   ): void {
     // Update filters in bulk; the caller triggers refresh.
     this.setFilter(filter);
     this.setProjectFilter(projectCwd);
+    this.setProjectScopeFilter(projectScopeCwd);
     this.setSourceFilter(sourceFilter);
     this.setTagFilter(tagFilter);
   }
 
   private matchesProject(session: SessionSummary): boolean {
-    const projectCwd = this.projectCwd;
-    if (!projectCwd) return true;
-    const cwd = session.meta?.cwd;
-    if (typeof cwd !== "string" || cwd.trim().length === 0) return false;
-    return normalizeProjectKey(cwd) === normalizeProjectKey(projectCwd);
+    return matchProjectByCanonicalKey(session.meta?.cwd, {
+      projectKey: this.projectCwdKey,
+      projectScopeKey: this.projectScopeCwdKey,
+    }, (cwd) => this.getCanonicalProjectKey(cwd));
   }
 
   private matchesTags(session: SessionSummary): boolean {
@@ -234,21 +293,18 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       item.contextValue = toTreeItemContextValue(element);
       item.iconPath = new vscode.ThemeIcon("root-folder");
       if (element.alias) {
-        item.tooltip = t(
-          "tree.tooltip.projectWithAlias",
-          element.alias,
-          element.cwd ?? t("tree.project.noCwd"),
-          element.sessionCount,
-          element.latestLabel,
-        );
+        item.tooltip = this.buildProjectTooltip(element, true);
       } else {
-        item.tooltip = t(
-          "tree.tooltip.project",
-          element.cwd ?? t("tree.project.noCwd"),
-          element.sessionCount,
-          element.latestLabel,
-        );
+        item.tooltip = this.buildProjectTooltip(element, false);
       }
+      return item;
+    }
+    if (element instanceof RelatedGroupNode) {
+      const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Collapsed);
+      item.description = element.description;
+      item.contextValue = toTreeItemContextValue(element);
+      item.iconPath = new vscode.ThemeIcon("folder-library");
+      item.tooltip = this.buildRelatedGroupTooltip(element);
       return item;
     }
     if (element instanceof ProjectYearNode) {
@@ -310,8 +366,9 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const label = `${prefix} ${shortTitle}`;
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
     const annotation = this.annotationStore.get(session.fsPath);
-    const projectAlias = this.projectAliasStore.getAliasByCwd(getSessionCwd(session));
-    item.description = buildSessionDescription(session, annotation?.tags ?? [], projectAlias);
+    const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(session));
+    const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
+    item.description = buildSessionDescription(session, annotation?.tags ?? [], projectAlias, projectDisplayCwd);
     const node = new SessionNode(session, pinned);
     item.contextValue = toTreeItemContextValue(node);
     // Show source-specific icons (Codex/Claude) in the list row.
@@ -332,6 +389,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       description: typeof item.description === "string" ? item.description : undefined,
       mode: getConfig().previewTooltipMode,
       projectAlias,
+      projectDisplayCwd,
     });
     return item;
   }
@@ -341,50 +399,170 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   private getFilteredSessions(): SessionSummary[] {
-    return this.historyService.getIndex().sessions.filter((s) => this.matchesSession(s));
+    if (this.filteredSessionsCache) return this.filteredSessionsCache;
+    this.filteredSessionsCache = this.historyService.getIndex().sessions.filter((s) => this.matchesSession(s));
+    return this.filteredSessionsCache;
   }
 
-  private buildProjectNodes(sessions: readonly SessionSummary[]): ProjectNode[] {
-    const groups = new Map<string, { cwd: string | null; sessions: SessionSummary[] }>();
+  private buildProjectNodes(sessions: readonly SessionSummary[]): TreeNode[] {
+    const context = this.buildProjectBuildContext(sessions);
+    return buildProjectGroupTreeNodes({
+      context,
+      createProjectNode: (bucket, parentAssociation) => this.createProjectNodeFromBucket(bucket, parentAssociation),
+      getRepresentativeCwd: (targetKey, bucket) => this.getRepresentativeCwdForProjectKey(targetKey, bucket?.cwd ?? null),
+      getAliasByCwd: (cwd) => this.projectAliasStore.getAliasByCwd(cwd) ?? null,
+      buildProjectLabel,
+      compareNodes: compareProjectTreeNodes,
+    });
+  }
 
+  private buildProjectBuildContext(sessions: readonly SessionSummary[]): HistoryProjectBuildContext {
+    const buckets = new Map<string, HistoryProjectBucket>();
     for (const session of sessions) {
       const cwd = getSessionCwd(session);
-      const key = cwd ? normalizeProjectKey(cwd) : NO_CWD_PROJECT_KEY;
-      const existing = groups.get(key);
+      const rawKey = cwd ? normalizeProjectKey(cwd) : NO_CWD_PROJECT_KEY;
+      const groupKey = cwd ? this.getCanonicalProjectKey(cwd) : NO_CWD_PROJECT_KEY;
+      const key = cwd ? this.getRelocationProjectKey(cwd) : NO_CWD_PROJECT_KEY;
+      const existing = buckets.get(key);
       if (existing) {
         existing.sessions.push(session);
+        if (cwd && rawKey === key) {
+          existing.cwd = cwd;
+          existing.hasTargetSession = true;
+        } else if (cwd) {
+          existing.associatedSourceCwds.set(rawKey, cwd);
+        }
         continue;
       }
-      groups.set(key, { cwd, sessions: [session] });
+      const representativeCwd = this.getRepresentativeCwdForProjectKey(key, cwd && rawKey === key ? cwd : null);
+      const associatedSourceCwds = new Map<string, string>();
+      if (cwd && rawKey !== key) associatedSourceCwds.set(rawKey, cwd);
+      buckets.set(key, {
+        key,
+        groupKey,
+        cwd: representativeCwd ?? cwd,
+        sessions: [session],
+        associatedSourceCwds,
+        hasTargetSession: !!cwd && rawKey === key,
+      });
     }
 
-    const nodes = Array.from(groups.entries()).map(([key, group]) => {
-      const latest = group.sessions[0];
-      const fallbackLabel = buildProjectLabel(group.cwd);
-      const alias = this.projectAliasStore.getAliasByCwd(group.cwd) ?? null;
-      const label = alias ?? fallbackLabel;
-      const description = buildProjectDescription(group.cwd, group.sessions.length);
-      return new ProjectNode({
-        key,
-        label,
-        cwd: group.cwd,
-        alias,
-        fallbackLabel,
-        sessionCount: group.sessions.length,
-        latestLabel: latest ? `${latest.localDate} ${latest.timeLabel}` : "",
-        description,
-      });
-    });
+    this.projectSessionsByRelocationKey = new Map(
+      Array.from(buckets.entries()).map(([key, bucket]) => [key, bucket.sessions.slice()]),
+    );
 
-    nodes.sort((a, b) => {
-      if (a.latestLabel !== b.latestLabel) return a.latestLabel < b.latestLabel ? 1 : -1;
-      return a.label.localeCompare(b.label);
+    return {
+      buckets,
+      directGroupOnlySourcesByTargetKey: buildDirectGroupOnlySourcesByTargetKey(this.projectAssociationStore.getAll()),
+    };
+  }
+
+  private createProjectNodeFromBucket(
+    group: HistoryProjectBucket,
+    parentAssociation: ProjectParentAssociation | null = null,
+  ): ProjectNode {
+    const latest = group.sessions[0];
+    const fallbackLabel = buildProjectLabel(group.cwd);
+    const alias = this.projectAliasStore.getAliasByCwd(group.cwd) ?? null;
+    const label = alias ?? fallbackLabel;
+    const associatedSources = buildAssociatedSources(
+      group.cwd ? this.projectAssociationStore.getRelocationSourcesForTargetCwd(group.cwd) : [],
+      group.associatedSourceCwds,
+    );
+    const description = buildProjectDescription(
+      group.cwd,
+      group.sessions.length,
+      associatedSources.length,
+      !group.hasTargetSession && associatedSources.length > 0,
+    );
+    return new ProjectNode({
+      key: group.key,
+      label,
+      cwd: group.cwd,
+      alias,
+      fallbackLabel,
+      sessionCount: group.sessions.length,
+      latestLabel: latest ? `${latest.localDate} ${latest.timeLabel}` : "",
+      description,
+      associatedSources,
+      targetMissingHistory: !group.hasTargetSession && associatedSources.length > 0,
+      parentAssociation,
     });
-    return nodes;
   }
 
   private getProjectSessions(projectKey: string): SessionSummary[] {
-    return this.getFilteredSessions().filter((session) => getSessionProjectKey(session) === projectKey);
+    const cached = this.projectSessionsByRelocationKey.get(projectKey);
+    if (cached) return cached;
+    return this.getFilteredSessions().filter((session) => {
+      const cwd = getSessionCwd(session);
+      const key = cwd ? this.getRelocationProjectKey(cwd) : NO_CWD_PROJECT_KEY;
+      return key === projectKey;
+    });
+  }
+
+  private getCanonicalProjectKey(cwd: string): string {
+    const key = normalizeProjectKey(cwd);
+    const cached = this.canonicalProjectKeyCache.get(key);
+    if (cached) return cached;
+    const canonical = this.projectAssociationStore.getCanonicalProjectKey(cwd) ?? key;
+    this.canonicalProjectKeyCache.set(key, canonical);
+    return canonical;
+  }
+
+  private recomputeProjectFilterKeys(): void {
+    this.projectCwdKey = this.projectCwd ? this.getCanonicalProjectKey(this.projectCwd) : null;
+    this.projectScopeCwdKey = this.projectScopeCwd ? this.getCanonicalProjectKey(this.projectScopeCwd) : null;
+  }
+
+  private getRelocationProjectKey(cwd: string): string {
+    return this.projectAssociationStore.getRelocationProjectKey(cwd) ?? normalizeProjectKey(cwd);
+  }
+
+  private getRepresentativeCwdForProjectKey(projectKey: string, fallbackCwd: string | null): string | null {
+    if (projectKey === NO_CWD_PROJECT_KEY) return null;
+    return this.projectAssociationStore.getRepresentativeTargetCwd(projectKey) ?? fallbackCwd;
+  }
+
+  private getProjectDisplayCwd(cwd: string | null): string | null {
+    if (!cwd) return null;
+    return this.projectAssociationStore.getDisplayCwd(cwd) ?? cwd;
+  }
+
+  private buildProjectTooltip(element: ProjectNode, withAlias: boolean): string {
+    const lines = [
+      withAlias
+        ? t(
+            "tree.tooltip.projectWithAlias",
+            element.alias ?? element.label,
+            element.cwd ?? t("tree.project.noCwd"),
+            element.sessionCount,
+            element.latestLabel,
+          )
+        : t(
+            "tree.tooltip.project",
+            element.cwd ?? t("tree.project.noCwd"),
+            element.sessionCount,
+            element.latestLabel,
+          ),
+    ];
+    if (element.targetMissingHistory) lines.push(t("projectAssociation.target.missingHistory"));
+    appendAssociatedSourceLines(lines, element.associatedSources, formatProjectAssociationMode);
+    return lines.join("\n");
+  }
+
+  private buildRelatedGroupTooltip(element: RelatedGroupNode): string {
+    const lines = [
+      t(
+        "projectAssociation.group.tooltip",
+        element.alias ?? element.fallbackLabel,
+        element.cwd ?? t("tree.project.noCwd"),
+        element.projectCount,
+        element.sessionCount,
+        element.latestLabel,
+      ),
+    ];
+    appendAssociatedSourceLines(lines, element.directSources, formatProjectAssociationMode);
+    return lines.join("\n");
   }
 
   private buildProjectChildren(element: TreeNode | undefined, shouldFilterSessions: boolean): TreeNode[] {
@@ -413,6 +591,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
         default:
           return [];
       }
+    }
+
+    if (element instanceof RelatedGroupNode) {
+      return [...element.children];
     }
 
     if (element instanceof ProjectYearNode) {
@@ -452,6 +634,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       this.archiveLocationFilter !== "all" ||
       this.filter.kind !== "all" ||
       !!this.projectCwd ||
+      !!this.projectScopeCwd ||
       this.sourceFilter !== "all" ||
       this.tagFilter.length > 0;
     if (this.projectGrouped) {
@@ -459,9 +642,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     }
     if (this.viewMode === "latest") {
       if (element) return [];
-      const nodes = idx.sessions
-        .filter((s) => this.matchesSession(s))
-        .map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+      const nodes = this.getFilteredSessions().map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
       return this.withFilteredEmptyFallback(nodes, shouldFilterSessions);
     }
 
@@ -617,11 +798,6 @@ function getSessionCwd(session: SessionSummary): string | null {
   return cwd.length > 0 ? cwd : null;
 }
 
-function getSessionProjectKey(session: SessionSummary): string {
-  const cwd = getSessionCwd(session);
-  return cwd ? normalizeProjectKey(cwd) : NO_CWD_PROJECT_KEY;
-}
-
 function buildProjectLabel(cwd: string | null): string {
   if (!cwd) return t("tree.project.noCwd");
   const normalized = cwd.replace(/[\\/]+/g, path.sep);
@@ -629,9 +805,21 @@ function buildProjectLabel(cwd: string | null): string {
   return base.length > 0 ? base : safeDisplayPath(cwd, 60);
 }
 
-function buildProjectDescription(cwd: string | null, sessionCount: number): string {
+function buildProjectDescription(
+  cwd: string | null,
+  sessionCount: number,
+  associatedSourceCount = 0,
+  targetMissingHistory = false,
+): string {
   if (!cwd) return String(sessionCount);
-  return `${sessionCount}  ${safeDisplayPath(cwd, 56)}`;
+  const parts = [`${sessionCount}  ${safeDisplayPath(cwd, 56)}`];
+  if (associatedSourceCount > 0) parts.push(t("projectAssociation.description.relatedPaths", associatedSourceCount));
+  if (targetMissingHistory) parts.push(t("projectAssociation.target.missingHistory"));
+  return parts.join("  ");
+}
+
+function formatProjectAssociationMode(mode: ProjectAssociatedSource["mode"]): string {
+  return mode === "groupOnly" ? t("projectAssociation.mode.groupOnly") : t("projectAssociation.mode.relocate");
 }
 
 function uniqueDateParts(sessions: readonly SessionSummary[], part: "year" | "month" | "day"): string[] {

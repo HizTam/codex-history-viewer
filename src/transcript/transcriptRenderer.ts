@@ -14,7 +14,12 @@ import {
 // Reads session JSONL and renders the conversation as Markdown.
 export async function renderTranscript(
   fsPath: string,
-  options: { timeZone: string; annotation?: { tags?: readonly string[]; note?: string }; locationLabel?: string },
+  options: {
+    timeZone: string;
+    annotation?: { tags?: readonly string[]; note?: string };
+    locationLabel?: string;
+    displayCwd?: string | null;
+  },
 ): Promise<{ content: string; messageLineMap: Map<number, number> }> {
   const timeZone = options.timeZone;
 
@@ -35,6 +40,8 @@ export async function renderTranscript(
   if (options.locationLabel) lines.push(`- Location: \`${options.locationLabel}\``);
   if (meta?.timestampIso) lines.push(`- Start: \`${formatIsoToLocal(meta.timestampIso, timeZone, { withSeconds: false })}\``);
   if (meta?.cwd) lines.push(`- CWD: \`${meta.cwd}\``);
+  const displayCwd = typeof options.displayCwd === "string" ? options.displayCwd.trim() : "";
+  if (displayCwd && meta?.cwd && displayCwd !== meta.cwd) lines.push(`- Display CWD: \`${displayCwd}\``);
   if (meta?.originator) lines.push(`- Originator: \`${meta.originator}\``);
   if (meta?.cliVersion) lines.push(`- CLI: \`${meta.cliVersion}\``);
   if (meta?.modelProvider) lines.push(`- Model Provider: \`${meta.modelProvider}\``);

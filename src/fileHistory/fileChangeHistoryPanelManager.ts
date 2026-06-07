@@ -13,9 +13,17 @@ import {
 import type { HistoryService } from "../services/historyService";
 import type { DebugLogger } from "../services/logger";
 import { buildBookmarkKey, type BookmarkStore, type BookmarkTarget } from "../services/bookmarkStore";
+import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import { SearchIndexService } from "../services/searchIndexService";
+import {
+  GLOBAL_SEARCH_HISTORY_PROJECT_KEY,
+  buildSearchHistoryEntryKey,
+  normalizeSearchHistoryProjectKey,
+  SearchHistoryStore,
+  type SearchHistoryEntry,
+} from "../services/searchHistoryStore";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
-import { normalizeCacheKey, pathExists } from "../utils/fsUtils";
+import { normalizeCacheKey, normalizeProjectKey, pathExists } from "../utils/fsUtils";
 import {
   FILE_CHANGE_HISTORY_PAGE_SIZE,
   type FileChangeHistoryCandidate,
@@ -26,7 +34,7 @@ import {
 } from "./fileChangeHistoryTypes";
 import { FileChangeHistoryService } from "./fileChangeHistoryService";
 
-type StaleReason = "indexToolContent" | "sources";
+type StaleReason = "association" | "indexToolContent" | "sources";
 
 interface FileChangeHistoryPanelState {
   target: FileChangeHistoryTarget;
@@ -73,8 +81,10 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
   private readonly historyService: HistoryService;
   private readonly searchIndexService: SearchIndexService;
   private readonly fileChangeHistoryService: FileChangeHistoryService;
+  private readonly projectAssociationStore: ProjectAssociationStore;
   private readonly chatPanels: ChatPanelManager;
   private readonly bookmarkStore: BookmarkStore;
+  private readonly searchHistoryStore: SearchHistoryStore;
   private readonly logger?: DebugLogger;
   private readonly bookmarkSubscription: vscode.Disposable;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
@@ -88,16 +98,20 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     historyService: HistoryService,
     searchIndexService: SearchIndexService,
     fileChangeHistoryService: FileChangeHistoryService,
+    projectAssociationStore: ProjectAssociationStore,
     chatPanels: ChatPanelManager,
     bookmarkStore: BookmarkStore,
+    searchHistoryStore: SearchHistoryStore,
     logger?: DebugLogger,
   ) {
     this.extensionUri = extensionUri;
     this.historyService = historyService;
     this.searchIndexService = searchIndexService;
     this.fileChangeHistoryService = fileChangeHistoryService;
+    this.projectAssociationStore = projectAssociationStore;
     this.chatPanels = chatPanels;
     this.bookmarkStore = bookmarkStore;
+    this.searchHistoryStore = searchHistoryStore;
     this.logger = logger;
     const extensionIcon = vscode.Uri.joinPath(extensionUri, "resources", "extension-icon.svg");
     this.panelIconPath = {
@@ -142,6 +156,14 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     }
   }
 
+  public refreshSearchHistoryCandidates(): void {
+    for (const panel of this.panelsByKey.values()) {
+      if (!this.readyByPanel.get(panel)) continue;
+      const candidates = this.getSearchHistoryCandidates(this.resolvePanelSearchHistoryProjectKey(panel));
+      void panel.webview.postMessage({ type: "searchHistoryCandidates", candidates });
+    }
+  }
+
   private refreshBookmarkState(): void {
     for (const panel of this.panelsByKey.values()) {
       if (!this.readyByPanel.get(panel)) continue;
@@ -157,6 +179,11 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     }
     const keys = Array.from(this.bookmarkStore.getKeysForTargets(Array.from(targets.values())).values());
     await panel.webview.postMessage({ type: "bookmarkState", keys });
+  }
+
+  private refreshAllSearchHistoryCandidates(): void {
+    this.chatPanels.refreshSearchHistoryCandidates();
+    this.refreshSearchHistoryCandidates();
   }
 
   public notifySettingsChanged(reason: StaleReason): void {
@@ -565,6 +592,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     switch (type) {
       case "ready":
         this.readyByPanel.set(panel, true);
+        this.refreshSearchHistoryCandidates();
         await this.sendLoading(panel, "syncIndex");
         // A fresh webview script instance should rebuild from extension-side state.
         {
@@ -609,6 +637,29 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
         } finally {
           await this.sendBookmarkState(panel);
         }
+        return;
+      }
+      case "savePageSearchHistory": {
+        const queryInput = typeof msg?.queryInput === "string" ? msg.queryInput.trim() : "";
+        if (!queryInput) return;
+        const projectKey = this.resolvePanelSearchHistoryProjectKey(panel);
+        const saved = await this.searchHistoryStore.save({
+          projectKey,
+          queryInput,
+        });
+        if (saved) {
+          this.refreshAllSearchHistoryCandidates();
+        }
+        return;
+      }
+      case "removePageSearchHistory": {
+        const queryInput = typeof msg?.queryInput === "string" ? msg.queryInput.trim() : "";
+        if (!queryInput) return;
+        const removed = await this.searchHistoryStore.remove(
+          this.resolvePanelSearchHistoryProjectKey(panel),
+          queryInput,
+        );
+        if (removed) this.refreshAllSearchHistoryCandidates();
         return;
       }
       case "dismissStale":
@@ -758,6 +809,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       addedCount: options.addedCount,
       reason: options.reason,
       bookmarks: bookmarkState.bookmarkKeys,
+      searchHistoryCandidates: this.getSearchHistoryCandidates(this.resolvePanelSearchHistoryProjectKey(panel)),
       timeGuideEnabled: config.timeGuideEnabled,
       debugLoggingEnabled: this.logger?.isDebugEnabled() ?? false,
       scrollAnchor: restoreScrollAnchor,
@@ -791,6 +843,28 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     };
   }
 
+  private resolvePanelSearchHistoryProjectKey(panel: vscode.WebviewPanel): string {
+    const state = this.stateByPanel.get(panel);
+    return this.resolveSearchHistoryProjectKey(state?.target.workspaceRoot);
+  }
+
+  private resolveSearchHistoryProjectKey(workspaceRoot: string | null | undefined): string {
+    const raw = typeof workspaceRoot === "string" ? workspaceRoot.trim() : "";
+    if (!raw) return GLOBAL_SEARCH_HISTORY_PROJECT_KEY;
+    const projectKey = this.projectAssociationStore.isEmpty()
+      ? normalizeProjectKey(raw)
+      : (this.projectAssociationStore.getCanonicalProjectKey(raw) ?? normalizeProjectKey(raw));
+    return normalizeSearchHistoryProjectKey(projectKey);
+  }
+
+  private getSearchHistoryCandidates(projectKey: string | null | undefined): Array<SearchHistoryEntry & { key: string }> {
+    const normalizedProjectKey = normalizeSearchHistoryProjectKey(projectKey);
+    return this.searchHistoryStore.getAll(normalizedProjectKey).map((entry) => ({
+      ...entry,
+      key: buildSearchHistoryEntryKey(entry.projectKey, entry.queryInput),
+    }));
+  }
+
   private buildHtml(webview: vscode.Webview): string {
     const nonce = randomNonce();
     const sharedTimeGuideCssUri = webview.asWebviewUri(
@@ -800,6 +874,9 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       vscode.Uri.joinPath(this.extensionUri, "media", "sharedTimeGuide.js"),
     );
     const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "fileChangeHistory.css"));
+    const pageSearchCoreUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "pageSearchCore.js"),
+    );
     const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "fileChangeHistory.js"));
     const csp = [
       `default-src 'none'`,
@@ -821,8 +898,28 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
 </head>
 <body>
   <div id="app"></div>
+  <div id="pageSearchBar" hidden>
+    <div id="pageSearchResizeHandle" aria-hidden="true"></div>
+    <div id="pageSearchInner">
+      <div id="pageSearchHeader">
+        <div id="pageSearchTitle"></div>
+        <div id="pageSearchActions">
+          <button id="btnPageSearchPrev" type="button" class="toolbarIconBtn"></button>
+          <button id="btnPageSearchNext" type="button" class="toolbarIconBtn"></button>
+          <button id="btnPageSearchClose" type="button" class="toolbarIconBtn"></button>
+        </div>
+      </div>
+      <div id="pageSearchInputRow">
+        <input id="pageSearchInput" type="search" spellcheck="false" autocomplete="off" />
+        <div id="pageSearchCount" aria-live="polite"></div>
+      </div>
+      <div id="pageSearchSuggestions" role="listbox" hidden></div>
+    </div>
+    <div id="pageSearchResults" role="listbox" aria-live="polite"></div>
+  </div>
   <div id="restoreCover" aria-hidden="true" hidden></div>
   <script nonce="${nonce}" src="${sharedTimeGuideJsUri}"></script>
+  <script nonce="${nonce}" src="${pageSearchCoreUri}"></script>
   <script nonce="${nonce}" src="${jsUri}"></script>
 </body>
 </html>`;
@@ -852,6 +949,10 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       pageSearchCloseTooltip: t("chat.pageSearch.closeTooltip"),
       pageSearchNoMatches: t("chat.pageSearch.noMatches"),
       pageSearchTypeToSearch: t("chat.pageSearch.typeToSearch"),
+      pageSearchInvalidQuery: t("chat.pageSearch.invalidQuery"),
+      pageSearchInvalidRegex: t("chat.pageSearch.invalidRegex"),
+      pageSearchNoHistory: t("chat.pageSearch.noHistory"),
+      pageSearchRemoveHistory: t("chat.pageSearch.removeHistory"),
       patchBefore: t("chat.patch.before"),
       patchAfter: t("chat.patch.after"),
       patchNoDiff: t("chat.patch.noDiff"),
@@ -890,6 +991,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       close: t("fileChangeHistory.close"),
       staleIndexToolContent: t("fileChangeHistory.stale.indexToolContent"),
       staleSources: t("fileChangeHistory.stale.sources"),
+      staleAssociation: t("fileChangeHistory.stale.association"),
       loadMoreDone: t("fileChangeHistory.loadMoreDone"),
       loadMoreDoneMore: t("fileChangeHistory.loadMoreDoneMore"),
       loadMoreAvailable: t("fileChangeHistory.loadMoreAvailable"),

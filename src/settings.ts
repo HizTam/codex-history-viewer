@@ -51,6 +51,7 @@ export interface CodexHistoryViewerConfig {
   toolDisplayMode: ToolDisplayMode;
   userLongMessageFolding: LongMessageFoldingMode;
   assistantLongMessageFolding: LongMessageFoldingMode;
+  stickyUserPrompt: boolean;
   timeGuideEnabled: boolean;
 }
 
@@ -201,6 +202,7 @@ export function getConfig(): CodexHistoryViewerConfig {
     toolDisplayMode,
     userLongMessageFolding,
     assistantLongMessageFolding,
+    stickyUserPrompt: cfg.get<boolean>("chat.stickyUserPrompt") ?? true,
     timeGuideEnabled: cfg.get<boolean>("ui.timeGuide.enabled") ?? false,
   };
 }

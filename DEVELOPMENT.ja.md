@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-05-26
-- 対象バージョン: 2.4.1
+- 最終更新: 2026-06-07
+- 対象バージョン: 2.5.0
 
 ## 1. 概要
 
@@ -39,28 +39,31 @@
   - `Cleanup Missing Pins`
   - `Bulk Rename Tag`
   - `Bulk Delete Tags`
+  - `Clear Project Search History`
   - `Delete Handoff Files`
   - `Empty Trash`
 - **Pinned**: ピン留め済みセッション一覧
   - 絞り込み: 日付スコープ / プロジェクト (`cwd`) / ソース / アーカイブ表示 / タグ
-  - プロジェクト表示: `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位`
+  - プロジェクト表示: `一覧表示` / `プロジェクト別表示`
+  - プロジェクト対象範囲: `すべて` / `現在のプロジェクトグループ`
   - プロジェクト (`cwd`) に別名が設定されている場合は、プロジェクト見出し、セッション行の CWD 表示、tooltip、絞り込み表示で別名を優先する
   - 表示順: `ピン留め日順` / `セッション日付順`
-  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、再読み込み、表示順切替、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、エクスポート、Undo
+  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、表示順切替、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、再読み込み、エクスポート、Undo
   - `History` / `Search` の絞り込み、ソース、アーカイブ表示とは独立して状態を保持する
   - 欠損ピンも表示対象
-  - 欠損ピンは日付スコープまたは現在プロジェクト絞り込みでは非表示にし、プロジェクト単位表示では `CWD なし` 配下に集約する
+  - 欠損ピンは日付スコープまたは現在プロジェクト絞り込みでは非表示にし、プロジェクト別表示では `CWD なし` 配下に集約する
   - `History` / `Search` からのドラッグ&ドロップで追加可能
   - Codex アーカイブ済みセッションのピンは、Pinned 独自のソースとアーカイブ表示が対象に含めるときだけ表示する
   - 公式側でアーカイブされてパスが変わったピンは、session identity で追従する
 - **History**: 年 / 月 / 日でグルーピングした履歴ツリー、または最新順のフラット一覧
   - 表示モード: `日付別` / `最新順`
   - 絞り込み: 日付スコープ / プロジェクト (`cwd`) / ソース / アーカイブ表示 / タグ
-  - プロジェクト表示: `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位`
+  - プロジェクト表示: `一覧表示` / `プロジェクト別表示`
+  - プロジェクト対象範囲: `すべて` / `現在のプロジェクトグループ`
   - プロジェクト (`cwd`) に別名が設定されている場合は、プロジェクト見出し、セッション行の CWD 表示、tooltip、絞り込み表示で別名を優先する
-  - `プロジェクト単位` では、`最新順` は `Project -> Session`、`日付別` は `Project -> Year -> Month -> Day -> Session` として表示する
-  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、再読み込み、表示モード切替、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、エクスポート、Undo など
-  - `絞り込み解除` は日付 / プロジェクト CWD / ソース / アーカイブ表示 / タグを解除し、プロジェクト単位表示は表示状態として維持する
+  - `プロジェクト別表示` では、`最新順` は `Project -> Session`、`日付別` は `Project -> Year -> Month -> Day -> Session` として表示する
+  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、表示モード切替、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、再読み込み、エクスポート、Undo など
+  - `絞り込み解除` は日付 / プロジェクト CWD / ソース / アーカイブ表示 / タグを解除し、プロジェクト表示と対象範囲は表示状態として維持する
   - 複数選択で開く / エクスポート / Promote / Delete が可能
   - Codex アーカイブ済みセッションは、アーカイブ表示が `すべて` または `アーカイブのみ` のときに表示し、アイコン / 説明 / tooltip で通常履歴と区別する
   - 初回履歴ロード中は、空状態案内ではなく読み込み中ノードを表示する
@@ -68,13 +71,15 @@
   - 絞り込み適用後に一致する履歴がない場合は、絞り込み条件の変更 / 解除を促す案内ノードを表示する
 - **Search**: 検索結果ツリー
   - 表示構造: セッション -> ヒット一覧
-  - ヘッダー操作: `Search...`、`Clear Results`、`Rerun Search`、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、保存済み検索、エクスポート、Undo
+  - ヘッダー操作: `Search...`、`Clear Results`、保存済み検索の実行、現在の検索を保存、`Rerun Search`、エクスポート、Undo
   - 既定ロール設定は Control view / Command Palette / settings から管理する
-  - 検索対象は History 側の「日付 / プロジェクト / ソース / アーカイブ表示」絞り込みに追従し、Pinned 側の独立した絞り込みには追従しない
+  - 検索対象は History 側の「日付 / プロジェクト / ソース / アーカイブ表示 / タグ / プロジェクト対象範囲」絞り込みに追従し、Pinned 側の独立した絞り込みには追従しない
+  - 検索結果が空のとき、History 側の絞り込み変更だけでは Search にセッション一覧を生成しない。これらの条件は次回検索の対象範囲としてだけ使う
+  - 検索結果が表示されているとき、History 側の絞り込み変更が実効値として変わった場合だけ、最後の検索条件で再検索する
   - 検索結果のセッション行と tooltip ではプロジェクト別名を表示に反映するが、検索 hit 対象には含めない
-  - Search 独自のタグ絞り込みも別途持つ
+  - Search のヘッダーにはタグ / ソース / アーカイブ表示 / 日付 / プロジェクトの絞り込み操作を置かず、絞り込み操作は History 側に集約する
   - アーカイブ非表示時は archived hit を候補から除外し、`search.maxResults` は表示される hit 数として扱う
-  - アーカイブ表示を切り替えた時点で検索結果がある場合は、最後の検索条件で再検索する
+  - History 側でアーカイブ表示を切り替えた時点で検索結果がある場合は、最後の検索条件で再検索する
 - **Status**: 実行時状態の要約
   - 有効ソースごとのセッション件数
   - Codex source と Codex archived sessions が有効な場合は archived 件数
@@ -94,6 +99,7 @@
 - `Open in New Tab (Chat)`: Webview で会話をセッションタブとして表示
 - `Custom Title...`: QuickPick からカスタムタイトルの設定 / 消去を選択する
 - `Project Alias...`: History / Pinned のプロジェクトノード右クリックから、プロジェクト別名の設定 / 消去を選択する
+- `Project Association...`: History / Pinned のプロジェクトノード右クリックから、別プロジェクトへの関連付け、関連付けモード変更、解除を選択する
 - `Open Session (Markdown)`: 仮想ドキュメントとして Markdown 化して表示
 - `Copy Quick Prompt`: チャット表示内で、タスクと直近メッセージだけの軽量な再開用プロンプトをクリップボードへコピー
 - `Resume in OpenAI Codex`: OpenAI Codex 拡張へ引き継ぐ
@@ -114,8 +120,8 @@
 - `codexHistoryViewer.sources.enabled` に `codex` が含まれ、かつ `codexHistoryViewer.codex.archivedSessions.enabled` が有効な場合、通常の Codex `sessions` に加えて Codex `archived_sessions` も読み込む
 - `codexHistoryViewer.codex.archivedSessionsRoot` が空の場合は、Codex `sessionsRoot` と同階層の `archived_sessions` を既定値にする
 - `codexHistoryViewer.sources.enabled` に `codex` が含まれていない場合は、`codexHistoryViewer.codex.archivedSessions.enabled = true` でも archived sessions を使用しない
-- `archiveLocationFilter` は History / Search 用として workspace ごとに保持し、既定は `通常のみ` とする
-- Pinned は `pinnedArchiveLocationFilter` を別に保持し、History / Search と Pinned の view title action からそれぞれ独立して `通常のみ` / `すべて` / `アーカイブのみ` を切り替えられる
+- `archiveLocationFilter` は History と Search の検索対象範囲用として workspace ごとに保持し、既定は `通常のみ` とする
+- Pinned は `pinnedArchiveLocationFilter` を別に保持し、History と Pinned の view title action からそれぞれ独立して `通常のみ` / `すべて` / `アーカイブのみ` を切り替えられる。Search は History 側のアーカイブ表示を検索対象範囲として参照する
 - Pinned のソース絞り込みが `claude` の場合、Pinned のアーカイブ表示切替は disabled 表示かつ実行しても状態を変更しない
 - archived 由来の session は `storage.archiveState = "archived"`、`rootKind = "codexArchivedSessions"` として扱う
 - active と archived に同じ session identity がある場合は active を優先し、重複表示を避ける
@@ -177,9 +183,16 @@
 - archived 非表示時は archived hit を先に除外してから `search.maxResults` を適用するため、表示件数が最大件数に達する
 - PDF / Office / binary / base64 document の内容や、Codex file reference の参照先ファイル内容は検索インデックスへ入れない
 - 保存済み検索:
-  - 実行
-  - 保存
-  - 削除
+  - 実行: 保存済み検索 QuickPick で検索語を選択し、保存済みの検索語だけを再利用する。検索対象ロールと大文字小文字の扱いは現在設定を使う
+  - 保存: 直近の検索語だけを保存する
+  - 削除: 保存済み検索 QuickPick の項目右側にあるゴミ箱ボタンで個別削除する。Search ヘッダーには削除専用ボタンを置かない
+- 検索履歴:
+  - 全体検索、履歴ビュー内検索、ファイル変更履歴の検索で検索語履歴を共有する
+  - 検索履歴はプロジェクト単位で保存する
+  - 履歴候補には検索語だけを表示し、検索対象ロールや大文字小文字の扱いは保存しない
+  - 全体検索 QuickPick では、検索履歴の項目選択で検索を実行し、項目右側のゴミ箱ボタンで個別削除する
+  - 検索履歴の全消去は Control view の `Clear Project Search History` に集約し、検索 QuickPick には全消去項目を置かない
+  - Webview 内検索の候補 dropdown は、非空入力で候補が 0 件になった場合は empty message を重ねず閉じる
 - `Rerun Search` は最後に使った検索条件を再実行する
 - カスタムタイトルは検索対象に含め、検索結果の表示タイトルにも反映する
 - プロジェクト別名は大量 hit を避けるため検索対象に含めない。検索 scope label と検索結果の表示には反映する
@@ -216,7 +229,7 @@
   - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
-  - 内部 file version: 8
+  - 内部 file version: 9
   - 用途: 繰り返し検索を高速化する増分インデックス
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
   - 再利用条件:
@@ -346,6 +359,8 @@
 - チャットのスクロール領域は固定ヘッダーの下に分離し、スクロールバーがヘッダー横から始まらないようにする
 - チャットヘッダーには、検索ボタンと再読み込みボタンの間に自動更新ボタンを置く
 - チャットヘッダーには、ピン留めボタンの右にカスタムタイトルの pencil アイコンを置き、QuickPick から設定 / 消去を選べるようにする
+- チャット本文では、現在のユーザープロンプトを上部に追従表示できる
+- assistant 応答に Codex のメモリー引用情報が含まれる場合は、本文末尾ではなく折りたたみ表示として扱う
 - チャットタブの自動更新ボタンは、履歴の自動更新設定が有効なときだけ表示し、`off` / `preserve` / `follow` をクリックで循環する
 - `preserve` / `follow` はボタンの背景色でオン状態を示し、`follow` はさらに別色で追従中であることを示す
 - チャットの先頭 / 末尾スクロールは、スクロールコンテナの絶対端ではなく、実際に描画されている最初 / 最後のカードを対象にする
@@ -381,7 +396,7 @@
 - 再利用タブで別セッションへ切り替わる場合は、検索状態、検索リサイズ状態、画像プレビュー、画像データキャッシュ、画像保存先 CWD、patch entry 詳細の pending 要求などのセッション依存 UI / panel-side 状態をリセットする
 - grouped diff カードの最大幅状態は、再読み込みでカードの並び順が変わっても維持しやすいように安定キーで管理する
 
-### 3.6.1 AI Change History（ファイル単位の AI 更新履歴）
+### 3.6.1 File AI Change History（ファイル単位の AI 更新履歴）
 
 - 目的:
   - ワークスペース内の 1 ファイルを起点に、そのファイルへ影響した Codex / Claude の AI diff 履歴を時系列で確認できるようにする
@@ -392,6 +407,7 @@
   - ディレクトリは対象外。ワークスペース外のファイルも対象外
 - 対象範囲:
   - 現在開いているワークスペース配下の対象ファイルだけ
+  - プロジェクト関連付けがある場合は、関連付け後の表示に沿って候補履歴と diff 表示を扱う
   - `codexHistoryViewer.sources.enabled` で有効な source だけ
   - Claude は復元可能な diff がある変更だけ表示する
   - `search.indexToolContent = conversationOnly` でも利用可能。ただし tool メタ情報が検索インデックスに少ないため、関連セッションの優先付け精度が下がる場合がある
@@ -407,7 +423,7 @@
   - `対象ファイルを開く`: VS Code の通常エディタで対象ファイルを開く
   - `ファイルパスをコピー`
   - `再読み込み`
-  - Webview 内検索（case-insensitive）
+  - Webview 内検索（正規表現、完全一致、検索履歴候補に対応）
   - `続きを読み込む`
   - 前 / 次の diff card へ移動。source toggle で絞り込んでいる場合は、表示中 card だけを移動対象にする
   - `履歴で開く`: 通常履歴 Webview を現在のエディタグループに別タブとして開き、該当 diff card へスクロールする。`patchEntry` reveal では full detail mode を強制しない
@@ -602,7 +618,7 @@
   - 実ファイルが消えている場合は `stat` 失敗時に該当エントリを削除する
   - `forceRebuild` 指定時は内部エントリをクリアして最初から作り直す
 
-### 4.5.1 AI Change History 実装
+### 4.5.1 File AI Change History 実装
 
 - `src/fileHistory/fileChangeHistoryService.ts`
   - ファイル単位 AI 更新履歴の候補抽出、精密 diff 解析、ページングを担当する
@@ -660,7 +676,7 @@
 - `src/services/searchService.ts`
   - 検索開始時に検索インデックスの差分同期を行う
   - 削除済みファイルに対応してインデックスから不要エントリを落とす
-  - 候補絞り込みは「日付 / プロジェクト / ソース / Search タグ」の順で適用する
+  - 候補絞り込みは「日付 / プロジェクト / ソース / History タグ」の順で適用する
   - `includeArchivedSessions` に従って archived session を除外し、除外後に `search.maxResults` を適用する
   - プロジェクト別名は検索 hit 対象には含めず、検索実行時に SearchRootNode の scope label へだけ反映する
   - 進捗表示とキャンセルに対応する
@@ -681,7 +697,7 @@
   - `handoffs` 配下の Handoff 件数 / 容量も集計する。件数は `handoff.md` の数、容量は `metadata.json` を含む配下全体の合算とする
   - `Empty Trash` 実行時に旧世代キャッシュ / インデックスも整理する
 
-### 4.8 注釈 / ピン / 保存済み検索
+### 4.8 注釈 / ピン / 保存済み検索 / プロジェクト関連付け
 
 - `src/services/sessionAnnotationStore.ts`
   - タグ / ノートを `globalState` に保存する
@@ -693,13 +709,21 @@
   - refresh 後の `reconcile()` で identity key を使い、active / archived 間で移動した pin path を追従する
   - archived 由来 pin は archived sessions 無効時またはアーカイブ非表示時に missing として出さない
 - View / filter state
-  - History の `historyFilter` / `historyProjectFilter` / `historyProjectGrouped` / `historySourceFilter` / `historyTagFilter` / `historyViewMode` は `workspaceState` に保存する
-  - Pinned の `pinnedFilter` / `pinnedProjectFilter` / `pinnedProjectGrouped` / `pinnedSourceFilter` / `pinnedArchiveLocationFilter` / `pinnedSortMode` / `pinnedTagFilter` は `workspaceState` に保存し、History / Search とは独立して扱う
-  - Search の `searchTagFilter` / `lastSearchRequest` は `workspaceState` に保存する
+  - History の日付 / project CWD / project display / project scope / source / tag / view mode は `workspaceState` に保存する
+  - Pinned の日付 / project CWD / project display / project scope / source / archive location / sort mode / tag は `workspaceState` に保存し、History / Search とは独立して扱う
+  - Search の `lastSearchRequest` は `workspaceState` に保存する。Search 独自の tag filter は持たず、History 側の tag filter を使う
   - `pinnedSourceFilter` の初回未保存時は `historySourceFilter` を初期値として移行し、`pinnedArchiveLocationFilter` の初回未保存時は `archiveLocationFilter` を初期値として移行する
   - プロジェクト判定用の key は `normalizeProjectKey()` で正規化し、全 OS で大文字小文字を区別しない
 - `src/services/searchPresetStore.ts`
-  - 保存済み検索条件を `workspaceState` に保存する
+  - 保存済み検索語を `globalState` に保存する
+  - 保存済み検索はプロジェクト単位に分けず全体共有とし、検索語だけを保存 / 表示 / 再利用する
+- `src/services/searchHistoryStore.ts`
+  - 検索履歴を `workspaceState` に保存する
+  - 検索履歴は project bucket ごとに最大 20 件を保持する
+  - 検索語だけを保存し、検索対象ロールや大文字小文字の扱いは保持しない
+- `src/services/projectAssociationStore.ts`
+  - プロジェクト関連付けを `globalState` に保存する
+  - 関連付けは project key 間の display-side association として扱い、元の履歴ファイルは移動しない
 - `src/services/chatOpenPositionStore.ts`
   - 最後に見えていた表示位置を `globalState` に最大 100 セッション分保存する
   - 復元には `chat.openPosition = lastMessage` のときだけ使用する
@@ -718,6 +742,7 @@
   - Codex の `Files mentioned by the user` block と Claude の IDE tag は raw のまま再出力せず、clean text と attachment summary を使う
   - Codex 向け Handoff / Resume でも `# Files mentioned by the user:` block は再生成しない
   - バイナリ添付や参照先ファイルは再添付 / 自動読み込みせず、過去セッションに存在した添付 / 参照の summary として扱う
+  - プロジェクト関連付けがある場合は、関連付け後の表示 CWD とパス変換情報を Handoff 内容へ反映する
   - secret / token / password 系に見える値は Handoff 用テキストへ入れる前に伏せる
   - `handoff.md` の保存先は元セッションパスから安定的に決め、同一セッションでは同じファイルを再利用または上書きする
   - `metadata.json` は Handoff ディレクトリの作成時刻、元セッション情報、生成サイズなどを保持する
@@ -982,7 +1007,39 @@ npm run package
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 
-### 5.4 v2.4.1 リリースメモ（2026-05-26）
+### 5.4 v2.5.0 リリースメモ（2026-06-07）
+
+**追加された機能**
+
+- **プロジェクト関連付け**を追加した。別プロジェクトの履歴を現在のプロジェクトに紐づけて表示したり、関連プロジェクトとしてまとめて扱える
+- 履歴ビュー / ピン留めビューに、**一覧表示 / プロジェクト別表示** と、**すべて / 現在のプロジェクトグループ** の切り替えを追加した
+- 検索履歴を追加した。全体検索、履歴ビュー内検索、ファイル変更履歴の検索で、検索語の履歴を共有できる
+- 検索結果を開いたとき、同じ検索語を履歴ビュー内検索に引き継げるようにした
+- 履歴ビュー内検索とファイル変更履歴の検索で、正規表現や完全一致など、より柔軟な検索表現に対応した
+- 履歴ビュー内検索とファイル変更履歴の検索に、検索履歴候補の表示・選択・削除を追加した
+- Codex のメモリー引用情報を、履歴ビュー内で折りたたみ表示できるようにした
+- チャット履歴で、現在のユーザープロンプトを上部に追従表示できるようにした
+- Handoff がプロジェクト関連付けを考慮するようになり、関連付け後のプロジェクト表示に沿った引き継ぎ内容を作れるようにした
+
+**変更された機能**
+
+- 履歴ビュー / ピン留めビューのプロジェクト表示まわりを整理し、「表示方法」と「対象範囲」を別々に切り替えられるようにした
+- 全体検索は、履歴ビューで選んでいる表示対象に連動するようにした。プロジェクト範囲、タグ、Codex / Claude などの種類、アーカイブ対象、日付など、現在の表示条件に沿って検索する
+- 全体検索の入力欄を改善し、手入力・検索履歴からの再検索・検索履歴の個別削除を同じ画面から行えるようにした
+- 保存済み検索は「検索語だけ」を保存・表示・再利用する方式に変更した。実行時の検索対象や大文字小文字の扱いはその時点の現在設定を使う。保存済み検索はプロジェクト単位で分けず全体で共有し、実行 QuickPick のゴミ箱ボタンで個別削除する
+- Search ペインの絞り込み操作を History 側に集約した。Search が空のときは History 側の絞り込み変更だけでは結果を生成せず、既存の Search 結果がある場合だけ実効値変更時に再検索する
+- 履歴ビュー / ピン留めビューの再読み込みと Search ペインの再検索を、それぞれエクスポートのすぐ左に配置した
+- 履歴ビュー内検索は、入力中・履歴選択時・検索結果からの引き継ぎ時に勝手にスクロールしない挙動へ整理した
+- ファイル変更履歴でも、プロジェクト関連付け後の表示に沿って履歴を扱えるようにした
+
+**修正された機能**
+
+- ファイル変更履歴の検索で、「これ以上の履歴はありません」/ “No more history” が検索に引っかからないように修正した
+- 履歴ビュー内検索 / ファイル変更履歴の検索で、入力中に候補が無くなった場合に「検索履歴はありません」が検索結果へ重ならないように修正した
+- ピン留めビューのプロジェクト並び順が、同じ時間に更新された場合に崩れることがある問題を修正した
+- `package.json` / `package-lock.json` のバージョンを `2.5.0` に更新した
+
+### 5.5 v2.4.1 リリースメモ（2026-05-26）
 
 - プロジェクト (`cwd`) に、この拡張機能内だけの別名を設定 / 消去できるようにした
 - プロジェクト別名は History / Pinned のプロジェクト見出し、セッション行、tooltip、絞り込み表示、Status、Search の scope / セッション表示に反映する
@@ -995,7 +1052,7 @@ npm run package
 - Chat Webview で `::code-comment{...}` directive をレビューコメントカードとして表示し、comma 区切りや複数行、未知 segment を含む出力も既知キーから復元できるようにした
 - `package.json` のバージョンを `2.4.1` に更新した
 
-### 5.5 v2.4.0 リリースメモ（2026-05-23）
+### 5.6 v2.4.0 リリースメモ（2026-05-23）
 
 - History に `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位` のプロジェクト表示 mode を追加した
 - プロジェクト判定用 key を全 OS で大文字小文字非区別に統一した
@@ -1013,7 +1070,7 @@ npm run package
 - Codex の `# Files mentioned by the user:` block が IDE context 後ろにある場合も、HTML / log / JSON などの file reference attachment として表示されるように修正した
 - `package.json` / `package-lock.json` のバージョンを `2.4.0` に更新した
 
-### 5.6 v2.3.0 リリースメモ（2026-05-22）
+### 5.7 v2.3.0 リリースメモ（2026-05-22）
 
 - Chat message の添付モデルを `attachments` に統合し、画像も `type: "image"` の attachment として扱うようにした
 - Claude Code の `type: "document"` を document card として表示できるようにした
@@ -1047,7 +1104,7 @@ npm run package
 - Resume / Handoff では clean text と attachment summary を使い、raw tag / `Files mentioned` block の重複やバイナリ再添付を避けるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.3.0` に更新した
 
-### 5.7 v2.2.0 リリースメモ（2026-05-21）
+### 5.8 v2.2.0 リリースメモ（2026-05-21）
 
 - Codex の通常 `sessions` に加えて、任意で `archived_sessions` を読み込めるようにした
 - `codexHistoryViewer.codex.archivedSessions.enabled` と `codexHistoryViewer.codex.archivedSessionsRoot` を追加した
@@ -1081,7 +1138,7 @@ npm run package
 - 検索インデックスの context に archived root / archived 有効状態を含めるようにした
 - `package.json` のバージョンを `2.2.0` に更新した
 
-### 5.8 v2.1.0 リリースメモ（2026-05-19）
+### 5.9 v2.1.0 リリースメモ（2026-05-19）
 
 - Codex / Claude Code 間の Handoff を新規実装した
 - History / Pinned / Search のセッション右クリックに、`他のAIへ引継ぎ` 階層メニューを追加した
@@ -1101,7 +1158,7 @@ npm run package
 - チャット表示内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
 - `package.json` / `package-lock.json` のバージョンを `2.1.0` に更新した
 
-### 5.9 v2.0.1 リリースメモ（2026-05-15）
+### 5.10 v2.0.1 リリースメモ（2026-05-15）
 
 - 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
 - しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
@@ -1125,9 +1182,9 @@ npm run package
 - ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
 - `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
 
-### 5.10 v2.0.0 リリースメモ（2026-05-14）
+### 5.11 v2.0.0 リリースメモ（2026-05-14）
 
-- ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる AI Change History を追加した
+- ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる File AI Change History を追加した
 - カスタムタイトル操作を QuickPick 入口へ統一し、チャット履歴ビューアのヘッダーからも設定 / 消去できるようにした
 - Explorer のファイル右クリックメニューに `Show File AI Change History` を表示できる設定 `codexHistoryViewer.fileChangeHistory.explorerContextMenu.enabled` を追加した
 - ファイル履歴 Webview では、source toggle、Webview 内検索、前後 card 移動、先頭 / 末尾移動、`続きを読み込む`、`履歴で開く` を提供する
@@ -1143,7 +1200,7 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.11 v1.5.1 リリースメモ（2026-05-08）
+### 5.12 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
@@ -1154,7 +1211,7 @@ npm run package
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.12 v1.5.0 リリースメモ（2026-05-07）
+### 5.13 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -1163,7 +1220,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.13 v1.4.3 リリースメモ（2026-04-30）
+### 5.14 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -1229,10 +1286,10 @@ npm run package
 - move / rename で before path と after path のどちらに一致してもファイル履歴に表示される
 - move / rename で before path と after path の両方が一致しても 1 card だけ表示される
 - ファイル履歴 Webview の初期表示は対象ファイルだけ、Webview 幅いっぱいの diff card として表示される
-- ファイル履歴 Webview の検索は読み込み済み diff card を case-insensitive で検索する
+- ファイル履歴 Webview の検索は読み込み済み diff card を対象にし、正規表現、完全一致、検索履歴候補を扱える
 - 検索中に `続きを読み込む` を実行した場合、追加された card も検索対象に含まれる
 - `続きを読み込む` の成功 / 失敗 / キャンセル後に scroll 位置が維持される
-- 全候補解析後は `続きを読み込む` が消え、`これ以上の履歴はありません` が表示される
+- 全候補解析後は `続きを読み込む` が消え、`これ以上の履歴はありません` が表示される。この表示は Webview 内検索の対象に含めない
 - `履歴で開く` を押すと、通常履歴 Webview が現在のエディタグループに別タブとして開き、該当 diff card へスクロールする
 - ファイル履歴で Codex / Claude source toggle を切り替えた状態でも、前 / 次 card ナビゲーションが表示中 card だけを対象にする
 - `履歴で開く` で通常履歴 Webview を開いても full detail mode が強制されず、対象 diff entry の詳細だけが必要時に読み込まれる
@@ -1291,15 +1348,16 @@ npm run package
 - `引き継ぎファイルを削除` 実行後、Status の Handoff 件数 / 容量が更新される
 - `History` の日付 / プロジェクト / ソース / アーカイブ表示 / タグ絞り込みが期待どおり動く
 - `History` の表示モードを `日付別` / `最新順` で切り替えられ、選択中セッションの操作が維持される
-- `History` のプロジェクト表示を `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位` で切り替えられる
-- `History` の `プロジェクト単位` で、`最新順` と `日付別` の階層がそれぞれ期待どおりになる
-- `History` の絞り込み解除は、非絞り込み時に disabled 表示になり、日付 / プロジェクト CWD / ソース / アーカイブ表示 / タグを解除して、プロジェクト単位表示は解除しない
-- `Pinned` のプロジェクト表示を `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位` で切り替えられ、History のプロジェクト表示に影響しない
+- `History` のプロジェクト表示を `一覧表示` / `プロジェクト別表示` で切り替えられ、対象範囲を `すべて` / `現在のプロジェクトグループ` で切り替えられる
+- `History` の `プロジェクト別表示` で、`最新順` と `日付別` の階層がそれぞれ期待どおりになる
+- `History` の絞り込み解除は、非絞り込み時に disabled 表示になり、日付 / プロジェクト CWD / ソース / アーカイブ表示 / タグを解除して、プロジェクト表示と対象範囲は解除しない
+- `Pinned` のプロジェクト表示を `一覧表示` / `プロジェクト別表示` で切り替えられ、対象範囲を `すべて` / `現在のプロジェクトグループ` で切り替えられる。History のプロジェクト表示には影響しない
 - `Pinned` の日付 / プロジェクト / ソース / アーカイブ表示 / タグ絞り込みが期待どおり動き、History / Search 側の絞り込みに影響しない
 - `Pinned` のソース切替を `all` / `codex` / `claude` で切り替えられ、History 側のソース切替に影響しない
 - `Pinned` のソースが `claude` のとき、Pinned のアーカイブ表示切替が disabled になり、Command Palette から実行しても状態が変わらない
 - `Pinned` の表示順を `ピン留め日順` / `セッション日付順` で切り替えられ、プロジェクト tooltip の基準表示も切り替わる
-- `Pinned` の絞り込み解除は日付 / プロジェクト / ソース / アーカイブ表示 / タグを解除し、プロジェクト単位表示と表示順は維持する
+- `Pinned` の絞り込み解除は日付 / プロジェクト / ソース / アーカイブ表示 / タグを解除し、プロジェクト表示、対象範囲、表示順は維持する
+- `History` の再読み込み、`Pinned` の再読み込み、`Search` の `Rerun Search` が、それぞれセッションのエクスポートのすぐ左に表示される
 - History / Pinned の右クリックから QuickPick 経由でカスタムタイトルを設定 / 消去でき、History / Pinned / チャット Webview タイトルへ反映される
 - カスタムタイトルがあるセッションの詳細ツールチップにオリジナルタイトルが表示される
 - 121 文字以上のカスタムタイトル入力ではエラーになり、保存されない
@@ -1308,6 +1366,12 @@ npm run package
 - CWD なしプロジェクトノードにはプロジェクト別名メニューが表示されず、direct / UI command でも active project 推定を行わない
 - 121 文字以上のプロジェクト別名入力ではエラーになり、保存されない
 - プロジェクト別名の設定 / 消去を `Undo Last Action` で戻せる
+- History / Pinned のプロジェクトノード右クリックからプロジェクト関連付けを設定 / 解除でき、関連プロジェクトとしてまとめて表示される
+- プロジェクト関連付けの設定 / 解除を `Undo Last Action` で戻せる
+- 全体検索は History の表示対象範囲、タグ、Codex / Claude などの種類、アーカイブ対象、日付に沿って検索される
+- 検索履歴候補と保存済み検索には検索語だけが表示され、検索対象ロールや大文字小文字の扱いは現在設定を使う。項目選択は検索実行、ゴミ箱ボタンは個別削除として動く
+- Webview 内検索の候補 dropdown は、非空入力で一致する候補が無くなった場合に閉じ、「検索履歴はありません」を検索結果へ重ねない
+- Search が空の状態で History 側の絞り込みを変更しても Search 結果が復活せず、既存の Search 結果がある場合だけ実効値変更時に再検索される
 - `preview.tooltipMode` を `full` / `compact` / `titleOnly` で切り替えると、ツリー項目ツールチップの表示量が変わる
 - `full` / `compact` のツールチップでは、カスタムタイトルがなくても履歴ペイン表示と同じタイトルが表示される
 - 履歴の自動更新設定が有効なとき、履歴ファイル作成 / 変更 / 削除で History が自動更新される
@@ -1329,10 +1393,10 @@ npm run package
 - `Show details` を ON/OFF しても、切り替え前に見ていたカードまたは次の表示カードへスクロールが復元される
 - 詳細 OFF の大型セッションで tool 詳細、patch diff 行、画像 data URI が初回描画時にまとめて読み込まれず、詳細表示・diff 展開・画像表示時に必要分が読み込まれる
 - 再利用タブで別セッションへ切り替えたとき、検索状態、画像プレビュー、画像データキャッシュ、画像保存先 CWD、patch entry 詳細の pending 要求が前セッションから残らない
-- `Search` の view title action が `Search...`、`Clear Results`、`Rerun Search` の順に表示される
-- `Search` が History 側の絞り込み条件に追従し、Pinned 側の独立した絞り込み条件には追従しない
+- `Search` の view title action に `Search...`、`Clear Results`、保存済み検索実行、現在検索保存、`Rerun Search`、エクスポート、Undo が表示され、`Rerun Search` はエクスポートのすぐ左に配置される。タグ / ソース / アーカイブ表示 / 日付 / プロジェクトの絞り込み操作や保存済み検索削除は表示されない
+- `Search` が History 側の絞り込み条件を検索対象範囲として使い、Pinned 側の独立した絞り込み条件には追従しない。Search が空のときは History 側の絞り込み変更だけで結果を生成しない
 - `settings.json` で `preview.maxMessages` / `search.maxResults` に範囲外の値を入れても、設定読み取り時に許容範囲へ丸められる
-- `Search` のロール設定、保存済み検索、再検索、タグ絞り込みが動く
+- `Search` のロール設定、保存済み検索、再検索が動き、保存済み検索は選択で実行、ゴミ箱ボタンで個別削除できる
 - `search.indexToolContent` を `conversationOnly` / `toolCalls` / `toolCallsAndOutputs` で切り替えると、検索インデックスに入るツール情報の範囲が変わる
 - `toolCalls` / `toolCallsAndOutputs` で Codex の `custom_tool_call` の tool 名、command、対象ファイルパスが検索にヒットする
 - `conversationOnly` では Codex の `custom_tool_call` の tool 名、command、対象ファイルパスが検索にヒットしない

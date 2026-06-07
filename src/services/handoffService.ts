@@ -11,6 +11,8 @@ import {
   extractCodexMessageContent,
 } from "../chat/chatAttachments";
 import type { ChatAttachment } from "../chat/chatTypes";
+import { mapAssociatedProjectPath, type ProjectPathMapping } from "./projectPathMapper";
+import { normalizeProjectKey } from "../utils/fsUtils";
 
 export type HandoffTarget = "codex" | "claude";
 
@@ -19,6 +21,7 @@ export interface CreateHandoffOptions {
   session: SessionSummary;
   target: HandoffTarget;
   sourceSessionsRoot: string;
+  pathRewrite?: HandoffPathRewriteContext;
 }
 
 export interface HandoffResult {
@@ -55,6 +58,21 @@ export interface HandoffLocation {
   target: HandoffTarget;
 }
 
+export interface HandoffPathRewriteContext {
+  mode: "recorded" | "relocated";
+  recordedCwd?: string | null;
+  displayCwd?: string | null;
+  mappings?: readonly ProjectPathMapping[];
+}
+
+export interface HandoffPathRewriteMetadata {
+  mode: "recorded" | "relocated";
+  recordedCwd: string | null;
+  displayCwd: string | null;
+  mappings: ProjectPathMapping[];
+  fingerprint: string;
+}
+
 type HandoffRole = "user" | "assistant" | "developer";
 
 interface HandoffMessage {
@@ -80,11 +98,12 @@ interface HandoffDirectoryInfo {
   createdAtMs: number;
 }
 
-interface HandoffMetadata {
+export interface HandoffMetadata {
   createdAt?: string;
   lastGeneratedAt?: string;
   source?: SessionSource;
   target?: HandoffTarget;
+  pathRewrite?: HandoffPathRewriteMetadata;
 }
 
 interface ClaudeToolCall {
@@ -108,6 +127,9 @@ const MAX_SINGLE_DIFF_CHARS = 60_000;
 const MAX_DIFF_BLOCKS = 60;
 const MAX_SYNTHETIC_WRITE_LINES = 4_000;
 const MAX_HANDOFF_PATH_SEGMENT_LENGTH = 120;
+const PATH_REWRITE_ALGORITHM_VERSION = 1;
+const ABSOLUTE_PATH_START_RE = /[A-Za-z]:[\\/]|\\\\[^\\/\s"'`<>|]+[\\/][^\\/\s"'`<>|]+[\\/]|\/(?!\/)/g;
+const TRAILING_PATH_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", ")", "]", "}", "、", "。", "，", "．"]);
 
 // Create or update a cross-agent handoff in global storage.
 export async function createHandoff(options: CreateHandoffOptions): Promise<HandoffResult> {
@@ -124,12 +146,14 @@ export async function createHandoff(options: CreateHandoffOptions): Promise<Hand
   const mirror = buildHandoffDirectoryMirror(options.session, options.sourceSessionsRoot);
   const directoryUri = location.directoryUri;
   await vscode.workspace.fs.createDirectory(directoryUri);
+  const pathRewrite = normalizeHandoffPathRewriteContext(options.pathRewrite);
 
   const context = await parseSessionForHandoff(options.session);
   const markdown = clampText(
     buildHandoffMarkdown({
       session: options.session,
       context,
+      pathRewrite,
     }),
     MAX_HANDOFF_CHARS,
   );
@@ -155,6 +179,7 @@ export async function createHandoff(options: CreateHandoffOptions): Promise<Hand
     handoffPath: handoffUri.fsPath,
     handoffPathMode: mirror.mode,
     transcriptMode: "tail-prioritized-message-excerpt-with-file-changes",
+    pathRewrite,
     includes: ["file changes when recoverable"],
     excludes: ["tool calls", "tool outputs"],
     retention: {
@@ -347,6 +372,7 @@ async function collectClaudeMessage(obj: any, messages: HandoffMessage[]): Promi
 function collectCodexDiffBlocks(obj: any, diffBlocks: HandoffDiffBlock[]): void {
   if (diffBlocks.length >= MAX_DIFF_BLOCKS) return;
   if (obj?.type !== "event_msg" || obj?.payload?.type !== "patch_apply_end") return;
+  if (isPatchApplyEndFailure(obj)) return;
 
   const changes = obj?.payload?.changes;
   if (!changes || typeof changes !== "object" || Array.isArray(changes)) return;
@@ -362,6 +388,13 @@ function collectCodexDiffBlocks(obj: any, diffBlocks: HandoffDiffBlock[]): void 
       diff: clampText(unifiedDiff, MAX_SINGLE_DIFF_CHARS),
     });
   }
+}
+
+function isPatchApplyEndFailure(obj: any): boolean {
+  const payload = obj?.payload && typeof obj.payload === "object" ? obj.payload : {};
+  if (typeof payload.success === "boolean") return !payload.success;
+  const status = typeof payload.status === "string" ? payload.status.trim().toLowerCase() : "";
+  return status === "failed" || status === "failure" || status === "error" || status === "cancelled" || status === "canceled";
 }
 
 function collectClaudeDiffBlocks(obj: any, diffBlocks: HandoffDiffBlock[]): void {
@@ -449,19 +482,26 @@ function appendDiffBlock(diffBlocks: HandoffDiffBlock[], block: HandoffDiffBlock
 function buildHandoffMarkdown(params: {
   session: SessionSummary;
   context: ParsedSessionContext;
+  pathRewrite: HandoffPathRewriteMetadata;
 }): string {
-  const { session, context } = params;
+  const { session, context, pathRewrite } = params;
   const lines: string[] = [];
   const sourceLabel = session.source === "claude" ? "Claude Code" : "OpenAI Codex";
-  const currentGoal = findLatestUserMessage(context.messages);
-  const transcript = buildTranscriptExcerpt(context.messages, MAX_TRANSCRIPT_CHARS);
-  const diffs = buildDiffSection(context.diffBlocks);
+  const currentGoal = rewriteHandoffFreeText(findLatestUserMessage(context.messages) ?? "", pathRewrite);
+  const transcript = buildTranscriptExcerpt(context.messages, MAX_TRANSCRIPT_CHARS, pathRewrite);
+  const diffs = buildDiffSection(context.diffBlocks, pathRewrite);
+  const displayCwd = pathRewrite.mode === "relocated" ? pathRewrite.displayCwd : session.meta.cwd;
 
   lines.push("# Handoff");
   lines.push("");
   lines.push(`- Source: \`${sourceLabel}\``);
   lines.push(`- Source session file: \`${session.fsPath}\``);
-  if (session.meta.cwd) lines.push(`- CWD: \`${session.meta.cwd}\``);
+  if (displayCwd) lines.push(`- CWD: \`${displayCwd}\``);
+  if (pathRewrite.mode === "relocated") {
+    if (pathRewrite.recordedCwd) lines.push(`- Recorded CWD: \`${pathRewrite.recordedCwd}\``);
+    const mappingText = pathRewrite.mappings.map((mapping) => `${mapping.sourceCwd} -> ${mapping.targetCwd}`).join("; ");
+    if (mappingText) lines.push(`- Path Mapping: \`${mappingText}\``);
+  }
   lines.push("");
   lines.push("> Transcript is tail-prioritized. Tool calls and tool outputs are omitted. File changes are included when recoverable.");
   lines.push("");
@@ -483,10 +523,14 @@ function buildHandoffMarkdown(params: {
   return lines.join("\n");
 }
 
-function buildTranscriptExcerpt(messages: readonly HandoffMessage[], maxChars: number): string {
+function buildTranscriptExcerpt(
+  messages: readonly HandoffMessage[],
+  maxChars: number,
+  pathRewrite: HandoffPathRewriteMetadata,
+): string {
   if (messages.length === 0) return "(no messages extracted)";
 
-  const blocks = messages.map((message) => renderMessageBlock(message));
+  const blocks = messages.map((message) => renderMessageBlock(message, pathRewrite));
   const selected: string[] = [];
   let used = 0;
   let omitted = 0;
@@ -508,10 +552,10 @@ function buildTranscriptExcerpt(messages: readonly HandoffMessage[], maxChars: n
   return [...prefix, ...selected].join("\n\n");
 }
 
-function renderMessageBlock(message: HandoffMessage): string {
+function renderMessageBlock(message: HandoffMessage, pathRewrite: HandoffPathRewriteMetadata): string {
   const lines = [`### ${message.role}`];
   lines.push("");
-  lines.push(message.text);
+  lines.push(rewriteHandoffFreeText(message.text, pathRewrite));
   return lines.join("\n");
 }
 
@@ -527,13 +571,14 @@ function combineHandoffText(attachmentSummary: string, text: string): string {
   return cleanText ? `${attachmentSummary}\n\n${cleanText}` : attachmentSummary;
 }
 
-function buildDiffSection(diffBlocks: readonly HandoffDiffBlock[]): string {
+function buildDiffSection(diffBlocks: readonly HandoffDiffBlock[], pathRewrite: HandoffPathRewriteMetadata): string {
   if (diffBlocks.length === 0) return "";
   const lines: string[] = [];
   let used = 0;
 
   for (const block of diffBlocks) {
-    const header = `### ${block.path}${block.changeType ? ` (${block.changeType})` : ""}`;
+    const headerPath = rewriteHandoffPath(block.path, pathRewrite);
+    const header = `### ${headerPath}${block.changeType ? ` (${block.changeType})` : ""}`;
     const body = ["```diff", block.diff, "```"].join("\n");
     const next = `${header}\n\n${body}`;
     if (used + next.length > MAX_DIFF_CHARS) {
@@ -553,6 +598,198 @@ function findLatestUserMessage(messages: readonly HandoffMessage[]): string | nu
     if (message.role === "user" && message.text.trim().length > 0) return message.text.trim();
   }
   return null;
+}
+
+export function isHandoffPathRewriteStale(
+  metadata: HandoffMetadata | null | undefined,
+  context: HandoffPathRewriteContext | null | undefined,
+): boolean {
+  const current = normalizeHandoffPathRewriteContext(context);
+  const existing = metadata?.pathRewrite;
+  if (!existing?.fingerprint) return current.mode !== "recorded";
+  return existing.fingerprint !== current.fingerprint;
+}
+
+function normalizeHandoffPathRewriteContext(
+  context: HandoffPathRewriteContext | null | undefined,
+): HandoffPathRewriteMetadata {
+  const recordedCwd = normalizeOptionalPath(context?.recordedCwd);
+  const displayCwd = normalizeOptionalPath(context?.displayCwd);
+  const mappings = normalizePathRewriteMappings(context?.mappings);
+  const canRelocate =
+    context?.mode === "relocated" &&
+    !!recordedCwd &&
+    !!displayCwd &&
+    normalizeProjectKey(recordedCwd) !== normalizeProjectKey(displayCwd) &&
+    mappings.length > 0;
+  const mode: "recorded" | "relocated" = canRelocate ? "relocated" : "recorded";
+  const normalized: Omit<HandoffPathRewriteMetadata, "fingerprint"> = {
+    mode,
+    recordedCwd: recordedCwd ?? null,
+    displayCwd: mode === "relocated" ? displayCwd : (recordedCwd ?? displayCwd ?? null),
+    mappings: mode === "relocated" ? mappings : [],
+  };
+  return {
+    ...normalized,
+    fingerprint: buildPathRewriteFingerprint(normalized),
+  };
+}
+
+function normalizePathRewriteMappings(mappings: readonly ProjectPathMapping[] | null | undefined): ProjectPathMapping[] {
+  const seen = new Set<string>();
+  const out: ProjectPathMapping[] = [];
+  if (!Array.isArray(mappings)) return out;
+
+  for (const mapping of mappings) {
+    const sourceCwd = normalizeOptionalPath(mapping?.sourceCwd);
+    const targetCwd = normalizeOptionalPath(mapping?.targetCwd);
+    if (!sourceCwd || !targetCwd) continue;
+    const sourceKey = normalizeProjectKey(sourceCwd);
+    const targetKey = normalizeProjectKey(targetCwd);
+    if (!sourceKey || !targetKey || sourceKey === targetKey) continue;
+    const key = `${sourceKey}\u0000${targetKey}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ sourceCwd, targetCwd });
+  }
+
+  return out.sort((a, b) => {
+    const aSource = normalizeProjectKey(a.sourceCwd);
+    const bSource = normalizeProjectKey(b.sourceCwd);
+    if (aSource !== bSource) return aSource.localeCompare(bSource);
+    const aTarget = normalizeProjectKey(a.targetCwd);
+    const bTarget = normalizeProjectKey(b.targetCwd);
+    if (aTarget !== bTarget) return aTarget.localeCompare(bTarget);
+    if (a.sourceCwd !== b.sourceCwd) return a.sourceCwd.localeCompare(b.sourceCwd);
+    return a.targetCwd.localeCompare(b.targetCwd);
+  });
+}
+
+function buildPathRewriteFingerprint(metadata: Omit<HandoffPathRewriteMetadata, "fingerprint">): string {
+  const payload = {
+    algorithmVersion: PATH_REWRITE_ALGORITHM_VERSION,
+    mode: metadata.mode,
+    recordedKey: normalizeProjectKey(metadata.recordedCwd ?? ""),
+    displayKey: normalizeProjectKey(metadata.displayCwd ?? ""),
+    recordedCwd: metadata.recordedCwd,
+    displayCwd: metadata.displayCwd,
+    mappings: metadata.mappings.map((mapping) => ({
+      sourceKey: normalizeProjectKey(mapping.sourceCwd),
+      targetKey: normalizeProjectKey(mapping.targetCwd),
+      sourceCwd: mapping.sourceCwd,
+      targetCwd: mapping.targetCwd,
+    })),
+  };
+  return `sha256:${crypto.createHash("sha256").update(JSON.stringify(payload)).digest("hex")}`;
+}
+
+function rewriteHandoffFreeText(text: string, pathRewrite: HandoffPathRewriteMetadata): string {
+  if (pathRewrite.mode !== "relocated") return text;
+  const source = String(text ?? "");
+  if (!source) return source;
+
+  const scanner = new RegExp(ABSOLUTE_PATH_START_RE.source, "g");
+  let output = "";
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = scanner.exec(source)) !== null) {
+    const start = match.index;
+    if (!isPathTokenBoundary(source, start) || isUrlEmbeddedPathStart(source, start)) {
+      continue;
+    }
+    const token = readPathToken(source, start);
+    scanner.lastIndex = Math.max(scanner.lastIndex, token.end);
+    if (!token.value || token.value.includes("\n")) continue;
+    const replacement = rewritePathTokenValue(token.value, pathRewrite);
+    if (!replacement) continue;
+    output += source.slice(lastIndex, start);
+    output += replacement;
+    lastIndex = token.end;
+  }
+
+  if (lastIndex === 0) return source;
+  return output + source.slice(lastIndex);
+}
+
+function rewriteHandoffPath(pathText: string, pathRewrite: HandoffPathRewriteMetadata): string {
+  if (pathRewrite.mode !== "relocated") return pathText;
+  const direct = rewritePathTokenValue(pathText, pathRewrite);
+  return direct ?? pathText;
+}
+
+function rewritePathTokenValue(tokenValue: string, pathRewrite: HandoffPathRewriteMetadata): string | null {
+  const parts = splitPathTokenDecorations(tokenValue);
+  if (!parts) return null;
+  if (isLikelyUrlToken(parts.pathText)) return null;
+  const mapped = mapAssociatedProjectPath(parts.pathText, pathRewrite.mappings);
+  if (!mapped) return null;
+  return `${mapped.fsPath}${parts.locationSuffix}${parts.trailing}`;
+}
+
+function readPathToken(text: string, start: number): { value: string; end: number } {
+  const opener = start > 0 ? text[start - 1] : "";
+  const closer = opener === "<" ? ">" : opener === "\"" || opener === "'" || opener === "`" ? opener : "";
+  if (closer) {
+    const end = text.indexOf(closer, start);
+    if (end >= 0) return { value: text.slice(start, end), end };
+  }
+
+  let end = start;
+  while (end < text.length) {
+    const ch = text[end]!;
+    if (/\s/u.test(ch) || ch === "\"" || ch === "'" || ch === "`" || ch === "<" || ch === ">" || ch === "|") break;
+    end += 1;
+  }
+  return { value: text.slice(start, end), end };
+}
+
+function splitPathTokenDecorations(
+  tokenValue: string,
+): { pathText: string; locationSuffix: string; trailing: string } | null {
+  let pathText = String(tokenValue ?? "").trim();
+  if (!pathText) return null;
+  let trailing = "";
+  while (pathText.length > 0 && TRAILING_PATH_PUNCTUATION.has(pathText[pathText.length - 1]!)) {
+    trailing = pathText[pathText.length - 1]! + trailing;
+    pathText = pathText.slice(0, -1);
+  }
+
+  let locationSuffix = "";
+  const suffixMatch = pathText.match(/(#L\d+|:\d+(?::\d+)?)$/iu);
+  if (suffixMatch?.index !== undefined) {
+    locationSuffix = suffixMatch[0];
+    pathText = pathText.slice(0, suffixMatch.index);
+  }
+  if (!pathText) return null;
+  return { pathText, locationSuffix, trailing };
+}
+
+function isPathTokenBoundary(text: string, start: number): boolean {
+  if (start <= 0) return true;
+  return !/[A-Za-z0-9_]/u.test(text[start - 1]!);
+}
+
+function isUrlEmbeddedPathStart(text: string, start: number): boolean {
+  const leftBoundary = Math.max(
+    text.lastIndexOf(" ", start - 1),
+    text.lastIndexOf("\n", start - 1),
+    text.lastIndexOf("\t", start - 1),
+    text.lastIndexOf("\"", start - 1),
+    text.lastIndexOf("'", start - 1),
+    text.lastIndexOf("`", start - 1),
+    text.lastIndexOf("<", start - 1),
+  );
+  const prefix = text.slice(leftBoundary + 1, start).toLowerCase();
+  return prefix.includes("://");
+}
+
+function isLikelyUrlToken(value: string): boolean {
+  return /^[A-Za-z][A-Za-z0-9+.-]*:\/\//u.test(String(value ?? "").trim());
+}
+
+function normalizeOptionalPath(value: string | null | undefined): string | null {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text || null;
 }
 
 function extractClaudeToolCalls(content: unknown): ClaudeToolCall[] {
@@ -782,7 +1019,7 @@ async function readHandoffCreatedAtMs(directoryUri: vscode.Uri): Promise<number>
   return 0;
 }
 
-async function readHandoffMetadata(metadataUri: vscode.Uri): Promise<HandoffMetadata> {
+export async function readHandoffMetadata(metadataUri: vscode.Uri): Promise<HandoffMetadata> {
   try {
     const raw = Buffer.from(await vscode.workspace.fs.readFile(metadataUri)).toString("utf8");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -793,10 +1030,36 @@ async function readHandoffMetadata(metadataUri: vscode.Uri): Promise<HandoffMeta
       lastGeneratedAt: typeof parsed.lastGeneratedAt === "string" ? parsed.lastGeneratedAt : undefined,
       source,
       target,
+      pathRewrite: sanitizePathRewriteMetadata(parsed.pathRewrite),
     };
   } catch {
     return {};
   }
+}
+
+function sanitizePathRewriteMetadata(value: unknown): HandoffPathRewriteMetadata | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const mode = record.mode === "relocated" ? "relocated" : record.mode === "recorded" ? "recorded" : undefined;
+  const fingerprint = typeof record.fingerprint === "string" ? record.fingerprint.trim() : "";
+  if (!mode || !fingerprint) return undefined;
+  const rawMappings = Array.isArray(record.mappings) ? record.mappings : [];
+  const mappings = normalizePathRewriteMappings(
+    rawMappings.map((mapping) => {
+      const item = mapping && typeof mapping === "object" ? (mapping as Record<string, unknown>) : {};
+      return {
+        sourceCwd: typeof item.sourceCwd === "string" ? item.sourceCwd : "",
+        targetCwd: typeof item.targetCwd === "string" ? item.targetCwd : "",
+      };
+    }),
+  );
+  return {
+    mode,
+    recordedCwd: normalizeOptionalPath(typeof record.recordedCwd === "string" ? record.recordedCwd : null),
+    displayCwd: normalizeOptionalPath(typeof record.displayCwd === "string" ? record.displayCwd : null),
+    mappings: mode === "relocated" ? mappings : [],
+    fingerprint,
+  };
 }
 
 async function statSourceSession(fsPath: string): Promise<{ mtime: number; size: number } | null> {

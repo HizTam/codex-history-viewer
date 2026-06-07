@@ -15,6 +15,8 @@ import {
   buildCodexPatchBookmarkGroupId,
   resolveClaudeToolCallId,
 } from "../services/bookmarkIdentity";
+import type { ProjectAssociationStore } from "../services/projectAssociationStore";
+import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/projectPathMapper";
 import type { SearchIndexService } from "../services/searchIndexService";
 import type { HistoryIndex, SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { formatYmdHmsInTimeZone, toYmdInTimeZone, ymdToString } from "../utils/dateUtils";
@@ -124,6 +126,12 @@ function addClaudeDiffStats(stats: FileChangeHistoryDiffStats, toolCall: ClaudeT
 }
 
 export class FileChangeHistoryService {
+  private readonly projectAssociationStore?: ProjectAssociationStore;
+
+  constructor(projectAssociationStore?: ProjectAssociationStore) {
+    this.projectAssociationStore = projectAssociationStore;
+  }
+
   public buildTarget(fileUri: vscode.Uri, workspaceFolder: vscode.WorkspaceFolder): FileChangeHistoryTarget {
     return {
       fsPath: path.normalize(fileUri.fsPath),
@@ -141,14 +149,15 @@ export class FileChangeHistoryService {
   }): FileChangeHistoryCandidate[] {
     const { index, searchIndexService, target, config } = params;
     const candidates: FileChangeHistoryCandidate[] = [];
+    const projectPathMappings = this.getProjectPathMappings(target);
 
     for (const session of index.sessions) {
       if (!isEnabledSource(session.source, config)) continue;
-      if (!isSessionAllowedForWorkspace(session, target.workspaceRoot)) continue;
+      if (!isSessionAllowedForWorkspace(session, target.workspaceRoot, projectPathMappings)) continue;
 
       // Search index hits are ranking hints; raw session parsing is the source of truth.
-      const hintScore = scoreFileChangeHints(searchIndexService, session, target);
-      const fallbackScore = hintScore > 0 ? 0 : scoreSearchMessages(searchIndexService, session, target);
+      const hintScore = scoreFileChangeHints(searchIndexService, session, target, projectPathMappings);
+      const fallbackScore = hintScore > 0 ? 0 : scoreSearchMessages(searchIndexService, session, target, projectPathMappings);
       const matchScore = Math.max(hintScore, fallbackScore);
       candidates.push({ session, matchScore });
     }
@@ -176,6 +185,7 @@ export class FileChangeHistoryService {
     let nextCandidateIndex = Math.max(0, Math.floor(params.nextCandidateIndex));
     const limit = Math.max(1, Math.floor(params.limit));
     const stats = createLoadStats();
+    const projectPathMappings = this.getProjectPathMappings(params.target);
 
     while (cards.length < limit && pendingCards.length > 0) {
       const next = pendingCards.shift();
@@ -190,7 +200,7 @@ export class FileChangeHistoryService {
       const candidate = params.candidates[nextCandidateIndex]!;
       nextCandidateIndex += 1;
       stats.candidateScanned += 1;
-      const parsed = await this.parseSession(candidate.session, params.target, params.token);
+      const parsed = await this.parseSession(candidate.session, params.target, projectPathMappings, params.token);
       stats.parsedSessions += 1;
       addDiffStats(stats.diffStats, parsed.diffStats);
       if (parsed.cards.length === 0) continue;
@@ -211,16 +221,17 @@ export class FileChangeHistoryService {
   private async parseSession(
     session: SessionSummary,
     target: FileChangeHistoryTarget,
+    projectPathMappings: readonly ProjectPathMapping[],
     token?: vscode.CancellationToken,
   ): Promise<ParsedSessionResult> {
     const parsed =
       session.source === "codex"
-        ? await parseCodexSession(session, target, token)
-        : await parseClaudeSession(session, target, token);
+        ? await parseCodexSession(session, target, projectPathMappings, token)
+        : await parseClaudeSession(session, target, projectPathMappings, token);
     const renderableEntries = parsed.entries.filter((item) => hasRenderableDiff(item.entry));
     const diffStats = cloneDiffStats(parsed.diffStats);
     diffStats.noRenderableSkipped += parsed.entries.length - renderableEntries.length;
-    const cards = renderableEntries.map((item, index) => toHistoryCard(session, target, item, index));
+    const cards = renderableEntries.map((item, index) => toHistoryCard(session, target, projectPathMappings, item, index));
     cards.sort((a, b) => {
       const at = parseTimeMs(a.timestampIso);
       const bt = parseTimeMs(b.timestampIso);
@@ -229,11 +240,21 @@ export class FileChangeHistoryService {
     });
     return { cards, diffStats };
   }
+
+  private getProjectPathMappings(target: FileChangeHistoryTarget): ProjectPathMapping[] {
+    const store = this.projectAssociationStore;
+    if (!store || store.isEmpty()) return [];
+    return store.getRelocationSourcesForTargetCwd(target.workspaceRoot).map((source) => ({
+      sourceCwd: source.sourceCwd,
+      targetCwd: target.workspaceRoot,
+    }));
+  }
 }
 
 async function parseCodexSession(
   session: SessionSummary,
   target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
   token?: vscode.CancellationToken,
 ): Promise<ParsedPatchEntriesResult> {
   const out: ParsedPatchEntry[] = [];
@@ -264,7 +285,7 @@ async function parseCodexSession(
       if (customApplyPatchInput !== undefined) {
         const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : `apply_patch:${lineIndex}`;
         const timestampIso = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
-        const entries = buildCodexApplyPatchEntries(customApplyPatchInput, session.meta.cwd, target, callId);
+        const entries = buildCodexApplyPatchEntries(customApplyPatchInput, session.meta.cwd, target, projectPathMappings, callId);
         if (entries.length > 0) {
           diffStats.codexApplyPatchParsed += entries.length;
           const bookmarkGroupId = `apply:${callId}`;
@@ -301,7 +322,7 @@ async function parseCodexSession(
           : typeof obj?.timestamp === "string"
             ? obj.timestamp
             : undefined;
-      const entries = buildCodexPatchEntries(obj?.payload?.changes, session.meta.cwd, target, callId);
+      const entries = buildCodexPatchEntries(obj?.payload?.changes, session.meta.cwd, target, projectPathMappings, callId);
       const removedByCallIdCount = rawCallId ? pendingApplyPatchEntries.get(rawCallId)?.length ?? 0 : 0;
       const removedByCallId = rawCallId ? pendingApplyPatchEntries.delete(rawCallId) : false;
       if (removedByCallId) diffStats.codexDuplicatesSuppressed += removedByCallIdCount;
@@ -346,6 +367,7 @@ async function parseCodexSession(
 async function parseClaudeSession(
   session: SessionSummary,
   target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
   token?: vscode.CancellationToken,
 ): Promise<ParsedPatchEntriesResult> {
   const out: ParsedPatchEntry[] = [];
@@ -374,7 +396,7 @@ async function parseClaudeSession(
         const toolCall = parsed.toolCalls[toolCallIndex]!;
         const callId = resolveClaudeToolCallId(toolCall.callId, lineIndex, toolCallIndex);
         const bookmarkGroupId = buildClaudePatchBookmarkGroupId(toolCall.callId, lineIndex, toolCallIndex, messageIndex);
-        const entries = buildClaudeToolUsePatchEntries(toolCall, session.meta.cwd, target, callId);
+        const entries = buildClaudeToolUsePatchEntries(toolCall, session.meta.cwd, target, projectPathMappings, callId);
         addClaudeDiffStats(diffStats, toolCall, entries.length);
         for (const entry of entries) {
           out.push({
@@ -398,6 +420,7 @@ function buildCodexPatchEntries(
   changes: unknown,
   sessionCwd: string | undefined,
   target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
   callId: string,
 ): ChatPatchEntry[] {
   if (!changes || typeof changes !== "object" || Array.isArray(changes)) return [];
@@ -406,7 +429,7 @@ function buildCodexPatchEntries(
   for (const [rawPath, rawChange] of Object.entries(changes as Record<string, unknown>)) {
     const change = rawChange && typeof rawChange === "object" ? (rawChange as Record<string, unknown>) : {};
     const movePath = typeof change.move_path === "string" ? change.move_path : undefined;
-    const match = matchPatchPaths(rawPath, movePath, sessionCwd, target);
+    const match = matchPatchPaths(rawPath, movePath, sessionCwd, target, projectPathMappings);
     if (!match.matched) {
       index += 1;
       continue;
@@ -421,9 +444,9 @@ function buildCodexPatchEntries(
       id,
       callId,
       path: rawPath,
-      displayPath: formatPatchDisplayPath(rawPath, sessionCwd, target.workspaceRoot),
+      displayPath: formatPatchDisplayPath(rawPath, sessionCwd, target.workspaceRoot, projectPathMappings),
       movePath,
-      moveDisplayPath: movePath ? formatPatchDisplayPath(movePath, sessionCwd, target.workspaceRoot) : undefined,
+      moveDisplayPath: movePath ? formatPatchDisplayPath(movePath, sessionCwd, target.workspaceRoot, projectPathMappings) : undefined,
       changeType,
       added: parsed.added,
       removed: parsed.removed,
@@ -444,6 +467,7 @@ function buildCodexApplyPatchEntries(
   patchText: string,
   sessionCwd: string | undefined,
   target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
   callId: string,
 ): ChatPatchEntry[] {
   const lines = String(patchText ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
@@ -454,16 +478,16 @@ function buildCodexApplyPatchEntries(
   const flush = (): void => {
     if (!current) return;
     flushApplyPatchPendingRows(current);
-    const match = matchPatchPaths(current.path, current.movePath, sessionCwd, target);
+    const match = matchPatchPaths(current.path, current.movePath, sessionCwd, target, projectPathMappings);
     if (match.matched && hasRenderableApplyPatch(current)) {
       entries.push({
         id: `${callId}:apply:${index}`,
         callId,
         path: current.path,
-        displayPath: formatPatchDisplayPath(current.path, sessionCwd, target.workspaceRoot),
+        displayPath: formatPatchDisplayPath(current.path, sessionCwd, target.workspaceRoot, projectPathMappings),
         movePath: current.movePath,
         moveDisplayPath: current.movePath
-          ? formatPatchDisplayPath(current.movePath, sessionCwd, target.workspaceRoot)
+          ? formatPatchDisplayPath(current.movePath, sessionCwd, target.workspaceRoot, projectPathMappings)
           : undefined,
         changeType: current.changeType,
         added: current.added,
@@ -743,6 +767,7 @@ function buildClaudeToolUsePatchEntries(
   toolCall: ClaudeToolCall,
   sessionCwd: string | undefined,
   target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
   callId: string,
 ): ChatPatchEntry[] {
   const input = typeof toolCall.input === "string" ? parseJsonLine(toolCall.input) ?? toolCall.input : toolCall.input;
@@ -750,7 +775,7 @@ function buildClaudeToolUsePatchEntries(
   const toolName = normalizeToolName(toolCall.name);
   const filePath = readPathField(input);
   if (!filePath) return [];
-  if (!matchPatchPaths(filePath, undefined, sessionCwd, target).matched) return [];
+  if (!matchPatchPaths(filePath, undefined, sessionCwd, target, projectPathMappings).matched) return [];
 
   const entries: ChatPatchEntry[] = [];
   const baseId = `${callId}:0`;
@@ -772,7 +797,7 @@ function buildClaudeToolUsePatchEntries(
       hunks.push(hunk);
     }
     if (hunks.length > 0) {
-      entries.push(buildSyntheticEntry(baseId, callId, filePath, sessionCwd, target, "update", added, removed, hunks));
+      entries.push(buildSyntheticEntry(baseId, callId, filePath, sessionCwd, target, projectPathMappings, "update", added, removed, hunks));
     }
     return entries;
   }
@@ -789,6 +814,7 @@ function buildClaudeToolUsePatchEntries(
         filePath,
         sessionCwd,
         target,
+        projectPathMappings,
         "update",
         countAddedRows(hunk),
         countRemovedRows(hunk),
@@ -810,6 +836,7 @@ function buildClaudeToolUsePatchEntries(
         filePath,
         sessionCwd,
         target,
+        projectPathMappings,
         "create",
         countAddedRows(hunk),
         0,
@@ -827,6 +854,7 @@ function buildSyntheticEntry(
   filePath: string,
   sessionCwd: string | undefined,
   target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
   changeType: ChatPatchChangeType,
   added: number,
   removed: number,
@@ -836,7 +864,7 @@ function buildSyntheticEntry(
     id,
     callId,
     path: filePath,
-    displayPath: formatPatchDisplayPath(filePath, sessionCwd, target.workspaceRoot),
+    displayPath: formatPatchDisplayPath(filePath, sessionCwd, target.workspaceRoot, projectPathMappings),
     changeType,
     added,
     removed,
@@ -879,13 +907,14 @@ function buildSyntheticCreateHunk(content: string, maxLines: number): ChatPatchH
 function toHistoryCard(
   session: SessionSummary,
   target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
   parsed: ParsedPatchEntry,
   index: number,
 ): FileChangeHistoryCard {
   const entry = parsed.entry;
   const timestampIso = parsed.timestampIso;
   const dateInfo = formatCardDate(timestampIso);
-  const matched = matchPatchPaths(entry.path, entry.movePath, session.meta.cwd, target);
+  const matched = matchPatchPaths(entry.path, entry.movePath, session.meta.cwd, target, projectPathMappings);
   const side = matched.matched ? matched.side : "path";
   const sourceLabel = getSourceLabel(session.source);
   const id = `fch-${hashString(
@@ -920,12 +949,13 @@ function scoreFileChangeHints(
   searchIndexService: SearchIndexService,
   session: SessionSummary,
   target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
 ): number {
   const hints = searchIndexService.getFileChangeHints(session.cacheKey) ?? [];
   let score = 0;
   for (const hint of hints) {
     for (const hintPath of hint.paths) {
-      if (!matchesPathCandidate(hintPath, session.meta.cwd, target)) continue;
+      if (!matchesPathCandidate(hintPath, session.meta.cwd, target, projectPathMappings)) continue;
       score = Math.max(score, hint.origin === "codexPatch" ? 100 : hint.hasDiffLikeContent ? 80 : 40);
     }
   }
@@ -936,9 +966,10 @@ function scoreSearchMessages(
   searchIndexService: SearchIndexService,
   session: SessionSummary,
   target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
 ): number {
   const messages = searchIndexService.getMessages(session.cacheKey) ?? [];
-  const needles = buildSearchNeedles(target);
+  const needles = buildSearchNeedles(target, projectPathMappings);
   for (const message of messages) {
     if (message.source === "message") continue;
     const haystack = message.text.toLowerCase();
@@ -947,21 +978,68 @@ function scoreSearchMessages(
   return 0;
 }
 
-function buildSearchNeedles(target: FileChangeHistoryTarget): string[] {
+function buildSearchNeedles(
+  target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
+): string[] {
   const relative = safeRelativePath(target.workspaceRoot, target.fsPath);
-  return [target.fsPath, relative, path.basename(target.fsPath)]
-    .map((value) => value.replace(/\\/g, "/").toLowerCase())
-    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+  const values = [target.fsPath, relative, path.basename(target.fsPath)];
+
+  for (const sourcePath of buildAssociatedTargetPaths(target.fsPath, projectPathMappings)) {
+    values.push(sourcePath);
+    for (const mapping of projectPathMappings) {
+      if (!isPathInsideOrEqual(sourcePath, mapping.sourceCwd)) continue;
+      values.push(safeRelativePath(mapping.sourceCwd, sourcePath));
+    }
+  }
+
+  return buildPathNeedleVariants(values);
+}
+
+function buildAssociatedTargetPaths(
+  targetPath: string,
+  projectPathMappings: readonly ProjectPathMapping[],
+): string[] {
+  const out: string[] = [];
+  const normalizedTargetPath = path.normalize(targetPath);
+  for (const mapping of projectPathMappings) {
+    const sourceCwd = String(mapping.sourceCwd ?? "").trim();
+    const targetCwd = String(mapping.targetCwd ?? "").trim();
+    if (!sourceCwd || !targetCwd) continue;
+    if (!isPathInsideOrEqual(normalizedTargetPath, targetCwd)) continue;
+    const rel = safeRelativePath(targetCwd, normalizedTargetPath);
+    out.push(rel ? path.join(sourceCwd, rel) : sourceCwd);
+  }
+  return dedupeStrings(out);
+}
+
+function buildPathNeedleVariants(values: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+    if (!text) continue;
+    out.push(text);
+    out.push(text.replace(/\\/g, "/"));
+    out.push(text.replace(/\//g, "\\"));
+  }
+  return dedupeStrings(out.map((value) => value.toLowerCase()));
 }
 
 function isEnabledSource(source: SessionSource, config: CodexHistoryViewerConfig): boolean {
   return source === "codex" ? config.enableCodexSource || config.enableCodexArchivedSessions : config.enableClaudeSource;
 }
 
-function isSessionAllowedForWorkspace(session: SessionSummary, workspaceRoot: string): boolean {
+function isSessionAllowedForWorkspace(
+  session: SessionSummary,
+  workspaceRoot: string,
+  projectPathMappings: readonly ProjectPathMapping[],
+): boolean {
   const cwd = typeof session.meta.cwd === "string" ? session.meta.cwd.trim() : "";
   if (!cwd) return true;
-  return isPathInsideOrEqual(cwd, workspaceRoot) || isPathInsideOrEqual(workspaceRoot, cwd);
+  if (isPathInsideOrEqual(cwd, workspaceRoot) || isPathInsideOrEqual(workspaceRoot, cwd)) return true;
+  return projectPathMappings.some(
+    (mapping) => isPathInsideOrEqual(cwd, mapping.sourceCwd) || isPathInsideOrEqual(mapping.sourceCwd, cwd),
+  );
 }
 
 function matchPatchPaths(
@@ -969,24 +1047,35 @@ function matchPatchPaths(
   movePath: string | undefined,
   sessionCwd: string | undefined,
   target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
 ): PathMatch {
-  const pathMatches = rawPath ? matchesPathCandidate(rawPath, sessionCwd, target) : false;
-  const moveMatches = movePath ? matchesPathCandidate(movePath, sessionCwd, target) : false;
+  const pathMatches = rawPath ? matchesPathCandidate(rawPath, sessionCwd, target, projectPathMappings) : false;
+  const moveMatches = movePath ? matchesPathCandidate(movePath, sessionCwd, target, projectPathMappings) : false;
   if (pathMatches && moveMatches) return { matched: true, side: "both" };
   if (pathMatches) return { matched: true, side: "path" };
   if (moveMatches) return { matched: true, side: "movePath" };
   return { matched: false };
 }
 
-function matchesPathCandidate(rawPath: string, sessionCwd: string | undefined, target: FileChangeHistoryTarget): boolean {
+function matchesPathCandidate(
+  rawPath: string,
+  sessionCwd: string | undefined,
+  target: FileChangeHistoryTarget,
+  projectPathMappings: readonly ProjectPathMapping[],
+): boolean {
   const targetKey = normalizePathForCompare(target.fsPath);
-  for (const candidate of resolvePathCandidates(rawPath, sessionCwd, target.workspaceRoot)) {
+  for (const candidate of resolvePathCandidates(rawPath, sessionCwd, target.workspaceRoot, projectPathMappings)) {
     if (normalizePathForCompare(candidate) === targetKey) return true;
   }
   return false;
 }
 
-function resolvePathCandidates(rawPath: string, sessionCwd: string | undefined, workspaceRoot: string): string[] {
+function resolvePathCandidates(
+  rawPath: string,
+  sessionCwd: string | undefined,
+  workspaceRoot: string,
+  projectPathMappings: readonly ProjectPathMapping[],
+): string[] {
   const cleaned = cleanupDiffPath(rawPath);
   if (!cleaned) return [];
   const values: string[] = [];
@@ -996,6 +1085,11 @@ function resolvePathCandidates(rawPath: string, sessionCwd: string | undefined, 
     if (sessionCwd) values.push(path.resolve(sessionCwd, cleaned));
     values.push(path.resolve(workspaceRoot, cleaned));
   }
+  const mappedValues = values
+    .map((value) => mapAssociatedProjectPath(value, projectPathMappings)?.fsPath)
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .map((value) => path.normalize(value));
+  values.push(...mappedValues);
   return dedupeStrings(values);
 }
 
@@ -1007,8 +1101,13 @@ function cleanupDiffPath(value: string): string {
   return text === "/dev/null" ? "" : text;
 }
 
-function formatPatchDisplayPath(rawPath: string, sessionCwd: string | undefined, workspaceRoot: string): string {
-  const candidates = resolvePathCandidates(rawPath, sessionCwd, workspaceRoot);
+function formatPatchDisplayPath(
+  rawPath: string,
+  sessionCwd: string | undefined,
+  workspaceRoot: string,
+  projectPathMappings: readonly ProjectPathMapping[],
+): string {
+  const candidates = resolvePathCandidates(rawPath, sessionCwd, workspaceRoot, projectPathMappings);
   for (const candidate of candidates) {
     const rel = safeRelativePath(workspaceRoot, candidate);
     if (rel && !rel.startsWith("..") && !path.isAbsolute(rel)) return rel;

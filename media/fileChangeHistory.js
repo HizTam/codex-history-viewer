@@ -3,6 +3,16 @@
   const vscode = acquireVsCodeApi();
   const app = document.getElementById("app");
   const restoreCoverEl = document.getElementById("restoreCover");
+  const pageSearchBarEl = document.getElementById("pageSearchBar");
+  const pageSearchResizeHandleEl = document.getElementById("pageSearchResizeHandle");
+  const pageSearchTitleEl = document.getElementById("pageSearchTitle");
+  const pageSearchInputEl = document.getElementById("pageSearchInput");
+  const pageSearchCountEl = document.getElementById("pageSearchCount");
+  const pageSearchSuggestionsEl = document.getElementById("pageSearchSuggestions");
+  const pageSearchResultsEl = document.getElementById("pageSearchResults");
+  const btnPageSearchPrevEl = document.getElementById("btnPageSearchPrev");
+  const btnPageSearchNextEl = document.getElementById("btnPageSearchNext");
+  const btnPageSearchCloseEl = document.getElementById("btnPageSearchClose");
 
   const COPY_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 1.5H6A1.5 1.5 0 0 0 4.5 3H3.75A1.75 1.75 0 0 0 2 4.75v8.5C2 14.216 2.784 15 3.75 15h8.5c.966 0 1.75-.784 1.75-1.75v-8.5C14 3.784 13.216 3 12.25 3H11.5A1.5 1.5 0 0 0 10 1.5Zm-4 1H10a.5.5 0 0 1 .5.5V3H5.5V3a.5.5 0 0 1 .5-.5ZM3.75 4h8.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-8.5a.75.75 0 0 1-.75-.75v-8.5A.75.75 0 0 1 3.75 4Z"/></svg>';
@@ -20,6 +30,8 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a4.75 4.75 0 1 1 0 9.5 4.75 4.75 0 0 1 0-9.5Zm0 1.5a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Zm4.9 6.83 2.13 2.14a.75.75 0 1 1-1.06 1.06l-2.14-2.13a.75.75 0 1 1 1.07-1.07Z"/></svg>';
   const CLOSE_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.22 3.22a.75.75 0 0 1 1.06 0L8 6.94l3.72-3.72a.75.75 0 1 1 1.06 1.06L9.06 8l3.72 3.72a.75.75 0 1 1-1.06 1.06L8 9.06l-3.72 3.72a.75.75 0 1 1-1.06-1.06L6.94 8 3.22 4.28a.75.75 0 0 1 0-1.06Z"/></svg>';
+  const TRASH_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.25 1.75h3.5c.69 0 1.25.56 1.25 1.25v.5h2.25a.75.75 0 0 1 0 1.5H12.9l-.62 8.05A1.75 1.75 0 0 1 10.54 14H5.46a1.75 1.75 0 0 1-1.74-1.95L3.1 5H2.75a.75.75 0 0 1 0-1.5H5V3c0-.69.56-1.25 1.25-1.25Zm1.25 5a.75.75 0 0 0-1.5 0v5a.75.75 0 0 0 1.5 0v-5Zm2.5 0a.75.75 0 0 0-1.5 0v5a.75.75 0 0 0 1.5 0v-5ZM6.5 3.5h3V3h-3v.5Zm-1 1.5.61 7.94c.01.03.03.06.07.06h5.08c.04 0 .06-.03.07-.06L11.5 5h-6Z"/></svg>';
   const OPEN_FILE_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.75 2h5.5a.75.75 0 0 1 0 1.5h-5.5a.25.25 0 0 0-.25.25v8.5c0 .14.11.25.25.25h8.5a.25.25 0 0 0 .25-.25v-5.5a.75.75 0 0 1 1.5 0v5.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm4.72 1.22a.75.75 0 0 1 .53-.22h4.25a.75.75 0 0 1 .75.75V8a.75.75 0 0 1-1.5 0V5.56L8.78 9.28a.75.75 0 1 1-1.06-1.06l3.72-3.72H9a.75.75 0 0 1-.53-1.28Z"/></svg>';
   const HISTORY_ICON_SVG = OPEN_FILE_ICON_SVG;
@@ -29,6 +41,7 @@
   const MIN_PAGE_SEARCH_WIDTH = 280;
   const PAGE_SEARCH_HORIZONTAL_MARGIN = 16;
   const PAGE_SEARCH_REFRESH_DEBOUNCE_MS = 180;
+  const MAX_PAGE_SEARCH_HISTORY_CANDIDATES = 20;
   const RESTORE_POSITION_SAVE_DEBOUNCE_MS = 500;
   const RESTORE_COVER_HIDE_DELAY_MS = 140;
   const RESTORE_COVER_MIN_VISIBLE_MS = 220;
@@ -51,6 +64,13 @@
   let pageSearchMatches = [];
   let pageSearchResults = [];
   let activePageSearchResultIndex = -1;
+  let pageSearchHistoryCandidates = [];
+  let pageSearchShowingSuggestions = false;
+  let activePageSearchSuggestionIndex = -1;
+  let suppressNextPageSearchFocusSuggestions = false;
+  let pageSearchCaseSensitive = false;
+  let pageSearchErrorText = "";
+  let lastCommittedPageSearchHistory = null;
   let pageSearchRefreshTimer = 0;
   let pageSearchResizeState = null;
   let restorePositionSaveTimer = 0;
@@ -69,12 +89,20 @@
   let pageSearchPanelWidth = Number.isFinite(Number(webviewState.pageSearchPanelWidth))
     ? Number(webviewState.pageSearchPanelWidth)
     : null;
+  pageSearchCaseSensitive = webviewState.pageSearchCaseSensitive === true;
   let pendingReloadScrollAnchor = null;
 
   window.addEventListener("message", (event) => {
     const msg = event.data || {};
-    if (msg.i18n) i18n = msg.i18n;
+    if (msg.i18n) {
+      i18n = msg.i18n;
+      updatePageSearchStaticText();
+    }
     if (msg.dateTime && typeof msg.dateTime === "object") dateTime = msg.dateTime;
+    if (msg.searchHistoryCandidates) {
+      pageSearchHistoryCandidates = normalizeSearchHistoryCandidates(msg.searchHistoryCandidates);
+      reconcileCommittedPageSearchHistory();
+    }
     if (msg.sourceIcons) sourceIcons = msg.sourceIcons;
     if (typeof msg.extensionIcon === "string") extensionIcon = msg.extensionIcon;
     if (typeof msg.timeGuideEnabled === "boolean") {
@@ -89,7 +117,14 @@
       return;
     }
     if (msg.type === "i18n") {
+      updatePageSearchStaticText();
       render();
+      return;
+    }
+    if (msg.type === "searchHistoryCandidates") {
+      pageSearchHistoryCandidates = normalizeSearchHistoryCandidates(msg.candidates);
+      reconcileCommittedPageSearchHistory();
+      if (pageSearchShowingSuggestions) updatePageSearchSuggestionsAfterInput(pageSearchInputEl);
       return;
     }
     if (msg.type === "resetUi") {
@@ -128,7 +163,7 @@
           });
         });
       }
-      render();
+      render(modelReason);
       if (reloadScrollAnchor) restoreReloadScrollAnchor(reloadScrollAnchor, scrollTop, persistRestoreState);
       else if (msg.scrollAnchor) restoreReloadScrollAnchor(msg.scrollAnchor, scrollTop, persistRestoreState);
       else restoreScroll(scrollTop, persistRestoreState);
@@ -209,6 +244,11 @@
     true,
   );
 
+  document.addEventListener("click", (event) => {
+    if (!pageSearchShowingSuggestions) return;
+    if (!isPageSearchSuggestionInteractionTarget(event.target)) hidePageSearchSuggestions();
+  });
+
   window.addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
       event.preventDefault();
@@ -280,7 +320,7 @@
     });
   }
 
-  function render() {
+  function render(modelReason) {
     renderShell((wrap) => {
       if (staleReason && !dismissedStale) wrap.appendChild(renderStaleBanner());
 
@@ -311,24 +351,25 @@
       }
       body.appendChild(content);
       wrap.appendChild(body);
-    });
+    }, { preservePageSearchIndex: modelReason !== "reload" });
   }
 
-  function renderShell(renderContent) {
+  function renderShell(renderContent, options) {
     clearPageSearchHighlights();
     clearApp();
     const toolbar = renderToolbar();
     app.appendChild(toolbar);
     updateToolbarHeight(toolbar);
-    app.appendChild(renderPageSearchPanel());
     const scrollRoot = el("main", { id: "scrollRoot" });
     scrollRoot.addEventListener("scroll", handleScrollRootScroll, { passive: true });
     const wrap = el("div", { className: "fchRoot" });
     renderContent(wrap);
     scrollRoot.appendChild(wrap);
     app.appendChild(scrollRoot);
-    if (pageSearchOpen) refreshPageSearchResults({ preserveIndex: true, reveal: false });
-    else {
+    if (pageSearchOpen) {
+      const preserveIndex = options && options.preservePageSearchIndex === false ? false : true;
+      refreshPageSearchResults({ preserveIndex, reveal: false });
+    } else {
       renderPageSearchResults();
       updatePageSearchStatus();
     }
@@ -384,59 +425,100 @@
     return info;
   }
 
-  function renderPageSearchPanel() {
-    const bar = el("div", { id: "pageSearchBar" });
-    bar.hidden = !pageSearchOpen;
-    const resizeHandle = el("div", { id: "pageSearchResizeHandle" });
-    resizeHandle.setAttribute("aria-hidden", "true");
-    attachPageSearchResizeHandlers(resizeHandle);
-    bar.appendChild(resizeHandle);
+  function initializePageSearchPanel() {
+    if (pageSearchResizeHandleEl instanceof HTMLElement) attachPageSearchResizeHandlers(pageSearchResizeHandleEl);
+    setupStaticPageSearchButton(btnPageSearchPrevEl, NAV_UP_ICON_SVG, () => navigatePageSearchResults(-1));
+    setupStaticPageSearchButton(btnPageSearchNextEl, NAV_DOWN_ICON_SVG, () => navigatePageSearchResults(1));
+    setupStaticPageSearchButton(btnPageSearchCloseEl, CLOSE_ICON_SVG, () => closePageSearch());
+    if (pageSearchInputEl instanceof HTMLInputElement) {
+      pageSearchInputEl.value = pageSearchQuery;
+      pageSearchInputEl.addEventListener("input", () => {
+        pageSearchQuery = pageSearchInputEl.value || "";
+        if (pageSearchShowingSuggestions) {
+          updatePageSearchSuggestionsAfterInput(pageSearchInputEl);
+        }
+        schedulePageSearchRefresh({ reveal: false, keepSuggestions: true });
+      });
+      pageSearchInputEl.addEventListener("focus", () => {
+        if (suppressNextPageSearchFocusSuggestions) suppressNextPageSearchFocusSuggestions = false;
+      });
+      pageSearchInputEl.addEventListener("click", () => {
+        showPageSearchSuggestions();
+      });
+      pageSearchInputEl.addEventListener("keydown", (event) => {
+        handlePageSearchInputKeydown(event, pageSearchInputEl);
+      });
+    }
+    updatePageSearchStaticText();
+    syncPageSearchPanelVisibility();
+    applyPageSearchPanelWidth();
+    renderPageSearchResults();
+    renderPageSearchSuggestions();
+    updatePageSearchStatus();
+  }
 
-    const inner = el("div", { id: "pageSearchInner" });
-    const header = el("div", { id: "pageSearchHeader" });
-    const title = el("div", { id: "pageSearchTitle" });
-    title.textContent = text("pageSearchTitle", text("search", "Search"));
-    const actions = el("div", { id: "pageSearchActions" });
-    actions.appendChild(pageSearchActionButton("btnPageSearchPrev", text("pageSearchPrevTooltip", "Previous match"), NAV_UP_ICON_SVG, () => {
-      navigatePageSearchResults(-1);
-    }));
-    actions.appendChild(pageSearchActionButton("btnPageSearchNext", text("pageSearchNextTooltip", "Next match"), NAV_DOWN_ICON_SVG, () => {
-      navigatePageSearchResults(1);
-    }));
-    actions.appendChild(pageSearchActionButton("btnPageSearchClose", text("pageSearchCloseTooltip", "Close search"), CLOSE_ICON_SVG, () => {
-      closePageSearch();
-    }));
-    header.appendChild(title);
-    header.appendChild(actions);
-    inner.appendChild(header);
+  function setupStaticPageSearchButton(button, svg, handler) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    button.innerHTML = svg;
+    button.addEventListener("click", handler);
+  }
 
-    const inputRow = el("div", { id: "pageSearchInputRow" });
-    const input = el("input", { id: "pageSearchInput", type: "search", spellcheck: false, autocomplete: "off" });
-    input.placeholder = text("pageSearchPlaceholder", text("searchPlaceholder", "Search loaded diffs"));
-    input.value = pageSearchQuery;
-    input.addEventListener("input", () => {
-      pageSearchQuery = input.value || "";
-      schedulePageSearchRefresh({ reveal: true });
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        event.preventDefault();
-        navigatePageSearchResults(event.shiftKey ? -1 : 1);
+  function updatePageSearchStaticText() {
+    if (pageSearchTitleEl instanceof HTMLElement) {
+      pageSearchTitleEl.textContent = text("pageSearchTitle", text("search", "Search"));
+    }
+    if (pageSearchInputEl instanceof HTMLInputElement) {
+      pageSearchInputEl.placeholder = text("pageSearchPlaceholder", text("searchPlaceholder", "Search loaded diffs"));
+    }
+    updateStaticButtonLabel(btnPageSearchPrevEl, text("pageSearchPrevTooltip", "Previous match"));
+    updateStaticButtonLabel(btnPageSearchNextEl, text("pageSearchNextTooltip", "Next match"));
+    updateStaticButtonLabel(btnPageSearchCloseEl, text("pageSearchCloseTooltip", "Close search"));
+  }
+
+  function updateStaticButtonLabel(button, label) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  }
+
+  function handlePageSearchInputKeydown(event, input) {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (pageSearchShowingSuggestions) movePageSearchSuggestion(1);
+      else showPageSearchSuggestions();
+      return;
+    }
+    if (pageSearchShowingSuggestions && event.key === "ArrowUp") {
+      event.preventDefault();
+      movePageSearchSuggestion(-1);
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      if (pageSearchShowingSuggestions && activatePageSearchSuggestion(activePageSearchSuggestionIndex)) return;
+      if (!input.value.trim()) {
+        clearPageSearchForEmptyInput();
         return;
       }
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closePageSearch();
+      commitCurrentPageSearchQuery();
+      if (!flushPageSearchRefresh({ preserveIndex: true, reveal: false })) {
+        refreshPageSearchResults({ preserveIndex: true, reveal: false });
       }
-    });
-    const count = el("div", { id: "pageSearchCount" });
-    count.setAttribute("aria-live", "polite");
-    inputRow.appendChild(input);
-    inputRow.appendChild(count);
-    inner.appendChild(inputRow);
-    bar.appendChild(inner);
-    bar.appendChild(el("div", { id: "pageSearchResults" }));
-    return bar;
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      if (pageSearchShowingSuggestions) {
+        hidePageSearchSuggestions();
+        return;
+      }
+      closePageSearch();
+    }
+  }
+
+  function syncPageSearchPanelVisibility() {
+    if (pageSearchBarEl instanceof HTMLElement) pageSearchBarEl.hidden = !pageSearchOpen;
+    document.body.classList.toggle("pageSearchOpen", pageSearchOpen);
   }
 
   function renderStaleBanner() {
@@ -445,6 +527,8 @@
     msg.textContent =
       staleReason === "sources"
         ? text("staleSources", "Source settings changed. Reload to apply.")
+        : staleReason === "association"
+          ? text("staleAssociation", "Project associations changed. Reload to apply them to File AI Change History.")
         : text("staleIndexToolContent", "Search index content setting changed. Reload to apply.");
     const close = el("button", { type: "button", className: "iconBtn" });
     close.innerHTML = CLOSE_ICON_SVG;
@@ -479,6 +563,23 @@
     for (const value of values) {
       const key = typeof value === "string" ? value.trim() : "";
       if (key) out.add(key);
+    }
+    return out;
+  }
+
+  function normalizeSearchHistoryCandidates(value) {
+    if (!Array.isArray(value)) return [];
+    const out = [];
+    const seen = new Set();
+    for (const item of value) {
+      if (!item || typeof item !== "object") continue;
+      const queryInput = typeof item.queryInput === "string" ? item.queryInput.trim() : "";
+      if (!queryInput) continue;
+      const key = typeof item.key === "string" ? item.key.trim() : "";
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push({ key, queryInput: queryInput.slice(0, 1000) });
+      if (out.length >= MAX_PAGE_SEARCH_HISTORY_CANDIDATES) break;
     }
     return out;
   }
@@ -707,7 +808,7 @@
       });
       wrap.appendChild(btn);
     } else if (model.noMore) {
-      const done = el("div", { className: "noMore" });
+      const done = el("div", { className: "noMore", "data-page-search-ignore": "true" });
       done.textContent = text("noMore", "No more history");
       wrap.appendChild(done);
     }
@@ -724,27 +825,40 @@
     cancelPageSearchResize();
     pageSearchOpen = false;
     pageSearchQuery = "";
+    if (pageSearchInputEl instanceof HTMLInputElement) pageSearchInputEl.value = "";
+    pageSearchShowingSuggestions = false;
+    activePageSearchSuggestionIndex = -1;
+    suppressNextPageSearchFocusSuggestions = false;
+    pageSearchCaseSensitive = false;
+    pageSearchErrorText = "";
+    lastCommittedPageSearchHistory = null;
+    persistPageSearchState();
+    syncPageSearchPanelVisibility();
     clearPageSearchHighlights();
     pageSearchResults = [];
     activePageSearchResultIndex = -1;
     renderPageSearchResults();
+    renderPageSearchSuggestions();
     updatePageSearchStatus();
   }
 
   function openPageSearch() {
     pageSearchOpen = true;
-    const bar = document.getElementById("pageSearchBar");
-    if (bar instanceof HTMLElement) bar.hidden = false;
-    document.body.classList.add("pageSearchOpen");
+    syncPageSearchPanelVisibility();
     applyPageSearchPanelWidth();
-    const input = document.getElementById("pageSearchInput");
+    const input = pageSearchInputEl;
     if (input instanceof HTMLInputElement) {
       const selectedText = window.getSelection ? String(window.getSelection() || "").trim() : "";
       if (!input.value && selectedText && !/\s*\n\s*/u.test(selectedText)) {
         input.value = selectedText;
         pageSearchQuery = selectedText;
       }
-      refreshPageSearchResults({ preserveIndex: true, reveal: false });
+      if (input.value) refreshPageSearchResults({ preserveIndex: true, reveal: false });
+      else {
+        renderPageSearchResults();
+        updatePageSearchStatus();
+      }
+      suppressNextPageSearchFocusSuggestions = true;
       input.focus();
       input.select();
     }
@@ -752,12 +866,16 @@
 
   function closePageSearch() {
     pageSearchOpen = false;
-    const bar = document.getElementById("pageSearchBar");
-    if (bar instanceof HTMLElement) bar.hidden = true;
-    document.body.classList.remove("pageSearchOpen");
+    syncPageSearchPanelVisibility();
     cancelPageSearchRefresh();
     cancelPageSearchResize();
+    hidePageSearchSuggestions();
+    suppressNextPageSearchFocusSuggestions = false;
     clearPageSearchHighlights();
+    pageSearchCaseSensitive = false;
+    pageSearchErrorText = "";
+    lastCommittedPageSearchHistory = null;
+    persistPageSearchState();
     renderPageSearchResults();
     updatePageSearchStatus();
   }
@@ -766,7 +884,9 @@
     const query = pageSearchQuery.trim();
     if (!query) {
       cancelPageSearchRefresh();
-      refreshPageSearchResults({ ...options, reveal: false });
+      pageSearchErrorText = "";
+      renderPageSearchResults();
+      updatePageSearchStatus();
       return;
     }
     if (pageSearchRefreshTimer) window.clearTimeout(pageSearchRefreshTimer);
@@ -797,6 +917,8 @@
     const input = document.getElementById("pageSearchInput");
     if (input instanceof HTMLInputElement) pageSearchQuery = input.value.trim();
     const query = pageSearchQuery.trim();
+    if (!options || !options.keepSuggestions) hidePageSearchSuggestions();
+    pageSearchErrorText = "";
     clearPageSearchHighlights();
     if (!query) {
       renderPageSearchResults();
@@ -804,7 +926,13 @@
       return;
     }
 
-    const loweredQuery = query.toLowerCase();
+    const compiled = compilePageSearchQuery(query, pageSearchCaseSensitive);
+    if (!compiled) {
+      pageSearchErrorText = getPageSearchInvalidMessage(query);
+      renderPageSearchResults();
+      updatePageSearchStatus();
+      return;
+    }
     const roots = [document.getElementById("contentRoot")].filter((node) => node instanceof HTMLElement);
     const textNodes = [];
     for (const root of roots) {
@@ -818,29 +946,27 @@
 
     for (const textNode of textNodes) {
       const sourceText = textNode.textContent || "";
-      const loweredText = sourceText.toLowerCase();
-      let matchIndex = loweredText.indexOf(loweredQuery);
-      if (matchIndex < 0) continue;
+      const matches = compiled.findAll(sourceText);
+      if (matches.length === 0) continue;
 
       const fragment = document.createDocumentFragment();
       const pendingMarks = [];
       let cursor = 0;
-      while (matchIndex >= 0) {
-        if (matchIndex > cursor) fragment.appendChild(document.createTextNode(sourceText.slice(cursor, matchIndex)));
+      for (const match of matches) {
+        if (match.start > cursor) fragment.appendChild(document.createTextNode(sourceText.slice(cursor, match.start)));
         const mark = document.createElement("mark");
         mark.className = "pageSearchMatch";
-        mark.textContent = sourceText.slice(matchIndex, matchIndex + query.length);
+        mark.textContent = sourceText.slice(match.start, match.start + match.length);
         fragment.appendChild(mark);
-        pendingMarks.push({ mark, start: matchIndex });
+        pendingMarks.push({ mark, start: match.start, length: match.length });
         pageSearchMatches.push(mark);
-        cursor = matchIndex + query.length;
-        matchIndex = loweredText.indexOf(loweredQuery, cursor);
+        cursor = match.start + match.length;
       }
       if (cursor < sourceText.length) fragment.appendChild(document.createTextNode(sourceText.slice(cursor)));
       textNode.parentNode.replaceChild(fragment, textNode);
 
       for (const pending of pendingMarks) {
-        pageSearchResults.push(buildPageSearchResult(pending.mark, sourceText, pending.start, query.length));
+        pageSearchResults.push(buildPageSearchResult(pending.mark, sourceText, pending.start, pending.length));
       }
     }
 
@@ -862,6 +988,7 @@
     const parent = node.parentElement;
     if (!(parent instanceof HTMLElement)) return false;
     if (parent.closest("#pageSearchBar, .dateGuide")) return false;
+    if (parent.closest("[data-page-search-ignore='true']")) return false;
     if (parent.closest("script, style, textarea, input, select, button")) return false;
     if (parent.closest("mark.pageSearchMatch")) return false;
     if (parent.closest("[hidden]")) return false;
@@ -929,9 +1056,16 @@
     resultsEl.textContent = "";
 
     const query = pageSearchQuery.trim();
-    if (!query) {
+    if (!query && pageSearchResults.length === 0) {
       const empty = el("div", { className: "pageSearchEmpty" });
       empty.textContent = text("pageSearchTypeToSearch", text("searchPlaceholder", "Search loaded diffs"));
+      resultsEl.appendChild(empty);
+      return;
+    }
+
+    if (pageSearchErrorText) {
+      const empty = el("div", { className: "pageSearchEmpty" });
+      empty.textContent = pageSearchErrorText;
       resultsEl.appendChild(empty);
       return;
     }
@@ -948,7 +1082,20 @@
       item.dataset.searchIndex = String(index);
       if (index === activePageSearchResultIndex) item.classList.add("pageSearchResult-active");
       item.addEventListener("click", () => {
+        commitCurrentPageSearchQuery();
         activatePageSearchResult(index, { reveal: true });
+      });
+      item.addEventListener("keydown", (event) => {
+        if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+          event.preventDefault();
+          moveFocusedPageSearchResult(event.key === "ArrowDown" ? 1 : -1);
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          commitCurrentPageSearchQuery();
+          activatePageSearchResult(index, { reveal: true });
+        }
       });
 
       const header = el("div", { className: "pageSearchResultHeader" });
@@ -981,30 +1128,272 @@
     });
   }
 
+  function renderPageSearchSuggestions() {
+    const suggestionsEl = document.getElementById("pageSearchSuggestions");
+    if (!(suggestionsEl instanceof HTMLElement)) return;
+    suggestionsEl.textContent = "";
+    if (!pageSearchShowingSuggestions) {
+      suggestionsEl.hidden = true;
+      return;
+    }
+
+    const suggestions = getVisiblePageSearchSuggestions();
+    suggestionsEl.hidden = false;
+    if (suggestions.length === 0) {
+      const empty = el("div", { className: "pageSearchEmpty" });
+      empty.textContent = text("pageSearchNoHistory", "No recent searches");
+      suggestionsEl.appendChild(empty);
+      return;
+    }
+
+    suggestions.forEach((entry, index) => {
+      const item = el("div", { className: "pageSearchResult pageSearchSuggestion" });
+      if (index === activePageSearchSuggestionIndex) item.classList.add("pageSearchResult-active");
+      item.addEventListener("click", () => {
+        activatePageSearchSuggestion(index);
+      });
+
+      const main = el("button", { type: "button", className: "pageSearchSuggestionMain" });
+      const header = el("div", { className: "pageSearchResultHeader" });
+      const headerText = el("div", { className: "pageSearchResultHeaderText" });
+      const title = el("div", { className: "pageSearchResultTitle" });
+      title.textContent = entry.queryInput;
+      headerText.appendChild(title);
+      header.appendChild(headerText);
+      main.appendChild(header);
+      item.appendChild(main);
+
+      const remove = el("button", { type: "button", className: "pageSearchSuggestionRemove" });
+      const removeLabel = text("pageSearchRemoveHistory", "Remove from history");
+      remove.title = removeLabel;
+      remove.setAttribute("aria-label", removeLabel);
+      remove.innerHTML = TRASH_ICON_SVG;
+      remove.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        removePageSearchHistoryCandidate(entry);
+      });
+      item.appendChild(remove);
+      suggestionsEl.appendChild(item);
+    });
+  }
+
+  function showPageSearchSuggestions() {
+    const input = document.getElementById("pageSearchInput");
+    if (!(input instanceof HTMLInputElement) || !pageSearchOpen) return;
+    const suggestions = getVisiblePageSearchSuggestions();
+    const query = input.value.trim();
+    pageSearchShowingSuggestions = suggestions.length > 0 || !query;
+    activePageSearchSuggestionIndex = pageSearchShowingSuggestions ? 0 : -1;
+    renderPageSearchSuggestions();
+  }
+
+  function hidePageSearchSuggestions() {
+    pageSearchShowingSuggestions = false;
+    activePageSearchSuggestionIndex = -1;
+    renderPageSearchSuggestions();
+  }
+
+  function updatePageSearchSuggestionsAfterInput(input) {
+    const suggestions = getVisiblePageSearchSuggestions();
+    const query = input instanceof HTMLInputElement ? input.value.trim() : "";
+    if (query && suggestions.length === 0) {
+      hidePageSearchSuggestions();
+      return;
+    }
+    activePageSearchSuggestionIndex = suggestions.length > 0 ? 0 : -1;
+    renderPageSearchSuggestions();
+  }
+
+  function isPageSearchSuggestionInteractionTarget(target) {
+    if (!(target instanceof Element)) return false;
+    const input = document.getElementById("pageSearchInput");
+    const suggestionsEl = document.getElementById("pageSearchSuggestions");
+    if (input instanceof HTMLElement && input.contains(target)) return true;
+    if (suggestionsEl instanceof HTMLElement && suggestionsEl.contains(target)) return true;
+    return false;
+  }
+
+  function movePageSearchSuggestion(delta) {
+    const suggestions = getVisiblePageSearchSuggestions();
+    if (suggestions.length === 0) return;
+    const current = activePageSearchSuggestionIndex >= 0 ? activePageSearchSuggestionIndex : 0;
+    activePageSearchSuggestionIndex = Math.max(0, Math.min(suggestions.length - 1, current + delta));
+    renderPageSearchSuggestions();
+  }
+
+  function activatePageSearchSuggestion(index) {
+    const suggestions = getVisiblePageSearchSuggestions();
+    if (suggestions.length === 0) return false;
+    const input = document.getElementById("pageSearchInput");
+    if (!(input instanceof HTMLInputElement)) return false;
+    const safeIndex = Math.max(0, Math.min(index, suggestions.length - 1));
+    const entry = suggestions[safeIndex];
+    if (!entry) return false;
+    input.value = String(entry.queryInput || "");
+    pageSearchQuery = input.value;
+    persistPageSearchState();
+    hidePageSearchSuggestions();
+    refreshPageSearchResults({ preserveIndex: false, reveal: false });
+    commitCurrentPageSearchQuery();
+    suppressNextPageSearchFocusSuggestions = true;
+    input.focus();
+    return true;
+  }
+
+  function removePageSearchHistoryCandidate(entry) {
+    if (!entry || typeof entry.queryInput !== "string") return;
+    const key = typeof entry.key === "string" ? entry.key : "";
+    if (!key) return;
+    pageSearchHistoryCandidates = pageSearchHistoryCandidates.filter((candidate) => {
+      const candidateKey = candidate && typeof candidate.key === "string" ? candidate.key : "";
+      return candidateKey !== key;
+    });
+    reconcileCommittedPageSearchHistory();
+    vscode.postMessage({ type: "removePageSearchHistory", queryInput: entry.queryInput });
+    if (pageSearchShowingSuggestions) renderPageSearchSuggestions();
+  }
+
+  function getVisiblePageSearchSuggestions() {
+    const input = document.getElementById("pageSearchInput");
+    const normalized = input instanceof HTMLInputElement ? input.value.trim().toLowerCase() : "";
+    const entries = Array.isArray(pageSearchHistoryCandidates) ? pageSearchHistoryCandidates : [];
+    if (!normalized) return entries;
+    return entries.filter((entry) => String(entry.queryInput || "").toLowerCase().includes(normalized));
+  }
+
+  function clearPageSearchForEmptyInput() {
+    pageSearchQuery = "";
+    pageSearchErrorText = "";
+    clearPageSearchHighlights();
+    renderPageSearchResults();
+    updatePageSearchStatus();
+  }
+
+  function commitCurrentPageSearchQuery() {
+    const input = document.getElementById("pageSearchInput");
+    const queryInput = input instanceof HTMLInputElement ? input.value.trim() : "";
+    if (!queryInput) return;
+    if (!compilePageSearchQuery(queryInput, pageSearchCaseSensitive)) return;
+    if (
+      lastCommittedPageSearchHistory &&
+      lastCommittedPageSearchHistory.queryInput === queryInput &&
+      hasPageSearchHistoryCandidate(queryInput)
+    ) {
+      return;
+    }
+    lastCommittedPageSearchHistory = { queryInput };
+    vscode.postMessage({ type: "savePageSearchHistory", queryInput });
+  }
+
+  function hasPageSearchHistoryCandidate(queryInput) {
+    const query = String(queryInput || "").trim();
+    if (!query) return false;
+    return pageSearchHistoryCandidates.some((entry) => {
+      if (!entry) return false;
+      const candidate = String(entry.queryInput || "").trim();
+      return candidate === query;
+    });
+  }
+
+  function reconcileCommittedPageSearchHistory() {
+    const committed = lastCommittedPageSearchHistory;
+    if (!committed) return;
+    const candidates = Array.isArray(pageSearchHistoryCandidates) ? pageSearchHistoryCandidates : [];
+    const stillPresent = candidates.some((entry) => {
+      return entry && entry.queryInput === committed.queryInput;
+    });
+    if (!stillPresent) lastCommittedPageSearchHistory = null;
+  }
+
+  function compilePageSearchQuery(rawInput, caseSensitive) {
+    const core = getPageSearchCore();
+    return core ? core.compileQuery(rawInput, caseSensitive === true) : null;
+  }
+
+  function getPageSearchInvalidMessage(rawInput) {
+    const core = getPageSearchCore();
+    if (core && core.getInvalidKind(rawInput) === "regex") return text("pageSearchInvalidRegex", "Invalid regular expression");
+    return text("pageSearchInvalidQuery", "Invalid search query");
+  }
+
+  function getPageSearchCore() {
+    const core = window.CHV_PAGE_SEARCH;
+    return core && typeof core.compileQuery === "function" && typeof core.getInvalidKind === "function" ? core : null;
+  }
+
   function navigatePageSearchResults(delta) {
-    if (!pageSearchOpen) openPageSearch();
+    if (!pageSearchOpen) {
+      openPageSearch();
+      return;
+    }
+    commitCurrentPageSearchQuery();
     if (!flushPageSearchRefresh({ preserveIndex: true, reveal: false })) {
       refreshPageSearchResults({ preserveIndex: true, reveal: false });
     }
     if (pageSearchResults.length === 0) return;
-    const current = activePageSearchResultIndex >= 0 ? activePageSearchResultIndex : delta > 0 ? -1 : 0;
-    let next = current + delta;
-    if (next < 0) next = pageSearchResults.length - 1;
-    if (next >= pageSearchResults.length) next = 0;
+    const current = activePageSearchResultIndex >= 0 ? activePageSearchResultIndex : 0;
+    const next = Math.max(0, Math.min(pageSearchResults.length - 1, current + delta));
+    if (next === current) return;
     activatePageSearchResult(next, { reveal: true });
   }
 
-  function activatePageSearchResult(index, options) {
-    if (index < 0 || index >= pageSearchResults.length) return;
-    for (const match of pageSearchMatches) match.classList.remove("pageSearchMatch-active");
-    activePageSearchResultIndex = index;
-    const result = pageSearchResults[index];
+  function activatePageSearchResult(index, options = {}) {
+    const reveal = options.reveal !== false;
+    if (reveal) hidePageSearchSuggestions();
+    if (pageSearchResults.length === 0) {
+      activePageSearchResultIndex = -1;
+      renderPageSearchResults();
+      updatePageSearchStatus();
+      return;
+    }
+    for (const match of pageSearchMatches) {
+      if (match instanceof HTMLElement) match.classList.remove("pageSearchMatch-active");
+    }
+    const safeIndex = Math.max(0, Math.min(index, pageSearchResults.length - 1));
+    activePageSearchResultIndex = safeIndex;
+    const result = pageSearchResults[safeIndex];
     if (result && result.mark) result.mark.classList.add("pageSearchMatch-active");
-    updatePageSearchStatus();
     renderPageSearchResults();
-    if (options && options.reveal && result && result.mark) {
+    scrollActivePageSearchResultIntoList();
+    if (options.focusResult === true) focusPageSearchResultItem(safeIndex);
+    updatePageSearchStatus();
+    if (reveal && result && result.mark) {
       result.mark.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
     }
+  }
+
+  function moveFocusedPageSearchResult(delta) {
+    if (!Array.isArray(pageSearchResults) || pageSearchResults.length === 0) return;
+    const focusedIndex = getFocusedPageSearchResultIndex();
+    const currentIndex =
+      focusedIndex >= 0 ? focusedIndex : activePageSearchResultIndex >= 0 ? activePageSearchResultIndex : 0;
+    const nextIndex = Math.max(0, Math.min(pageSearchResults.length - 1, currentIndex + delta));
+    if (nextIndex === currentIndex) return;
+    activatePageSearchResult(nextIndex, { reveal: false, focusResult: true });
+  }
+
+  function getFocusedPageSearchResultIndex() {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement)) return -1;
+    const item = active.closest("#pageSearchResults .pageSearchResult");
+    if (!(item instanceof HTMLElement)) return -1;
+    const index = Number(item.dataset.searchIndex);
+    return Number.isFinite(index) ? Math.max(0, Math.floor(index)) : -1;
+  }
+
+  function focusPageSearchResultItem(index) {
+    const resultsEl = document.getElementById("pageSearchResults");
+    if (!(resultsEl instanceof HTMLElement)) return;
+    const item = resultsEl.querySelector(`[data-search-index="${String(index)}"]`);
+    if (item instanceof HTMLElement) item.focus({ preventScroll: true });
+  }
+
+  function scrollActivePageSearchResultIntoList() {
+    const resultsEl = document.getElementById("pageSearchResults");
+    if (!(resultsEl instanceof HTMLElement)) return;
+    const active = resultsEl.querySelector(".pageSearchResult-active");
+    if (active instanceof HTMLElement) active.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
   function updatePageSearchStatus() {
@@ -1013,13 +1402,14 @@
     const total = pageSearchResults.length;
     const prev = document.getElementById("btnPageSearchPrev");
     const next = document.getElementById("btnPageSearchNext");
-    if (prev instanceof HTMLButtonElement) prev.disabled = total <= 1;
-    if (next instanceof HTMLButtonElement) next.disabled = total <= 1;
+    const currentIndex = activePageSearchResultIndex >= 0 ? activePageSearchResultIndex : 0;
+    if (prev instanceof HTMLButtonElement) prev.disabled = total <= 1 || currentIndex <= 0;
+    if (next instanceof HTMLButtonElement) next.disabled = total <= 1 || currentIndex >= total - 1;
     if (total === 0) {
       countEl.textContent = "0/0";
       return;
     }
-    const current = activePageSearchResultIndex >= 0 ? activePageSearchResultIndex + 1 : 1;
+    const current = currentIndex + 1;
     countEl.textContent = `${current}/${total}`;
   }
 
@@ -1188,6 +1578,11 @@
 
   function persistSourceFilter() {
     webviewState = { ...webviewState, sourceFilter };
+    if (typeof vscode.setState === "function") vscode.setState(webviewState);
+  }
+
+  function persistPageSearchState() {
+    webviewState = { ...webviewState, pageSearchCaseSensitive };
     if (typeof vscode.setState === "function") vscode.setState(webviewState);
   }
 
@@ -1548,15 +1943,6 @@
     return btn;
   }
 
-  function pageSearchActionButton(id, label, svg, handler) {
-    const btn = el("button", { id, type: "button", className: "toolbarIconBtn" });
-    btn.innerHTML = svg;
-    btn.title = label;
-    btn.setAttribute("aria-label", label);
-    btn.addEventListener("click", handler);
-    return btn;
-  }
-
   function navButton(labelKey, targetId) {
     const btn = el("button", { type: "button", className: "iconBtn navBtn" });
     btn.title = text(labelKey, labelKey);
@@ -1851,6 +2237,8 @@
     }
     return node;
   }
+
+  initializePageSearchPanel();
 
   vscode.postMessage({
     type: "ready",

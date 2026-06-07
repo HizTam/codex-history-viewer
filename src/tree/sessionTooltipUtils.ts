@@ -20,15 +20,16 @@ export function buildSessionHoverTooltip(params: {
   description?: string;
   mode: PreviewTooltipMode;
   projectAlias?: string;
+  projectDisplayCwd?: string | null;
 }): string | vscode.MarkdownString {
-  const { session, annotation, label, description, mode, projectAlias } = params;
+  const { session, annotation, label, description, mode, projectAlias, projectDisplayCwd } = params;
   if (mode === "titleOnly") return buildTreeRowTooltip(label, description);
 
   const md = new vscode.MarkdownString(undefined, true);
   md.isTrusted = false;
   appendSessionTooltipTitleLines(md, session);
   appendSessionTooltipDateLines(md, session);
-  appendSessionMetadataLines(md, session, annotation, projectAlias);
+  appendSessionMetadataLines(md, session, annotation, projectAlias, projectDisplayCwd);
 
   if (mode === "compact") return md;
 
@@ -75,6 +76,7 @@ function appendSessionMetadataLines(
   session: SessionSummary,
   annotation: SessionTooltipAnnotation | null,
   projectAlias?: string,
+  projectDisplayCwd?: string | null,
 ): void {
   md.appendMarkdown(`Source: ${sourceName(session.source)}  \n`);
   if (session.storage.archiveState === "archived") {
@@ -84,8 +86,14 @@ function appendSessionMetadataLines(
   }
   const alias = String(projectAlias ?? "").trim();
   const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
-  if (alias && cwd) {
+  const displayCwd = typeof projectDisplayCwd === "string" ? projectDisplayCwd.trim() : "";
+  if (alias) {
     md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.projectLabel"))}: ${escapeForMarkdown(alias)}  \n`);
+  }
+  if (displayCwd && cwd && displayCwd !== cwd) {
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.displayCwdLabel"))}: ${escapeForMarkdown(displayCwd)}  \n`);
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.originalCwdLabel"))}: ${escapeForMarkdown(cwd)}  \n`);
+  } else if (alias && cwd) {
     md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.cwdLabel"))}: ${escapeForMarkdown(cwd)}  \n`);
   } else if (session.cwdShort) {
     md.appendMarkdown(`${escapeForMarkdown(session.cwdShort)}  \n`);

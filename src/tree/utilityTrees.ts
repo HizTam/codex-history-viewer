@@ -115,6 +115,13 @@ export class ControlTreeDataProvider implements vscode.TreeDataProvider<UtilityN
         command: { command: "codexHistoryViewer.deleteTagsGlobally", title: "" },
       }),
       makeAction({
+        id: "clearSearchHistory",
+        label: t("maintenance.action.clearSearchHistory"),
+        description: t("maintenance.action.clearSearchHistory.description"),
+        icon: new vscode.ThemeIcon("clear-all"),
+        command: { command: "codexHistoryViewer.searchClearHistory", title: "" },
+      }),
+      makeAction({
         id: "cleanupHandoffs",
         label: t("maintenance.action.cleanupHandoffs"),
         description: t("maintenance.action.cleanupHandoffs.description"),
@@ -149,7 +156,7 @@ export interface StatusSnapshot {
   handoffBytes: number;
   searchHitCount: number;
   currentSearchRoles: readonly string[];
-  currentSearchTagFilter: readonly string[];
+  currentHistoryTagFilter: readonly string[];
   filterSummary: string;
   currentProjectCwd: string | null;
   currentProjectLabel?: string | null;
@@ -187,7 +194,7 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
         ? s.currentProjectLabel.trim()
         : null;
     const currentSearchRoles = s.currentSearchRoles.map((x) => String(x).trim()).filter((x) => x.length > 0);
-    const currentSearchTags = s.currentSearchTagFilter.map((x) => String(x).trim()).filter((x) => x.length > 0);
+    const currentSearchTags = s.currentHistoryTagFilter.map((x) => String(x).trim()).filter((x) => x.length > 0);
     const refreshed =
       typeof s.lastRefreshAt === "number" && Number.isFinite(s.lastRefreshAt)
         ? new Date(s.lastRefreshAt).toLocaleString()

@@ -459,6 +459,13 @@
     }
 
     activatePeriod(period, button) {
+      if (typeof this.options.onActivatePeriod === "function") {
+        try {
+          this.options.onActivatePeriod(period);
+        } catch (error) {
+          console.warn("Time guide activation hook failed", error);
+        }
+      }
       this.scrollToPeriod(period);
       if (button instanceof HTMLElement) button.blur();
       this.scheduleHideHover();

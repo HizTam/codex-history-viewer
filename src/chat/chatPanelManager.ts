@@ -3,6 +3,14 @@ import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { PinStore } from "../services/pinStore";
+import type { ProjectAssociationStore } from "../services/projectAssociationStore";
+import {
+  GLOBAL_SEARCH_HISTORY_PROJECT_KEY,
+  buildSearchHistoryEntryKey,
+  normalizeSearchHistoryProjectKey,
+  type SearchHistoryEntry,
+  type SearchHistoryStore,
+} from "../services/searchHistoryStore";
 import {
   buildBookmarkKey,
   type BookmarkStore,
@@ -13,7 +21,7 @@ import type { ChatOpenPositionStore } from "../services/chatOpenPositionStore";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { buildSessionSummary } from "../sessions/sessionSummary";
 import { elapsedMs, formatDebugFields, nowMs, safeDebugBasename, sanitizeDebugError } from "../services/debugLogUtils";
-import { normalizeCacheKey } from "../utils/fsUtils";
+import { normalizeCacheKey, normalizeProjectKey } from "../utils/fsUtils";
 import { collectLocalLinkBaseDirs, openLinkedFileInEditor, resolveLocalFileLinkTarget } from "../utils/localFileLinks";
 import { buildChatPatchEntryDetails, buildChatSessionModel, type ChatPatchEntryDetailTarget } from "./chatModelBuilder";
 import { t } from "../i18n";
@@ -33,7 +41,9 @@ import type {
   ChatSessionModel,
   ChatTimelineItem,
   ChatToolItem,
+  ChatWebviewPathMode,
 } from "./chatTypes";
+import type { SessionPageSearchSeed } from "../tree/treeNodes";
 import type { FileChangeHistoryRevealTarget } from "../fileHistory/fileChangeHistoryTypes";
 
 type SaveableChatImage = {
@@ -71,12 +81,17 @@ type ChatPanelState = {
   revealTarget?: FileChangeHistoryRevealTarget;
   restoreScrollY?: number;
   restoreTopMessageIndex?: number;
+  pageSearchSeed?: SessionPageSearchSeed;
   sessionCwd?: string;
+  sessionDisplayCwd?: string;
   kind: ChatPanelKind;
   autoRefreshMode: ChatWebviewAutoRefreshMode;
   detailMode?: ChatSessionDetailMode;
+  pathMode?: ChatWebviewPathMode;
+  pathModeEnabled?: boolean;
   pendingAutoRefresh: boolean;
 };
+type SearchHistoryWebviewCandidate = SearchHistoryEntry & { key: string };
 type ExistingChatPanel = { panel: vscode.WebviewPanel; kind: ChatPanelKind };
 type ChatPanelRestoreState = {
   version: 1;
@@ -88,6 +103,7 @@ type ChatPanelRestoreState = {
   topMessageIndex?: number;
   autoRefreshMode: ChatWebviewAutoRefreshMode;
   detailMode?: ChatSessionDetailMode;
+  pathMode?: ChatWebviewPathMode;
 };
 const DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE: ChatWebviewAutoRefreshMode = "off";
 const DEFAULT_CHAT_SESSION_DETAIL_MODE: ChatSessionDetailMode = "summary";
@@ -98,14 +114,17 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly historyService: HistoryService;
   private readonly annotationStore: SessionAnnotationStore;
   private readonly pinStore: PinStore;
+  private readonly projectAssociationStore: ProjectAssociationStore;
   private readonly bookmarkStore: BookmarkStore;
   private readonly openPositionStore: ChatOpenPositionStore;
+  private readonly searchHistoryStore: SearchHistoryStore;
   private readonly onMissingSession?: MissingSessionHandler;
   private readonly logger?: DebugLogger;
   private readonly codexPanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudePanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly autoRefreshConsumerVisibilityEmitter = new vscode.EventEmitter<void>();
   private readonly bookmarkSubscription: vscode.Disposable;
+  private searchHistoryPeerRefresh: (() => void) | undefined;
 
   private reusablePanel: vscode.WebviewPanel | null = null;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
@@ -122,8 +141,10 @@ export class ChatPanelManager implements vscode.Disposable {
     historyService: HistoryService,
     annotationStore: SessionAnnotationStore,
     pinStore: PinStore,
+    projectAssociationStore: ProjectAssociationStore,
     bookmarkStore: BookmarkStore,
     openPositionStore: ChatOpenPositionStore,
+    searchHistoryStore: SearchHistoryStore,
     onMissingSession?: MissingSessionHandler,
     logger?: DebugLogger,
   ) {
@@ -131,8 +152,10 @@ export class ChatPanelManager implements vscode.Disposable {
     this.historyService = historyService;
     this.annotationStore = annotationStore;
     this.pinStore = pinStore;
+    this.projectAssociationStore = projectAssociationStore;
     this.bookmarkStore = bookmarkStore;
     this.openPositionStore = openPositionStore;
+    this.searchHistoryStore = searchHistoryStore;
     this.onMissingSession = onMissingSession;
     this.logger = logger;
     this.codexPanelIconPath = {
@@ -172,6 +195,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const userLongMessageFolding = config.userLongMessageFolding;
     const assistantLongMessageFolding = config.assistantLongMessageFolding;
     const imageSettings = this.buildImageSettings(config);
+    const stickyUserPrompt = config.stickyUserPrompt;
     const send = (panel: vscode.WebviewPanel): void => {
       if (!this.readyByPanel.get(panel)) return;
       void panel.webview.postMessage({
@@ -182,6 +206,7 @@ export class ChatPanelManager implements vscode.Disposable {
         chatPerformanceMode,
         userLongMessageFolding,
         assistantLongMessageFolding,
+        stickyUserPrompt,
         imageSettings,
         chatOpenPosition: config.chatOpenPosition,
         autoRefreshAvailable: config.autoRefresh.enabled,
@@ -217,6 +242,16 @@ export class ChatPanelManager implements vscode.Disposable {
     const refresh = (panel: vscode.WebviewPanel): void => {
       if (!this.readyByPanel.get(panel)) return;
       void this.sendSessionData(panel);
+    };
+
+    if (this.reusablePanel) refresh(this.reusablePanel);
+    for (const panel of this.panelsByKey.values()) refresh(panel);
+  }
+
+  public refreshProjectAssociations(): void {
+    const refresh = (panel: vscode.WebviewPanel): void => {
+      if (!this.readyByPanel.get(panel)) return;
+      void this.sendSessionData(panel, { preserveUiState: true });
     };
 
     if (this.reusablePanel) refresh(this.reusablePanel);
@@ -298,6 +333,7 @@ export class ChatPanelManager implements vscode.Disposable {
       kind: ChatPanelKind;
       revealMessageIndex?: number;
       revealTarget?: FileChangeHistoryRevealTarget;
+      pageSearchSeed?: SessionPageSearchSeed;
       viewColumn?: vscode.ViewColumn;
       preserveFocus?: boolean;
     },
@@ -321,10 +357,14 @@ export class ChatPanelManager implements vscode.Disposable {
       fsPath: session.fsPath,
       revealMessageIndex: options.revealMessageIndex,
       revealTarget: options.revealTarget,
+      pageSearchSeed: sanitizePageSearchSeed(options.pageSearchSeed),
       sessionCwd: isSameSession ? prevState?.sessionCwd : undefined,
+      sessionDisplayCwd: isSameSession ? prevState?.sessionDisplayCwd : undefined,
       kind: options.kind,
       autoRefreshMode: isSameSession ? prevState.autoRefreshMode : DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE,
       detailMode: isSameSession ? prevState.detailMode : undefined,
+      pathMode: isSameSession ? prevState.pathMode : undefined,
+      pathModeEnabled: isSameSession ? prevState.pathModeEnabled : undefined,
       pendingAutoRefresh: false,
     });
     panel.title = buildPanelTitle(session);
@@ -341,7 +381,12 @@ export class ChatPanelManager implements vscode.Disposable {
   public async revealExistingSessionPanel(
     fsPath: string,
     revealMessageIndex?: number,
-    options: { preserveFocus?: boolean; promoteReusable?: boolean; revealTarget?: FileChangeHistoryRevealTarget } = {},
+    options: {
+      preserveFocus?: boolean;
+      promoteReusable?: boolean;
+      revealTarget?: FileChangeHistoryRevealTarget;
+      pageSearchSeed?: SessionPageSearchSeed;
+    } = {},
   ): Promise<boolean> {
     const existing = this.findExistingSessionPanel(fsPath);
     if (!existing) return false;
@@ -359,6 +404,7 @@ export class ChatPanelManager implements vscode.Disposable {
       ...state,
       revealMessageIndex,
       revealTarget: options.revealTarget,
+      pageSearchSeed: sanitizePageSearchSeed(options.pageSearchSeed),
       kind: nextKind,
       pendingAutoRefresh: false,
     });
@@ -372,7 +418,12 @@ export class ChatPanelManager implements vscode.Disposable {
 
   public async openSessionByFsPath(
     fsPath: string,
-    options: { kind: ChatPanelKind; revealMessageIndex?: number; revealTarget?: FileChangeHistoryRevealTarget },
+    options: {
+      kind: ChatPanelKind;
+      revealMessageIndex?: number;
+      revealTarget?: FileChangeHistoryRevealTarget;
+      pageSearchSeed?: SessionPageSearchSeed;
+    },
   ): Promise<void> {
     const session = this.historyService.findByFsPath(fsPath);
     if (!session) {
@@ -380,6 +431,24 @@ export class ChatPanelManager implements vscode.Disposable {
       return;
     }
     await this.openSession(session, options);
+  }
+
+  public refreshSearchHistoryCandidates(): void {
+    for (const panel of this.getOpenPanels()) {
+      if (!this.readyByPanel.get(panel)) continue;
+      const state = this.stateByPanel.get(panel);
+      const candidates = this.getSearchHistoryCandidates(this.resolveSearchHistoryProjectKey(state?.sessionCwd));
+      void panel.webview.postMessage({ type: "searchHistoryCandidates", candidates });
+    }
+  }
+
+  public setSearchHistoryPeerRefresh(callback: (() => void) | undefined): void {
+    this.searchHistoryPeerRefresh = callback;
+  }
+
+  private refreshAllSearchHistoryCandidates(): void {
+    this.refreshSearchHistoryCandidates();
+    this.searchHistoryPeerRefresh?.();
   }
 
   private getOrCreateReusablePanel(): vscode.WebviewPanel {
@@ -533,6 +602,7 @@ export class ChatPanelManager implements vscode.Disposable {
       kind: restored.kind,
       autoRefreshMode: restored.autoRefreshMode,
       detailMode: restored.detailMode,
+      pathMode: restored.pathMode,
       pendingAutoRefresh: false,
     });
     const session = this.historyService.findByFsPath(restored.fsPath);
@@ -552,6 +622,9 @@ export class ChatPanelManager implements vscode.Disposable {
       vscode.Uri.joinPath(this.extensionUri, "media", "sharedTimeGuide.js"),
     );
     const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "chatView.css"));
+    const pageSearchCoreUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "pageSearchCore.js"),
+    );
     const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "chatView.js"));
     const katexCssUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "media", "vendor", "katex", "katex.min.css"),
@@ -595,6 +668,7 @@ export class ChatPanelManager implements vscode.Disposable {
     <button id="btnMarkdown" type="button" class="toolbarIconBtn"></button>
     <button id="btnCopyResume" type="button" class="toolbarIconBtn"></button>
     <button id="btnToggleDetails" type="button" class="toolbarIconBtn"></button>
+    <button id="btnPathMode" type="button" class="toolbarIconBtn"></button>
     <button id="btnScrollTop" type="button" class="toolbarIconBtn"></button>
     <button id="btnScrollBottom" type="button" class="toolbarIconBtn"></button>
     <button id="btnPageSearch" type="button" class="toolbarIconBtn"></button>
@@ -607,6 +681,7 @@ export class ChatPanelManager implements vscode.Disposable {
     <div id="pageSearchInner">
       <div id="pageSearchHeader">
         <div id="pageSearchTitle"></div>
+        <div id="pageSearchRoleFilters" role="group" hidden></div>
         <div id="pageSearchActions">
           <button id="btnPageSearchPrev" type="button" class="toolbarIconBtn"></button>
           <button id="btnPageSearchNext" type="button" class="toolbarIconBtn"></button>
@@ -617,6 +692,7 @@ export class ChatPanelManager implements vscode.Disposable {
         <input id="pageSearchInput" type="search" spellcheck="false" autocomplete="off" />
         <div id="pageSearchCount" aria-live="polite"></div>
       </div>
+      <div id="pageSearchSuggestions" role="listbox" hidden></div>
     </div>
     <div id="pageSearchResults" role="listbox" aria-live="polite"></div>
   </div>
@@ -630,6 +706,7 @@ export class ChatPanelManager implements vscode.Disposable {
   <script nonce="${nonce}" src="${katexJsUri}"></script>
   <script nonce="${nonce}" src="${shikiBundleUri}"></script>
   <script nonce="${nonce}" src="${sharedTimeGuideJsUri}"></script>
+  <script nonce="${nonce}" src="${pageSearchCoreUri}"></script>
   <script nonce="${nonce}" src="${jsUri}"></script>
 </body>
 </html>`;
@@ -712,6 +789,26 @@ export class ChatPanelManager implements vscode.Disposable {
         }
         return;
       }
+      case "savePageSearchHistory": {
+        const queryInput = typeof msg?.queryInput === "string" ? msg.queryInput.trim() : "";
+        if (!queryInput) return;
+        const saved = await this.searchHistoryStore.save({
+          projectKey: this.resolveSearchHistoryProjectKey(state.sessionCwd),
+          queryInput,
+        });
+        if (saved) this.refreshAllSearchHistoryCandidates();
+        return;
+      }
+      case "removePageSearchHistory": {
+        const queryInput = typeof msg?.queryInput === "string" ? msg.queryInput.trim() : "";
+        if (!queryInput) return;
+        const removed = await this.searchHistoryStore.remove(
+          this.resolveSearchHistoryProjectKey(state.sessionCwd),
+          queryInput,
+        );
+        if (removed) this.refreshAllSearchHistoryCandidates();
+        return;
+      }
       case "saveImage": {
         await this.saveImageFromPanel(panel, msg);
         return;
@@ -752,7 +849,15 @@ export class ChatPanelManager implements vscode.Disposable {
         );
         const activeFsPath = typeof result?.activeFsPath === "string" ? result.activeFsPath : "";
         if (activeFsPath) {
-          this.stateByPanel.set(panel, { ...state, fsPath: activeFsPath, revealMessageIndex });
+          this.stateByPanel.set(panel, {
+            ...state,
+            fsPath: activeFsPath,
+            revealMessageIndex,
+            sessionCwd: undefined,
+            sessionDisplayCwd: undefined,
+            pathMode: undefined,
+            pathModeEnabled: undefined,
+          });
           await this.sendSessionData(panel, { preserveUiState: false });
         }
         return;
@@ -841,6 +946,12 @@ export class ChatPanelManager implements vscode.Disposable {
         }
         return;
       }
+      case "setPathMode": {
+        const requestedMode = normalizeChatWebviewPathMode(msg?.mode);
+        const pathMode = state.pathModeEnabled === true ? requestedMode : "recorded";
+        this.stateByPanel.set(panel, { ...state, pathMode });
+        return;
+      }
       case "filterByTag": {
         const tag = typeof msg?.tag === "string" ? msg.tag.trim() : "";
         if (!tag) return;
@@ -912,27 +1023,43 @@ export class ChatPanelManager implements vscode.Disposable {
       return false;
     }
 
-    this.stateByPanel.set(panel, {
+    const sessionCwd = typeof model.meta?.cwd === "string" ? model.meta.cwd : undefined;
+    const sessionDisplayCwd = sessionCwd ? (this.projectAssociationStore.getDisplayCwd(sessionCwd) ?? sessionCwd) : undefined;
+    const pathModeState = this.resolveChatPathModeState(
+      sessionCwd,
+      sessionDisplayCwd,
+      state.pathMode,
+      state.pathModeEnabled,
+    );
+    const nextState: ChatPanelState = {
       ...state,
-      sessionCwd: typeof model.meta?.cwd === "string" ? model.meta.cwd : undefined,
+      sessionCwd,
+      sessionDisplayCwd,
       detailMode,
-    });
+      pathMode: pathModeState.mode,
+      pathModeEnabled: pathModeState.enabled,
+    };
+    this.stateByPanel.set(panel, nextState);
     const statsStartedAt = nowMs();
-    const performanceStats = await buildChatPerformanceStats(state.fsPath, model);
+    const performanceStats = await buildChatPerformanceStats(nextState.fsPath, model);
     statsMs = elapsedMs(statsStartedAt);
     this.imageDataByPanel.set(panel, collectSaveableImages(model));
     this.documentDataByPanel.set(panel, collectSaveableDocuments(model));
-    const annotation = this.annotationStore.get(state.fsPath);
+    const annotation = this.annotationStore.get(nextState.fsPath);
     const dateTime = this.buildDateTime();
     const savedOpenMessageIndex =
-      config.chatOpenPosition === "lastMessage" ? this.openPositionStore.get(state.fsPath) : undefined;
+      config.chatOpenPosition === "lastMessage" ? this.openPositionStore.get(nextState.fsPath) : undefined;
     this.logger?.debug(
-      `chatOpenPosition send session=${debugSessionName(state.fsPath)} mode=${config.chatOpenPosition} panelKind=${state.kind} saved=${savedOpenMessageIndex ?? "none"}`,
+      `chatOpenPosition send session=${debugSessionName(nextState.fsPath)} mode=${config.chatOpenPosition} panelKind=${nextState.kind} saved=${savedOpenMessageIndex ?? "none"}`,
     );
-    const bookmarkState = this.withBookmarkState(toWebviewChatSessionModel(model, detailMode), state.fsPath, panel);
-    const summary = this.historyService.findByFsPath(state.fsPath);
+    const bookmarkState = this.withBookmarkState(toWebviewChatSessionModel(model, detailMode), nextState.fsPath, panel);
+    const summary = this.historyService.findByFsPath(nextState.fsPath);
     const webviewModel: ChatSessionModel = {
       ...bookmarkState.model,
+      meta: {
+        ...bookmarkState.model.meta,
+        ...(sessionDisplayCwd && sessionCwd && sessionDisplayCwd !== sessionCwd ? { displayCwd: sessionDisplayCwd } : {}),
+      },
       ...(summary
         ? {
             sessionLocation: {
@@ -951,24 +1078,29 @@ export class ChatPanelManager implements vscode.Disposable {
           note: annotation?.note ?? "",
         },
       },
-      revealMessageIndex: state.revealMessageIndex,
-      revealTarget: state.revealTarget,
+      revealMessageIndex: nextState.revealMessageIndex,
+      revealTarget: nextState.revealTarget,
       restoreScrollY: options?.restoreScrollY,
       restoreSelectedMessageIndex: options?.restoreSelectedMessageIndex,
       preserveUiState: options?.preserveUiState === true,
       autoScrollToBottom: options?.autoScrollToBottom === true,
-      panelKind: state.kind,
-      isPreview: state.kind === "reusable",
-      isPinned: this.pinStore.isPinned(state.fsPath),
+      panelKind: nextState.kind,
+      isPreview: nextState.kind === "reusable",
+      isPinned: this.pinStore.isPinned(nextState.fsPath),
       bookmarks: bookmarkState.bookmarkKeys,
       i18n: this.buildI18n(),
       dateTime,
       chatOpenPosition: config.chatOpenPosition,
       autoRefreshAvailable: config.autoRefresh.enabled,
-      autoRefreshMode: state.autoRefreshMode,
+      autoRefreshMode: nextState.autoRefreshMode,
+      pathMode: pathModeState.mode,
+      pathModeEnabled: pathModeState.enabled,
+      pageSearchSeed: nextState.pageSearchSeed,
+      searchHistoryCandidates: this.getSearchHistoryCandidates(this.resolveSearchHistoryProjectKey(nextState.sessionCwd)),
       savedOpenMessageIndex,
       debugLoggingEnabled: this.logger?.isDebugEnabled() ?? false,
       timeGuideEnabled: config.timeGuideEnabled,
+      stickyUserPrompt: config.stickyUserPrompt,
       chatPerformanceMode: config.chatPerformanceMode,
       performanceStats,
       toolDisplayMode: config.toolDisplayMode,
@@ -978,11 +1110,17 @@ export class ChatPanelManager implements vscode.Disposable {
       detailMode,
       detailsLoaded: detailMode === "full",
     });
+    if (nextState.pageSearchSeed) {
+      this.stateByPanel.set(panel, {
+        ...nextState,
+        pageSearchSeed: undefined,
+      });
+    }
     this.logger?.debug(
       formatDebugFields("chatSession send done", {
-        session: safeDebugBasename(state.fsPath),
+        session: safeDebugBasename(nextState.fsPath),
         detailMode,
-        panelKind: state.kind,
+        panelKind: nextState.kind,
         totalMs: elapsedMs(totalStartedAt),
         buildMs,
         statsMs,
@@ -1025,6 +1163,23 @@ export class ChatPanelManager implements vscode.Disposable {
       },
       bookmarkKeys: Array.from(bookmarkedKeys.values()),
     };
+  }
+
+  private resolveSearchHistoryProjectKey(cwd: string | null | undefined): string {
+    const raw = typeof cwd === "string" ? cwd.trim() : "";
+    if (!raw) return GLOBAL_SEARCH_HISTORY_PROJECT_KEY;
+    const projectKey = this.projectAssociationStore.isEmpty()
+      ? normalizeProjectKey(raw)
+      : (this.projectAssociationStore.getCanonicalProjectKey(raw) ?? normalizeProjectKey(raw));
+    return normalizeSearchHistoryProjectKey(projectKey);
+  }
+
+  private getSearchHistoryCandidates(projectKey: string | null | undefined): SearchHistoryWebviewCandidate[] {
+    const normalizedProjectKey = normalizeSearchHistoryProjectKey(projectKey);
+    return this.searchHistoryStore.getAll(normalizedProjectKey).map((entry) => ({
+      ...entry,
+      key: buildSearchHistoryEntryKey(entry.projectKey, entry.queryInput),
+    }));
   }
 
   private async loadPatchEntryDetails(panel: vscode.WebviewPanel, msg: any): Promise<void> {
@@ -1142,7 +1297,7 @@ export class ChatPanelManager implements vscode.Disposable {
       return;
     }
 
-    const defaultUri = buildDefaultImageSaveUri(state.sessionCwd, image.label, decoded.extension);
+    const defaultUri = buildDefaultImageSaveUri(resolveSessionSaveCwd(state), image.label, decoded.extension);
     const targetUri = await vscode.window.showSaveDialog({
       title: t("chat.image.saveDialogTitle"),
       defaultUri,
@@ -1205,7 +1360,7 @@ export class ChatPanelManager implements vscode.Disposable {
       return;
     }
 
-    const defaultUri = buildDefaultAttachmentSaveUri(state.sessionCwd, document.label, decoded.extension);
+    const defaultUri = buildDefaultAttachmentSaveUri(resolveSessionSaveCwd(state), document.label, decoded.extension);
     const targetUri = await vscode.window.showSaveDialog({
       title: t("chat.attachment.saveDialogTitle"),
       defaultUri,
@@ -1270,10 +1425,11 @@ export class ChatPanelManager implements vscode.Disposable {
     const target = await resolveLocalFileLinkTarget(rawFsPath, {
       requestedLine,
       requestedColumn,
-      baseDirs: collectLocalLinkBaseDirs(
-        state.sessionCwd,
+      baseDirs: collectChatLocalLinkBaseDirs(
+        state,
         ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
       ),
+      projectPathMappings: buildChatProjectPathMappings(state),
     });
 
     if (!target) {
@@ -1288,6 +1444,25 @@ export class ChatPanelManager implements vscode.Disposable {
     }
   }
 
+  private resolveChatPathModeState(
+    sessionCwd: string | undefined,
+    sessionDisplayCwd: string | undefined,
+    requestedMode: ChatWebviewPathMode | undefined,
+    previousEnabled: boolean | undefined,
+  ): { mode: ChatWebviewPathMode; enabled: boolean } {
+    const cwd = typeof sessionCwd === "string" ? sessionCwd.trim() : "";
+    const displayCwd = typeof sessionDisplayCwd === "string" ? sessionDisplayCwd.trim() : "";
+    const association = cwd ? this.projectAssociationStore.getBySourceCwd(cwd) : null;
+    const enabled =
+      association?.mode === "relocate" &&
+      !!cwd &&
+      !!displayCwd &&
+      normalizeCacheKey(cwd) !== normalizeCacheKey(displayCwd);
+    if (!enabled) return { mode: "recorded", enabled: false };
+    const mode = requestedMode === "recorded" && previousEnabled !== false ? "recorded" : "relocated";
+    return { mode, enabled: true };
+  }
+
   private buildI18n(): Record<string, string> {
     return {
       resumeInCodex: t("chat.button.resumeInCodex"),
@@ -1295,6 +1470,13 @@ export class ChatPanelManager implements vscode.Disposable {
       restoreArchived: t("chat.button.restoreArchived"),
       restoreArchivedTooltip: t("chat.tooltip.restoreArchived"),
       sessionLocationArchived: t("session.location.archived"),
+      originalCwd: t("chat.meta.originalCwd"),
+      relocatedCwd: t("chat.meta.relocatedCwd"),
+      pathModeRecorded: t("chat.pathMode.recorded"),
+      pathModeRelocated: t("chat.pathMode.relocated"),
+      pathModeRecordedTooltip: t("chat.tooltip.pathModeRecorded"),
+      pathModeRelocatedTooltip: t("chat.tooltip.pathModeRelocated"),
+      pathModeDisabledTooltip: t("chat.tooltip.pathModeDisabled"),
       resumeInClaude: t("chat.button.resumeInClaude"),
       resumeInClaudeTooltip: t("chat.tooltip.resumeInClaude"),
       pin: t("chat.button.pin"),
@@ -1331,6 +1513,21 @@ export class ChatPanelManager implements vscode.Disposable {
       pageSearchCloseTooltip: t("chat.pageSearch.closeTooltip"),
       pageSearchNoMatches: t("chat.pageSearch.noMatches"),
       pageSearchTypeToSearch: t("chat.pageSearch.typeToSearch"),
+      pageSearchInvalidQuery: t("chat.pageSearch.invalidQuery"),
+      pageSearchInvalidRegex: t("chat.pageSearch.invalidRegex"),
+      pageSearchNoHistory: t("chat.pageSearch.noHistory"),
+      pageSearchCaseSensitive: t("chat.pageSearch.caseSensitive"),
+      pageSearchRemoveHistory: t("chat.pageSearch.removeHistory"),
+      pageSearchRoleFilters: t("chat.pageSearch.roleFilters"),
+      pageSearchRoleFilterOnlyTooltip: t("chat.pageSearch.roleFilterOnlyTooltip"),
+      pageSearchRoleFilterAddTooltip: t("chat.pageSearch.roleFilterAddTooltip"),
+      pageSearchRoleFilterRemoveTooltip: t("chat.pageSearch.roleFilterRemoveTooltip"),
+      pageSearchRoleFilterRemoveToAllTooltip: t("chat.pageSearch.roleFilterRemoveToAllTooltip"),
+      memoryCitationSummary: t("chat.memoryCitation.summary"),
+      memoryCitationEntryRange: t("chat.memoryCitation.entryRange"),
+      memoryCitationEntryLine: t("chat.memoryCitation.entryLine"),
+      memoryCitationNote: t("chat.memoryCitation.note"),
+      memoryCitationRelatedSessions: t("chat.memoryCitation.relatedSessions"),
       timeGuideDates: t("fileChangeHistory.guide.dates"),
       copied: t("chat.toast.copied"),
       restoredLastPosition: t("chat.toast.restoredLastPosition"),
@@ -1419,6 +1616,9 @@ export class ChatPanelManager implements vscode.Disposable {
       copy: t("chat.button.copy"),
       showMore: t("chat.button.showMore"),
       showLess: t("chat.button.showLess"),
+      stickyUserAriaLabel: t("chat.stickyUser.ariaLabel"),
+      stickyUserAttachmentOnly: t("chat.stickyUser.attachmentOnly"),
+      stickyUserOpenOriginal: t("chat.stickyUser.openOriginal"),
       copyMessageTooltip: t("chat.tooltip.copyMessage"),
       copyCodeTooltip: t("chat.tooltip.copyCode"),
       expandCardWidthTooltip: t("chat.tooltip.expandCardWidth"),
@@ -1623,7 +1823,7 @@ function resolveSessionDetailMode(
 ): ChatSessionDetailMode {
   if (requestedMode === "full" || requestedMode === "summary") return requestedMode;
   if (state.revealTarget?.kind === "patchEntry") return DEFAULT_CHAT_SESSION_DETAIL_MODE;
-  return typeof state.revealMessageIndex === "number" ? "full" : DEFAULT_CHAT_SESSION_DETAIL_MODE;
+  return DEFAULT_CHAT_SESSION_DETAIL_MODE;
 }
 
 function normalizeChatWebviewAutoRefreshMode(value: unknown): ChatWebviewAutoRefreshMode {
@@ -1632,6 +1832,31 @@ function normalizeChatWebviewAutoRefreshMode(value: unknown): ChatWebviewAutoRef
 
 function normalizeChatSessionDetailMode(value: unknown): ChatSessionDetailMode | undefined {
   return value === "full" || value === "summary" ? value : undefined;
+}
+
+function normalizeChatWebviewPathMode(value: unknown): ChatWebviewPathMode {
+  return value === "relocated" ? "relocated" : "recorded";
+}
+
+function normalizeChatWebviewPathModeOrUndefined(value: unknown): ChatWebviewPathMode | undefined {
+  return value === "recorded" || value === "relocated" ? value : undefined;
+}
+
+function sanitizePageSearchSeed(value: unknown): SessionPageSearchSeed | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Record<string, unknown>;
+  const queryInput = typeof source.queryInput === "string" ? source.queryInput.trim() : "";
+  if (!queryInput) return undefined;
+  const preferredMessageIndex =
+    typeof source.preferredMessageIndex === "number" && Number.isFinite(source.preferredMessageIndex)
+      ? Math.max(0, Math.floor(source.preferredMessageIndex))
+      : undefined;
+  return {
+    queryInput,
+    caseSensitive: source.caseSensitive === true,
+    ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
+    ...(source.autoOpen === false ? { autoOpen: false } : {}),
+  };
 }
 
 function sanitizeChatPanelRestoreState(value: unknown): ChatPanelRestoreState | null {
@@ -1658,6 +1883,7 @@ function sanitizeChatPanelRestoreState(value: unknown): ChatPanelRestoreState | 
       : undefined;
   const autoRefreshMode = normalizeChatWebviewAutoRefreshMode(restore.autoRefreshMode);
   const detailMode = normalizeChatSessionDetailMode(restore.detailMode);
+  const pathMode = normalizeChatWebviewPathModeOrUndefined(restore.pathMode);
   return {
     version: 1,
     kind,
@@ -1668,6 +1894,7 @@ function sanitizeChatPanelRestoreState(value: unknown): ChatPanelRestoreState | 
     ...(topMessageIndex !== undefined ? { topMessageIndex } : {}),
     autoRefreshMode,
     ...(detailMode ? { detailMode } : {}),
+    ...(pathMode ? { pathMode } : {}),
   };
 }
 
@@ -2089,6 +2316,28 @@ function imageExtensionForMimeType(mimeType: string): string | null {
   if (mimeType === "image/gif") return ".gif";
   if (mimeType === "image/webp") return ".webp";
   return null;
+}
+
+function resolveSessionSaveCwd(state: ChatPanelState): string | undefined {
+  return isChatRelocatedPathMode(state) ? state.sessionDisplayCwd || state.sessionCwd : state.sessionCwd;
+}
+
+function collectChatLocalLinkBaseDirs(state: ChatPanelState, ...workspaceDirs: string[]): string[] {
+  if (isChatRelocatedPathMode(state)) {
+    return collectLocalLinkBaseDirs(state.sessionDisplayCwd, state.sessionCwd, ...workspaceDirs);
+  }
+  return collectLocalLinkBaseDirs(state.sessionCwd, ...workspaceDirs);
+}
+
+function buildChatProjectPathMappings(state: ChatPanelState): Array<{ sourceCwd: string; targetCwd: string }> {
+  if (!isChatRelocatedPathMode(state)) return [];
+  if (!state.sessionCwd || !state.sessionDisplayCwd) return [];
+  if (normalizeCacheKey(state.sessionCwd) === normalizeCacheKey(state.sessionDisplayCwd)) return [];
+  return [{ sourceCwd: state.sessionCwd, targetCwd: state.sessionDisplayCwd }];
+}
+
+function isChatRelocatedPathMode(state: ChatPanelState): boolean {
+  return state.pathModeEnabled === true && state.pathMode === "relocated";
 }
 
 function buildDefaultImageSaveUri(sessionCwd: string | undefined, label: string, extension: string): vscode.Uri {

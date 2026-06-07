@@ -9,6 +9,7 @@ export type TreeNode =
   | MonthNode
   | DayNode
   | ProjectNode
+  | RelatedGroupNode
   | ProjectYearNode
   | ProjectMonthNode
   | ProjectDayNode
@@ -20,6 +21,19 @@ export type TreeNode =
   | HistoryEmptyNode
   | MissingPinnedNode
   | PinnedDropHintNode;
+
+export type ProjectAssociatedSourceMode = "relocate" | "groupOnly";
+
+export interface ProjectAssociatedSource {
+  cwd: string;
+  mode: ProjectAssociatedSourceMode;
+}
+
+export interface ProjectParentAssociation {
+  sourceCwd: string;
+  targetCwd: string;
+  mode: ProjectAssociatedSourceMode;
+}
 
 export class YearNode {
   public readonly kind = "year";
@@ -68,6 +82,9 @@ export class ProjectNode {
   public readonly sessionCount: number;
   public readonly latestLabel: string;
   public readonly description: string;
+  public readonly associatedSources: readonly ProjectAssociatedSource[];
+  public readonly targetMissingHistory: boolean;
+  public readonly parentAssociation: ProjectParentAssociation | null;
 
   constructor(params: {
     key: string;
@@ -78,6 +95,9 @@ export class ProjectNode {
     sessionCount: number;
     latestLabel: string;
     description: string;
+    associatedSources?: readonly ProjectAssociatedSource[];
+    targetMissingHistory?: boolean;
+    parentAssociation?: ProjectParentAssociation | null;
   }) {
     this.key = params.key;
     this.label = params.label;
@@ -87,6 +107,53 @@ export class ProjectNode {
     this.sessionCount = params.sessionCount;
     this.latestLabel = params.latestLabel;
     this.description = params.description;
+    this.associatedSources = params.associatedSources ?? [];
+    this.targetMissingHistory = params.targetMissingHistory ?? false;
+    this.parentAssociation = params.parentAssociation ?? null;
+  }
+}
+
+export class RelatedGroupNode {
+  public readonly kind = "relatedGroup";
+  public readonly key: string;
+  public readonly label: string;
+  public readonly cwd: string | null;
+  public readonly alias: string | null;
+  public readonly fallbackLabel: string;
+  public readonly sessionCount: number;
+  public readonly projectCount: number;
+  public readonly latestLabel: string;
+  public readonly description: string;
+  public readonly directSources: readonly ProjectAssociatedSource[];
+  public readonly children: readonly TreeNode[];
+  public readonly parentAssociation: ProjectParentAssociation | null;
+
+  constructor(params: {
+    key: string;
+    label: string;
+    cwd: string | null;
+    alias?: string | null;
+    fallbackLabel?: string;
+    sessionCount: number;
+    projectCount: number;
+    latestLabel: string;
+    description: string;
+    directSources?: readonly ProjectAssociatedSource[];
+    children?: readonly TreeNode[];
+    parentAssociation?: ProjectParentAssociation | null;
+  }) {
+    this.key = params.key;
+    this.label = params.label;
+    this.cwd = params.cwd;
+    this.alias = params.alias ?? null;
+    this.fallbackLabel = params.fallbackLabel ?? params.label;
+    this.sessionCount = params.sessionCount;
+    this.projectCount = params.projectCount;
+    this.latestLabel = params.latestLabel;
+    this.description = params.description;
+    this.directSources = params.directSources ?? [];
+    this.children = params.children ?? [];
+    this.parentAssociation = params.parentAssociation ?? null;
   }
 }
 
@@ -164,18 +231,33 @@ export interface SearchHit {
   snippet: string;
 }
 
+export interface SessionPageSearchSeed {
+  queryInput: string;
+  caseSensitive: boolean;
+  preferredMessageIndex?: number;
+  autoOpen?: boolean;
+}
+
 export class SearchRootNode {
   public readonly kind = "searchRoot";
   public readonly query: string;
   public readonly scopeKind: "all" | "year" | "month" | "day";
   public readonly scopeValue?: string;
   public readonly totalHits: number;
+  public readonly pageSearchSeed?: SessionPageSearchSeed;
 
-  constructor(params: { query: string; scopeKind: "all" | "year" | "month" | "day"; scopeValue?: string; totalHits: number }) {
+  constructor(params: {
+    query: string;
+    scopeKind: "all" | "year" | "month" | "day";
+    scopeValue?: string;
+    totalHits: number;
+    pageSearchSeed?: SessionPageSearchSeed;
+  }) {
     this.query = params.query;
     this.scopeKind = params.scopeKind;
     this.scopeValue = params.scopeValue;
     this.totalHits = params.totalHits;
+    this.pageSearchSeed = params.pageSearchSeed;
   }
 }
 
@@ -183,10 +265,12 @@ export class SearchSessionNode {
   public readonly kind = "searchSession";
   public readonly session: SessionSummary;
   public readonly hits: SearchHit[];
+  public readonly pageSearchSeed?: SessionPageSearchSeed;
 
-  constructor(session: SessionSummary, hits: SearchHit[]) {
+  constructor(session: SessionSummary, hits: SearchHit[], pageSearchSeed?: SessionPageSearchSeed) {
     this.session = session;
     this.hits = hits;
+    this.pageSearchSeed = pageSearchSeed;
   }
 }
 
@@ -195,11 +279,13 @@ export class SearchHitNode {
   public readonly session: SessionSummary;
   public readonly hit: SearchHit;
   public readonly query: string;
+  public readonly pageSearchSeed?: SessionPageSearchSeed;
 
-  constructor(session: SessionSummary, hit: SearchHit, query: string) {
+  constructor(session: SessionSummary, hit: SearchHit, query: string, pageSearchSeed?: SessionPageSearchSeed) {
     this.session = session;
     this.hit = hit;
     this.query = query;
+    this.pageSearchSeed = pageSearchSeed;
   }
 }
 
@@ -235,6 +321,8 @@ export function toTreeItemContextValue(node: TreeNode): string {
       return "codexHistoryViewer.day";
     case "project":
       return node.cwd ? "codexHistoryViewer.project.withCwd" : "codexHistoryViewer.project.noCwd";
+    case "relatedGroup":
+      return node.cwd ? "codexHistoryViewer.relatedGroup.withCwd" : "codexHistoryViewer.relatedGroup.noCwd";
     case "projectYear":
       return "codexHistoryViewer.projectYear";
     case "projectMonth":

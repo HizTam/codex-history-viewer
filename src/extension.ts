@@ -21,8 +21,13 @@ import { PinStore, type PinEntry } from "./services/pinStore";
 import { BookmarkStore, type BookmarkEntry } from "./services/bookmarkStore";
 import { type SearchRequest, runSearchFlow } from "./services/searchService";
 import { type IndexedSearchRole, SearchIndexService } from "./services/searchIndexService";
+import {
+  GLOBAL_SEARCH_HISTORY_PROJECT_KEY,
+  SearchHistoryStore,
+  normalizeSearchHistoryProjectKey,
+} from "./services/searchHistoryStore";
 import { exportMaskedTranscripts, exportSessions, importSessions } from "./services/importExportService";
-import { SearchPresetStore } from "./services/searchPresetStore";
+import { type SearchPreset, SearchPresetStore } from "./services/searchPresetStore";
 import { SessionAnnotationStore } from "./services/sessionAnnotationStore";
 import {
   getMaxCustomTitleLength,
@@ -36,6 +41,13 @@ import {
   normalizeProjectAlias,
   ProjectAliasStore,
 } from "./services/projectAliasStore";
+import {
+  ProjectAssociationStore,
+  type ProjectAssociation,
+  type ProjectAssociationMode,
+  type ProjectAssociationModeChangePreflight,
+  type ProjectAssociationSetPreflight,
+} from "./services/projectAssociationStore";
 import { AutoRefreshService } from "./services/autoRefreshService";
 import { ChatOpenPositionStore } from "./services/chatOpenPositionStore";
 import { SessionReferenceRelocator } from "./services/sessionReferenceRelocator";
@@ -50,14 +62,28 @@ import {
 } from "./services/storageMaintenanceService";
 import {
   type HandoffResult,
+  type HandoffPathRewriteContext,
   type HandoffTarget,
   buildHandoffPrompt,
   cleanupHandoffs,
   createHandoff,
+  isHandoffPathRewriteStale,
+  readHandoffMetadata,
   resolveHandoffLocation,
 } from "./services/handoffService";
 import type { TreeNode } from "./tree/treeNodes";
-import { DayNode, MissingPinnedNode, MonthNode, ProjectNode, SearchHitNode, YearNode, isSessionNode } from "./tree/treeNodes";
+import {
+  DayNode,
+  MissingPinnedNode,
+  MonthNode,
+  ProjectNode,
+  RelatedGroupNode,
+  SearchHitNode,
+  SearchSessionNode,
+  type SessionPageSearchSeed,
+  YearNode,
+  isSessionNode,
+} from "./tree/treeNodes";
 import {
   ControlTreeDataProvider,
   StatusTreeDataProvider,
@@ -72,6 +98,9 @@ import { normalizeCacheKey, normalizeProjectKey, pathExists } from "./utils/fsUt
 
 const SEARCH_ROLE_ORDER: IndexedSearchRole[] = ["user", "assistant", "developer", "tool"];
 
+type ProjectDisplayMode = "list" | "project";
+type ProjectScopeMode = "all" | "currentGroup";
+
 // Extension entry point. Initializes core services and tree views.
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const config = getConfig();
@@ -79,16 +108,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const HISTORY_VIEW_MODE_KEY = "codexHistoryViewer.historyViewMode.v1";
   const HISTORY_PROJECT_FILTER_KEY = "codexHistoryViewer.historyProjectFilter.v1";
   const HISTORY_PROJECT_GROUPED_KEY = "codexHistoryViewer.historyProjectGrouped.v1";
+  const HISTORY_PROJECT_DISPLAY_KEY = "codexHistoryViewer.historyProjectDisplay.v1";
+  const HISTORY_PROJECT_SCOPE_KEY = "codexHistoryViewer.historyProjectScope.v1";
   const HISTORY_SOURCE_FILTER_KEY = "codexHistoryViewer.historySourceFilter.v1";
   const HISTORY_TAG_FILTER_KEY = "codexHistoryViewer.historyTagFilter.v1";
   const PINNED_FILTER_KEY = "codexHistoryViewer.pinnedFilter.v1";
   const PINNED_SOURCE_FILTER_KEY = "codexHistoryViewer.pinnedSourceFilter.v1";
   const PINNED_PROJECT_FILTER_KEY = "codexHistoryViewer.pinnedProjectFilter.v1";
   const PINNED_PROJECT_GROUPED_KEY = "codexHistoryViewer.pinnedProjectGrouped.v1";
+  const PINNED_PROJECT_DISPLAY_KEY = "codexHistoryViewer.pinnedProjectDisplay.v1";
+  const PINNED_PROJECT_SCOPE_KEY = "codexHistoryViewer.pinnedProjectScope.v1";
   const PINNED_ARCHIVE_LOCATION_FILTER_KEY = "codexHistoryViewer.pinnedArchiveLocationFilter.v1";
   const PINNED_SORT_MODE_KEY = "codexHistoryViewer.pinnedSortMode.v1";
   const PINNED_TAG_FILTER_KEY = "codexHistoryViewer.pinnedTagFilter.v1";
-  const SEARCH_TAG_FILTER_KEY = "codexHistoryViewer.searchTagFilter.v1";
   const LAST_SEARCH_REQUEST_KEY = "codexHistoryViewer.lastSearchRequest.v1";
   const ARCHIVE_LOCATION_FILTER_KEY = "codexHistoryViewer.archiveLocationFilter.v1";
   const LEGACY_SHOW_ARCHIVED_SESSIONS_KEY = "codexHistoryViewer.showArchivedSessions.v1";
@@ -170,7 +202,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const annotationStore = new SessionAnnotationStore(context.globalState);
   const titleOverrideStore = new SessionTitleOverrideStore(context.globalState);
   const projectAliasStore = new ProjectAliasStore(context.globalState);
+  const projectAssociationStore = new ProjectAssociationStore(context.globalState);
   const searchPresetStore = new SearchPresetStore(context.globalState);
+  const searchHistoryStore = new SearchHistoryStore(context.workspaceState);
+  void searchHistoryStore.discardLegacyHistory().catch((error) => {
+    logger.debug(`searchHistory legacy discard failed error=${sanitizeDebugError(error)}`);
+  });
   const chatOpenPositionStore = new ChatOpenPositionStore(context.globalState);
   const sessionReferenceRelocator = new SessionReferenceRelocator(
     annotationStore,
@@ -180,29 +217,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
   const historyService = new HistoryService(context.globalStorageUri, config, titleOverrideStore, logger);
   const searchIndexService = new SearchIndexService(context.globalStorageUri, logger);
-  const transcriptProvider = new TranscriptContentProvider(historyService, annotationStore);
+  const transcriptProvider = new TranscriptContentProvider(historyService, annotationStore, projectAssociationStore);
   const chatPanels = new ChatPanelManager(
     context.extensionUri,
     historyService,
     annotationStore,
     pinStore,
+    projectAssociationStore,
     bookmarkStore,
     chatOpenPositionStore,
+    searchHistoryStore,
     async () => {
       await vscode.commands.executeCommand("codexHistoryViewer.refresh");
     },
     logger,
   );
-  const fileChangeHistoryService = new FileChangeHistoryService();
+  const fileChangeHistoryService = new FileChangeHistoryService(projectAssociationStore);
   const fileChangeHistoryPanels = new FileChangeHistoryPanelManager(
     context.extensionUri,
     historyService,
     searchIndexService,
     fileChangeHistoryService,
+    projectAssociationStore,
     chatPanels,
     bookmarkStore,
+    searchHistoryStore,
     logger,
   );
+  chatPanels.setSearchHistoryPeerRefresh(() => fileChangeHistoryPanels.refreshSearchHistoryCandidates());
   if (config.webviewRestoreAfterReload) {
     chatPanels.registerSerializer(context.subscriptions);
     fileChangeHistoryPanels.registerSerializer(context.subscriptions);
@@ -219,6 +261,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     storageStats = await collectStorageStats(context.globalStorageUri);
   };
   let lastSearchRequest: SearchRequest | null = sanitizeSearchRequest(context.workspaceState.get(LAST_SEARCH_REQUEST_KEY));
+  let searchExecutionGeneration = 0;
   const getConfiguredDefaultSearchRoles = (): IndexedSearchRole[] => {
     const raw = vscode.workspace.getConfiguration("codexHistoryViewer").get<unknown>(SEARCH_DEFAULT_ROLES_CONFIG);
     return sanitizeIndexedSearchRoles(raw);
@@ -235,15 +278,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasSearchResults", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyTagFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyViewMode", "date");
-  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectMode", "none");
-  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedProjectMode", "none");
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectDisplay", "list");
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectScope", "all");
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedProjectDisplay", "list");
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedProjectScope", "all");
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSortMode", pinnedSortMode);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceFilter", "all");
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceSwitchable", true);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedTagFiltered", false);
-  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.searchTagFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceCodexEnabled", true);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceClaudeEnabled", true);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historySourceSwitchable", true);
@@ -256,8 +300,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let historyViewMode: HistoryViewMode = sanitizeHistoryViewMode(context.workspaceState.get(HISTORY_VIEW_MODE_KEY));
   let historyFilter: DateScope = sanitizeDateScope(context.workspaceState.get(HISTORY_FILTER_KEY));
   let historyProjectCwd: string | null = sanitizeProjectCwd(context.workspaceState.get(HISTORY_PROJECT_FILTER_KEY));
-  let historyProjectGrouped: boolean = sanitizeProjectGrouped(context.workspaceState.get(HISTORY_PROJECT_GROUPED_KEY));
-  if (historyProjectGrouped) historyProjectCwd = null;
+  const historyProjectDisplayRaw = context.workspaceState.get(HISTORY_PROJECT_DISPLAY_KEY);
+  const historyProjectScopeRaw = context.workspaceState.get(HISTORY_PROJECT_SCOPE_KEY);
+  const historyLegacyGroupedRaw = context.workspaceState.get(HISTORY_PROJECT_GROUPED_KEY);
+  let historyProjectDisplay: ProjectDisplayMode = sanitizeProjectDisplayMode(
+    historyProjectDisplayRaw,
+    historyLegacyGroupedRaw,
+  );
+  let historyProjectScope: ProjectScopeMode = sanitizeProjectScopeMode(historyProjectScopeRaw);
+  const shouldPersistHistoryProjectMigration = historyProjectDisplayRaw === undefined || historyProjectScopeRaw === undefined;
+  const shouldClearHistoryProjectFilterForMigration =
+    historyProjectDisplayRaw === undefined && sanitizeProjectGrouped(historyLegacyGroupedRaw) && historyProjectCwd !== null;
+  if (shouldClearHistoryProjectFilterForMigration) historyProjectCwd = null;
   let historySourceFilter: SessionSourceFilter = resolveConstrainedHistorySourceFilter(
     sanitizeHistorySourceFilter(context.workspaceState.get(HISTORY_SOURCE_FILTER_KEY)),
     config,
@@ -278,20 +332,49 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
   let pinnedTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(PINNED_TAG_FILTER_KEY));
   let pinnedProjectCwd: string | null = sanitizeProjectCwd(context.workspaceState.get(PINNED_PROJECT_FILTER_KEY));
-  let pinnedProjectGrouped: boolean = sanitizeProjectGrouped(context.workspaceState.get(PINNED_PROJECT_GROUPED_KEY));
-  if (pinnedProjectGrouped) pinnedProjectCwd = null;
-  let searchTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(SEARCH_TAG_FILTER_KEY));
+  const pinnedProjectDisplayRaw = context.workspaceState.get(PINNED_PROJECT_DISPLAY_KEY);
+  const pinnedProjectScopeRaw = context.workspaceState.get(PINNED_PROJECT_SCOPE_KEY);
+  const pinnedLegacyGroupedRaw = context.workspaceState.get(PINNED_PROJECT_GROUPED_KEY);
+  let pinnedProjectDisplay: ProjectDisplayMode = sanitizeProjectDisplayMode(
+    pinnedProjectDisplayRaw,
+    pinnedLegacyGroupedRaw,
+  );
+  let pinnedProjectScope: ProjectScopeMode = sanitizeProjectScopeMode(pinnedProjectScopeRaw);
+  const shouldPersistPinnedProjectMigration = pinnedProjectDisplayRaw === undefined || pinnedProjectScopeRaw === undefined;
+  const shouldClearPinnedProjectFilterForMigration =
+    pinnedProjectDisplayRaw === undefined && sanitizeProjectGrouped(pinnedLegacyGroupedRaw) && pinnedProjectCwd !== null;
+  if (shouldClearPinnedProjectFilterForMigration) pinnedProjectCwd = null;
+  if (shouldPersistHistoryProjectMigration || shouldClearHistoryProjectFilterForMigration) {
+    try {
+      await context.workspaceState.update(HISTORY_PROJECT_DISPLAY_KEY, historyProjectDisplay);
+      await context.workspaceState.update(HISTORY_PROJECT_SCOPE_KEY, historyProjectScope);
+      if (shouldClearHistoryProjectFilterForMigration) await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, "");
+    } catch (error) {
+      logger.debug(`history.projectState.migration failed error=${sanitizeDebugError(error)}`);
+    }
+  }
+  if (shouldPersistPinnedProjectMigration || shouldClearPinnedProjectFilterForMigration) {
+    try {
+      await context.workspaceState.update(PINNED_PROJECT_DISPLAY_KEY, pinnedProjectDisplay);
+      await context.workspaceState.update(PINNED_PROJECT_SCOPE_KEY, pinnedProjectScope);
+      if (shouldClearPinnedProjectFilterForMigration) await context.workspaceState.update(PINNED_PROJECT_FILTER_KEY, "");
+    } catch (error) {
+      logger.debug(`pinned.projectState.migration failed error=${sanitizeDebugError(error)}`);
+    }
+  }
   const pinnedProvider = new PinnedTreeDataProvider(
     historyService,
     pinStore,
     annotationStore,
     projectAliasStore,
+    projectAssociationStore,
     pinnedFilter,
     pinnedSourceFilter,
     pinnedTagFilter,
     pinnedSourceFilter === "claude" ? "all" : pinnedArchiveLocationFilter,
     pinnedProjectCwd,
-    pinnedProjectGrouped,
+    resolveProjectScopeCwd(pinnedProjectScope),
+    pinnedProjectDisplay === "project",
     pinnedSortMode,
     context.extensionUri,
   );
@@ -300,10 +383,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     pinStore,
     annotationStore,
     projectAliasStore,
+    projectAssociationStore,
     historyViewMode,
     historyFilter,
     historyProjectCwd,
-    historyProjectGrouped,
+    resolveProjectScopeCwd(historyProjectScope),
+    historyProjectDisplay === "project",
     historySourceFilter,
     historyTagFilter,
     historySourceFilter === "claude" ? "all" : archiveLocationFilter,
@@ -313,6 +398,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     pinStore,
     annotationStore,
     projectAliasStore,
+    projectAssociationStore,
     historySourceFilter === "claude" ? "all" : archiveLocationFilter,
     context.extensionUri,
   );
@@ -328,6 +414,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyProvider.setArchiveLocationFilter(resolveEffectiveArchiveLocationFilter());
     searchProvider.setArchiveLocationFilter(resolveEffectiveArchiveLocationFilter());
     pinnedProvider.setArchiveLocationFilter(resolveEffectivePinnedArchiveLocationFilter());
+  };
+
+  const syncProjectScopeFiltersToProviders = (): void => {
+    let scopeChanged = false;
+    if (!resolveCurrentWorkspaceFolder()) {
+      if (historyProjectScope === "currentGroup") {
+        historyProjectScope = "all";
+        void context.workspaceState.update(HISTORY_PROJECT_SCOPE_KEY, historyProjectScope);
+        scopeChanged = true;
+      }
+      if (pinnedProjectScope === "currentGroup") {
+        pinnedProjectScope = "all";
+        void context.workspaceState.update(PINNED_PROJECT_SCOPE_KEY, pinnedProjectScope);
+        scopeChanged = true;
+      }
+    }
+    historyProvider.setProjectScopeFilter(resolveProjectScopeCwd(historyProjectScope));
+    pinnedProvider.setProjectScopeFilter(resolveProjectScopeCwd(pinnedProjectScope));
+    if (scopeChanged) {
+      updateHistoryViewDescription();
+      updatePinnedViewDescription();
+    }
   };
 
   const isCodexSourceEnabled = (sourceFilter: SessionSourceFilter): boolean =>
@@ -368,28 +476,62 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const getProjectDisplayName = (projectCwd: string | null | undefined, maxPathLength = 60): string => {
-    const alias = projectAliasStore.getAliasByCwd(projectCwd);
+    const displayCwd =
+      typeof projectCwd === "string" && projectCwd.trim() && !projectAssociationStore.isEmpty()
+        ? (projectAssociationStore.getDisplayCwd(projectCwd) ?? projectCwd)
+        : projectCwd;
+    const alias = projectAliasStore.getAliasByCwd(displayCwd);
     if (alias) return alias;
-    return safeDisplayPath(String(projectCwd ?? ""), maxPathLength);
+    return safeDisplayPath(String(displayCwd ?? ""), maxPathLength);
   };
 
-  const resolveHistoryProjectMode = (): "none" | "currentProject" | "grouped" => {
-    if (historyProjectGrouped) return "grouped";
-    return historyProjectCwd ? "currentProject" : "none";
+  const getCanonicalProjectKey = (projectCwd: string): string | null =>
+    projectAssociationStore.isEmpty()
+      ? normalizeProjectKey(projectCwd)
+      : (projectAssociationStore.getCanonicalProjectKey(projectCwd) ?? normalizeProjectKey(projectCwd));
+
+  function resolveProjectScopeCwd(scope: ProjectScopeMode): string | null {
+    if (scope !== "currentGroup") return null;
+    const workspaceFolder = resolveCurrentWorkspaceFolder();
+    if (!workspaceFolder) return null;
+    const rawScopeCwd = resolveCurrentProjectFilterCwd(historyService.getIndex(), workspaceFolder.uri.fsPath);
+    if (!rawScopeCwd || projectAssociationStore.isEmpty()) return rawScopeCwd;
+    const canonicalKey = projectAssociationStore.getCanonicalProjectKey(rawScopeCwd);
+    if (!canonicalKey) return rawScopeCwd;
+    return (
+      projectAssociationStore.getRepresentativeTargetCwd(canonicalKey) ??
+      projectAssociationStore.getDisplayCwd(rawScopeCwd) ??
+      rawScopeCwd
+    );
+  }
+
+  const resolveSearchHistoryProjectKeyFromCwd = (projectCwd: string | null | undefined): string => {
+    const raw = typeof projectCwd === "string" ? projectCwd.trim() : "";
+    if (!raw) return GLOBAL_SEARCH_HISTORY_PROJECT_KEY;
+    return normalizeSearchHistoryProjectKey(getCanonicalProjectKey(raw) ?? normalizeProjectKey(raw));
   };
 
-  const resolvePinnedProjectMode = (): "none" | "currentProject" | "grouped" => {
-    if (pinnedProjectGrouped) return "grouped";
-    return pinnedProjectCwd ? "currentProject" : "none";
+  const resolveSearchHistoryProjectKeyForSearch = (): string => {
+    if (historyProjectCwd) return resolveSearchHistoryProjectKeyFromCwd(historyProjectCwd);
+    const scopeCwd = resolveProjectScopeCwd(historyProjectScope);
+    if (scopeCwd) return resolveSearchHistoryProjectKeyFromCwd(scopeCwd);
+    const workspaceFolder = resolveCurrentWorkspaceFolder();
+    if (workspaceFolder) return resolveSearchHistoryProjectKeyFromCwd(workspaceFolder.uri.fsPath);
+    return GLOBAL_SEARCH_HISTORY_PROJECT_KEY;
   };
 
-  const buildHistoryFilterSummary = (options: { includeProjectMode?: boolean } = {}): string => {
-    const includeProjectMode = options.includeProjectMode ?? true;
+  const buildHistoryViewStateSummary = (): string => {
+    const parts: string[] = [];
+    if (historyProjectDisplay === "project") parts.push(t("history.project.display.summary.project"));
+    if (historyProjectScope === "currentGroup") parts.push(t("history.project.scope.summary.currentGroup"));
+    return parts.join(" / ");
+  };
+
+  const buildHistoryFilterSummary = (): string => {
     const parts: string[] = [];
     const dateValue = getDateScopeValue(historyFilter);
     if (dateValue) parts.push(dateValue);
     if (historyProjectCwd) parts.push(t("history.filter.projectLabel", getProjectDisplayName(historyProjectCwd, 60)));
-    if (includeProjectMode && historyProjectGrouped) parts.push(t("history.project.mode.summary.grouped"));
     const sourceSummary = buildSourceFilterSummary();
     if (sourceSummary) parts.push(sourceSummary);
     const archiveLocationSummary = buildArchiveLocationFilterSummary();
@@ -485,7 +627,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       handoffBytes: storageStats.handoffBytes,
       searchHitCount: searchProvider.root ? searchProvider.visibleTotalHits : 0,
       currentSearchRoles: resolveStatusCurrentSearchRoles(),
-      currentSearchTagFilter: searchTagFilter,
+      currentHistoryTagFilter: historyTagFilter,
       filterSummary: buildHistoryFilterSummary(),
       currentProjectCwd: resolveStatusCurrentProjectCwd(),
       currentProjectLabel: getProjectDisplayName(resolveStatusCurrentProjectCwd(), 64),
@@ -501,11 +643,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.workspace.registerTextDocumentContentProvider(transcriptProvider.scheme, transcriptProvider),
     vscode.languages.registerDocumentLinkProvider(
       { scheme: transcriptProvider.scheme },
-      new TranscriptDocumentLinkProvider(transcriptProvider.scheme),
+      new TranscriptDocumentLinkProvider(transcriptProvider.scheme, projectAssociationStore),
     ),
   );
 
   const URI_LIST_MIME = "text/uri-list";
+  const PROJECT_ASSOCIATION_DND_MIME = "application/vnd.codex-history-viewer.project-association+json";
   const OPEN_MULTI_LIMIT = 10;
   const MAX_DND_ITEMS = 500;
   const RESUME_MAX_MESSAGES = 20;
@@ -591,6 +734,62 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return fsPaths.map((p) => vscode.Uri.file(p).toString()).join("\r\n");
   };
 
+  type ProjectAssociationDragPayload = {
+    version: 1;
+    sourceCwd: string;
+    sourceKind: "project" | "relatedGroup";
+    sourceLabel?: string;
+  };
+
+  const resolveProjectAssociationDndTarget = (target: unknown): ProjectNode | RelatedGroupNode | null => {
+    if (!(target instanceof ProjectNode || target instanceof RelatedGroupNode)) return null;
+    return target.cwd ? target : null;
+  };
+
+  const buildProjectAssociationDragPayload = (
+    source: readonly unknown[],
+  ): ProjectAssociationDragPayload | null => {
+    if (source.length !== 1) return null;
+    const target = resolveProjectAssociationDndTarget(source[0]);
+    if (!target?.cwd) return null;
+    return {
+      version: 1,
+      sourceCwd: target.cwd,
+      sourceKind: target instanceof RelatedGroupNode ? "relatedGroup" : "project",
+      sourceLabel: target.label,
+    };
+  };
+
+  const parseProjectAssociationDragPayload = async (
+    dataTransfer: vscode.DataTransfer,
+  ): Promise<ProjectAssociationDragPayload | null> => {
+    const item = dataTransfer.get(PROJECT_ASSOCIATION_DND_MIME);
+    if (!item) return null;
+
+    let raw = "";
+    try {
+      raw = await item.asString();
+    } catch {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(String(raw || ""));
+      const sourceCwd = typeof parsed?.sourceCwd === "string" ? parsed.sourceCwd.trim() : "";
+      const sourceKind =
+        parsed?.sourceKind === "relatedGroup" ? "relatedGroup" : parsed?.sourceKind === "project" ? "project" : null;
+      if (parsed?.version !== 1 || !sourceCwd || !sourceKind) return null;
+      return {
+        version: 1,
+        sourceCwd,
+        sourceKind,
+        sourceLabel: typeof parsed.sourceLabel === "string" ? parsed.sourceLabel.trim() : undefined,
+      };
+    } catch {
+      return null;
+    }
+  };
+
   const parseUriListToFsPaths = async (dataTransfer: vscode.DataTransfer): Promise<string[]> => {
     const item = dataTransfer.get(URI_LIST_MIME);
     if (!item) return [];
@@ -624,13 +823,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const historyDragController: vscode.TreeDragAndDropController<TreeNode> = {
-    dragMimeTypes: [URI_LIST_MIME],
-    dropMimeTypes: [],
+    dragMimeTypes: [URI_LIST_MIME, PROJECT_ASSOCIATION_DND_MIME],
+    dropMimeTypes: [PROJECT_ASSOCIATION_DND_MIME],
     handleDrag: (source, dataTransfer) => {
+      const projectPayload = buildProjectAssociationDragPayload(source);
+      if (projectPayload) {
+        dataTransfer.set(PROJECT_ASSOCIATION_DND_MIME, new vscode.DataTransferItem(JSON.stringify(projectPayload)));
+        return;
+      }
+
       // Assume source contains all selected items when dragging with multi-selection.
       const fsPaths = collectSessionFsPaths(source);
       if (fsPaths.length === 0) return;
       dataTransfer.set(URI_LIST_MIME, new vscode.DataTransferItem(buildUriList(fsPaths)));
+    },
+    handleDrop: async (target, dataTransfer) => {
+      const dropTarget = resolveProjectAssociationDndTarget(target);
+      if (!dropTarget?.cwd) return;
+
+      const payload = await parseProjectAssociationDragPayload(dataTransfer);
+      if (!payload?.sourceCwd) return;
+
+      const sourceCwd = payload.sourceCwd.trim();
+      const targetCwd = dropTarget.cwd.trim();
+      await applyProjectAssociationSet(sourceCwd, targetCwd, t("undo.label.projectAssociationSet"));
     },
   };
 
@@ -733,14 +949,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const updateHistoryViewDescription = (): void => {
-    const v = buildHistoryFilterSummary({ includeProjectMode: true });
-    const filterOnly = buildHistoryFilterSummary({ includeProjectMode: false });
-    historyView.description =
-      historyProjectGrouped && filterOnly.length === 0 ? t("history.project.mode.summary.grouped") : v ? t("history.filter.active", v) : "";
-    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyFiltered", filterOnly.length > 0);
+    const viewStateSummary = buildHistoryViewStateSummary();
+    const filterSummary = buildHistoryFilterSummary();
+    historyView.description = [
+      viewStateSummary,
+      filterSummary ? t("history.filter.active", filterSummary) : "",
+    ].filter(Boolean).join("  ");
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyFiltered", filterSummary.length > 0);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyTagFiltered", historyTagFilter.length > 0);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyViewMode", historyViewMode);
-    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectMode", resolveHistoryProjectMode());
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectDisplay", historyProjectDisplay);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectScope", historyProjectScope);
     void vscode.commands.executeCommand(
       "setContext",
       "codexHistoryViewer.sourceCodexEnabled",
@@ -768,12 +987,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   };
 
+  const buildPinnedViewStateSummary = (): string => {
+    const parts: string[] = [];
+    if (pinnedProjectDisplay === "project") parts.push(t("pinned.project.display.summary.project"));
+    if (pinnedProjectScope === "currentGroup") parts.push(t("pinned.project.scope.summary.currentGroup"));
+    return parts.join(" / ");
+  };
+
   const buildPinnedFilterSummary = (): string => {
     const parts: string[] = [];
     const dateValue = getDateScopeValue(pinnedFilter);
     if (dateValue) parts.push(dateValue);
     if (pinnedProjectCwd) parts.push(t("pinned.filter.projectLabel", getProjectDisplayName(pinnedProjectCwd, 60)));
-    if (pinnedProjectGrouped) parts.push(t("pinned.project.mode.summary.grouped"));
     const sourceSummary = buildSourceFilterSummary(pinnedSourceFilter);
     if (sourceSummary) parts.push(sourceSummary);
     const archiveLocationSummary = buildArchiveLocationFilterSummary(pinnedArchiveLocationFilter, pinnedSourceFilter);
@@ -792,29 +1017,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     pinnedTagFilter.length > 0;
 
   const updatePinnedViewDescription = (): void => {
-    const v = buildPinnedFilterSummary();
-    pinnedView.description = v;
+    const viewStateSummary = buildPinnedViewStateSummary();
+    const filterSummary = buildPinnedFilterSummary();
+    pinnedView.description = [viewStateSummary, filterSummary].filter(Boolean).join(" / ");
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedFiltered", isPinnedFiltered());
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedTagFiltered", pinnedTagFilter.length > 0);
-    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedProjectMode", resolvePinnedProjectMode());
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedProjectDisplay", pinnedProjectDisplay);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedProjectScope", pinnedProjectScope);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSortMode", pinnedSortMode);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceFilter", pinnedSourceFilter);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceFiltered", pinnedSourceFilter !== "all");
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedSourceSwitchable", isHistorySourceSwitchable());
   };
 
-  const buildSearchTagFilterSummary = (): string => {
+  const buildSearchFilterSummary = (): string => {
     const parts: string[] = [];
-    const archiveLocationSummary = buildArchiveLocationFilterSummary();
-    if (archiveLocationSummary) parts.push(archiveLocationSummary);
-    if (searchTagFilter.length > 0) parts.push(t("search.tagFilter.summary", searchTagFilter.map((tag) => `#${tag}`).join(", ")));
-    return parts.join(" / ");
+    if (historyProjectScope === "currentGroup") parts.push(t("history.project.scope.summary.currentGroup"));
+    const filterSummary = buildHistoryFilterSummary();
+    if (filterSummary) parts.push(t("history.filter.active", filterSummary));
+    return parts.join("  ");
   };
 
   const updateSearchViewDescription = (): void => {
-    const v = buildSearchTagFilterSummary();
-    searchView.description = v;
-    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.searchTagFiltered", searchTagFilter.length > 0);
+    searchView.description = buildSearchFilterSummary();
   };
 
   const isSameTagFilter = (left: readonly string[], right: readonly string[]): boolean => {
@@ -824,26 +1049,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!rightKeys.has(tag.toLowerCase())) return false;
     }
     return true;
-  };
-
-  const applySearchTagFilter = async (
-    nextTags: readonly string[],
-    opts: { persist: boolean; rerunSearch: boolean },
-  ): Promise<void> => {
-    const normalized = sanitizeTagFilter(nextTags);
-    const changed = !isSameTagFilter(searchTagFilter, normalized);
-    searchTagFilter = normalized;
-    updateSearchViewDescription();
-    statusProvider.refresh();
-    if (opts.persist) {
-      await context.workspaceState.update(SEARCH_TAG_FILTER_KEY, searchTagFilter);
-    }
-    if (!opts.rerunSearch || !changed) return;
-    if (!lastSearchRequest) {
-      void vscode.window.showInformationMessage(t("search.tagFilter.deferred"));
-      return;
-    }
-    await executeSearch(lastSearchRequest);
   };
 
   const applyPinnedTagFilter = async (nextTags: readonly string[], opts: { persist: boolean }): Promise<void> => {
@@ -861,7 +1066,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     next: {
       date: DateScope;
       projectCwd: string | null;
-      projectGrouped?: boolean;
       source: SessionSourceFilter;
       tags: string[];
       archiveLocation: ArchiveLocationFilter;
@@ -869,20 +1073,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     opts: { persist: boolean },
   ): Promise<void> => {
     pinnedFilter = sanitizeDateScope(next.date);
-    const nextProjectGrouped = next.projectGrouped ?? pinnedProjectGrouped;
-    pinnedProjectCwd = nextProjectGrouped ? null : sanitizeProjectCwd(next.projectCwd);
-    pinnedProjectGrouped = nextProjectGrouped && !pinnedProjectCwd;
+    pinnedProjectCwd = sanitizeProjectCwd(next.projectCwd);
     pinnedSourceFilter = constrainHistorySourceFilter(next.source);
     pinnedTagFilter = sanitizeTagFilter(next.tags);
     pinnedArchiveLocationFilter = sanitizeArchiveLocationFilter(next.archiveLocation);
     pinnedProvider.setFilters(
       pinnedFilter,
       pinnedProjectCwd,
+      resolveProjectScopeCwd(pinnedProjectScope),
       pinnedSourceFilter,
       pinnedTagFilter,
       resolveEffectivePinnedArchiveLocationFilter(),
     );
-    pinnedProvider.setProjectGrouped(pinnedProjectGrouped);
+    pinnedProvider.setProjectGrouped(pinnedProjectDisplay === "project");
     pinnedProvider.refresh();
     updateArchivedSessionsContext();
     updatePinnedViewDescription();
@@ -890,7 +1093,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (opts.persist) {
       await context.workspaceState.update(PINNED_FILTER_KEY, pinnedFilter);
       await context.workspaceState.update(PINNED_PROJECT_FILTER_KEY, pinnedProjectCwd ?? "");
-      await context.workspaceState.update(PINNED_PROJECT_GROUPED_KEY, pinnedProjectGrouped);
       await context.workspaceState.update(PINNED_SOURCE_FILTER_KEY, pinnedSourceFilter);
       await context.workspaceState.update(PINNED_TAG_FILTER_KEY, pinnedTagFilter);
       await context.workspaceState.update(PINNED_ARCHIVE_LOCATION_FILTER_KEY, pinnedArchiveLocationFilter);
@@ -917,20 +1119,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const applyPinnedProjectState = async (
-    next: { projectCwd: string | null; grouped: boolean },
+    next: { projectCwd?: string | null; display?: ProjectDisplayMode; scope?: ProjectScopeMode },
     opts: { persist: boolean },
   ): Promise<void> => {
-    const projectCwd = next.grouped ? null : sanitizeProjectCwd(next.projectCwd);
-    pinnedProjectCwd = projectCwd;
-    pinnedProjectGrouped = next.grouped && !projectCwd;
+    if ("projectCwd" in next) pinnedProjectCwd = sanitizeProjectCwd(next.projectCwd);
+    if (next.display) pinnedProjectDisplay = sanitizeProjectDisplayMode(next.display);
+    if (next.scope) pinnedProjectScope = sanitizeProjectScopeMode(next.scope);
     pinnedProvider.setProjectFilter(pinnedProjectCwd);
-    pinnedProvider.setProjectGrouped(pinnedProjectGrouped);
+    pinnedProvider.setProjectScopeFilter(resolveProjectScopeCwd(pinnedProjectScope));
+    pinnedProvider.setProjectGrouped(pinnedProjectDisplay === "project");
     pinnedProvider.refresh();
     updatePinnedViewDescription();
     statusProvider.refresh();
     if (opts.persist) {
       await context.workspaceState.update(PINNED_PROJECT_FILTER_KEY, pinnedProjectCwd ?? "");
-      await context.workspaceState.update(PINNED_PROJECT_GROUPED_KEY, pinnedProjectGrouped);
+      await context.workspaceState.update(PINNED_PROJECT_DISPLAY_KEY, pinnedProjectDisplay);
+      await context.workspaceState.update(PINNED_PROJECT_SCOPE_KEY, pinnedProjectScope);
     }
   };
 
@@ -967,6 +1171,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     pinnedProvider.setFilter(pinnedFilter);
     pinnedProvider.setProjectFilter(null);
+    pinnedProvider.setProjectScopeFilter(resolveProjectScopeCwd(pinnedProjectScope));
     pinnedProvider.setSourceFilter(pinnedSourceFilter);
     pinnedProvider.setTagFilter(pinnedTagFilter);
     pinnedProvider.setArchiveLocationFilter(resolveEffectivePinnedArchiveLocationFilter());
@@ -998,44 +1203,79 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const applyHistoryProjectState = async (
-    next: { projectCwd: string | null; grouped: boolean },
-    opts: { persist: boolean },
+    next: { projectCwd?: string | null; display?: ProjectDisplayMode; scope?: ProjectScopeMode },
+    opts: { persist: boolean; rerunSearch?: boolean },
   ): Promise<void> => {
-    const projectCwd = next.grouped ? null : sanitizeProjectCwd(next.projectCwd);
-    historyProjectCwd = projectCwd;
-    historyProjectGrouped = next.grouped && !projectCwd;
+    const previousProjectCwd = historyProjectCwd;
+    const previousProjectScope = historyProjectScope;
+    if ("projectCwd" in next) historyProjectCwd = sanitizeProjectCwd(next.projectCwd);
+    if (next.display) historyProjectDisplay = sanitizeProjectDisplayMode(next.display);
+    if (next.scope) historyProjectScope = sanitizeProjectScopeMode(next.scope);
     historyProvider.setProjectFilter(historyProjectCwd);
-    historyProvider.setProjectGrouped(historyProjectGrouped);
+    historyProvider.setProjectScopeFilter(resolveProjectScopeCwd(historyProjectScope));
+    historyProvider.setProjectGrouped(historyProjectDisplay === "project");
     historyProvider.refresh();
     updateHistoryViewDescription();
+    updateSearchViewDescription();
     statusProvider.refresh();
     if (opts.persist) {
       await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, historyProjectCwd ?? "");
-      await context.workspaceState.update(HISTORY_PROJECT_GROUPED_KEY, historyProjectGrouped);
+      await context.workspaceState.update(HISTORY_PROJECT_DISPLAY_KEY, historyProjectDisplay);
+      await context.workspaceState.update(HISTORY_PROJECT_SCOPE_KEY, historyProjectScope);
+    }
+    if (
+      opts.rerunSearch !== false &&
+      (previousProjectCwd !== historyProjectCwd || previousProjectScope !== historyProjectScope)
+    ) {
+      await rerunVisibleSearch();
     }
   };
 
   const applyHistoryFilters = async (
     next: { date: DateScope; projectCwd: string | null; source: SessionSourceFilter; tags: string[] },
-    opts: { persist: boolean },
+    opts: { persist: boolean; rerunSearch?: boolean },
   ): Promise<void> => {
-    historyFilter = next.date;
-    historyProjectCwd = next.projectCwd;
-    if (historyProjectCwd) historyProjectGrouped = false;
-    historySourceFilter = constrainHistorySourceFilter(next.source);
-    historyTagFilter = sanitizeTagFilter(next.tags);
-    historyProvider.setFilters(historyFilter, historyProjectCwd, historySourceFilter, historyTagFilter);
-    historyProvider.setProjectGrouped(historyProjectGrouped);
+    const previousDate = historyFilter;
+    const previousProjectCwd = historyProjectCwd;
+    const previousSource = historySourceFilter;
+    const previousTags = historyTagFilter;
+    const nextDate = sanitizeDateScope(next.date);
+    const nextProjectCwd = sanitizeProjectCwd(next.projectCwd);
+    const nextSource = constrainHistorySourceFilter(next.source);
+    const nextTags = sanitizeTagFilter(next.tags);
+    const dateChanged =
+      previousDate.kind !== nextDate.kind || getDateScopeValue(previousDate) !== getDateScopeValue(nextDate);
+    const changed =
+      dateChanged ||
+      previousProjectCwd !== nextProjectCwd ||
+      previousSource !== nextSource ||
+      !isSameTagFilter(previousTags, nextTags);
+
+    historyFilter = nextDate;
+    historyProjectCwd = nextProjectCwd;
+    historySourceFilter = nextSource;
+    historyTagFilter = nextTags;
+    historyProvider.setFilters(
+      historyFilter,
+      historyProjectCwd,
+      resolveProjectScopeCwd(historyProjectScope),
+      historySourceFilter,
+      historyTagFilter,
+    );
+    historyProvider.setProjectGrouped(historyProjectDisplay === "project");
     historyProvider.refresh();
     syncArchiveLocationFilterToProviders();
     updateHistoryViewDescription();
+    updateSearchViewDescription();
     statusProvider.refresh();
     if (opts.persist) {
-      await context.workspaceState.update(HISTORY_FILTER_KEY, next.date);
-      await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, next.projectCwd ?? "");
-      await context.workspaceState.update(HISTORY_PROJECT_GROUPED_KEY, historyProjectGrouped);
+      await context.workspaceState.update(HISTORY_FILTER_KEY, historyFilter);
+      await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, historyProjectCwd ?? "");
       await context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
       await context.workspaceState.update(HISTORY_TAG_FILTER_KEY, historyTagFilter);
+    }
+    if (opts.rerunSearch !== false && changed) {
+      await rerunVisibleSearch();
     }
   };
 
@@ -1084,6 +1324,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     await applyPinnedSourceFilter(nextSource, { persist: true });
   };
 
+  syncProjectScopeFiltersToProviders();
   updateViewTitles();
   updatePinnedViewDescription();
   updateHistoryViewDescription();
@@ -1244,7 +1485,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       void vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") }, async () => {
         await refreshHistoryIndex(false);
-        refreshViews({ clearSearch: true });
+        refreshViews({ clearSearch: true, reloadProjectAssociations: true });
         controlProvider.refresh();
         chatPanels.refreshTitles();
       });
@@ -1253,9 +1494,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const openReusableSessionFromElement = async (element: unknown): Promise<void> => {
     if (!isSessionNode(element)) return;
-    const reveal = element instanceof SearchHitNode ? element.hit.messageIndex : undefined;
-    if (await chatPanels.revealExistingSessionPanel(element.session.fsPath, reveal, { preserveFocus: true })) return;
-    await chatPanels.openSession(element.session, { kind: "reusable", revealMessageIndex: reveal });
+    const pageSearchSeed = resolvePageSearchSeed(element);
+    const reveal = resolveRevealIndex(element, pageSearchSeed);
+    if (await chatPanels.revealExistingSessionPanel(element.session.fsPath, reveal, { preserveFocus: true, pageSearchSeed })) return;
+    await chatPanels.openSession(element.session, { kind: "reusable", revealMessageIndex: reveal, pageSearchSeed });
   };
 
   // Open a reusable session tab on selection (if enabled).
@@ -1382,15 +1624,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return selection && selection.length > 1 ? selection : [element];
   };
 
-  const collectOpenTargets = (targets: readonly unknown[]): Array<{ session: SessionSummary; revealMessageIndex?: number }> => {
-    // Deduplicate "Open" targets by session, and for SearchHit use the first hit location.
-    const byKey = new Map<string, { session: SessionSummary; revealMessageIndex?: number }>();
+  const collectOpenTargets = (
+    targets: readonly unknown[],
+  ): Array<{ session: SessionSummary; revealMessageIndex?: number; pageSearchSeed?: SessionPageSearchSeed }> => {
+    // Deduplicate open targets by session while preserving each row's seed-derived reveal target.
+    const byKey = new Map<string, { session: SessionSummary; revealMessageIndex?: number; pageSearchSeed?: SessionPageSearchSeed }>();
     for (const t of targets) {
       if (!isSessionNode(t)) continue;
       const s = t.session;
       const key = normalizeCacheKey(s.fsPath);
       if (byKey.has(key)) continue;
-      byKey.set(key, { session: s, revealMessageIndex: resolveRevealIndex(t) });
+      const pageSearchSeed = resolvePageSearchSeed(t);
+      byKey.set(key, {
+        session: s,
+        revealMessageIndex: resolveRevealIndex(t, pageSearchSeed),
+        pageSearchSeed,
+      });
     }
     return Array.from(byKey.values());
   };
@@ -1642,6 +1891,72 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     cfg: CodexHistoryViewerConfig,
   ): string => session.source === "claude" ? cfg.claudeSessionsRoot : cfg.sessionsRoot;
 
+  const isProjectKeyInside = (candidateKey: string, parentKey: string): boolean => {
+    if (!candidateKey || !parentKey) return false;
+    if (candidateKey === parentKey) return true;
+    if (parentKey === "/" || /^[a-z]:\/$/i.test(parentKey)) return candidateKey.startsWith(parentKey);
+    return candidateKey.startsWith(`${parentKey}/`);
+  };
+
+  const buildHandoffPathRewriteMappings = (
+    recordedCwd: string,
+    displayCwd: string,
+    relocationSources: readonly ProjectAssociation[],
+  ): HandoffPathRewriteContext["mappings"] => {
+    const recordedKey = normalizeProjectKey(recordedCwd);
+    const mappings: { sourceCwd: string; targetCwd: string }[] = [];
+    const seen = new Set<string>();
+    const addMapping = (sourceCwd: string, targetCwd: string): void => {
+      const sourceKey = normalizeProjectKey(sourceCwd);
+      const targetKey = normalizeProjectKey(targetCwd);
+      if (!sourceKey || !targetKey || sourceKey === targetKey) return;
+      const key = `${sourceKey}\n${targetKey}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      mappings.push({ sourceCwd, targetCwd });
+    };
+
+    addMapping(recordedCwd, displayCwd);
+    for (const entry of relocationSources) {
+      const sourceKey = normalizeProjectKey(entry.sourceCwd);
+      if (!isProjectKeyInside(sourceKey, recordedKey)) continue;
+      addMapping(entry.sourceCwd, entry.targetCwd);
+    }
+    return mappings;
+  };
+
+  const buildHandoffPathRewriteContext = (session: SessionSummary): HandoffPathRewriteContext => {
+    const recordedCwd = typeof session.meta.cwd === "string" ? session.meta.cwd.trim() : "";
+    if (!recordedCwd) return { mode: "recorded", recordedCwd: null, displayCwd: null, mappings: [] };
+
+    const association = projectAssociationStore.getBySourceCwd(recordedCwd);
+    const displayCwd = projectAssociationStore.getDisplayCwd(recordedCwd);
+    if (
+      association?.mode !== "relocate" ||
+      !displayCwd ||
+      normalizeProjectKey(recordedCwd) === normalizeProjectKey(displayCwd)
+    ) {
+      return { mode: "recorded", recordedCwd, displayCwd: recordedCwd, mappings: [] };
+    }
+
+    const relocationSources = projectAssociationStore.getRelocationSourcesForTargetCwd(displayCwd);
+    const mappings = buildHandoffPathRewriteMappings(recordedCwd, displayCwd, relocationSources);
+    return {
+      mode: "relocated",
+      recordedCwd,
+      displayCwd,
+      mappings,
+    };
+  };
+
+  const isExistingHandoffStale = async (
+    metadataUri: vscode.Uri,
+    pathRewrite: HandoffPathRewriteContext,
+  ): Promise<boolean> => {
+    const metadata = await readHandoffMetadata(metadataUri);
+    return isHandoffPathRewriteStale(metadata, pathRewrite);
+  };
+
   const buildExistingHandoffResult = (
     session: SessionSummary,
     target: HandoffTarget,
@@ -1657,12 +1972,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     createdAtIso: new Date().toISOString(),
   });
 
-  const confirmExistingHandoffReuse = async (): Promise<"reuse" | "recreate" | "cancel"> => {
+  const confirmExistingHandoffReuse = async (stale: boolean): Promise<"reuse" | "recreate" | "cancel"> => {
     const reuseAction = t("handoff.action.useExistingFile");
     const recreateAction = t("handoff.action.recreateFile");
-    const choice = await vscode.window.showInformationMessage(t("handoff.existingConfirm"), reuseAction, recreateAction);
+    const choice = stale
+      ? await vscode.window.showWarningMessage(t("handoff.staleConfirm"), recreateAction, reuseAction)
+      : await vscode.window.showInformationMessage(t("handoff.existingConfirm"), reuseAction, recreateAction);
     if (choice === reuseAction) return "reuse";
     if (choice === recreateAction) return "recreate";
+    return "cancel";
+  };
+
+  const confirmStaleHandoffOpen = async (): Promise<"recreate" | "openExisting" | "cancel"> => {
+    const recreateAction = t("handoff.action.recreateAndOpenFile");
+    const openExistingAction = t("handoff.action.openExistingFile");
+    const choice = await vscode.window.showWarningMessage(t("handoff.staleOpenConfirm"), recreateAction, openExistingAction);
+    if (choice === recreateAction) return "recreate";
+    if (choice === openExistingAction) return "openExisting";
     return "cancel";
   };
 
@@ -1679,10 +2005,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       sourceSessionsRoot,
       target,
     });
+    const pathRewrite = buildHandoffPathRewriteContext(session);
 
     if (await pathExists(location.handoffPath)) {
-      if (options?.existing === "reuse") return buildExistingHandoffResult(session, target, location);
-      const choice = await confirmExistingHandoffReuse();
+      const stale = await isExistingHandoffStale(location.metadataUri, pathRewrite);
+      if (options?.existing === "reuse" && !stale) return buildExistingHandoffResult(session, target, location);
+      const choice = options?.existing === "reuse" ? "recreate" : await confirmExistingHandoffReuse(stale);
       if (choice === "cancel") return null;
       if (choice === "reuse") return buildExistingHandoffResult(session, target, location);
     }
@@ -1693,6 +2021,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         session,
         target,
         sourceSessionsRoot,
+        pathRewrite,
       });
     } catch {
       void vscode.window.showErrorMessage(t("handoff.createFailed"));
@@ -1719,16 +2048,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       session,
       sourceSessionsRoot: resolveSourceSessionsRootForHandoff(session, latestConfig),
     });
+    const target = resolveDefaultHandoffTargetForSource(session.source);
+    const pathRewrite = buildHandoffPathRewriteContext(session);
     if (!(await pathExists(location.handoffPath))) {
       const createAction = t("handoff.action.createFile");
       const choice = await vscode.window.showInformationMessage(t("handoff.sessionMissing"), createAction);
       if (choice !== createAction) return false;
 
-      const target = resolveDefaultHandoffTargetForSource(session.source);
       const handoff = await prepareHandoff(session, target, { existing: "reuse" });
       if (!handoff) return false;
       await refreshHandoffStorageState();
       return openHandoffDocument(handoff.handoffUri);
+    }
+
+    if (await isExistingHandoffStale(location.metadataUri, pathRewrite)) {
+      const choice = await confirmStaleHandoffOpen();
+      if (choice === "cancel") return false;
+      if (choice === "recreate") {
+        const handoff = await prepareHandoff(session, target, { existing: "reuse" });
+        if (!handoff) return false;
+        await refreshHandoffStorageState();
+        return openHandoffDocument(handoff.handoffUri);
+      }
     }
 
     return openHandoffDocument(location.handoffUri);
@@ -1827,6 +2168,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasSearchResults", value);
   };
 
+  const updateHasSearchPresetsContext = (): void => {
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasSearchPresets", searchPresetStore.getAll().length > 0);
+  };
+
+  updateHasSearchPresetsContext();
+
   let historyRefreshQueue: Promise<void> = Promise.resolve();
   const performHistoryIndexRefresh = async (forceRebuildCache: boolean): Promise<void> => {
     const latestConfig = getConfig();
@@ -1885,7 +2232,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusProvider.refresh();
   };
 
-  const refreshViews = (options?: { clearSearch?: boolean }): void => {
+  const reloadProjectAssociationCacheForRefresh = (): void => {
+    projectAssociationStore.invalidateCache();
+    updatePinnedViewDescription();
+    updateHistoryViewDescription();
+    updateSearchViewDescription();
+  };
+
+  const refreshViews = (options?: { clearSearch?: boolean; reloadProjectAssociations?: boolean }): void => {
+    if (options?.reloadProjectAssociations) reloadProjectAssociationCacheForRefresh();
+    syncProjectScopeFiltersToProviders();
     pinnedProvider.refresh();
     historyProvider.refresh();
     if (options?.clearSearch) {
@@ -1896,6 +2252,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       setHasSearchResultsContext(searchProvider.root !== null);
     }
     statusProvider.refresh();
+    if (options?.reloadProjectAssociations) chatPanels.refreshProjectAssociations();
   };
 
   const applyArchiveLocationFilter = async (
@@ -1958,6 +2315,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   autoRefreshService = new AutoRefreshService(
     async (changedFsPaths) => {
       await refreshHistoryIndex(false);
+      reloadProjectAssociationCacheForRefresh();
       refreshViews();
       chatPanels.refreshTitles();
       chatPanels.refreshAutoRefreshPanels(changedFsPaths);
@@ -2066,6 +2424,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const executeSearch = async (request?: SearchRequest): Promise<boolean> => {
+    const searchGeneration = ++searchExecutionGeneration;
+    const isCurrentSearchGeneration = (): boolean => searchGeneration === searchExecutionGeneration;
     const latestConfig = getConfig();
     historyService.updateConfig(latestConfig);
     const index = historyService.getIndex();
@@ -2080,19 +2440,237 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       {
         request,
         defaultRoleFilter: getConfiguredDefaultSearchRoles(),
-        tagFilter: searchTagFilter,
+        tagFilter: historyTagFilter,
         archiveLocationFilter: resolveEffectiveArchiveLocationFilter(),
+        projectScopeCwd: resolveProjectScopeCwd(historyProjectScope),
         getProjectDisplayName: (projectCwd) => getProjectDisplayName(projectCwd, 50),
+        getCanonicalProjectKey,
       },
     );
-    if (!results) return false;
+    if (!results || !isCurrentSearchGeneration()) return false;
 
+    const savedHistory = await searchHistoryStore.save({
+      projectKey: resolveSearchHistoryProjectKeyForSearch(),
+      queryInput: results.request.queryInput,
+    });
+    if (!isCurrentSearchGeneration()) return false;
+    if (savedHistory) {
+      chatPanels.refreshSearchHistoryCandidates();
+      fileChangeHistoryPanels.refreshSearchHistoryCandidates();
+    }
     await persistLastSearchRequest(results.request);
+    if (!isCurrentSearchGeneration()) return false;
     searchProvider.setResults(results);
     setHasSearchResultsContext(true);
     statusProvider.refresh();
     await searchView.reveal(results.root, { focus: true, expand: true, select: true });
     return true;
+  };
+
+  const rerunVisibleSearch = async (): Promise<void> => {
+    if (searchProvider.root && lastSearchRequest) {
+      await executeSearch(lastSearchRequest);
+      return;
+    }
+    searchProvider.refresh();
+    setHasSearchResultsContext(searchProvider.root !== null);
+  };
+
+  type SearchHistoryQuickPickItem =
+    | (vscode.QuickPickItem & { action: "manual"; queryInput: string })
+    | (vscode.QuickPickItem & { action: "history"; entry: ReturnType<SearchHistoryStore["getAll"]>[number] });
+
+  const createSearchHistoryItem = (
+    entry: ReturnType<SearchHistoryStore["getAll"]>[number],
+    removeButton: vscode.QuickInputButton,
+  ): SearchHistoryQuickPickItem => ({
+    action: "history",
+    label: entry.queryInput,
+    buttons: [removeButton],
+    entry,
+  });
+
+  const runSearchHistoryEntry = async (entry: ReturnType<SearchHistoryStore["getAll"]>[number]): Promise<boolean> =>
+    executeSearch({
+      queryInput: entry.queryInput,
+      roleFilter: getConfiguredDefaultSearchRoles(),
+    });
+
+  const promptSearchQuickPick = async (): Promise<void> => {
+    const picked = await new Promise<SearchHistoryQuickPickItem | undefined>((resolve) => {
+      const qp = vscode.window.createQuickPick<SearchHistoryQuickPickItem>();
+      qp.title = t("searchHistory.quickPick.title");
+      qp.placeholder = t("searchHistory.quickPick.placeholder");
+      qp.matchOnDescription = true;
+      qp.matchOnDetail = true;
+      qp.canSelectMany = false;
+      const removeButton: vscode.QuickInputButton = {
+        iconPath: new vscode.ThemeIcon("trash"),
+        tooltip: t("searchHistory.remove.button"),
+      };
+
+      const updateItems = (): void => {
+        const query = qp.value.trim();
+        const entries = searchHistoryStore.getAll(resolveSearchHistoryProjectKeyForSearch());
+        const filtered = query
+          ? entries.filter((entry) => entry.queryInput.toLowerCase().includes(query.toLowerCase()))
+          : entries;
+        const items: SearchHistoryQuickPickItem[] = [];
+        if (query) {
+          items.push({
+            action: "manual",
+            label: t("searchHistory.searchWithInput", query),
+            description: t("searchHistory.manualDescription"),
+            queryInput: query,
+          });
+        }
+        items.push(...filtered.map((entry) => createSearchHistoryItem(entry, removeButton)));
+        qp.items = items;
+      };
+
+      let done = false;
+      const finish = (value: SearchHistoryQuickPickItem | undefined): void => {
+        if (done) return;
+        done = true;
+        resolve(value);
+        qp.dispose();
+      };
+      qp.onDidChangeValue(updateItems);
+      qp.onDidTriggerItemButton((event) => {
+        if (event.item.action !== "history") return;
+        void removeSearchHistoryEntry(event.item.entry.projectKey, event.item.entry).then(updateItems);
+      });
+      qp.onDidAccept(() => {
+        const active = qp.activeItems[0];
+        if (active) {
+          finish(active);
+          return;
+        }
+        const query = qp.value.trim();
+        finish(query ? { action: "manual", label: t("searchHistory.searchWithInput", query), queryInput: query } : undefined);
+      });
+      qp.onDidHide(() => finish(undefined));
+      updateItems();
+      qp.show();
+    });
+
+    if (!picked) return;
+    if (picked.action === "history") {
+      await runSearchHistoryEntry(picked.entry);
+      return;
+    }
+    await executeSearch({
+      queryInput: picked.queryInput,
+      roleFilter: getConfiguredDefaultSearchRoles(),
+    });
+  };
+
+  const removeSearchHistoryEntry = async (
+    projectKey: string,
+    entry: ReturnType<SearchHistoryStore["getAll"]>[number],
+  ): Promise<boolean> => {
+    const removed = await searchHistoryStore.remove(projectKey, entry.queryInput);
+    if (removed) {
+      chatPanels.refreshSearchHistoryCandidates();
+      fileChangeHistoryPanels.refreshSearchHistoryCandidates();
+      void vscode.window.showInformationMessage(t("searchHistory.remove.done", entry.queryInput));
+    }
+    return removed;
+  };
+
+  const clearSearchHistory = async (): Promise<boolean> => {
+    const projectKey = resolveSearchHistoryProjectKeyForSearch();
+    const entries = searchHistoryStore.getAll(projectKey);
+    if (entries.length === 0) {
+      void vscode.window.showInformationMessage(t("searchHistory.empty"));
+      return false;
+    }
+    const choice = await vscode.window.showWarningMessage(
+      t("searchHistory.clear.confirm", entries.length),
+      { modal: true },
+      t("searchHistory.clear.button"),
+    );
+    if (choice !== t("searchHistory.clear.button")) return false;
+    await searchHistoryStore.clear(projectKey);
+    chatPanels.refreshSearchHistoryCandidates();
+    fileChangeHistoryPanels.refreshSearchHistoryCandidates();
+    void vscode.window.showInformationMessage(t("searchHistory.clear.done"));
+    return true;
+  };
+
+  const refreshAfterProjectAssociationChange = async (): Promise<void> => {
+    updatePinnedViewDescription();
+    updateHistoryViewDescription();
+    updateSearchViewDescription();
+    refreshViews();
+    statusProvider.refresh();
+    chatPanels.refreshProjectAssociations();
+    fileChangeHistoryPanels.notifySettingsChanged("association");
+    await rerunVisibleSearch();
+  };
+
+  const removeSearchPreset = async (preset: SearchPreset): Promise<boolean> => {
+    const deleted = await searchPresetStore.delete(preset.id);
+    if (!deleted) return false;
+    updateHasSearchPresetsContext();
+    statusProvider.refresh();
+    void vscode.window.showInformationMessage(t("savedSearches.deleted", preset.queryInput));
+    return true;
+  };
+
+  type SearchPresetQuickPickItem = vscode.QuickPickItem & { preset: SearchPreset };
+
+  const promptSearchPresetQuickPick = async (): Promise<void> => {
+    const presets = searchPresetStore.getAll();
+    if (presets.length === 0) {
+      void vscode.window.showInformationMessage(t("savedSearches.noPresets"));
+      return;
+    }
+
+    const picked = await new Promise<SearchPresetQuickPickItem | undefined>((resolve) => {
+      const qp = vscode.window.createQuickPick<SearchPresetQuickPickItem>();
+      qp.title = t("savedSearches.run.title");
+      qp.canSelectMany = false;
+      const deleteButton: vscode.QuickInputButton = {
+        iconPath: new vscode.ThemeIcon("trash"),
+        tooltip: t("savedSearches.delete.tooltip"),
+      };
+
+      const updateItems = (): void => {
+        const query = qp.value.trim().toLowerCase();
+        const nextPresets = searchPresetStore.getAll();
+        qp.items = nextPresets
+          .filter((preset) => !query || preset.queryInput.toLowerCase().includes(query))
+          .map((preset) => ({
+            label: preset.queryInput,
+            buttons: [deleteButton],
+            preset,
+          }));
+      };
+
+      let done = false;
+      const finish = (value: SearchPresetQuickPickItem | undefined): void => {
+        if (done) return;
+        done = true;
+        resolve(value);
+        qp.dispose();
+      };
+
+      qp.onDidChangeValue(updateItems);
+      qp.onDidTriggerItemButton((event) => {
+        void removeSearchPreset(event.item.preset).then(() => {
+          updateItems();
+          if (searchPresetStore.getAll().length === 0) finish(undefined);
+        });
+      });
+      qp.onDidAccept(() => finish(qp.activeItems[0]));
+      qp.onDidHide(() => finish(undefined));
+      updateItems();
+      qp.show();
+    });
+
+    if (!picked) return;
+    await runSearchPresetById(picked.preset.id);
   };
 
   const runSearchPresetById = async (presetId: string): Promise<boolean> => {
@@ -2103,7 +2681,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showErrorMessage(t("app.searchPresetNotFound"));
       return false;
     }
-    return executeSearch(preset.request);
+    return executeSearch({
+      queryInput: preset.queryInput,
+      roleFilter: getConfiguredDefaultSearchRoles(),
+    });
   };
 
   const pushRestoreArchivedUndo = (pairs: Array<{ archivedFsPath: string; activeFsPath: string }>): void => {
@@ -2187,7 +2768,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     pushRestoreArchivedUndo(undoPairs);
     await refreshHistoryIndex(false);
-    refreshViews({ clearSearch: true });
+    refreshViews({ clearSearch: true, reloadProjectAssociations: true });
     offerHistoryReloadHint();
 
     if (sessions.length === 1) {
@@ -2279,7 +2860,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
 
     await refreshHistoryIndex(false);
-    refreshViews({ clearSearch: true });
+    refreshViews({ clearSearch: true, reloadProjectAssociations: true });
     offerHistoryReloadHint();
 
     if (sessions.length === 1) {
@@ -2308,7 +2889,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
         async () => refreshHistoryIndex(false),
       );
-      refreshViews({ clearSearch: true });
+      refreshViews({ clearSearch: true, reloadProjectAssociations: true });
       controlProvider.refresh();
     }),
   );
@@ -2319,8 +2900,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { location: vscode.ProgressLocation.Window, title: t("app.loadingPinned") },
         async () => refreshHistoryIndex(false),
       );
+      reloadProjectAssociationCacheForRefresh();
+      syncProjectScopeFiltersToProviders();
       pinnedProvider.refresh();
       statusProvider.refresh();
+      chatPanels.refreshProjectAssociations();
     }),
   );
 
@@ -2336,8 +2920,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { location: vscode.ProgressLocation.Window, title: t("app.loadingHistoryPane") },
         async () => refreshHistoryIndex(false),
       );
+      reloadProjectAssociationCacheForRefresh();
+      syncProjectScopeFiltersToProviders();
       historyProvider.refresh();
       statusProvider.refresh();
+      chatPanels.refreshProjectAssociations();
     }),
   );
 
@@ -2354,12 +2941,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.toggleHistoryViewMode", async () => {
+      await applyHistoryViewMode(historyViewMode === "latest" ? "date" : "latest", { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.refreshStatusPane", async () => {
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Window, title: t("app.loadingStatus") },
         async () => refreshHistoryIndex(false),
       );
+      reloadProjectAssociationCacheForRefresh();
       statusProvider.refresh();
+      chatPanels.refreshProjectAssociations();
     }),
   );
 
@@ -2404,7 +2999,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           await rebuildSearchIndex(progress, token);
         },
       );
-      refreshViews({ clearSearch: true });
+      refreshViews({ clearSearch: true, reloadProjectAssociations: true });
       controlProvider.refresh();
     }),
   );
@@ -2442,10 +3037,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const session = resolveSessionFromElementOrFsPath(historyService, elementOrArgs);
         if (!session) return;
         const reveal = resolveRevealIndexFromArgs(elementOrArgs);
-        if (await chatPanels.revealExistingSessionPanel(session.fsPath, reveal, { promoteReusable: true })) {
+        const pageSearchSeed = resolvePageSearchSeed(elementOrArgs);
+        if (await chatPanels.revealExistingSessionPanel(session.fsPath, reveal, { promoteReusable: true, pageSearchSeed })) {
           return;
         }
-        await chatPanels.openSession(session, { kind: "session", revealMessageIndex: reveal });
+        await chatPanels.openSession(session, { kind: "session", revealMessageIndex: reveal, pageSearchSeed });
         return;
       }
 
@@ -2464,11 +3060,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           if (
             await chatPanels.revealExistingSessionPanel(it.session.fsPath, it.revealMessageIndex, {
               promoteReusable: true,
+              pageSearchSeed: it.pageSearchSeed,
             })
           ) {
             continue;
           }
-          await chatPanels.openSession(it.session, { kind: "session", revealMessageIndex: it.revealMessageIndex });
+          await chatPanels.openSession(it.session, {
+            kind: "session",
+            revealMessageIndex: it.revealMessageIndex,
+            pageSearchSeed: it.pageSearchSeed,
+          });
         }
         return;
       }
@@ -2478,21 +3079,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (
           await chatPanels.revealExistingSessionPanel(it.session.fsPath, it.revealMessageIndex, {
             promoteReusable: true,
+            pageSearchSeed: it.pageSearchSeed,
           })
         ) {
           return;
         }
-        await chatPanels.openSession(it.session, { kind: "session", revealMessageIndex: it.revealMessageIndex });
+        await chatPanels.openSession(it.session, {
+          kind: "session",
+          revealMessageIndex: it.revealMessageIndex,
+          pageSearchSeed: it.pageSearchSeed,
+        });
         return;
       }
 
       const session = resolveSessionFromElementOrActive(historyService, transcriptProvider.scheme, elementOrArgs);
       if (!session) return;
-      const reveal = resolveRevealIndex(elementOrArgs);
-      if (await chatPanels.revealExistingSessionPanel(session.fsPath, reveal, { promoteReusable: true })) {
+      const pageSearchSeed = resolvePageSearchSeed(elementOrArgs);
+      const reveal = resolveRevealIndex(elementOrArgs, pageSearchSeed);
+      if (await chatPanels.revealExistingSessionPanel(session.fsPath, reveal, { promoteReusable: true, pageSearchSeed })) {
         return;
       }
-      await chatPanels.openSession(session, { kind: "session", revealMessageIndex: reveal });
+      await chatPanels.openSession(session, { kind: "session", revealMessageIndex: reveal, pageSearchSeed });
     }),
   );
 
@@ -2543,7 +3150,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const session = resolveSessionFromElementOrActive(historyService, transcriptProvider.scheme, elementOrArgs);
       if (!session) return;
-      const reveal = resolveRevealIndex(elementOrArgs);
+      const pageSearchSeed = resolvePageSearchSeed(elementOrArgs);
+      const reveal = resolveRevealIndex(elementOrArgs, pageSearchSeed);
       await transcriptProvider.openSessionTranscript(session, { preview: false, revealMessageIndex: reveal });
     }),
   );
@@ -2669,7 +3277,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.search", async () => {
-      await executeSearch();
+      await promptSearchQuickPick();
     }),
   );
 
@@ -2679,12 +3287,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await executeSearch(lastSearchRequest);
         return;
       }
-      await executeSearch();
+      await promptSearchQuickPick();
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.searchClearResults", async () => {
+      if (!searchProvider.root) return;
       searchProvider.clear();
       setHasSearchResultsContext(false);
       statusProvider.refresh();
@@ -2694,11 +3303,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.searchFilterByTag", async (tagArg?: unknown) => {
       const singleTag = typeof tagArg === "string" ? tagArg.trim() : "";
+      const applySearchTagShortcut = async (nextTags: readonly string[]): Promise<void> => {
+        const normalized = sanitizeTagFilter(nextTags);
+        const changed = !isSameTagFilter(historyTagFilter, normalized);
+        const hadVisibleSearch = !!searchProvider.root;
+        await applyHistoryFilters(
+          {
+            date: historyFilter,
+            projectCwd: historyProjectCwd,
+            source: historySourceFilter,
+            tags: normalized,
+          },
+          { persist: true, rerunSearch: changed },
+        );
+        if (!changed) return;
+        if (!hadVisibleSearch) {
+          void vscode.window.showInformationMessage(t("search.tagFilter.deferred"));
+        }
+      };
+
       if (singleTag) {
+        const normalizedCurrent = sanitizeTagFilter(historyTagFilter);
         const isSameSingle =
-          searchTagFilter.length === 1 &&
-          searchTagFilter[0]!.toLowerCase() === singleTag.toLowerCase();
-        await applySearchTagFilter(isSameSingle ? [] : [singleTag], { persist: true, rerunSearch: true });
+          normalizedCurrent.length === 1 &&
+          normalizedCurrent[0]!.toLowerCase() === singleTag.toLowerCase();
+        await applySearchTagShortcut(isSameSingle ? [] : [singleTag]);
         return;
       }
 
@@ -2720,7 +3349,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         qp.placeholder = t("search.tagFilter.placeholder");
         qp.canSelectMany = true;
         qp.items = items;
-        const currentKeys = new Set(searchTagFilter.map((x) => x.toLowerCase()));
+        const currentKeys = new Set(historyTagFilter.map((x) => x.toLowerCase()));
         qp.selectedItems = items.filter((x) => currentKeys.has(x.tag.toLowerCase()));
         let done = false;
         const finish = (value: readonly (typeof items)[number][] | undefined): void => {
@@ -2735,17 +3364,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
       if (!picked) return;
 
-      await applySearchTagFilter(
-        picked.map((x) => x.tag),
-        { persist: true, rerunSearch: true },
-      );
+      await applySearchTagShortcut(picked.map((x) => x.tag));
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearSearchTagFilter", async () => {
-      if (searchTagFilter.length === 0) return;
-      await applySearchTagFilter([], { persist: true, rerunSearch: true });
+      if (historyTagFilter.length === 0) return;
+      const hadVisibleSearch = !!searchProvider.root;
+      await applyHistoryFilters(
+        {
+          date: historyFilter,
+          projectCwd: historyProjectCwd,
+          source: historySourceFilter,
+          tags: [],
+        },
+        { persist: true },
+      );
+      if (!hadVisibleSearch) {
+        void vscode.window.showInformationMessage(t("search.tagFilter.deferred"));
+      }
     }),
   );
 
@@ -2761,6 +3399,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         tags: pinnedTagFilter,
         availableTags: annotationStore.listTagStats().map((x) => x.tag),
         getProjectDisplayName: (projectCwd) => getProjectDisplayName(projectCwd, 80),
+        getCanonicalProjectKey,
         placeholder: t("pinned.filter.placeholder"),
         allDateLabel: t("pinned.filter.all"),
       });
@@ -2768,7 +3407,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const next = {
         date: change.kind === "date" ? change.date : pinnedFilter,
         projectCwd: change.kind === "project" ? change.projectCwd : pinnedProjectCwd,
-        projectGrouped: change.kind === "project" ? false : pinnedProjectGrouped,
         source: change.kind === "source" ? change.source : pinnedSourceFilter,
         archiveLocation: change.kind === "archiveLocation" ? change.archiveLocation : pinnedArchiveLocationFilter,
         tags: change.kind === "tags" ? change.tags : pinnedTagFilter,
@@ -2842,112 +3480,96 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.filterPinnedCurrentProject", async () => {
       const workspaceFolder = resolveCurrentWorkspaceFolder();
       if (!workspaceFolder) {
-        void vscode.window.showInformationMessage(t("pinned.project.current.noWorkspaceGrouped"));
-        await applyPinnedProjectState({ projectCwd: null, grouped: true }, { persist: true });
+        void vscode.window.showInformationMessage(t("pinned.project.scope.noWorkspace"));
+        await applyPinnedProjectState({ scope: "all" }, { persist: true });
         return;
       }
 
-      const idx = historyService.getIndex();
-      const targetProjectCwd = resolveCurrentProjectFilterCwd(idx, workspaceFolder.uri.fsPath);
-      const sameProject =
-        !pinnedProjectGrouped &&
-        !!pinnedProjectCwd &&
-        normalizeProjectKey(pinnedProjectCwd) === normalizeProjectKey(targetProjectCwd);
-
-      await applyPinnedProjectState({ projectCwd: sameProject ? null : targetProjectCwd, grouped: false }, { persist: true });
+      await applyPinnedProjectState(
+        { display: "list", scope: pinnedProjectScope === "currentGroup" ? "all" : "currentGroup" },
+        { persist: true },
+      );
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.showPinnedProjectGrouped", async () => {
-      if (pinnedProjectGrouped) return;
-      await applyPinnedProjectState({ projectCwd: null, grouped: true }, { persist: true });
+      if (pinnedProjectDisplay === "project" && pinnedProjectScope === "all") return;
+      await applyPinnedProjectState({ display: "project", scope: "all" }, { persist: true });
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearPinnedProjectMode", async () => {
-      if (!pinnedProjectGrouped && !pinnedProjectCwd) return;
-      await applyPinnedProjectState({ projectCwd: null, grouped: false }, { persist: true });
+      if (pinnedProjectDisplay === "list" && pinnedProjectScope === "all" && !pinnedProjectCwd) return;
+      await applyPinnedProjectState({ projectCwd: null, display: "list", scope: "all" }, { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.togglePinnedProjectDisplay", async () => {
+      await applyPinnedProjectState(
+        { display: pinnedProjectDisplay === "project" ? "list" : "project" },
+        { persist: true },
+      );
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.togglePinnedProjectScope", async () => {
+      if (pinnedProjectScope === "currentGroup") {
+        await applyPinnedProjectState({ scope: "all" }, { persist: true });
+        return;
+      }
+      if (!resolveCurrentWorkspaceFolder()) {
+        void vscode.window.showInformationMessage(t("pinned.project.scope.noWorkspace"));
+        return;
+      }
+      await applyPinnedProjectState({ scope: "currentGroup" }, { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.searchRunRecent", async () => {
+      await promptSearchQuickPick();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.searchManageHistory", async () => {
+      await promptSearchQuickPick();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.searchClearHistory", async () => {
+      await clearSearchHistory();
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.searchRunPreset", async () => {
-      const presets = searchPresetStore.getAll();
-      if (presets.length === 0) {
-        void vscode.window.showInformationMessage(t("savedSearches.noPresets"));
-        return;
-      }
-      const picked = await vscode.window.showQuickPick(
-        presets.map((p) => ({
-          label: p.name,
-          description: p.request.queryInput,
-          detail: p.request.roleFilter.join(", "),
-          presetId: p.id,
-        })),
-        {
-          title: t("savedSearches.run.title"),
-        },
-      );
-      if (!picked) return;
-      await runSearchPresetById(picked.presetId);
+      await promptSearchPresetQuickPick();
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.searchSavePreset", async () => {
-      if (!lastSearchRequest) {
+      if (!lastSearchRequest || !searchProvider.root) {
         void vscode.window.showInformationMessage(t("savedSearches.noRequestToSave"));
         return;
       }
 
-      const suggested = lastSearchRequest.queryInput.slice(0, 80);
-      const nameInput = await vscode.window.showInputBox({
-        title: t("savedSearches.save.title"),
-        prompt: t("savedSearches.save.prompt"),
-        value: suggested,
-        validateInput: (v) => (v.trim().length === 0 ? t("common.nameRequired") : undefined),
-      });
-      if (nameInput === undefined) return;
-      const name = nameInput.trim();
-      if (!name) return;
-
-      const existing = searchPresetStore.getAll().find((p) => p.name.toLowerCase() === name.toLowerCase());
-      await searchPresetStore.save({
-        name,
-        request: lastSearchRequest,
-        overwriteId: existing?.id,
-      });
+      const saved = await searchPresetStore.save({ queryInput: lastSearchRequest.queryInput });
+      updateHasSearchPresetsContext();
       statusProvider.refresh();
-      void vscode.window.showInformationMessage(t("savedSearches.saved", name));
+      void vscode.window.showInformationMessage(t("savedSearches.saved", saved.queryInput));
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.searchDeletePreset", async () => {
-      const presets = searchPresetStore.getAll();
-      if (presets.length === 0) {
-        void vscode.window.showInformationMessage(t("savedSearches.noPresetsToDelete"));
-        return;
-      }
-
-      const picked = await vscode.window.showQuickPick(
-        presets.map((p) => ({
-          label: p.name,
-          description: p.request.queryInput,
-          presetId: p.id,
-        })),
-        {
-          title: t("savedSearches.delete.title"),
-        },
-      );
-      if (!picked) return;
-
-      const deleted = await searchPresetStore.delete(picked.presetId);
-      if (!deleted) return;
-      statusProvider.refresh();
-      void vscode.window.showInformationMessage(t("savedSearches.deleted", picked.label));
+      await promptSearchPresetQuickPick();
     }),
   );
 
@@ -3012,7 +3634,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!result) return;
 
       await refreshHistoryIndex(false);
-      refreshViews({ clearSearch: true });
+      refreshViews({ clearSearch: true, reloadProjectAssociations: true });
       controlProvider.refresh();
       if (result.imported > 0 || result.overwritten > 0) offerHistoryReloadHint();
 
@@ -3126,7 +3748,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       if (action.postUndoRefresh !== "none") {
         await refreshHistoryIndex(false);
-        refreshViews({ clearSearch: true });
+        refreshViews({ clearSearch: true, reloadProjectAssociations: true });
       }
       void vscode.window.showInformationMessage(t("undo.done", action.label));
     }),
@@ -3258,12 +3880,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return picked.action === "clear" ? clearCustomTitleForSession(session) : setCustomTitleForSession(session);
   };
 
-  const resolveProjectAliasTarget = (element?: unknown): ProjectNode | null => {
-    // Project alias commands only accept an explicit project node to avoid guessing the wrong workspace.
-    return element instanceof ProjectNode && element.cwd ? element : null;
+  type ProjectTreeTarget = ProjectNode | RelatedGroupNode;
+
+  const resolveProjectAliasTarget = (element?: unknown): ProjectTreeTarget | null => {
+    // Project alias commands require an explicit tree target to avoid guessing the wrong workspace.
+    return (element instanceof ProjectNode || element instanceof RelatedGroupNode) && element.cwd ? element : null;
   };
 
-  const clearProjectAliasForProject = async (project: ProjectNode): Promise<boolean> => {
+  const clearProjectAliasForProject = async (project: ProjectTreeTarget): Promise<boolean> => {
     const cwd = project.cwd;
     if (!cwd) {
       void vscode.window.showInformationMessage(t("projectAlias.noProjectSelected"));
@@ -3301,7 +3925,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return true;
   };
 
-  const setProjectAliasForProject = async (project: ProjectNode): Promise<boolean> => {
+  const setProjectAliasForProject = async (project: ProjectTreeTarget): Promise<boolean> => {
     const cwd = project.cwd;
     if (!cwd) {
       void vscode.window.showInformationMessage(t("projectAlias.noProjectSelected"));
@@ -3360,7 +3984,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return true;
   };
 
-  const manageProjectAliasForProject = async (project: ProjectNode): Promise<boolean> => {
+  const manageProjectAliasForProject = async (project: ProjectTreeTarget): Promise<boolean> => {
     const items: Array<vscode.QuickPickItem & { action: "set" | "clear" }> = [
       {
         label: t("projectAlias.action.set"),
@@ -3381,6 +4005,614 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     });
     if (!picked) return false;
     return picked.action === "clear" ? clearProjectAliasForProject(project) : setProjectAliasForProject(project);
+  };
+
+  const resolveProjectAssociationTarget = (element?: unknown): ProjectTreeTarget | null => {
+    return (element instanceof ProjectNode || element instanceof RelatedGroupNode) && element.cwd ? element : null;
+  };
+
+  const getProjectAssociationSessionCounts = (cwds: readonly string[]): { active: number; archived: number; total: number } => {
+    const keys = new Set(cwds.map((cwd) => normalizeProjectKey(cwd)).filter((key) => key.length > 0));
+    let active = 0;
+    let archived = 0;
+    for (const session of historyService.getIndex().sessions) {
+      const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
+      if (!cwd || !keys.has(normalizeProjectKey(cwd))) continue;
+      if (session.storage.archiveState === "archived") archived += 1;
+      else active += 1;
+    }
+    return { active, archived, total: active + archived };
+  };
+
+  const formatProjectAssociationModeLabel = (mode: ProjectAssociationMode): string => {
+    return mode === "groupOnly" ? t("projectAssociation.mode.groupOnly") : t("projectAssociation.mode.relocate");
+  };
+
+  const formatProjectAssociationModeDescription = (mode: ProjectAssociationMode): string => {
+    return mode === "groupOnly"
+      ? t("projectAssociation.mode.groupOnly.description")
+      : t("projectAssociation.mode.relocate.description");
+  };
+
+  const formatProjectAssociationModeNote = (mode: ProjectAssociationMode): string => {
+    return mode === "groupOnly"
+      ? t("projectAssociation.confirm.associateGroupOnlyNote")
+      : t("projectAssociation.confirm.associateRelocateNote");
+  };
+
+  const pickProjectAssociationMode = async (
+    defaultMode: ProjectAssociationMode = "relocate",
+  ): Promise<ProjectAssociationMode | null> => {
+    const items: Array<vscode.QuickPickItem & { mode: ProjectAssociationMode }> = ([
+      "relocate",
+      "groupOnly",
+    ] as ProjectAssociationMode[]).map((mode) => ({
+      label: formatProjectAssociationModeLabel(mode),
+      description: formatProjectAssociationModeDescription(mode),
+      picked: mode === defaultMode,
+      mode,
+    }));
+    const picked = await vscode.window.showQuickPick(items, {
+      title: t("projectAssociation.mode.title"),
+      placeHolder: t("projectAssociation.mode.title"),
+      matchOnDescription: true,
+    });
+    return picked?.mode ?? null;
+  };
+
+  const getImpactedAssociationSourceCwds = (sourceCwd: string): string[] => {
+    const sourceKey = normalizeProjectKey(sourceCwd);
+    const byKey = new Map<string, string>();
+    if (sourceKey) byKey.set(sourceKey, sourceCwd);
+    if (!sourceKey) return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b));
+
+    for (const association of projectAssociationStore.getDescendantSourcesForSourceCwd(sourceCwd)) {
+      byKey.set(association.sourceKey, association.sourceCwd);
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b));
+  };
+
+  const showProjectAssociationPreflightMessage = (result: Exclude<ProjectAssociationSetPreflight, "ok">): void => {
+    if (result === "invalid") {
+      void vscode.window.showInformationMessage(t("projectAssociation.noProjectSelected"));
+      return;
+    }
+    if (result === "circular") {
+      void vscode.window.showInformationMessage(t("projectAssociation.error.circular"));
+      return;
+    }
+    if (result === "sameGroup") {
+      void vscode.window.showInformationMessage(t("projectAssociation.error.sameGroup"));
+      return;
+    }
+    if (result === "sameTarget") {
+      void vscode.window.showInformationMessage(t("projectAssociation.error.sameTarget"));
+      return;
+    }
+    void vscode.window.showInformationMessage(t("projectAssociation.noChanges"));
+  };
+
+  const showProjectAssociationModeChangePreflightMessage = (
+    result: Exclude<ProjectAssociationModeChangePreflight, "ok">,
+  ): void => {
+    if (result === "invalid") {
+      void vscode.window.showInformationMessage(t("projectAssociation.noProjectSelected"));
+      return;
+    }
+    if (result === "noAssociation") {
+      void vscode.window.showInformationMessage(t("projectAssociation.error.noAssociation"));
+      return;
+    }
+    void vscode.window.showInformationMessage(t("projectAssociation.noChanges"));
+  };
+
+  const formatAssociationCountDetail = (cwds: readonly string[]): string => {
+    const counts = getProjectAssociationSessionCounts(cwds);
+    return t("projectAssociation.sessionCountBreakdown", counts.total, counts.active, counts.archived);
+  };
+
+  const formatCwdListPreview = (cwds: readonly string[]): string => {
+    const max = 5;
+    const shown = cwds.slice(0, max);
+    const lines = shown.map((cwd) => `- ${cwd}`);
+    if (cwds.length > max) lines.push(t("projectAssociation.tooltip.moreSources", cwds.length - max));
+    return lines.join("\n");
+  };
+
+  const confirmProjectAssociation = async (
+    sourceCwd: string,
+    targetCwd: string,
+    mode: ProjectAssociationMode,
+  ): Promise<boolean> => {
+    const impacted = getImpactedAssociationSourceCwds(sourceCwd);
+    const countDetail = formatAssociationCountDetail(impacted);
+    const sourcePreview = formatCwdListPreview(impacted);
+    const message = t(
+      "projectAssociation.confirm.associate",
+      sourceCwd,
+      targetCwd,
+      formatProjectAssociationModeLabel(mode),
+      countDetail,
+      sourcePreview,
+      formatProjectAssociationModeNote(mode),
+    );
+    const confirm = t("projectAssociation.button.associate");
+    const picked = await vscode.window.showWarningMessage(message, { modal: true }, confirm);
+    return picked === confirm;
+  };
+
+  const confirmProjectAssociationModeChange = async (
+    association: ProjectAssociation,
+    mode: ProjectAssociationMode,
+  ): Promise<boolean> => {
+    const impacted = getImpactedAssociationSourceCwds(association.sourceCwd);
+    const countDetail = formatAssociationCountDetail(impacted);
+    const sourcePreview = formatCwdListPreview(impacted);
+    const message = t(
+      "projectAssociation.confirm.changeMode",
+      association.sourceCwd,
+      association.targetCwd,
+      formatProjectAssociationModeLabel(association.mode),
+      formatProjectAssociationModeLabel(mode),
+      countDetail,
+      sourcePreview,
+      formatProjectAssociationModeNote(mode),
+    );
+    const confirm = t("projectAssociation.button.changeMode");
+    const picked = await vscode.window.showWarningMessage(message, { modal: true }, confirm);
+    return picked === confirm;
+  };
+
+  const applyProjectAssociationSet = async (
+    sourceCwd: string,
+    targetCwd: string,
+    undoLabel: string,
+    defaultMode: ProjectAssociationMode = "relocate",
+  ): Promise<boolean> => {
+    const preflight = projectAssociationStore.evaluateSet(sourceCwd, targetCwd);
+    if (preflight !== "ok") {
+      showProjectAssociationPreflightMessage(preflight);
+      return false;
+    }
+    const mode = await pickProjectAssociationMode(defaultMode);
+    if (!mode) return false;
+    if (!(await confirmProjectAssociation(sourceCwd, targetCwd, mode))) return false;
+
+    const before = projectAssociationStore.getAll();
+    const changed = await projectAssociationStore.set(sourceCwd, targetCwd, mode);
+    if (!changed) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noChanges"));
+      return false;
+    }
+    await refreshAfterProjectAssociationChange();
+    pushUndoAction(
+      undoLabel,
+      async () => {
+        await projectAssociationStore.restoreSnapshot(before);
+        await refreshAfterProjectAssociationChange();
+      },
+      undefined,
+      { postUndoRefresh: "none" },
+    );
+    offerUndo(t("projectAssociation.saved"));
+    return true;
+  };
+
+  const pickWorkspaceFolderForProjectAssociation = async (): Promise<string | null> => {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noWorkspace"));
+      return null;
+    }
+    if (folders.length === 1) return folders[0]!.uri.fsPath;
+
+    const active = resolveCurrentWorkspaceFolder();
+    const items = folders
+      .map((folder) => ({
+        label: folder.name,
+        description: folder.uri.fsPath,
+        fsPath: folder.uri.fsPath,
+        picked: active?.uri.fsPath === folder.uri.fsPath,
+      }))
+      .sort((a, b) => Number(b.picked) - Number(a.picked) || a.label.localeCompare(b.label));
+    const picked = await vscode.window.showQuickPick(items, {
+      title: t("projectAssociation.workspace.title"),
+      placeHolder: t("projectAssociation.workspace.placeholder"),
+    });
+    return picked?.fsPath ?? null;
+  };
+
+  const buildProjectAssociationCandidates = (excludeCwds: readonly string[]): Array<vscode.QuickPickItem & { cwd: string }> => {
+    const excludedKeys = new Set(excludeCwds.map((cwd) => getCanonicalProjectKey(cwd)).filter((key): key is string => !!key));
+    const byKey = new Map<string, { cwd: string; count: number; latest: string }>();
+    for (const session of historyService.getIndex().sessions) {
+      const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
+      if (!cwd) continue;
+      const key = getCanonicalProjectKey(cwd) ?? normalizeProjectKey(cwd);
+      if (!key || excludedKeys.has(key)) continue;
+      const displayCwd = projectAssociationStore.getRepresentativeTargetCwd(key) ?? projectAssociationStore.getDisplayCwd(cwd) ?? cwd;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.count += 1;
+        if (normalizeProjectKey(displayCwd) === key) existing.cwd = displayCwd;
+        continue;
+      }
+      byKey.set(key, { cwd: displayCwd, count: 1, latest: `${session.localDate} ${session.timeLabel}` });
+    }
+    return Array.from(byKey.values())
+      .sort((a, b) => (a.latest < b.latest ? 1 : a.latest > b.latest ? -1 : a.cwd.localeCompare(b.cwd)))
+      .map((entry) => ({
+        label: getProjectDisplayName(entry.cwd, 80),
+        description: t("projectAssociation.candidate.description", entry.count),
+        detail: entry.cwd,
+        cwd: entry.cwd,
+      }));
+  };
+
+  const buildProjectAssociationProjectItems = (): Array<vscode.QuickPickItem & { project: ProjectNode }> => {
+    const byKey = new Map<string, { cwd: string; count: number; latest: string }>();
+    for (const session of historyService.getIndex().sessions) {
+      const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
+      if (!cwd) continue;
+      const key = getCanonicalProjectKey(cwd) ?? normalizeProjectKey(cwd);
+      if (!key) continue;
+      const displayCwd = projectAssociationStore.getRepresentativeTargetCwd(key) ?? projectAssociationStore.getDisplayCwd(cwd) ?? cwd;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.count += 1;
+        if (normalizeProjectKey(displayCwd) === key) existing.cwd = displayCwd;
+        continue;
+      }
+      byKey.set(key, { cwd: displayCwd, count: 1, latest: `${session.localDate} ${session.timeLabel}` });
+    }
+
+    for (const association of projectAssociationStore.getAll()) {
+      const key = getCanonicalProjectKey(association.targetCwd) ?? association.targetKey;
+      if (!key || byKey.has(key)) continue;
+      const displayCwd = projectAssociationStore.getDisplayCwd(association.targetCwd) ?? association.targetCwd;
+      byKey.set(key, { cwd: displayCwd, count: 0, latest: "" });
+    }
+
+    return Array.from(byKey.entries())
+      .sort(([, a], [, b]) => (a.latest < b.latest ? 1 : a.latest > b.latest ? -1 : a.cwd.localeCompare(b.cwd)))
+      .map(([key, entry]) => {
+        const alias = projectAliasStore.getAliasByCwd(entry.cwd) ?? null;
+        const label = getProjectDisplayName(entry.cwd, 80);
+        const project = new ProjectNode({
+          key,
+          label,
+          cwd: entry.cwd,
+          alias,
+          fallbackLabel: label,
+          sessionCount: entry.count,
+          latestLabel: entry.latest,
+          description: t("projectAssociation.candidate.description", entry.count),
+        });
+        return {
+          label,
+          description: t("projectAssociation.candidate.description", entry.count),
+          detail: entry.cwd,
+          project,
+        };
+      });
+  };
+
+  const pickProjectAssociationProject = async (): Promise<ProjectNode | null> => {
+    const items = buildProjectAssociationProjectItems();
+    if (items.length === 0) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noCandidates"));
+      return null;
+    }
+    const picked = await vscode.window.showQuickPick(items, {
+      title: t("projectAssociation.pickProject.title"),
+      placeHolder: t("projectAssociation.pickProject.placeholder"),
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    return picked?.project ?? null;
+  };
+
+  const associateProjectToWorkspace = async (project: ProjectTreeTarget): Promise<boolean> => {
+    const sourceCwd = project.cwd;
+    if (!sourceCwd) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noProjectSelected"));
+      return false;
+    }
+    const targetCwd = await pickWorkspaceFolderForProjectAssociation();
+    if (!targetCwd) return false;
+    return applyProjectAssociationSet(sourceCwd, targetCwd, t("undo.label.projectAssociationSet"));
+  };
+
+  const associateProjectToAnotherProject = async (sourceCwd: string, targetHint?: string): Promise<boolean> => {
+    const candidates = buildProjectAssociationCandidates([sourceCwd]);
+    if (candidates.length === 0) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noCandidates"));
+      return false;
+    }
+    const picked = await vscode.window.showQuickPick(candidates, {
+      title: targetHint ? t("projectAssociation.pickSource.title") : t("projectAssociation.pickTarget.title"),
+      placeHolder: targetHint
+        ? t("projectAssociation.pickSource.placeholder", targetHint)
+        : t("projectAssociation.pickTarget.placeholder"),
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    if (!picked) return false;
+    return targetHint
+      ? applyProjectAssociationSet(picked.cwd, sourceCwd, t("undo.label.projectAssociationSet"))
+      : applyProjectAssociationSet(sourceCwd, picked.cwd, t("undo.label.projectAssociationSet"));
+  };
+
+  const clearProjectAssociationForProject = async (project: ProjectTreeTarget): Promise<boolean> => {
+    const parentAssociation = project.parentAssociation;
+    if (parentAssociation) {
+      const before = projectAssociationStore.getAll();
+      const detached = getImpactedAssociationSourceCwds(parentAssociation.sourceCwd);
+      const confirm = t("projectAssociation.button.clear");
+      const message = t(
+        "projectAssociation.confirm.clear",
+        parentAssociation.sourceCwd,
+        parentAssociation.targetCwd,
+        formatAssociationCountDetail(detached),
+        detached.length,
+      );
+      if ((await vscode.window.showWarningMessage(message, { modal: true }, confirm)) !== confirm) return false;
+      if (!(await projectAssociationStore.removeBySourceCwd(parentAssociation.sourceCwd))) return false;
+      pushUndoAction(
+        t("undo.label.projectAssociationClear"),
+        async () => {
+          await projectAssociationStore.restoreSnapshot(before);
+          await refreshAfterProjectAssociationChange();
+        },
+        undefined,
+        { postUndoRefresh: "none" },
+      );
+      await refreshAfterProjectAssociationChange();
+      offerUndo(t("projectAssociation.cleared"));
+      return true;
+    }
+
+    const targetCwd = project.cwd;
+    if (!targetCwd) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noProjectSelected"));
+      return false;
+    }
+    const sources = projectAssociationStore.getDirectSourcesForTargetCwd(targetCwd);
+    if (sources.length === 0) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noChanges"));
+      return false;
+    }
+
+    const allItem = {
+      label: t("projectAssociation.action.clearAll"),
+      description: t("projectAssociation.clearAll.description", sources.length),
+      source: null as ProjectAssociation | null,
+    };
+    const sourceItems = sources.map((source) => ({
+      label: source.sourceCwd,
+      description: `${formatProjectAssociationModeLabel(source.mode)} - ${formatAssociationCountDetail(getImpactedAssociationSourceCwds(source.sourceCwd))}`,
+      source,
+    }));
+    const picked = await vscode.window.showQuickPick([allItem, ...sourceItems], {
+      title: t("projectAssociation.clear.title"),
+      placeHolder: t("projectAssociation.clear.placeholder"),
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    if (!picked) return false;
+
+    const before = projectAssociationStore.getAll();
+    if (picked.source) {
+      const confirm = t("projectAssociation.button.clear");
+      const detached = getImpactedAssociationSourceCwds(picked.source.sourceCwd);
+      const message = t(
+        "projectAssociation.confirm.clear",
+        picked.source.sourceCwd,
+        targetCwd,
+        formatAssociationCountDetail(detached),
+        detached.length,
+      );
+      if ((await vscode.window.showWarningMessage(message, { modal: true }, confirm)) !== confirm) return false;
+      if (!(await projectAssociationStore.removeBySourceCwd(picked.source.sourceCwd))) return false;
+      pushUndoAction(
+        t("undo.label.projectAssociationClear"),
+        async () => {
+          await projectAssociationStore.restoreSnapshot(before);
+          await refreshAfterProjectAssociationChange();
+        },
+        undefined,
+        { postUndoRefresh: "none" },
+      );
+    } else {
+      const confirm = t("projectAssociation.button.clear");
+      const message = t("projectAssociation.confirm.clearAll", targetCwd, sources.length);
+      if ((await vscode.window.showWarningMessage(message, { modal: true }, confirm)) !== confirm) return false;
+      await projectAssociationStore.removeDirectSourcesForTargetCwd(targetCwd);
+      pushUndoAction(
+        t("undo.label.projectAssociationClearAll"),
+        async () => {
+          await projectAssociationStore.restoreSnapshot(before);
+          await refreshAfterProjectAssociationChange();
+        },
+        undefined,
+        { postUndoRefresh: "none" },
+      );
+    }
+    await refreshAfterProjectAssociationChange();
+    offerUndo(t("projectAssociation.cleared"));
+    return true;
+  };
+
+  const showProjectAssociationsForProject = async (project: ProjectTreeTarget): Promise<boolean> => {
+    const directSources = projectAssociationStore.getDirectSourcesForTargetCwd(project.cwd);
+    const subtreeSources = projectAssociationStore.getSourcesForTargetCwd(project.cwd);
+    if (directSources.length === 0 && subtreeSources.length === 0) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noChanges"));
+      return false;
+    }
+    const directKeys = new Set(directSources.map((source) => source.sourceKey));
+    const nestedSources = subtreeSources.filter((source) => !directKeys.has(source.sourceKey));
+    const lines = [t("projectAssociation.show.directHeader")];
+    if (directSources.length === 0) lines.push(t("projectAssociation.show.none"));
+    else lines.push(...directSources.map((source) => `${source.sourceCwd} (${formatProjectAssociationModeLabel(source.mode)})`));
+    if (nestedSources.length > 0) {
+      lines.push("", t("projectAssociation.show.subtreeHeader"));
+      lines.push(...nestedSources.map((source) => `${source.sourceCwd} (${formatProjectAssociationModeLabel(source.mode)})`));
+    }
+    void vscode.window.showInformationMessage(
+      t("projectAssociation.show.message", project.cwd ?? "", subtreeSources.length, lines.join("\n")),
+    );
+    return true;
+  };
+
+  const pickDirectAssociationSource = async (
+    targetCwd: string,
+    title: string,
+    placeHolder: string,
+  ): Promise<ProjectAssociation | null> => {
+    const sources = projectAssociationStore.getDirectSourcesForTargetCwd(targetCwd);
+    if (sources.length === 0) return null;
+    if (sources.length === 1) return sources[0] ?? null;
+
+    const items = sources.map((source) => ({
+      label: source.sourceCwd,
+      description: formatProjectAssociationModeLabel(source.mode),
+      detail: formatAssociationCountDetail(getImpactedAssociationSourceCwds(source.sourceCwd)),
+      source,
+    }));
+    const picked = await vscode.window.showQuickPick(items, {
+      title,
+      placeHolder,
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    return picked?.source ?? null;
+  };
+
+  const changeProjectAssociationModeForProject = async (project: ProjectTreeTarget): Promise<boolean> => {
+    let association: ProjectAssociation | null = null;
+    if (project.parentAssociation) {
+      association = projectAssociationStore.getBySourceCwd(project.parentAssociation.sourceCwd);
+    } else if (project.cwd) {
+      association = await pickDirectAssociationSource(
+        project.cwd,
+        t("projectAssociation.changeMode.title"),
+        t("projectAssociation.changeMode.placeholder"),
+      );
+    }
+
+    if (!association) {
+      void vscode.window.showInformationMessage(t("projectAssociation.error.noAssociation"));
+      return false;
+    }
+
+    const defaultMode: ProjectAssociationMode = association.mode === "relocate" ? "groupOnly" : "relocate";
+    const mode = await pickProjectAssociationMode(defaultMode);
+    if (!mode) return false;
+
+    const preflight = projectAssociationStore.evaluateModeChange(association.sourceCwd, mode);
+    if (preflight !== "ok") {
+      showProjectAssociationModeChangePreflightMessage(preflight);
+      return false;
+    }
+    if (!(await confirmProjectAssociationModeChange(association, mode))) return false;
+
+    const before = projectAssociationStore.getAll();
+    const changed = await projectAssociationStore.changeMode(association.sourceCwd, mode);
+    if (!changed) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noChanges"));
+      return false;
+    }
+    await refreshAfterProjectAssociationChange();
+    pushUndoAction(
+      t("undo.label.projectAssociationChangeMode"),
+      async () => {
+        await projectAssociationStore.restoreSnapshot(before);
+        await refreshAfterProjectAssociationChange();
+      },
+      undefined,
+      { postUndoRefresh: "none" },
+    );
+    offerUndo(t("projectAssociation.saved"));
+    return true;
+  };
+
+  const changeProjectAssociationTarget = async (project: ProjectTreeTarget): Promise<boolean> => {
+    const sourceCwd = project.cwd;
+    if (!sourceCwd) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noProjectSelected"));
+      return false;
+    }
+    const candidates: Array<vscode.QuickPickItem & { action: "project"; cwd: string }> = buildProjectAssociationCandidates([
+      sourceCwd,
+    ]).map((item) => ({ ...item, action: "project" as const }));
+    const workspaceItems: Array<vscode.QuickPickItem & { action: "workspace"; cwd: null }> =
+      (vscode.workspace.workspaceFolders?.length ?? 0) > 0
+        ? [{ label: t("projectAssociation.action.associateToWorkspace"), action: "workspace" as const, cwd: null }]
+        : [];
+    if (candidates.length === 0 && workspaceItems.length === 0) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noCandidates"));
+      return false;
+    }
+    const picked = await vscode.window.showQuickPick([...workspaceItems, ...candidates], {
+      title: t("projectAssociation.pickTarget.title"),
+      placeHolder: t("projectAssociation.pickTarget.placeholder"),
+      matchOnDescription: true,
+      matchOnDetail: true,
+    });
+    if (!picked) return false;
+    if (picked.action === "workspace") {
+      const targetCwd = await pickWorkspaceFolderForProjectAssociation();
+      if (!targetCwd) return false;
+      return applyProjectAssociationSet(sourceCwd, targetCwd, t("undo.label.projectAssociationChangeTarget"));
+    }
+    return applyProjectAssociationSet(sourceCwd, picked.cwd, t("undo.label.projectAssociationChangeTarget"));
+  };
+
+  const manageProjectAssociationForProject = async (project: ProjectTreeTarget): Promise<boolean> => {
+    if (!project.cwd) {
+      void vscode.window.showInformationMessage(t("projectAssociation.noProjectSelected"));
+      return false;
+    }
+    const directSources = projectAssociationStore.getDirectSourcesForTargetCwd(project.cwd);
+    const hasModeChangeTargets = !!project.parentAssociation || directSources.length > 0;
+    const hasSources = hasModeChangeTargets || projectAssociationStore.getSourcesForTargetCwd(project.cwd).length > 0;
+    const items: Array<vscode.QuickPickItem & { action: "workspace" | "target" | "add" | "mode" | "clear" | "show" | "change" }> = hasSources
+      ? [
+          { label: t("projectAssociation.action.add"), action: "add" },
+          ...(hasModeChangeTargets ? [{ label: t("projectAssociation.action.changeMode"), action: "mode" as const }] : []),
+          { label: t("projectAssociation.action.clear"), action: "clear" },
+          { label: t("projectAssociation.action.show"), action: "show" },
+          { label: t("projectAssociation.action.changeTarget"), action: "change" },
+        ]
+      : [
+          { label: t("projectAssociation.action.associateToWorkspace"), action: "workspace" },
+          { label: t("projectAssociation.action.associateToProject"), action: "target" },
+        ];
+
+    const picked = await vscode.window.showQuickPick(items, {
+      title: t("projectAssociation.manage.title"),
+      placeHolder: t("projectAssociation.manage.placeholder"),
+    });
+    if (!picked) return false;
+    switch (picked.action) {
+      case "workspace":
+        return associateProjectToWorkspace(project);
+      case "target":
+        return associateProjectToAnotherProject(project.cwd);
+      case "add":
+        return associateProjectToAnotherProject(project.cwd, project.cwd);
+      case "mode":
+        return changeProjectAssociationModeForProject(project);
+      case "clear":
+        return clearProjectAssociationForProject(project);
+      case "show":
+        return showProjectAssociationsForProject(project);
+      case "change":
+        return changeProjectAssociationTarget(project);
+      default:
+        return false;
+    }
   };
 
   context.subscriptions.push(
@@ -3446,6 +4678,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return false;
       }
       return manageProjectAliasForProject(project);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.manageProjectAssociation", async (element?: unknown) => {
+      const project = resolveProjectAssociationTarget(element) ?? (await pickProjectAssociationProject());
+      if (!project) {
+        return false;
+      }
+      return manageProjectAssociationForProject(project);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.clearProjectAssociation", async (element?: unknown) => {
+      const project = resolveProjectAssociationTarget(element) ?? (await pickProjectAssociationProject());
+      if (!project) {
+        return false;
+      }
+      return clearProjectAssociationForProject(project);
     }),
   );
 
@@ -3739,6 +4991,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         tags: historyTagFilter,
         availableTags: annotationStore.listTagStats().map((x) => x.tag),
         getProjectDisplayName: (projectCwd) => getProjectDisplayName(projectCwd, 80),
+        getCanonicalProjectKey,
       });
       if (!change) return;
       if (change.kind === "archiveLocation") {
@@ -3846,34 +5099,52 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.filterHistoryCurrentProject", async () => {
       const workspaceFolder = resolveCurrentWorkspaceFolder();
       if (!workspaceFolder) {
-        void vscode.window.showInformationMessage(t("history.project.current.noWorkspaceGrouped"));
-        await applyHistoryProjectState({ projectCwd: null, grouped: true }, { persist: true });
+        void vscode.window.showInformationMessage(t("history.project.scope.noWorkspace"));
+        await applyHistoryProjectState({ scope: "all" }, { persist: true });
         return;
       }
 
-      const idx = historyService.getIndex();
-      const targetProjectCwd = resolveCurrentProjectFilterCwd(idx, workspaceFolder.uri.fsPath);
-      const sameProject =
-        !historyProjectGrouped &&
-        !!historyProjectCwd &&
-        normalizeProjectKey(historyProjectCwd) === normalizeProjectKey(targetProjectCwd);
-
-      // If the same project filter is already active, allow toggling it off with a second invocation.
-      await applyHistoryProjectState({ projectCwd: sameProject ? null : targetProjectCwd, grouped: false }, { persist: true });
+      await applyHistoryProjectState(
+        { display: "list", scope: historyProjectScope === "currentGroup" ? "all" : "currentGroup" },
+        { persist: true },
+      );
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.showHistoryProjectGrouped", async () => {
-      if (historyProjectGrouped) return;
-      await applyHistoryProjectState({ projectCwd: null, grouped: true }, { persist: true });
+      if (historyProjectDisplay === "project" && historyProjectScope === "all") return;
+      await applyHistoryProjectState({ display: "project", scope: "all" }, { persist: true });
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearHistoryProjectMode", async () => {
-      if (!historyProjectGrouped && !historyProjectCwd) return;
-      await applyHistoryProjectState({ projectCwd: null, grouped: false }, { persist: true });
+      if (historyProjectDisplay === "list" && historyProjectScope === "all" && !historyProjectCwd) return;
+      await applyHistoryProjectState({ projectCwd: null, display: "list", scope: "all" }, { persist: true });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.toggleHistoryProjectDisplay", async () => {
+      await applyHistoryProjectState(
+        { display: historyProjectDisplay === "project" ? "list" : "project" },
+        { persist: true },
+      );
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.toggleHistoryProjectScope", async () => {
+      if (historyProjectScope === "currentGroup") {
+        await applyHistoryProjectState({ scope: "all" }, { persist: true });
+        return;
+      }
+      if (!resolveCurrentWorkspaceFolder()) {
+        void vscode.window.showInformationMessage(t("history.project.scope.noWorkspace"));
+        return;
+      }
+      await applyHistoryProjectState({ scope: "currentGroup" }, { persist: true });
     }),
   );
 
@@ -4009,7 +5280,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
           async () => refreshHistoryIndex(false),
         );
-        refreshViews({ clearSearch: true });
+        refreshViews({ clearSearch: true, reloadProjectAssociations: true });
         await transcriptProvider.openSessionTranscript(promoted, { preview: false });
         offerHistoryReloadHint();
         return;
@@ -4055,7 +5326,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
         async () => refreshHistoryIndex(false),
       );
-      refreshViews({ clearSearch: true });
+      refreshViews({ clearSearch: true, reloadProjectAssociations: true });
       if (succeeded > 0) offerHistoryReloadHint();
     }),
   );
@@ -4226,7 +5497,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       await refreshHistoryIndex(false);
-      refreshViews({ clearSearch: true });
+      refreshViews({ clearSearch: true, reloadProjectAssociations: true });
     }),
   );
 
@@ -4302,12 +5573,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.showHistoryLatestView", "codexHistoryViewer.showHistoryLatestView");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.showHistoryDateView", "codexHistoryViewer.showHistoryDateView");
   registerUiCommandAlias("codexHistoryViewer.ui.en.showHistoryDateView", "codexHistoryViewer.showHistoryDateView");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.historyViewLatestCurrent", "codexHistoryViewer.toggleHistoryViewMode");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.historyViewLatestCurrent", "codexHistoryViewer.toggleHistoryViewMode");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.historyViewDateCurrent", "codexHistoryViewer.toggleHistoryViewMode");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.historyViewDateCurrent", "codexHistoryViewer.toggleHistoryViewMode");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.refreshStatusPane", "codexHistoryViewer.refreshStatusPane");
   registerUiCommandAlias("codexHistoryViewer.ui.en.refreshStatusPane", "codexHistoryViewer.refreshStatusPane");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.search", "codexHistoryViewer.search");
   registerUiCommandAlias("codexHistoryViewer.ui.en.search", "codexHistoryViewer.search");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.searchRerun", "codexHistoryViewer.searchRerun");
   registerUiCommandAlias("codexHistoryViewer.ui.en.searchRerun", "codexHistoryViewer.searchRerun");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.searchRunRecent", "codexHistoryViewer.searchRunRecent");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.searchRunRecent", "codexHistoryViewer.searchRunRecent");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.searchClearHistory", "codexHistoryViewer.searchClearHistory");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.searchClearHistory", "codexHistoryViewer.searchClearHistory");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.searchManageHistory", "codexHistoryViewer.searchManageHistory");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.searchManageHistory", "codexHistoryViewer.searchManageHistory");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.searchClearResults", "codexHistoryViewer.searchClearResults");
   registerUiCommandAlias("codexHistoryViewer.ui.en.searchClearResults", "codexHistoryViewer.searchClearResults");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.searchFilterByTag", "codexHistoryViewer.searchFilterByTag");
@@ -4346,6 +5627,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     "codexHistoryViewer.ui.en.clearPinnedProjectMode",
     "codexHistoryViewer.clearPinnedProjectMode",
   );
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.pinnedProjectDisplayList", "codexHistoryViewer.togglePinnedProjectDisplay");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedProjectDisplayList", "codexHistoryViewer.togglePinnedProjectDisplay");
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.ja.pinnedProjectDisplayProject",
+    "codexHistoryViewer.togglePinnedProjectDisplay",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.en.pinnedProjectDisplayProject",
+    "codexHistoryViewer.togglePinnedProjectDisplay",
+  );
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.pinnedProjectScopeAll", "codexHistoryViewer.togglePinnedProjectScope");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedProjectScopeAll", "codexHistoryViewer.togglePinnedProjectScope");
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.ja.pinnedProjectScopeCurrentGroup",
+    "codexHistoryViewer.togglePinnedProjectScope",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.en.pinnedProjectScopeCurrentGroup",
+    "codexHistoryViewer.togglePinnedProjectScope",
+  );
   registerUiCommandAlias("codexHistoryViewer.ui.ja.filterHistory", "codexHistoryViewer.filterHistory");
   registerUiCommandAlias("codexHistoryViewer.ui.en.filterHistory", "codexHistoryViewer.filterHistory");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.filterHistoryByTag", "codexHistoryViewer.filterHistoryByTag");
@@ -4375,6 +5676,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias(
     "codexHistoryViewer.ui.en.clearHistoryProjectMode",
     "codexHistoryViewer.clearHistoryProjectMode",
+  );
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.historyProjectDisplayList", "codexHistoryViewer.toggleHistoryProjectDisplay");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.historyProjectDisplayList", "codexHistoryViewer.toggleHistoryProjectDisplay");
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.ja.historyProjectDisplayProject",
+    "codexHistoryViewer.toggleHistoryProjectDisplay",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.en.historyProjectDisplayProject",
+    "codexHistoryViewer.toggleHistoryProjectDisplay",
+  );
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.historyProjectScopeAll", "codexHistoryViewer.toggleHistoryProjectScope");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.historyProjectScopeAll", "codexHistoryViewer.toggleHistoryProjectScope");
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.ja.historyProjectScopeCurrentGroup",
+    "codexHistoryViewer.toggleHistoryProjectScope",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.en.historyProjectScopeCurrentGroup",
+    "codexHistoryViewer.toggleHistoryProjectScope",
   );
   registerUiCommandAlias("codexHistoryViewer.ui.cycleHistorySourceAll", "codexHistoryViewer.cycleHistorySourceFilter");
   registerUiCommandAlias("codexHistoryViewer.ui.cycleHistorySourceCodex", "codexHistoryViewer.cycleHistorySourceFilter");
@@ -4416,6 +5737,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.setProjectAlias", "codexHistoryViewer.setProjectAlias");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.clearProjectAlias", "codexHistoryViewer.clearProjectAlias");
   registerUiCommandAlias("codexHistoryViewer.ui.en.clearProjectAlias", "codexHistoryViewer.clearProjectAlias");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.manageProjectAssociation", "codexHistoryViewer.manageProjectAssociation");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.manageProjectAssociation", "codexHistoryViewer.manageProjectAssociation");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.clearProjectAssociation", "codexHistoryViewer.clearProjectAssociation");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.clearProjectAssociation", "codexHistoryViewer.clearProjectAssociation");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.editSessionAnnotation", "codexHistoryViewer.editSessionAnnotation");
   registerUiCommandAlias("codexHistoryViewer.ui.en.editSessionAnnotation", "codexHistoryViewer.editSessionAnnotation");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.renameTagGlobally", "codexHistoryViewer.renameTagGlobally");
@@ -4480,6 +5805,16 @@ function sanitizeProjectGrouped(value: unknown): boolean {
   return value === true;
 }
 
+function sanitizeProjectDisplayMode(value: unknown, legacyGroupedValue?: unknown): ProjectDisplayMode {
+  if (value === "project") return "project";
+  if (value === "list") return "list";
+  return sanitizeProjectGrouped(legacyGroupedValue) ? "project" : "list";
+}
+
+function sanitizeProjectScopeMode(value: unknown): ProjectScopeMode {
+  return value === "currentGroup" ? "currentGroup" : "all";
+}
+
 function sanitizePinnedSortMode(value: unknown): PinnedSortMode {
   return value === "historyDate" ? "historyDate" : "pinnedAt";
 }
@@ -4500,11 +5835,15 @@ function sanitizeIndexedSearchRoles(value: unknown): IndexedSearchRole[] {
 
 function sanitizeSearchRequest(value: unknown): SearchRequest | null {
   if (!value || typeof value !== "object") return null;
-  const v = value as { queryInput?: unknown; roleFilter?: unknown };
+  const v = value as { queryInput?: unknown; roleFilter?: unknown; caseSensitive?: unknown };
   const queryInput = typeof v.queryInput === "string" ? v.queryInput.trim() : "";
   if (!queryInput) return null;
   const roleFilter = sanitizeIndexedSearchRoles(v.roleFilter);
-  return { queryInput, roleFilter };
+  return {
+    queryInput,
+    roleFilter,
+    ...(typeof v.caseSensitive === "boolean" ? { caseSensitive: v.caseSensitive } : {}),
+  };
 }
 
 function sanitizeTagFilter(value: unknown): string[] {
@@ -4645,6 +5984,7 @@ async function promptHistoryFilter(
     tags: string[];
     availableTags: string[];
     getProjectDisplayName?: (projectCwd: string) => string;
+    getCanonicalProjectKey?: (projectCwd: string) => string | null;
     placeholder?: string;
     allDateLabel?: string;
   },
@@ -4667,10 +6007,10 @@ async function promptHistoryFilter(
   for (const s of idx.sessions) {
     const cwd = typeof s.meta?.cwd === "string" ? s.meta.cwd.trim() : "";
     if (!cwd) continue;
-    const key = normalizeProjectKey(cwd);
+    const key = current.getCanonicalProjectKey?.(cwd) ?? normalizeProjectKey(cwd);
     if (seenProjects.has(key)) continue;
     seenProjects.add(key);
-    projectCwds.push(cwd);
+    projectCwds.push(resolveProjectCwdForFilterList(cwd, key, idx, current.getCanonicalProjectKey));
     if (projectCwds.length >= MAX_PROJECTS) break;
   }
 
@@ -4814,11 +6154,16 @@ async function promptHistoryFilter(
     qp.onDidHide(() => finish(null));
 
     // Set initial focus based on the current filters.
-    const currentProjectKey = current.projectCwd ? normalizeProjectKey(current.projectCwd) : null;
+    const currentProjectKey = current.projectCwd
+      ? (current.getCanonicalProjectKey?.(current.projectCwd) ?? normalizeProjectKey(current.projectCwd))
+      : null;
     const activeDateItem = dateItemsBase.find((it) => it.pickKind === "date" && it.date && isSameDateScope(it.date, current.date));
     const activeProjectItem = currentProjectKey
       ? projectItemsBase.find(
-          (it) => it.pickKind === "project" && it.projectCwd && normalizeProjectKey(it.projectCwd) === currentProjectKey,
+          (it) =>
+            it.pickKind === "project" &&
+            it.projectCwd &&
+            (current.getCanonicalProjectKey?.(it.projectCwd) ?? normalizeProjectKey(it.projectCwd)) === currentProjectKey,
         )
       : undefined;
     const activeSourceItem = sourceItemsBase.find((it) => it.pickKind === "source" && it.source === current.source);
@@ -4838,6 +6183,27 @@ async function promptHistoryFilter(
   });
 }
 
+function resolveProjectCwdForFilterList(
+  fallbackCwd: string,
+  canonicalKey: string,
+  idx: import("./sessions/sessionTypes").HistoryIndex,
+  getCanonicalProjectKey?: (projectCwd: string) => string | null,
+): string {
+  for (const session of idx.sessions) {
+    const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
+    if (!cwd) continue;
+    if (normalizeProjectKey(cwd) !== canonicalKey) continue;
+    return cwd;
+  }
+  for (const session of idx.sessions) {
+    const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";
+    if (!cwd) continue;
+    const key = getCanonicalProjectKey?.(cwd) ?? normalizeProjectKey(cwd);
+    if (key === canonicalKey) return cwd;
+  }
+  return fallbackCwd;
+}
+
 // Cleanup hook called by VS Code.
 export function deactivate(): void {
   // Disposables are already registered in context.subscriptions.
@@ -4848,10 +6214,35 @@ function resolveExtensionVersion(context: vscode.ExtensionContext): string {
   return typeof version === "string" && version.trim().length > 0 ? version.trim() : "unknown";
 }
 
-function resolveRevealIndex(element: unknown): number | undefined {
+function resolveRevealIndex(element: unknown, pageSearchSeed?: SessionPageSearchSeed): number | undefined {
+  if (element instanceof SearchSessionNode) return pageSearchSeed?.preferredMessageIndex;
   if (!(element instanceof SearchHitNode)) return undefined;
   if (element.hit.role !== "user" && element.hit.role !== "assistant") return undefined;
   return element.hit.messageIndex;
+}
+
+function resolvePageSearchSeed(element: unknown): SessionPageSearchSeed | undefined {
+  if (element instanceof SearchHitNode) return sanitizeSessionPageSearchSeed(element.pageSearchSeed);
+  if (element instanceof SearchSessionNode) return sanitizeSessionPageSearchSeed(element.pageSearchSeed);
+  if (!element || typeof element !== "object") return undefined;
+  return sanitizeSessionPageSearchSeed((element as any).pageSearchSeed);
+}
+
+function sanitizeSessionPageSearchSeed(value: unknown): SessionPageSearchSeed | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const source = value as Record<string, unknown>;
+  const queryInput = typeof source.queryInput === "string" ? source.queryInput.trim() : "";
+  if (!queryInput) return undefined;
+  const preferredMessageIndex =
+    typeof source.preferredMessageIndex === "number" && Number.isFinite(source.preferredMessageIndex)
+      ? Math.max(0, Math.floor(source.preferredMessageIndex))
+      : undefined;
+  return {
+    queryInput,
+    caseSensitive: source.caseSensitive === true,
+    ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
+    ...(source.autoOpen === false ? { autoOpen: false } : {}),
+  };
 }
 
 function resolveRevealIndexFromArgs(args: unknown): number | undefined {

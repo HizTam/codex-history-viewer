@@ -3,6 +3,8 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import type {
   ChatEnvironmentItem,
+  ChatMessageItem,
+  ChatMemoryCitation,
   ChatPatchChangeType,
   ChatPatchEntry,
   ChatPatchGroupItem,
@@ -30,6 +32,7 @@ import {
   hasClaudeAttachmentLikeContent,
 } from "./chatAttachments";
 import { stripImagePlaceholders } from "./chatImageAttachments";
+import { normalizeMemoryCitationPayload, splitTrailingMemoryCitationBlock } from "./memoryCitation";
 import {
   buildClaudePatchBookmarkGroupId,
   buildCodexPatchBookmarkGroupId,
@@ -101,6 +104,7 @@ async function readTimelineItems(
   const codexTurnMeta: ChatMessageModelMeta = {};
   const usageState: UsageBuildState = {};
   const environmentState: EnvironmentBuildState = {};
+  const memoryCitationState: MemoryCitationBuildState = {};
   let messageIndex = 0;
   let lineIndex = 0;
 
@@ -129,6 +133,7 @@ async function readTimelineItems(
           () => (messageIndex += 1),
           () => messageIndex,
           codexTurnMeta,
+          memoryCitationState,
           sessionCwd,
           options,
           lineIndex,
@@ -144,6 +149,7 @@ async function readTimelineItems(
           pendingPatchGroups,
           () => messageIndex,
           codexTurnMeta,
+          memoryCitationState,
           usageState,
           sessionCwd,
           options,
@@ -280,6 +286,7 @@ async function indexCodexTimelineRecord(
   nextMessageIndex: () => number,
   currentMessageIndex: () => number,
   codexTurnMeta: ChatMessageModelMeta,
+  memoryCitationState: MemoryCitationBuildState,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
   lineIndex = 0,
@@ -296,9 +303,15 @@ async function indexCodexTimelineRecord(
       sessionCwd,
       toImageExtractionOptions(options.images),
     );
-    const text = normalizeText(parsed.text);
+    let text = normalizeText(parsed.text);
     const attachments = parsed.attachments;
-    if (!text && attachments.length === 0) return true;
+    let memoryCitation: ChatMemoryCitation | undefined;
+    if (role === "assistant") {
+      const split = splitTrailingMemoryCitationBlock(text);
+      text = normalizeText(split.text);
+      memoryCitation = takePendingMemoryCitation(memoryCitationState) ?? split.memoryCitation;
+    }
+    if (!text && attachments.length === 0 && !memoryCitation) return true;
 
     const compactUserText = role === "user" ? extractCompactUserText(text) : null;
     const isBoilerplate = role === "assistant" ? false : isBoilerplateUserMessageText(text);
@@ -311,7 +324,7 @@ async function indexCodexTimelineRecord(
     const idx = role === "user" || role === "assistant" ? nextMessageIndex() : undefined;
     assignAttachmentIds(attachments, typeof idx === "number" ? `m${idx}` : `item${items.length}`);
 
-    items.push({
+    const item: ChatMessageItem = {
       type: "message",
       role,
       messageIndex: idx,
@@ -320,8 +333,11 @@ async function indexCodexTimelineRecord(
       text,
       requestText,
       ...(attachments.length > 0 ? { attachments } : {}),
+      ...(memoryCitation ? { memoryCitation } : {}),
       isContext,
-    });
+    };
+    items.push(item);
+    if (role === "assistant") memoryCitationState.lastAssistantItemIndex = items.length - 1;
     return true;
   }
 
@@ -405,6 +421,7 @@ function indexCodexEventRecord(
   pendingPatchGroups: Map<string, PendingPatchGroup>,
   currentMessageIndex: () => number,
   codexTurnMeta: ChatMessageModelMeta,
+  memoryCitationState: MemoryCitationBuildState,
   usageState: UsageBuildState,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
@@ -413,6 +430,17 @@ function indexCodexEventRecord(
   if (obj?.type !== "event_msg") return false;
 
   const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
+  const payloadPhase = typeof obj?.payload?.phase === "string" ? obj.payload.phase : "";
+  if (payloadPhase === "final_answer") {
+    const memoryCitation = normalizeMemoryCitationPayload(obj?.payload?.memory_citation);
+    if (
+      memoryCitation &&
+      !attachMemoryCitationToLastAssistant(items, memoryCitationState, memoryCitation, currentMessageIndex())
+    ) {
+      memoryCitationState.pendingFinalAnswer = memoryCitation;
+    }
+  }
+
   if (payloadType === "token_count") {
     const usageItem = buildCodexUsageItem(obj, currentMessageIndex(), codexTurnMeta);
     if (usageItem && shouldAppendCodexUsage(usageItem, usageState)) items.push(usageItem);
@@ -487,6 +515,8 @@ function indexCodexEventRecord(
   if (payloadType === "task_started") {
     // Finalize any pending patch groups before the next turn begins.
     flushPendingPatchGroups(items, pendingPatchGroups);
+    memoryCitationState.pendingFinalAnswer = undefined;
+    memoryCitationState.lastAssistantItemIndex = undefined;
     return true;
   }
 
@@ -609,6 +639,11 @@ interface ChatMessageModelMeta {
   effort?: string;
 }
 
+interface MemoryCitationBuildState {
+  pendingFinalAnswer?: ChatMemoryCitation;
+  lastAssistantItemIndex?: number;
+}
+
 interface UsageBuildState {
   lastCodexUsageSignature?: string;
   lastClaudeUsageSignature?: string;
@@ -620,6 +655,27 @@ interface UsageBuildState {
 
 interface EnvironmentBuildState {
   lastSignature?: string;
+}
+
+function takePendingMemoryCitation(state: MemoryCitationBuildState): ChatMemoryCitation | undefined {
+  const citation = state.pendingFinalAnswer;
+  state.pendingFinalAnswer = undefined;
+  return citation;
+}
+
+function attachMemoryCitationToLastAssistant(
+  items: ChatTimelineItem[],
+  state: MemoryCitationBuildState,
+  citation: ChatMemoryCitation,
+  currentMessageIndex: number,
+): boolean {
+  const index = state.lastAssistantItemIndex;
+  if (typeof index !== "number" || index < 0 || index >= items.length) return false;
+  const item = items[index];
+  if (!item || item.type !== "message" || item.role !== "assistant") return false;
+  if (item.messageIndex !== currentMessageIndex) return false;
+  item.memoryCitation = citation;
+  return true;
 }
 
 function updateCodexTurnMeta(obj: any, meta: ChatMessageModelMeta): boolean {

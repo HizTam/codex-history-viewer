@@ -2,11 +2,13 @@
 import type { ChatToolPresentation } from "../tools/toolTypes";
 
 export type ChatRole = "developer" | "user" | "assistant";
+export type ChatWebviewPathMode = "recorded" | "relocated";
 
 export interface ChatSessionMeta {
   id?: string;
   timestampIso?: string;
   cwd?: string;
+  displayCwd?: string;
   originator?: string;
   cliVersion?: string;
   modelProvider?: string;
@@ -113,6 +115,18 @@ export interface ChatSelectionReferenceAttachment {
   previewText?: string;
 }
 
+export interface ChatMemoryCitationEntry {
+  path: string;
+  lineStart?: number;
+  lineEnd?: number;
+  note?: string;
+}
+
+export interface ChatMemoryCitation {
+  entries: ChatMemoryCitationEntry[];
+  rolloutIds: string[];
+}
+
 export interface ChatMessageItem {
   type: "message";
   role: ChatRole;
@@ -124,6 +138,7 @@ export interface ChatMessageItem {
   text: string;
   requestText?: string;
   attachments?: ChatAttachment[];
+  memoryCitation?: ChatMemoryCitation;
   // Treat large environment/rule messages as "context".
   isContext: boolean;
   bookmarkKey?: string;

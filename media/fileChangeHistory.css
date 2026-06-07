@@ -314,7 +314,7 @@ body.pageSearchResizing #pageSearchBar {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  overflow: hidden;
+  overflow: visible;
   padding: 10px 10px 10px 14px;
   border-bottom: 1px solid color-mix(in srgb, var(--chv-search-border) 70%, transparent);
   background: linear-gradient(
@@ -432,6 +432,31 @@ body.pageSearchResizing #pageSearchBar {
   background: color-mix(in srgb, var(--chv-bg) 92%, var(--chv-search-surface) 8%);
 }
 
+#pageSearchSuggestions[hidden] {
+  display: none;
+}
+
+#pageSearchSuggestions {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% - 6px);
+  right: 72px;
+  left: 14px;
+  display: flex;
+  max-height: min(256px, 42vh);
+  flex-direction: column;
+  gap: 5px;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 84%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--vscode-editorWidget-background, var(--chv-search-surface)) 92%, var(--chv-bg) 8%);
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--vscode-widget-shadow, #000000) 36%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--chv-bg) 72%, transparent);
+  color: var(--chv-fg);
+}
+
 .pageSearchEmpty {
   padding: 12px 10px;
   border: 1px dashed color-mix(in srgb, var(--chv-border) 80%, transparent);
@@ -440,6 +465,11 @@ body.pageSearchResizing #pageSearchBar {
   color: var(--chv-muted);
   font-size: 12px;
   text-align: center;
+}
+
+#pageSearchSuggestions .pageSearchEmpty {
+  padding: 8px 10px;
+  border-radius: 8px;
 }
 
 .pageSearchResult {
@@ -452,6 +482,7 @@ body.pageSearchResizing #pageSearchBar {
   background: color-mix(in srgb, var(--chv-bg) 84%, var(--chv-search-surface) 16%);
   color: inherit;
   text-align: left;
+  cursor: pointer;
 }
 
 .pageSearchResult:hover {
@@ -463,6 +494,75 @@ body.pageSearchResizing #pageSearchBar {
   border-color: color-mix(in srgb, var(--chv-accent) 72%, var(--chv-border) 28%);
   background: color-mix(in srgb, var(--chv-accent) 10%, var(--chv-bg) 90%);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chv-accent) 18%, transparent);
+}
+
+.pageSearchSuggestion {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 5px 6px 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--chv-bg) 88%, var(--chv-search-surface) 12%);
+}
+
+.pageSearchSuggestion .pageSearchResultHeader {
+  gap: 6px;
+}
+
+.pageSearchSuggestion .pageSearchResultHeaderText {
+  gap: 0;
+}
+
+.pageSearchSuggestion .pageSearchResultTitle {
+  line-height: 1.25;
+}
+
+#pageSearchSuggestions .pageSearchSuggestionMain {
+  display: flex;
+  flex: 1;
+  align-items: stretch;
+  justify-content: flex-start;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--chv-fg);
+  line-height: normal;
+  text-align: left;
+  cursor: pointer;
+}
+
+#pageSearchSuggestions .pageSearchSuggestionMain:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+#pageSearchSuggestions .pageSearchSuggestionRemove {
+  display: inline-flex;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--chv-muted);
+  line-height: 1;
+  cursor: pointer;
+}
+
+#pageSearchSuggestions .pageSearchSuggestionRemove svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+#pageSearchSuggestions .pageSearchSuggestionRemove:hover {
+  border-color: color-mix(in srgb, var(--chv-patch-remove-accent) 55%, var(--chv-border) 45%);
+  background: color-mix(in srgb, var(--chv-patch-remove-accent) 12%, transparent);
+  color: var(--chv-fg);
 }
 
 .pageSearchResultHeader {

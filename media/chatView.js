@@ -13,6 +13,7 @@
   const btnMarkdown = document.getElementById("btnMarkdown");
   const btnCopyResume = document.getElementById("btnCopyResume");
   const btnToggleDetails = document.getElementById("btnToggleDetails");
+  const btnPathMode = document.getElementById("btnPathMode");
   const btnScrollTop = document.getElementById("btnScrollTop");
   const btnScrollBottom = document.getElementById("btnScrollBottom");
   const btnPageSearch = document.getElementById("btnPageSearch");
@@ -22,8 +23,10 @@
   const pageSearchBarEl = document.getElementById("pageSearchBar");
   const pageSearchResizeHandleEl = document.getElementById("pageSearchResizeHandle");
   const pageSearchTitleEl = document.getElementById("pageSearchTitle");
+  const pageSearchRoleFiltersEl = document.getElementById("pageSearchRoleFilters");
   const pageSearchInputEl = document.getElementById("pageSearchInput");
   const pageSearchCountEl = document.getElementById("pageSearchCount");
+  const pageSearchSuggestionsEl = document.getElementById("pageSearchSuggestions");
   const pageSearchResultsEl = document.getElementById("pageSearchResults");
   const btnPageSearchPrev = document.getElementById("btnPageSearchPrev");
   const btnPageSearchNext = document.getElementById("btnPageSearchNext");
@@ -37,6 +40,7 @@
   const MAX_CODE_COMMENT_FILE_LENGTH = 4096;
   const MAX_CODE_COMMENT_TITLE_LENGTH = 512;
   const MAX_CODE_COMMENT_BODY_LENGTH = 20000;
+  const MAX_PAGE_SEARCH_HISTORY_CANDIDATES = 20;
   const CODE_COMMENT_ATTRIBUTE_KEYS = new Set(["file", "title", "body", "start", "end", "priority"]);
   const COPY_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 1.5H6A1.5 1.5 0 0 0 4.5 3H3.75A1.75 1.75 0 0 0 2 4.75v8.5C2 14.216 2.784 15 3.75 15h8.5c.966 0 1.75-.784 1.75-1.75v-8.5C14 3.784 13.216 3 12.25 3H11.5A1.5 1.5 0 0 0 10 1.5Zm-4 1H10a.5.5 0 0 1 .5.5V3H5.5V3a.5.5 0 0 1 .5-.5ZM3.75 4h8.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-8.5a.75.75 0 0 1-.75-.75v-8.5A.75.75 0 0 1 3.75 4Z"/></svg>';
@@ -80,6 +84,8 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 1 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/></svg>';
   const SAVE_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.75 2h7.5c.4 0 .78.16 1.06.44l1.25 1.25c.28.28.44.66.44 1.06v7.5A1.75 1.75 0 0 1 12.25 14h-8.5A1.75 1.75 0 0 1 2 12.25v-8.5C2 2.784 2.784 2 3.75 2Zm0 1.5a.25.25 0 0 0-.25.25v8.5c0 .14.11.25.25.25h8.5a.25.25 0 0 0 .25-.25V5.06L10.94 3.5H10.5v2.25c0 .414-.336.75-.75.75h-4.5a.75.75 0 0 1-.75-.75V3.5h-.75Zm2.25 0V5h3V3.5H6Zm-.25 5h4.5A1.75 1.75 0 0 1 12 10.25v2.25h-1.5v-2.25a.25.25 0 0 0-.25-.25h-4.5a.25.25 0 0 0-.25.25v2.25H4v-2.25C4 9.284 4.784 8.5 5.75 8.5Z"/></svg>';
+  const TRASH_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.25 1.75h3.5c.69 0 1.25.56 1.25 1.25v.5h2.25a.75.75 0 0 1 0 1.5H12.9l-.62 8.05A1.75 1.75 0 0 1 10.54 14H5.46a1.75 1.75 0 0 1-1.74-1.95L3.1 5H2.75a.75.75 0 0 1 0-1.5H5V3c0-.69.56-1.25 1.25-1.25Zm1.25 5a.75.75 0 0 0-1.5 0v5a.75.75 0 0 0 1.5 0v-5Zm2.5 0a.75.75 0 0 0-1.5 0v5a.75.75 0 0 0 1.5 0v-5ZM6.5 3.5h3V3h-3v.5Zm-1 1.5.61 7.94c.01.03.03.06.07.06h5.08c.04 0 .06-.03.07-.06L11.5 5h-6Z"/></svg>';
   const PATCH_WRAP_ON_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 4h10.5a.75.75 0 0 1 0 1.5H5.56l1.22 1.22a.75.75 0 0 1-1.06 1.06L3.22 5.28a.75.75 0 0 1 0-1.06l2.5-2.5a.75.75 0 0 1 1.06 1.06L5.56 4H2.75Zm0 4.5h6.5a2.75 2.75 0 1 1 0 5.5H7.31l1.22 1.22a.75.75 0 1 1-1.06 1.06l-2.5-2.5a.75.75 0 0 1 0-1.06l2.5-2.5a.75.75 0 1 1 1.06 1.06L7.31 12.5h1.94a1.25 1.25 0 0 0 0-2.5h-6.5a.75.75 0 0 1 0-1.5Z"/></svg>';
   const PATCH_WRAP_OFF_ICON_SVG =
@@ -90,6 +96,10 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 3.25c3.53 0 6.25 3.62 6.25 4.75S11.53 12.75 8 12.75 1.75 9.13 1.75 8 4.47 3.25 8 3.25Zm0 1.5c-2.7 0-4.75 2.54-4.75 3.25s2.05 3.25 4.75 3.25 4.75-2.54 4.75-3.25S10.7 4.75 8 4.75Zm0 1a2.25 2.25 0 1 1 0 4.5 2.25 2.25 0 0 1 0-4.5Z"/></svg>';
   const DETAILS_OFF_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.28 1.72a.75.75 0 1 0-1.06 1.06l11 11a.75.75 0 0 0 1.06-1.06l-1.45-1.45A7.74 7.74 0 0 0 14.25 8C14.25 6.87 11.53 3.25 8 3.25c-.97 0-1.88.27-2.72.7L2.28 1.72Zm4.09 4.09a2.25 2.25 0 0 1 3.82 2.43L6.37 5.81Zm2.82 5.94A5.65 5.65 0 0 1 8 12.75C4.47 12.75 1.75 9.13 1.75 8c0-.7 1.07-2.14 2.75-2.86l1.16 1.16a2.25 2.25 0 0 0 3.04 3.04l.49.49Z"/></svg>';
+  const PATH_RECORDED_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 1.75a6.25 6.25 0 1 1 0 12.5 6.25 6.25 0 0 1 0-12.5Zm0 1.5a4.75 4.75 0 1 0 0 9.5 4.75 4.75 0 0 0 0-9.5Zm.75 2.25v2.18l1.47 1.47a.75.75 0 1 1-1.06 1.06L7.47 8.53A.75.75 0 0 1 7.25 8V5.5a.75.75 0 0 1 1.5 0Z"/></svg>';
+  const PATH_RELOCATED_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 3.25h4.4a.75.75 0 0 1 .53.22L9.2 5h4.05c.97 0 1.75.78 1.75 1.75v6A1.75 1.75 0 0 1 13.25 14H2.75A1.75 1.75 0 0 1 1 12.75v-7.5c0-.97.78-1.75 1.75-1.75Zm0 1.5a.25.25 0 0 0-.25.25v7.5c0 .14.11.25.25.25h10.5a.25.25 0 0 0 .25-.25v-6a.25.25 0 0 0-.25-.25H8.58a.75.75 0 0 1-.53-.22L6.83 4.75H2.75Zm2.5 3.5h4.69l-.72-.72a.75.75 0 1 1 1.06-1.06l2 2a.75.75 0 0 1 0 1.06l-2 2a.75.75 0 1 1-1.06-1.06l.72-.72H5.25a.75.75 0 0 1 0-1.5Z"/></svg>';
   const TOOL_ICON_SVGS = Object.freeze({
     agent:
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 1.75a.75.75 0 0 1 .75.75v.84a4.5 4.5 0 0 1 3.91 3.91h.84a.75.75 0 0 1 0 1.5h-.84a4.5 4.5 0 0 1-3.91 3.91v.84a.75.75 0 0 1-1.5 0v-.84a4.5 4.5 0 0 1-3.91-3.91H2.5a.75.75 0 0 1 0-1.5h.84a4.5 4.5 0 0 1 3.91-3.91V2.5A.75.75 0 0 1 8 1.75Zm0 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>',
@@ -111,6 +121,13 @@
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a4.75 4.75 0 1 1 0 9.5 4.75 4.75 0 0 1 0-9.5Zm0 1.5a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Zm4.9 6.83 2.13 2.14a.75.75 0 1 1-1.06 1.06l-2.14-2.13a.75.75 0 1 1 1.07-1.07Z"/></svg>',
     write:
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 1.75h7.5c.4 0 .78.16 1.06.44l1 1c.28.28.44.66.44 1.06v8.5c0 .97-.78 1.75-1.75 1.75h-8A1.75 1.75 0 0 1 1.75 12.75v-9c0-.97.78-1.75 1.75-1.75Zm0 1.5a.25.25 0 0 0-.25.25v9c0 .14.11.25.25.25h8a.25.25 0 0 0 .25-.25v-8.19l-.81-.81H3.25Zm1.5 1.5h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5Zm3 3.25a.75.75 0 0 1 .75.75v1h1a.75.75 0 0 1 0 1.5h-1v1a.75.75 0 0 1-1.5 0v-1h-1a.75.75 0 0 1 0-1.5h1v-1A.75.75 0 0 1 7.75 8Z"/></svg>',
+  });
+  const PAGE_SEARCH_ROLE_ORDER = Object.freeze(["user", "assistant", "tool"]);
+  const PAGE_SEARCH_ROLE_SET = new Set(PAGE_SEARCH_ROLE_ORDER);
+  const PAGE_SEARCH_ROLE_SHORT_LABELS = Object.freeze({
+    user: "U",
+    assistant: "A",
+    tool: "T",
   });
   const PATCH_LANGUAGE_BY_EXTENSION = Object.freeze({
     ".bash": "shellscript",
@@ -178,6 +195,9 @@
   const SIMPLIFIED_DIFF_ENTRY_COUNT = 300;
   const SIMPLIFIED_DIFF_LINE_ESTIMATE = 8000;
   const SIMPLIFIED_IMAGE_COUNT = 80;
+  const STICKY_USER_SUMMARY_LIMIT = 180;
+  const STICKY_USER_PREVIEW_LIMIT = 6000;
+  const STICKY_USER_SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Spacebar"]);
 
   /** @type {any} */
   let model = null;
@@ -188,6 +208,7 @@
   let toolDisplayMode = "detailsOnly";
   let userLongMessageFolding = "off";
   let assistantLongMessageFolding = "off";
+  let stickyUserPromptEnabled = true;
   let imageSettings = { thumbnailSize: "medium" };
   let panelKind = "session";
   let chatOpenPosition = "top";
@@ -199,6 +220,8 @@
   let autoPerformanceToastShown = false;
   let autoRefreshAvailable = false;
   let autoRefreshMode = "off";
+  let pathMode = "recorded";
+  let pathModeEnabled = false;
   let debugLoggingEnabled = false;
   let imagePreview = null;
   const imageDataById = new Map();
@@ -213,6 +236,13 @@
   let messageNavMap = new Map();
   let patchGroupNavMap = new Map();
   let expandedMessageIndexes = new Set();
+  let expandedStickyUserKeys = new Set();
+  let stickyUserOverlayEl = null;
+  let stickyUserRows = [];
+  let stickyUserUpdateFrame = 0;
+  let activeStickyUserKey = null;
+  let stickyUserSuppressedUntilUserScroll = false;
+  let stickyUserPointerScrollIntent = false;
   let expandedPatchEntries = new Set();
   let expandedUsageCardKeys = new Set();
   let wideTimelineCardKeys = new Set();
@@ -222,7 +252,16 @@
   let pageSearchMatches = [];
   let pageSearchResults = [];
   let activePageSearchResultIndex = -1;
+  let pageSearchHistoryCandidates = [];
+  let pendingPageSearchSeed = null;
+  let pageSearchShowingSuggestions = false;
+  let activePageSearchSuggestionIndex = -1;
+  let suppressNextPageSearchFocusSuggestions = false;
+  let pageSearchCaseSensitive = false;
+  let pageSearchErrorText = "";
   let pageSearchRefreshTimer = 0;
+  let lastCommittedPageSearchHistory = null;
+  let pageSearchSelectedRoles = new Set();
   let pageSearchPanelWidth = null;
   let pageSearchResizeState = null;
   let openPositionSaveTimer = 0;
@@ -286,6 +325,10 @@
 
   if (scrollRootEl instanceof HTMLElement) {
     scrollRootEl.addEventListener("scroll", handleScrollRootScroll, { passive: true });
+    scrollRootEl.addEventListener("wheel", handleStickyUserDirectScrollIntent, { passive: true });
+    scrollRootEl.addEventListener("touchmove", handleStickyUserDirectScrollIntent, { passive: true });
+    scrollRootEl.addEventListener("pointerdown", handleStickyUserPointerScrollIntent, { passive: true });
+    scrollRootEl.addEventListener("mousedown", handleStickyUserPointerScrollIntent, { passive: true });
   }
   window.addEventListener("blur", () => {
     persistCurrentChatOpenPosition({ immediate: true });
@@ -319,6 +362,7 @@
   setToolbarIconButton(btnCopyResume, COPY_ICON_SVG, "Copy prompt");
   // Scroll buttons stay icon-only in the toolbar.
   setToolbarIconButton(btnToggleDetails, DETAILS_OFF_ICON_SVG, "Details");
+  setToolbarIconButton(btnPathMode, PATH_RECORDED_ICON_SVG, "Recorded path");
   setToolbarIconButton(btnScrollTop, SCROLL_TOP_ICON_SVG, "Top");
   setToolbarIconButton(btnScrollBottom, SCROLL_BOTTOM_ICON_SVG, "Bottom");
   setToolbarIconButton(btnPageSearch, SEARCH_ICON_SVG, "Find");
@@ -402,6 +446,7 @@
       : null;
 
     showDetails = nextShowDetails;
+    syncPageSearchRoleFilters({ reset: false });
     updateToolbar();
     persistRestoreState();
     if (showDetails) requestFullDetailsIfNeeded({ restoreByCard: true });
@@ -409,6 +454,16 @@
     render();
     restorePendingDetailScrollAnchorAfterRender({ clear: !expectsSessionData });
   });
+  if (btnPathMode instanceof HTMLElement) {
+    btnPathMode.addEventListener("click", () => {
+      if (!pathModeEnabled) return;
+      pathMode = getEffectivePathMode() === "relocated" ? "recorded" : "relocated";
+      updateToolbar();
+      render();
+      persistRestoreState({ preserveReveal: true });
+      vscode.postMessage({ type: "setPathMode", mode: pathMode });
+    });
+  }
   btnPageSearchPrev.addEventListener("click", () => {
     navigatePageSearchResults(-1);
   });
@@ -419,16 +474,50 @@
     closePageSearch();
   });
   pageSearchInputEl.addEventListener("input", () => {
-    schedulePageSearchRefresh({ reveal: true });
+    if (pageSearchShowingSuggestions) {
+      updatePageSearchSuggestionsAfterInput();
+    }
+    schedulePageSearchRefresh({ reveal: false, keepSuggestions: true });
+  });
+  pageSearchInputEl.addEventListener("focus", () => {
+    if (suppressNextPageSearchFocusSuggestions) {
+      suppressNextPageSearchFocusSuggestions = false;
+    }
+  });
+  pageSearchInputEl.addEventListener("click", () => {
+    showPageSearchSuggestions();
   });
   pageSearchInputEl.addEventListener("keydown", (event) => {
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      if (pageSearchShowingSuggestions) movePageSearchSuggestion(1);
+      else showPageSearchSuggestions();
+      return;
+    }
+    if (pageSearchShowingSuggestions && event.key === "ArrowUp") {
+      event.preventDefault();
+      movePageSearchSuggestion(-1);
+      return;
+    }
     if (event.key === "Enter") {
       event.preventDefault();
-      navigatePageSearchResults(event.shiftKey ? -1 : 1);
+      if (pageSearchShowingSuggestions && activatePageSearchSuggestion(activePageSearchSuggestionIndex)) return;
+      if (!pageSearchInputEl.value.trim()) {
+        clearPageSearchForEmptyInput();
+        return;
+      }
+      commitCurrentPageSearchQuery();
+      if (!flushPageSearchRefresh({ preserveIndex: true, reveal: false })) {
+        refreshPageSearchResults({ preserveIndex: true, reveal: false });
+      }
       return;
     }
     if (event.key === "Escape") {
       event.preventDefault();
+      if (pageSearchShowingSuggestions) {
+        hidePageSearchSuggestions();
+        return;
+      }
       closePageSearch();
     }
   });
@@ -477,6 +566,7 @@
     scheduleToolbarCompactMode();
     schedulePatchLayoutSync();
     updateTimeGuide({ afterPaint: true });
+    scheduleStickyUserOverlayUpdate({ rebuildRows: true });
   });
   applyPageSearchPanelWidth();
   if (toolbarResizeObserver) toolbarResizeObserver.observe(toolbarEl);
@@ -484,6 +574,9 @@
   document.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof Element)) return;
+    if (pageSearchShowingSuggestions && !isPageSearchSuggestionInteractionTarget(target)) {
+      hidePageSearchSuggestions();
+    }
     const anchor = target.closest("a");
     if (!anchor) return;
 
@@ -502,6 +595,7 @@
   });
 
   document.addEventListener("keydown", (event) => {
+    handleStickyUserKeyScrollIntent(event);
     if (event.key === "Escape" && isImagePreviewOpen()) {
       event.preventDefault();
       closeImagePreview();
@@ -550,6 +644,8 @@
           ? Math.max(0, Math.floor(msg.savedOpenMessageIndex))
           : null;
       const revealTarget = normalizeRevealTarget(msg.revealTarget);
+      const pageSearchSeed = normalizePageSearchSeed(msg.pageSearchSeed);
+      pageSearchHistoryCandidates = normalizeSearchHistoryCandidates(msg.searchHistoryCandidates);
       debugLoggingEnabled = msg.debugLoggingEnabled === true;
       const isRestore = typeof restoreScrollY === "number" || typeof restoreSelectedMessageIndex === "number";
       let shouldPreserveUiState = preserveUiState || isRestore;
@@ -558,6 +654,7 @@
       const prevExpandedNote = expandedNote;
       const prevSelectedMessageIndex = selectedMessageIndex;
       const prevExpandedMessageIndexes = new Set(expandedMessageIndexes);
+      const prevExpandedStickyUserKeys = new Set(expandedStickyUserKeys);
       const prevExpandedPatchEntries = new Set(expandedPatchEntries);
       const prevExpandedUsageCardKeys = new Set(expandedUsageCardKeys);
       const prevWideTimelineCardKeys = new Set(wideTimelineCardKeys);
@@ -573,6 +670,7 @@
         pendingDetailScrollAnchor = null;
         shouldPreserveUiState = false;
       }
+      if (!shouldPreserveUiState) resetStickyUserSuppression();
       model = incomingModel;
       i18n = msg.i18n || {};
       dateTime = msg.dateTime || {};
@@ -580,7 +678,10 @@
       chatOpenPosition = normalizeChatOpenPosition(msg.chatOpenPosition);
       autoRefreshAvailable = msg.autoRefreshAvailable === true;
       autoRefreshMode = normalizeAutoRefreshMode(msg.autoRefreshMode);
+      pathModeEnabled = msg.pathModeEnabled === true;
+      pathMode = pathModeEnabled ? normalizePathMode(msg.pathMode) : "recorded";
       timeGuideEnabled = msg.timeGuideEnabled === true;
+      stickyUserPromptEnabled = msg.stickyUserPrompt !== false;
       configuredPerformanceMode = normalizePerformanceMode(msg.chatPerformanceMode);
       performanceStats = normalizePerformanceStats(msg.performanceStats);
       toolDisplayMode = msg.toolDisplayMode === "compactCards" ? "compactCards" : "detailsOnly";
@@ -620,6 +721,7 @@
             ? revealTarget.messageIndex
           : null;
       expandedMessageIndexes = shouldPreserveUiState ? prevExpandedMessageIndexes : new Set();
+      expandedStickyUserKeys = shouldPreserveUiState ? prevExpandedStickyUserKeys : new Set();
       expandedPatchEntries = shouldPreserveUiState ? prevExpandedPatchEntries : new Set();
       expandedUsageCardKeys = shouldPreserveUiState ? prevExpandedUsageCardKeys : new Set();
       wideTimelineCardKeys = shouldPreserveUiState ? prevWideTimelineCardKeys : new Set();
@@ -634,12 +736,23 @@
         }
       }
 
-      // On reload, preserve the current UI state (details visibility); on normal render, auto-determine as before.
-      showDetails = shouldPreserveUiState ? prevShowDetails : shouldAutoShowDetails(model, selectedMessageIndex, revealTarget);
+      // Preserve details visibility only for reload-like updates; fresh opens start with details hidden.
+      showDetails = shouldPreserveUiState ? prevShowDetails : false;
+      syncPageSearchRoleFilters({ reset: !shouldPreserveUiState });
       updateToolbar();
       render();
       let pendingRestoreCompletions = 0;
       let restoreStatePersisted = false;
+      let pageSearchSeedApplied = false;
+      const applyPendingPageSearchSeed = () => {
+        if (pageSearchSeedApplied || !pageSearchSeed) return;
+        pageSearchSeedApplied = true;
+        if (pageSearchSeed.autoOpen === false && !isPageSearchOpen()) {
+          pendingPageSearchSeed = pageSearchSeed;
+          return;
+        }
+        applyPageSearchSeed(pageSearchSeed);
+      };
       const persistAfterRestore = () => {
         if (restoreStatePersisted) return;
         restoreStatePersisted = true;
@@ -647,6 +760,7 @@
           revealTarget,
           revealMessageIndex: typeof selectedMessageIndex === "number" ? selectedMessageIndex : undefined,
         });
+        applyPendingPageSearchSeed();
       };
       const createRestoreCompletion = () => {
         pendingRestoreCompletions += 1;
@@ -702,6 +816,12 @@
       if (pendingRestoreCompletions === 0) persistAfterRestore();
       return;
     }
+    if (msg.type === "searchHistoryCandidates") {
+      pageSearchHistoryCandidates = normalizeSearchHistoryCandidates(msg.candidates);
+      reconcileCommittedPageSearchHistory();
+      if (pageSearchShowingSuggestions) updatePageSearchSuggestionsAfterInput();
+      return;
+    }
     if (msg.type === "i18n") {
       i18n = msg.i18n || {};
       dateTime = msg.dateTime || dateTime || {};
@@ -709,6 +829,7 @@
       chatOpenPosition = normalizeChatOpenPosition(msg.chatOpenPosition);
       autoRefreshAvailable = msg.autoRefreshAvailable === true;
       timeGuideEnabled = msg.timeGuideEnabled === true;
+      stickyUserPromptEnabled = msg.stickyUserPrompt !== false;
       configuredPerformanceMode = normalizePerformanceMode(msg.chatPerformanceMode);
       updateEffectivePerformanceMode({ showAutoToast: true });
       if (msg.toolDisplayMode === "compactCards" || msg.toolDisplayMode === "detailsOnly") {
@@ -875,6 +996,7 @@
     const detailsIcon = showDetails ? DETAILS_ON_ICON_SVG : DETAILS_OFF_ICON_SVG;
     setToolbarIconButton(btnToggleDetails, detailsIcon, detailsTooltip);
     btnToggleDetails.setAttribute("aria-pressed", showDetails ? "true" : "false");
+    updatePathModeToolbarButton();
     if (pageSearchInputEl instanceof HTMLInputElement) {
       const searchPlaceholder = getSafeUiText(i18n.pageSearchPlaceholder, "Find in this view");
       pageSearchInputEl.placeholder = searchPlaceholder;
@@ -883,6 +1005,7 @@
     if (pageSearchTitleEl instanceof HTMLElement) {
       pageSearchTitleEl.textContent = pageSearchLabel;
     }
+    renderPageSearchRoleFilters();
     const prevTooltip = getSafeUiText(i18n.pageSearchPrevTooltip, "Previous match");
     const nextTooltip = getSafeUiText(i18n.pageSearchNextTooltip, "Next match");
     const closeTooltip = getSafeUiText(i18n.pageSearchCloseTooltip, "Close search");
@@ -925,6 +1048,21 @@
     btnPerformanceMode.dataset.mode = effectivePerformanceMode;
     btnPerformanceMode.dataset.configuredMode = configuredPerformanceMode;
     btnPerformanceMode.setAttribute("aria-pressed", simplified ? "true" : "false");
+  }
+
+  function updatePathModeToolbarButton() {
+    if (!(btnPathMode instanceof HTMLButtonElement)) return;
+    const effectiveMode = getEffectivePathMode();
+    const relocated = effectiveMode === "relocated";
+    const tooltip = pathModeEnabled
+      ? relocated
+        ? getSafeUiText(i18n.pathModeRelocatedTooltip, "Associated history: using target path. Click to use recorded path.")
+        : getSafeUiText(i18n.pathModeRecordedTooltip, "Associated history: using recorded path. Click to use target path.")
+      : getSafeUiText(i18n.pathModeDisabledTooltip, "This is not relocated history, so the recorded path is used.");
+    setToolbarIconButton(btnPathMode, relocated ? PATH_RELOCATED_ICON_SVG : PATH_RECORDED_ICON_SVG, tooltip);
+    btnPathMode.disabled = !pathModeEnabled;
+    btnPathMode.dataset.mode = effectiveMode;
+    btnPathMode.setAttribute("aria-pressed", relocated ? "true" : "false");
   }
 
   function toggleTemporaryPerformanceMode() {
@@ -1147,10 +1285,61 @@
   }
 
   function handleScrollRootScroll() {
+    releaseStickyUserSuppressionForPointerScroll();
     schedulePersistChatOpenPosition();
     schedulePersistRestorePosition();
     if (isSimplifiedPerformanceMode()) restoreHibernatedPatchBodies();
     if (timeGuideEnabled && timeGuide) timeGuide.handleScroll();
+    scheduleStickyUserOverlayUpdate();
+  }
+
+  function isEventInsideScrollRoot(event) {
+    const root = getScrollRoot();
+    const target = event && event.target instanceof Node ? event.target : null;
+    return !!(root instanceof HTMLElement && target && root.contains(target));
+  }
+
+  function suppressStickyUserUntilUserScroll() {
+    stickyUserSuppressedUntilUserScroll = true;
+    stickyUserPointerScrollIntent = false;
+    expandedStickyUserKeys = new Set();
+    hideStickyUserOverlay();
+  }
+
+  function resetStickyUserSuppression() {
+    stickyUserSuppressedUntilUserScroll = false;
+    stickyUserPointerScrollIntent = false;
+  }
+
+  function releaseStickyUserSuppressionForUserScroll() {
+    stickyUserPointerScrollIntent = false;
+    if (!stickyUserSuppressedUntilUserScroll) return;
+    stickyUserSuppressedUntilUserScroll = false;
+    scheduleStickyUserOverlayUpdate();
+  }
+
+  function releaseStickyUserSuppressionForPointerScroll() {
+    if (!stickyUserPointerScrollIntent) return;
+    releaseStickyUserSuppressionForUserScroll();
+  }
+
+  function handleStickyUserDirectScrollIntent(event) {
+    if (!stickyUserSuppressedUntilUserScroll || !isEventInsideScrollRoot(event)) return;
+    releaseStickyUserSuppressionForUserScroll();
+  }
+
+  function handleStickyUserPointerScrollIntent(event) {
+    if (!stickyUserSuppressedUntilUserScroll || !isEventInsideScrollRoot(event)) return;
+    if (typeof event.button === "number" && event.button !== 0) return;
+    stickyUserPointerScrollIntent = true;
+  }
+
+  function handleStickyUserKeyScrollIntent(event) {
+    if (!stickyUserSuppressedUntilUserScroll || !event || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (isTextInputElement(document.activeElement)) return;
+    const key = typeof event.key === "string" ? event.key : "";
+    if (!STICKY_USER_SCROLL_KEYS.has(key)) return;
+    releaseStickyUserSuppressionForUserScroll();
   }
 
   function schedulePersistRestorePosition() {
@@ -1284,7 +1473,7 @@
 
   function getRenderedTimelineRows() {
     if (!(timelineEl instanceof HTMLElement)) return [];
-    return Array.from(timelineEl.querySelectorAll(":scope > .row")).filter(
+    return Array.from(timelineEl.querySelectorAll(".row[data-item-index]")).filter(
       (element) => element instanceof HTMLElement && element.offsetParent !== null,
     );
   }
@@ -1326,6 +1515,7 @@
 
     const target = findTimelineRowForAnchor(anchor);
     if (target) {
+      if (isUserTimelineElement(target)) suppressStickyUserUntilUserScroll();
       scrollElementIntoRootView(target, { behavior: "auto", block: "start" });
       finish();
       return true;
@@ -1422,6 +1612,7 @@
     toolbarEl.classList.toggle("toolbarCompact", needsCompact);
     document.documentElement.style.setProperty("--chv-toolbar-height", `${toolbarEl.offsetHeight}px`);
     updateTimeGuide({ afterPaint: true });
+    scheduleStickyUserOverlayUpdate();
   }
 
   function normalizePageSearchPanelWidth(value) {
@@ -1479,6 +1670,7 @@
       fsPath: model.fsPath,
       autoRefreshMode: normalizeAutoRefreshMode(autoRefreshMode),
       detailMode: showDetails ? "full" : "summary",
+      pathMode: getEffectivePathMode(),
       scrollY: getScrollTop(),
       ...(typeof topMessageIndex === "number" ? { topMessageIndex } : {}),
       ...(revealMessageIndex !== undefined ? { revealMessageIndex } : {}),
@@ -1497,6 +1689,14 @@
 
   function normalizeAutoRefreshMode(value) {
     return value === "preserve" || value === "follow" ? value : "off";
+  }
+
+  function normalizePathMode(value) {
+    return value === "relocated" ? "relocated" : "recorded";
+  }
+
+  function getEffectivePathMode() {
+    return pathModeEnabled && pathMode === "relocated" ? "relocated" : "recorded";
   }
 
   function cycleAutoRefreshMode(mode) {
@@ -1558,8 +1758,10 @@
     if (imagePreview || isImagePreviewOpen()) closeImagePreview();
     resetImageDataCache();
     resetPatchEntryDetailsCache();
+    resetStickyUserSuppression();
     temporaryPerformanceMode = null;
     pendingDetailScrollAnchor = null;
+    expandedStickyUserKeys = new Set();
   }
 
   function resetPatchEntryDetailsCache() {
@@ -1575,8 +1777,18 @@
     if (pageSearchBarEl instanceof HTMLElement) pageSearchBarEl.hidden = true;
     document.body.classList.remove("pageSearchOpen");
     if (pageSearchInputEl instanceof HTMLInputElement) pageSearchInputEl.value = "";
+    pageSearchShowingSuggestions = false;
+    pendingPageSearchSeed = null;
+    activePageSearchSuggestionIndex = -1;
+    suppressNextPageSearchFocusSuggestions = false;
+    pageSearchCaseSensitive = false;
+    pageSearchErrorText = "";
+    lastCommittedPageSearchHistory = null;
+    pageSearchSelectedRoles = new Set();
     clearPageSearchHighlights();
     renderPageSearchResults();
+    renderPageSearchSuggestions();
+    renderPageSearchRoleFilters([]);
     updatePageSearchStatus();
   }
 
@@ -1599,11 +1811,19 @@
     pageSearchBarEl.hidden = false;
     document.body.classList.add("pageSearchOpen");
     updateToolbarCompactMode();
-    const selectedText = window.getSelection ? String(window.getSelection() || "").trim() : "";
-    if (!pageSearchInputEl.value && selectedText && !/\s*\n\s*/u.test(selectedText)) {
-      pageSearchInputEl.value = selectedText;
+    const usedPendingSeed = !pageSearchInputEl.value && applyPendingPageSearchSeedOnOpen();
+    if (!usedPendingSeed) {
+      const selectedText = window.getSelection ? String(window.getSelection() || "").trim() : "";
+      if (!pageSearchInputEl.value && selectedText && !/\s*\n\s*/u.test(selectedText)) {
+        pageSearchInputEl.value = selectedText;
+      }
+      if (pageSearchInputEl.value) refreshPageSearchResults({ preserveIndex: true, reveal: false });
+      else {
+        renderPageSearchResults();
+        updatePageSearchStatus();
+      }
     }
-    refreshPageSearchResults({ preserveIndex: true, reveal: false });
+    suppressNextPageSearchFocusSuggestions = true;
     pageSearchInputEl.focus();
     pageSearchInputEl.select();
   }
@@ -1614,8 +1834,15 @@
     document.body.classList.remove("pageSearchOpen");
     cancelPageSearchRefresh();
     cancelPageSearchResize();
+    hidePageSearchSuggestions();
+    suppressNextPageSearchFocusSuggestions = false;
+    pageSearchCaseSensitive = false;
+    pageSearchSelectedRoles = new Set();
+    pageSearchErrorText = "";
+    lastCommittedPageSearchHistory = null;
     clearPageSearchHighlights();
     renderPageSearchResults();
+    renderPageSearchRoleFilters();
     updatePageSearchStatus();
   }
 
@@ -1623,7 +1850,9 @@
     const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
     if (!query) {
       cancelPageSearchRefresh();
-      refreshPageSearchResults({ ...options, reveal: false });
+      pageSearchErrorText = "";
+      renderPageSearchResults();
+      updatePageSearchStatus();
       return;
     }
     if (pageSearchRefreshTimer) window.clearTimeout(pageSearchRefreshTimer);
@@ -1647,11 +1876,130 @@
     pageSearchRefreshTimer = 0;
   }
 
+  function syncPageSearchRoleFilters(options = {}) {
+    const availableRoles = getAvailablePageSearchRoles();
+
+    if (options.reset === true) {
+      pageSearchSelectedRoles = new Set();
+    }
+
+    renderPageSearchRoleFilters(availableRoles);
+  }
+
+  function getAvailablePageSearchRoles() {
+    const roles = new Set();
+    const items = model && Array.isArray(model.items) ? model.items : [];
+    for (const item of items) {
+      if (!item || typeof item !== "object") continue;
+      if (item.type === "message") {
+        const role = getMessageRole(item);
+        if ((role === "user" || role === "assistant") && canRenderMessage(item)) roles.add(role);
+        continue;
+      }
+      if (item.type === "tool") {
+        if (shouldRenderToolCard()) roles.add("tool");
+        continue;
+      }
+      if (item.type === "patchGroup") {
+        roles.add("tool");
+        continue;
+      }
+      if (showDetails && item.type === "note") {
+        roles.add("tool");
+      }
+    }
+    return PAGE_SEARCH_ROLE_ORDER.filter((role) => roles.has(role));
+  }
+
+  function renderPageSearchRoleFilters(availableRoles = getAvailablePageSearchRoles()) {
+    if (!(pageSearchRoleFiltersEl instanceof HTMLElement)) return;
+    prunePageSearchSelectedRoles(availableRoles);
+    pageSearchRoleFiltersEl.textContent = "";
+    if (availableRoles.length === 0) {
+      pageSearchRoleFiltersEl.hidden = true;
+      return;
+    }
+
+    pageSearchRoleFiltersEl.hidden = false;
+    pageSearchRoleFiltersEl.setAttribute(
+      "aria-label",
+      getSafeUiText(i18n.pageSearchRoleFilters, "Filter target roles"),
+    );
+    const selectedCount = availableRoles.filter((role) => pageSearchSelectedRoles.has(role)).length;
+    for (const role of availableRoles) {
+      const label = getPageSearchRoleLabel(role);
+      const shortLabel = PAGE_SEARCH_ROLE_SHORT_LABELS[role] || label.slice(0, 1).toUpperCase();
+      const selected = pageSearchSelectedRoles.has(role);
+      const button = el("button", { type: "button", className: "pageSearchRoleFilter" });
+      button.dataset.role = role;
+      const tooltip = getPageSearchRoleFilterTooltip(role, label, selected, selectedCount);
+      button.title = tooltip;
+      button.setAttribute("aria-label", tooltip);
+      button.setAttribute("aria-pressed", selected ? "true" : "false");
+      const full = el("span", { className: "pageSearchRoleFilterFull" });
+      full.textContent = label;
+      const short = el("span", { className: "pageSearchRoleFilterShort" });
+      short.textContent = shortLabel;
+      button.appendChild(full);
+      button.appendChild(short);
+      button.addEventListener("click", () => {
+        togglePageSearchRoleFilter(role);
+      });
+      pageSearchRoleFiltersEl.appendChild(button);
+    }
+  }
+
+  function getPageSearchRoleLabel(role) {
+    if (role === "user") return getSafeUiText(i18n.roleUser, "User");
+    if (role === "assistant") return getSafeUiText(i18n.roleAssistant, "Assistant");
+    if (role === "tool") return getSafeUiText(i18n.tool, "Tool");
+    return String(role || "");
+  }
+
+  function getPageSearchRoleFilterTooltip(role, label, selected, selectedCount) {
+    if (selected && selectedCount <= 1) {
+      return formatTemplate(
+        getSafeUiText(i18n.pageSearchRoleFilterRemoveToAllTooltip, "Clear {0} filter and search all"),
+        label,
+      );
+    }
+    if (selected) {
+      return formatTemplate(
+        getSafeUiText(i18n.pageSearchRoleFilterRemoveTooltip, "Remove {0} from filter"),
+        label,
+      );
+    }
+    if (selectedCount > 0) {
+      return formatTemplate(getSafeUiText(i18n.pageSearchRoleFilterAddTooltip, "Add {0} to filter"), label);
+    }
+    return formatTemplate(getSafeUiText(i18n.pageSearchRoleFilterOnlyTooltip, "Search only {0}"), label);
+  }
+
+  function togglePageSearchRoleFilter(role) {
+    if (!PAGE_SEARCH_ROLE_SET.has(role)) return;
+    const availableRoles = getAvailablePageSearchRoles();
+    prunePageSearchSelectedRoles(availableRoles);
+    if (!availableRoles.includes(role)) return;
+    if (pageSearchSelectedRoles.has(role)) pageSearchSelectedRoles.delete(role);
+    else pageSearchSelectedRoles.add(role);
+    renderPageSearchRoleFilters(availableRoles);
+    if (isPageSearchOpen()) refreshPageSearchResults({ preserveIndex: false, reveal: false });
+  }
+
+  function prunePageSearchSelectedRoles(availableRoles = getAvailablePageSearchRoles()) {
+    const availableRoleSet = new Set(availableRoles);
+    for (const role of Array.from(pageSearchSelectedRoles)) {
+      if (!availableRoleSet.has(role)) pageSearchSelectedRoles.delete(role);
+    }
+  }
+
   function refreshPageSearchResults(options = {}) {
     const preserveIndex = !!options.preserveIndex;
     const reveal = options.reveal !== false;
     const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
     const previousIndex = preserveIndex ? activePageSearchResultIndex : -1;
+    if (!options.keepSuggestions) hidePageSearchSuggestions();
+    pageSearchErrorText = "";
     clearPageSearchHighlights();
     if (!query) {
       renderPageSearchResults();
@@ -1659,14 +2007,23 @@
       return;
     }
 
-    const loweredQuery = query.toLowerCase();
+    const compiled = compilePageSearchQuery(query, pageSearchCaseSensitive);
+    if (!compiled) {
+      pageSearchErrorText = getPageSearchInvalidMessage(query);
+      renderPageSearchResults();
+      updatePageSearchStatus();
+      return;
+    }
     const roots = [annotationEl, metaEl, timelineEl].filter((node) => node instanceof HTMLElement);
     const textNodes = [];
 
+    const roleFilterActive = isPageSearchRoleFilterActive();
     for (const root of roots) {
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
         acceptNode(node) {
-          return shouldAcceptPageSearchTextNode(node) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+          return shouldAcceptPageSearchTextNode(node, { roleFilterActive })
+            ? NodeFilter.FILTER_ACCEPT
+            : NodeFilter.FILTER_REJECT;
         },
       });
       while (walker.nextNode()) {
@@ -1676,25 +2033,23 @@
 
     for (const textNode of textNodes) {
       const text = textNode.textContent || "";
-      const loweredText = text.toLowerCase();
-      let matchIndex = loweredText.indexOf(loweredQuery);
-      if (matchIndex < 0) continue;
+      const matches = compiled.findAll(text);
+      if (matches.length === 0) continue;
 
       const fragment = document.createDocumentFragment();
       const pendingMarks = [];
       let cursor = 0;
-      while (matchIndex >= 0) {
-        if (matchIndex > cursor) {
-          fragment.appendChild(document.createTextNode(text.slice(cursor, matchIndex)));
+      for (const match of matches) {
+        if (match.start > cursor) {
+          fragment.appendChild(document.createTextNode(text.slice(cursor, match.start)));
         }
         const mark = document.createElement("mark");
         mark.className = "pageSearchMatch";
-        mark.textContent = text.slice(matchIndex, matchIndex + query.length);
+        mark.textContent = text.slice(match.start, match.start + match.length);
         fragment.appendChild(mark);
-        pendingMarks.push({ mark, start: matchIndex });
+        pendingMarks.push({ mark, start: match.start, length: match.length });
         pageSearchMatches.push(mark);
-        cursor = matchIndex + query.length;
-        matchIndex = loweredText.indexOf(loweredQuery, cursor);
+        cursor = match.start + match.length;
       }
       if (cursor < text.length) {
         fragment.appendChild(document.createTextNode(text.slice(cursor)));
@@ -1702,7 +2057,7 @@
       textNode.parentNode.replaceChild(fragment, textNode);
 
       for (const pending of pendingMarks) {
-        pageSearchResults.push(buildPageSearchResult(pending.mark, text, pending.start, query.length));
+        pageSearchResults.push(buildPageSearchResult(pending.mark, text, pending.start, pending.length));
       }
     }
 
@@ -1718,7 +2073,12 @@
     activatePageSearchResult(nextIndex, { reveal });
   }
 
-  function shouldAcceptPageSearchTextNode(node) {
+  function isPageSearchRoleFilterActive() {
+    const availableRoles = getAvailablePageSearchRoles();
+    return availableRoles.some((role) => pageSearchSelectedRoles.has(role));
+  }
+
+  function shouldAcceptPageSearchTextNode(node, options = {}) {
     if (!(node instanceof Text)) return false;
     const text = node.textContent || "";
     if (!text.trim()) return false;
@@ -1726,9 +2086,13 @@
     const parent = node.parentElement;
     if (!(parent instanceof HTMLElement)) return false;
     if (parent.closest("#pageSearchBar, .dateGuide")) return false;
+    if (parent.closest("[data-page-search-ignore='true']")) return false;
     if (parent.closest("script, style, textarea, input, select, button")) return false;
     if (parent.closest("mark.pageSearchMatch")) return false;
     if (parent.closest("[hidden]")) return false;
+    if (!showDetails && parent.closest(".row.developer, .row.usage, .row.environment")) return false;
+    const role = resolvePageSearchTextRole(parent);
+    if (options.roleFilterActive === true && (!role || !pageSearchSelectedRoles.has(role))) return false;
 
     const closedDetails = parent.closest("details:not([open])");
     if (closedDetails) {
@@ -1738,6 +2102,19 @@
 
     if (parent.getClientRects().length === 0 && !parent.closest("summary")) return false;
     return true;
+  }
+
+  function resolvePageSearchTextRole(element) {
+    if (!(element instanceof HTMLElement)) return "";
+    const bubble = element.closest(".bubble");
+    if (bubble instanceof HTMLElement) {
+      if (bubble.classList.contains("user")) return "user";
+      if (bubble.classList.contains("assistant")) return "assistant";
+      if (bubble.classList.contains("tool")) return "tool";
+      return "";
+    }
+    if (element.closest(".toolCard, .patchGroupCard, .patchEntry, .patchDiffBlock")) return "tool";
+    return "";
   }
 
   function clearPageSearchHighlights() {
@@ -1753,11 +2130,20 @@
     activePageSearchResultIndex = -1;
   }
 
+  function clearPageSearchForEmptyInput() {
+    cancelPageSearchRefresh();
+    pageSearchErrorText = "";
+    clearPageSearchHighlights();
+    renderPageSearchResults();
+    updatePageSearchStatus();
+  }
+
   function navigatePageSearchResults(delta) {
     if (!isPageSearchOpen()) {
       openPageSearch();
       return;
     }
+    commitCurrentPageSearchQuery();
     const flushed = flushPageSearchRefresh({ preserveIndex: true, reveal: false });
     if (!flushed && pageSearchResults.length === 0) {
       refreshPageSearchResults({ reveal: false });
@@ -1766,11 +2152,14 @@
     if (pageSearchResults.length === 0) return;
     const total = pageSearchResults.length;
     const currentIndex = activePageSearchResultIndex >= 0 ? activePageSearchResultIndex : 0;
-    const nextIndex = (currentIndex + delta + total) % total;
+    const nextIndex = Math.max(0, Math.min(total - 1, currentIndex + delta));
+    if (nextIndex === currentIndex) return;
     activatePageSearchResult(nextIndex, { reveal: true });
   }
 
   function activatePageSearchResult(index, options = {}) {
+    const reveal = options.reveal !== false;
+    if (reveal) hidePageSearchSuggestions();
     if (pageSearchResults.length === 0) {
       activePageSearchResultIndex = -1;
       renderPageSearchResults();
@@ -1778,7 +2167,6 @@
       return;
     }
 
-    const reveal = options.reveal !== false;
     for (const match of pageSearchMatches) {
       if (match instanceof HTMLElement) match.classList.remove("pageSearchMatch-active");
     }
@@ -1793,7 +2181,41 @@
       }
     }
     renderPageSearchResults();
+    scrollActivePageSearchResultIntoList();
+    if (options.focusResult === true) focusPageSearchResultItem(safeIndex);
     updatePageSearchStatus();
+  }
+
+  function moveFocusedPageSearchResult(delta) {
+    if (!Array.isArray(pageSearchResults) || pageSearchResults.length === 0) return;
+    const focusedIndex = getFocusedPageSearchResultIndex();
+    const currentIndex =
+      focusedIndex >= 0 ? focusedIndex : activePageSearchResultIndex >= 0 ? activePageSearchResultIndex : 0;
+    const nextIndex = Math.max(0, Math.min(pageSearchResults.length - 1, currentIndex + delta));
+    if (nextIndex === currentIndex) return;
+    activatePageSearchResult(nextIndex, { reveal: false, focusResult: true });
+  }
+
+  function getFocusedPageSearchResultIndex() {
+    const active = document.activeElement;
+    if (!(active instanceof HTMLElement)) return -1;
+    const item = active.closest("#pageSearchResults .pageSearchResult");
+    if (!(item instanceof HTMLElement)) return -1;
+    const index = Number(item.dataset.searchIndex);
+    return Number.isFinite(index) ? Math.max(0, Math.floor(index)) : -1;
+  }
+
+  function focusPageSearchResultItem(index) {
+    if (!(pageSearchResultsEl instanceof HTMLElement)) return;
+    const item = pageSearchResultsEl.querySelector(`[data-search-index="${String(index)}"]`);
+    if (item instanceof HTMLElement) item.focus({ preventScroll: true });
+  }
+
+  function scrollActivePageSearchResultIntoList() {
+    if (!(pageSearchResultsEl instanceof HTMLElement)) return;
+    const active = pageSearchResultsEl.querySelector(".pageSearchResult-active");
+    if (!(active instanceof HTMLElement)) return;
+    active.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
   function buildPageSearchResult(mark, sourceText, startIndex, queryLength) {
@@ -1805,6 +2227,7 @@
       meta: context.meta,
       lineNumber: context.lineNumber,
       snippet,
+      messageIndex: context.messageIndex,
     };
   }
 
@@ -1835,6 +2258,11 @@
         meta: "",
         lineNumber: "",
       };
+    }
+
+    const toolCard = mark instanceof HTMLElement ? mark.closest(".toolCard") : null;
+    if (toolCard instanceof HTMLElement) {
+      return describeToolCardSearchContext(toolCard);
     }
 
     const bubble = mark instanceof HTMLElement ? mark.closest(".bubble") : null;
@@ -1884,6 +2312,16 @@
     };
   }
 
+  function describeToolCardSearchContext(card) {
+    const title = getElementText(card.querySelector(".toolCardTitle"));
+    const metaText = getElementText(card.querySelector(".toolCardMetaLine"));
+    return {
+      title: title || getSafeUiText(i18n.roleMessage, "Message"),
+      meta: metaText,
+      lineNumber: "",
+    };
+  }
+
   function describeBubbleSearchContext(bubble) {
     const roleLabel = bubble.classList.contains("user")
       ? getSafeUiText(i18n.roleUser, "User")
@@ -1893,12 +2331,21 @@
           ? getSafeUiText(i18n.roleDeveloper, "Developer")
           : getSafeUiText(i18n.roleMessage, "Message");
     const messageIndex = bubble.dataset.messageIndex ? `#${bubble.dataset.messageIndex}` : "";
-    const metaText = getElementText(bubble.querySelector(".metaLine"));
+    const metaText = describeMessageSearchMeta(bubble, roleLabel, messageIndex);
     return {
       title: [roleLabel, messageIndex].filter(Boolean).join(" "),
       meta: metaText,
       lineNumber: "",
+      messageIndex: bubble.dataset.messageIndex ? Number(bubble.dataset.messageIndex) : undefined,
     };
+  }
+
+  function describeMessageSearchMeta(bubble, roleLabel, messageIndex) {
+    const tags = Array.from(bubble.querySelectorAll(".metaTags .tag"))
+      .map((tag) => getElementText(tag))
+      .filter(Boolean);
+    const excluded = new Set([String(roleLabel || "").toLowerCase(), String(messageIndex || "").toLowerCase()]);
+    return tags.filter((tag) => !excluded.has(String(tag || "").toLowerCase())).join(" · ");
   }
 
   function resolvePatchSearchLineNumber(cell) {
@@ -1921,9 +2368,16 @@
     pageSearchResultsEl.textContent = "";
 
     const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
-    if (!query) {
+    if (!query && pageSearchResults.length === 0) {
       const empty = el("div", { className: "pageSearchEmpty" });
       empty.textContent = getSafeUiText(i18n.pageSearchTypeToSearch, "Type to search");
+      pageSearchResultsEl.appendChild(empty);
+      return;
+    }
+
+    if (pageSearchErrorText) {
+      const empty = el("div", { className: "pageSearchEmpty" });
+      empty.textContent = pageSearchErrorText;
       pageSearchResultsEl.appendChild(empty);
       return;
     }
@@ -1940,7 +2394,13 @@
       item.dataset.searchIndex = String(index);
       if (index === activePageSearchResultIndex) item.classList.add("pageSearchResult-active");
       item.addEventListener("click", () => {
+        commitCurrentPageSearchQuery();
         activatePageSearchResult(index, { reveal: true });
+      });
+      item.addEventListener("keydown", (event) => {
+        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+        event.preventDefault();
+        moveFocusedPageSearchResult(event.key === "ArrowDown" ? 1 : -1);
       });
 
       const header = el("div", { className: "pageSearchResultHeader" });
@@ -1974,6 +2434,175 @@
     });
   }
 
+  function renderPageSearchSuggestions() {
+    if (!(pageSearchSuggestionsEl instanceof HTMLElement)) return;
+    pageSearchSuggestionsEl.textContent = "";
+    if (!pageSearchShowingSuggestions) {
+      pageSearchSuggestionsEl.hidden = true;
+      return;
+    }
+
+    const suggestions = getVisiblePageSearchSuggestions();
+    pageSearchSuggestionsEl.hidden = false;
+    if (suggestions.length === 0) {
+      const empty = el("div", { className: "pageSearchEmpty" });
+      empty.textContent = getSafeUiText(i18n.pageSearchNoHistory, "No recent searches");
+      pageSearchSuggestionsEl.appendChild(empty);
+      return;
+    }
+
+    suggestions.forEach((entry, index) => {
+      const item = el("div", { className: "pageSearchResult pageSearchSuggestion" });
+      if (index === activePageSearchSuggestionIndex) item.classList.add("pageSearchResult-active");
+      item.addEventListener("click", () => {
+        activatePageSearchSuggestion(index);
+      });
+      const main = el("button", { type: "button", className: "pageSearchSuggestionMain" });
+
+      const header = el("div", { className: "pageSearchResultHeader" });
+      const headerText = el("div", { className: "pageSearchResultHeaderText" });
+      const title = el("div", { className: "pageSearchResultTitle" });
+      title.textContent = entry.queryInput;
+      headerText.appendChild(title);
+      header.appendChild(headerText);
+      main.appendChild(header);
+      item.appendChild(main);
+
+      const remove = el("button", { type: "button", className: "pageSearchSuggestionRemove" });
+      const removeLabel = getSafeUiText(i18n.pageSearchRemoveHistory, "Remove from history");
+      remove.title = removeLabel;
+      remove.setAttribute("aria-label", removeLabel);
+      remove.innerHTML = TRASH_ICON_SVG;
+      remove.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        removePageSearchHistoryCandidate(entry);
+      });
+      item.appendChild(remove);
+      pageSearchSuggestionsEl.appendChild(item);
+    });
+  }
+
+  function hidePageSearchSuggestions() {
+    pageSearchShowingSuggestions = false;
+    activePageSearchSuggestionIndex = -1;
+    renderPageSearchSuggestions();
+  }
+
+  function updatePageSearchSuggestionsAfterInput() {
+    const suggestions = getVisiblePageSearchSuggestions();
+    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    if (query && suggestions.length === 0) {
+      hidePageSearchSuggestions();
+      return;
+    }
+    activePageSearchSuggestionIndex = suggestions.length > 0 ? 0 : -1;
+    renderPageSearchSuggestions();
+  }
+
+  function getVisiblePageSearchSuggestions() {
+    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim().toLowerCase() : "";
+    const entries = Array.isArray(pageSearchHistoryCandidates) ? pageSearchHistoryCandidates : [];
+    const filtered = query
+      ? entries.filter((entry) => String(entry.queryInput || "").toLowerCase().includes(query))
+      : entries;
+    return filtered.slice(0, MAX_PAGE_SEARCH_HISTORY_CANDIDATES);
+  }
+
+  function showPageSearchSuggestions() {
+    if (!isPageSearchOpen()) return;
+    const suggestions = getVisiblePageSearchSuggestions();
+    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    pageSearchShowingSuggestions = suggestions.length > 0 || !query;
+    activePageSearchSuggestionIndex = pageSearchShowingSuggestions ? 0 : -1;
+    renderPageSearchSuggestions();
+  }
+
+  function isPageSearchSuggestionInteractionTarget(target) {
+    if (!(target instanceof Element)) return false;
+    if (pageSearchInputEl instanceof HTMLElement && pageSearchInputEl.contains(target)) return true;
+    if (pageSearchSuggestionsEl instanceof HTMLElement && pageSearchSuggestionsEl.contains(target)) return true;
+    return false;
+  }
+
+  function movePageSearchSuggestion(delta) {
+    const suggestions = getVisiblePageSearchSuggestions();
+    if (suggestions.length === 0) return;
+    const current = activePageSearchSuggestionIndex >= 0 ? activePageSearchSuggestionIndex : 0;
+    activePageSearchSuggestionIndex = Math.max(0, Math.min(suggestions.length - 1, current + delta));
+    renderPageSearchSuggestions();
+  }
+
+  function activatePageSearchSuggestion(index) {
+    const suggestions = getVisiblePageSearchSuggestions();
+    if (suggestions.length === 0) return false;
+    const safeIndex = Math.max(0, Math.min(index, suggestions.length - 1));
+    const entry = suggestions[safeIndex];
+    if (!entry || !(pageSearchInputEl instanceof HTMLInputElement)) return false;
+    pageSearchInputEl.value = String(entry.queryInput || "");
+    hidePageSearchSuggestions();
+    refreshPageSearchResults({ preserveIndex: false, reveal: false });
+    commitCurrentPageSearchQuery();
+    suppressNextPageSearchFocusSuggestions = true;
+    pageSearchInputEl.focus();
+    return true;
+  }
+
+  function removePageSearchHistoryCandidate(entry) {
+    if (!entry || typeof entry.queryInput !== "string") return;
+    const key = typeof entry.key === "string" ? entry.key : "";
+    if (!key) return;
+    pageSearchHistoryCandidates = pageSearchHistoryCandidates.filter((candidate) => {
+      const candidateKey = candidate && typeof candidate.key === "string" ? candidate.key : "";
+      return candidateKey !== key;
+    });
+    reconcileCommittedPageSearchHistory();
+    vscode.postMessage({ type: "removePageSearchHistory", queryInput: entry.queryInput });
+    if (pageSearchShowingSuggestions) renderPageSearchSuggestions();
+  }
+
+  function reconcileCommittedPageSearchHistory() {
+    const committed = lastCommittedPageSearchHistory;
+    if (!committed) return;
+    const candidates = Array.isArray(pageSearchHistoryCandidates) ? pageSearchHistoryCandidates : [];
+    const stillPresent = candidates.some((entry) => {
+      return entry && entry.queryInput === committed.queryInput;
+    });
+    if (!stillPresent) lastCommittedPageSearchHistory = null;
+  }
+
+  function commitCurrentPageSearchQuery() {
+    const queryInput = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    if (!queryInput) return;
+    if (!compilePageSearchQuery(queryInput, pageSearchCaseSensitive)) return;
+    if (
+      lastCommittedPageSearchHistory &&
+      lastCommittedPageSearchHistory.queryInput === queryInput
+    ) {
+      return;
+    }
+    lastCommittedPageSearchHistory = { queryInput };
+    vscode.postMessage({ type: "savePageSearchHistory", queryInput });
+  }
+
+  function compilePageSearchQuery(rawInput, caseSensitive) {
+    const core = getPageSearchCore();
+    return core ? core.compileQuery(rawInput, caseSensitive === true) : null;
+  }
+
+  function getPageSearchInvalidMessage(rawInput) {
+    const core = getPageSearchCore();
+    if (core && core.getInvalidKind(rawInput) === "regex") {
+      return getSafeUiText(i18n.pageSearchInvalidRegex, "Invalid regular expression");
+    }
+    return getSafeUiText(i18n.pageSearchInvalidQuery, "Invalid search query");
+  }
+
+  function getPageSearchCore() {
+    const core = window.CHV_PAGE_SEARCH;
+    return core && typeof core.compileQuery === "function" && typeof core.getInvalidKind === "function" ? core : null;
+  }
+
   function getElementText(node) {
     return node instanceof HTMLElement && typeof node.textContent === "string" ? node.textContent.trim() : "";
   }
@@ -1981,14 +2610,34 @@
   function updatePageSearchStatus() {
     if (!(pageSearchCountEl instanceof HTMLElement)) return;
     const total = pageSearchResults.length;
-    if (btnPageSearchPrev instanceof HTMLButtonElement) btnPageSearchPrev.disabled = total <= 1;
-    if (btnPageSearchNext instanceof HTMLButtonElement) btnPageSearchNext.disabled = total <= 1;
+    const currentIndex = activePageSearchResultIndex >= 0 ? activePageSearchResultIndex : 0;
+    if (btnPageSearchPrev instanceof HTMLButtonElement) btnPageSearchPrev.disabled = total <= 1 || currentIndex <= 0;
+    if (btnPageSearchNext instanceof HTMLButtonElement) {
+      btnPageSearchNext.disabled = total <= 1 || currentIndex >= total - 1;
+    }
     if (total === 0) {
       pageSearchCountEl.textContent = "0/0";
       return;
     }
-    const current = activePageSearchResultIndex >= 0 ? activePageSearchResultIndex + 1 : 1;
+    const current = currentIndex + 1;
     pageSearchCountEl.textContent = `${current}/${total}`;
+  }
+
+  function appendCwdMetaLines(metaLines, meta) {
+    if (!meta) return;
+    const cwd = typeof meta.cwd === "string" ? meta.cwd : "";
+    const displayCwd = typeof meta.displayCwd === "string" ? meta.displayCwd : "";
+    if (cwd && displayCwd && cwd !== displayCwd) {
+      if (getEffectivePathMode() === "relocated") {
+        metaLines.push(`CWD: ${displayCwd}`);
+        metaLines.push(`${i18n.originalCwd || "Recorded CWD"}: ${cwd}`);
+      } else {
+        metaLines.push(`CWD: ${cwd}`);
+        metaLines.push(`${i18n.relocatedCwd || "Target CWD"}: ${displayCwd}`);
+      }
+      return;
+    }
+    if (cwd) metaLines.push(`CWD: ${cwd}`);
   }
 
   function render() {
@@ -1998,18 +2647,25 @@
     if (annotationEl) annotationEl.textContent = "";
     metaEl.textContent = "";
     timelineEl.textContent = "";
+    stickyUserRows = [];
+    activeStickyUserKey = null;
+    hideStickyUserOverlay();
     pageSearchMatches = [];
     pageSearchResults = [];
     activePageSearchResultIndex = -1;
     patchEntrySummaryById.clear();
-    if (!model) return;
+    document.body.classList.toggle("chatTimeGuideEnabled", timeGuideEnabled === true);
+    if (!model) {
+      scheduleStickyUserOverlayUpdate();
+      return;
+    }
 
     renderAnnotationHeader(model.annotation);
 
     // Render session metadata at the top.
     const metaLines = [];
     if (model.meta && model.meta.timestampIso) metaLines.push(`Start: ${formatIsoYmdHm(model.meta.timestampIso)}`);
-    if (model.meta && model.meta.cwd) metaLines.push(`CWD: ${model.meta.cwd}`);
+    appendCwdMetaLines(metaLines, model.meta);
     if (model.meta && model.meta.originator) metaLines.push(`Originator: ${model.meta.originator}`);
     if (model.meta && model.meta.cliVersion) metaLines.push(`CLI: ${model.meta.cliVersion}`);
     if (model.meta && model.meta.modelProvider) metaLines.push(`Model Provider: ${model.meta.modelProvider}`);
@@ -2023,13 +2679,35 @@
     // Build navigation metadata between messages before rendering.
     messageNavMap = buildMessageNavMap(items);
     patchGroupNavMap = buildPatchGroupNavMap(items);
+    const useStickyUserPrompt = stickyUserPromptEnabled === true;
+    let currentTurnSection = null;
     for (const [itemIndex, item] of items.entries()) {
       if (!item || typeof item !== "object") continue;
       const rendered = renderItem(item, itemIndex);
-      if (rendered) timelineEl.appendChild(rendered);
+      if (!rendered) continue;
+      if (!useStickyUserPrompt) {
+        timelineEl.appendChild(rendered);
+        continue;
+      }
+
+      if (isStickyUserTurnStart(item)) {
+        currentTurnSection = createChatTurnSection("user");
+        currentTurnSection.appendChild(rendered);
+        timelineEl.appendChild(currentTurnSection);
+        continue;
+      }
+
+      if (!currentTurnSection) {
+        currentTurnSection = createChatTurnSection("prelude");
+        timelineEl.appendChild(currentTurnSection);
+      }
+      currentTurnSection.appendChild(rendered);
     }
+    refreshStickyUserRows();
     schedulePatchLayoutSync();
     updateTimeGuide({ afterPaint: true, rebuildItems: true });
+    scheduleStickyUserOverlayUpdate();
+    syncPageSearchRoleFilters({ reset: false });
     if (isPageSearchOpen()) refreshPageSearchResults({ preserveIndex: true, reveal: false });
     else {
       renderPageSearchResults();
@@ -2133,6 +2811,254 @@
     annotationEl.appendChild(wrap);
   }
 
+  function createChatTurnSection(kind) {
+    const section = el("section", { className: `chatTurn chatTurn-${kind}` });
+    return section;
+  }
+
+  function isStickyUserTurnStart(item) {
+    return item && item.type === "message" && getMessageRole(item) === "user";
+  }
+
+  function isUserMessageIndex(messageIndex) {
+    if (!model || !Array.isArray(model.items) || typeof messageIndex !== "number") return false;
+    const safeIndex = Math.max(0, Math.floor(messageIndex));
+    return model.items.some(
+      (item) => item && item.type === "message" && item.messageIndex === safeIndex && getMessageRole(item) === "user",
+    );
+  }
+
+  function isUserTimelineElement(element) {
+    if (!(element instanceof HTMLElement) || !model || !Array.isArray(model.items)) return false;
+    const row = element.classList.contains("row") ? element : element.closest(".row[data-item-index]");
+    if (!(row instanceof HTMLElement)) return false;
+    if (row.classList.contains("user")) return true;
+    const itemIndex = Number(row.dataset.itemIndex);
+    const item = Number.isFinite(itemIndex) ? model.items[itemIndex] : null;
+    return isStickyUserTurnStart(item);
+  }
+
+  function ensureStickyUserOverlay() {
+    if (stickyUserOverlayEl instanceof HTMLElement) return stickyUserOverlayEl;
+    const overlay = el("div", { className: "userStickyOverlay" });
+    overlay.id = "userStickyOverlay";
+    overlay.hidden = true;
+    overlay.dataset.pageSearchIgnore = "true";
+    document.body.appendChild(overlay);
+    stickyUserOverlayEl = overlay;
+    return overlay;
+  }
+
+  function hideStickyUserOverlay() {
+    if (stickyUserUpdateFrame) {
+      cancelAnimationFrame(stickyUserUpdateFrame);
+      stickyUserUpdateFrame = 0;
+    }
+    activeStickyUserKey = null;
+    if (stickyUserOverlayEl instanceof HTMLElement) {
+      stickyUserOverlayEl.hidden = true;
+      stickyUserOverlayEl.textContent = "";
+    }
+  }
+
+  function refreshStickyUserRows() {
+    if (!stickyUserPromptEnabled || !(timelineEl instanceof HTMLElement) || !model || !Array.isArray(model.items)) {
+      stickyUserRows = [];
+      return;
+    }
+    stickyUserRows = Array.from(timelineEl.querySelectorAll(".row.user[data-item-index]"))
+      .filter((element) => element instanceof HTMLElement && element.offsetParent !== null)
+      .map((element) => {
+        const itemIndex = Number(element.dataset.itemIndex);
+        const item = Number.isFinite(itemIndex) ? model.items[itemIndex] : null;
+        if (!isStickyUserTurnStart(item)) return null;
+        const messageIndex = getStickyUserMessageIndex(item);
+        const stickyKey = getStickyUserKey(item, itemIndex);
+        return { element, item, itemIndex, messageIndex, stickyKey };
+      })
+      .filter(Boolean);
+  }
+
+  function getStickyUserMessageIndex(item) {
+    if (!item || typeof item.messageIndex !== "number" || !Number.isFinite(item.messageIndex)) return null;
+    return Math.max(0, Math.floor(item.messageIndex));
+  }
+
+  function getStickyUserKey(item, itemIndex) {
+    const messageIndex = getStickyUserMessageIndex(item);
+    if (typeof messageIndex === "number") return `message:${messageIndex}`;
+    const safeItemIndex = Number.isFinite(itemIndex) ? Math.max(0, Math.floor(itemIndex)) : 0;
+    return `item:${safeItemIndex}`;
+  }
+
+  function getStickyUserSafeDomKey(stickyKey) {
+    return String(stickyKey || "unknown").replace(/[^A-Za-z0-9_-]+/g, "-");
+  }
+
+  function scheduleStickyUserOverlayUpdate(options = {}) {
+    if (stickyUserUpdateFrame) cancelAnimationFrame(stickyUserUpdateFrame);
+    stickyUserUpdateFrame = requestAnimationFrame(() => {
+      stickyUserUpdateFrame = 0;
+      if (options.rebuildRows) refreshStickyUserRows();
+      updateStickyUserOverlay();
+    });
+  }
+
+  function getStickyUserThreshold() {
+    if (toolbarEl instanceof HTMLElement) return toolbarEl.getBoundingClientRect().bottom;
+    return 0;
+  }
+
+  function updateStickyUserOverlay() {
+    if (!stickyUserPromptEnabled || !model || stickyUserRows.length === 0) {
+      hideStickyUserOverlay();
+      return;
+    }
+    if (stickyUserSuppressedUntilUserScroll) {
+      hideStickyUserOverlay();
+      return;
+    }
+
+    const threshold = getStickyUserThreshold();
+    let active = null;
+    let crossingVisibleUser = false;
+    for (const row of stickyUserRows) {
+      if (!row || !(row.element instanceof HTMLElement) || row.element.offsetParent === null) continue;
+      const rect = row.element.getBoundingClientRect();
+      if (rect.bottom <= threshold) {
+        active = row;
+        continue;
+      }
+      if (rect.top <= threshold && rect.bottom > threshold) {
+        crossingVisibleUser = true;
+      }
+      break;
+    }
+
+    if (!active || crossingVisibleUser) {
+      hideStickyUserOverlay();
+      return;
+    }
+
+    const overlay = ensureStickyUserOverlay();
+    if (activeStickyUserKey !== active.stickyKey || overlay.childElementCount === 0) {
+      overlay.textContent = "";
+      overlay.appendChild(renderStickyUserHeader(active));
+      activeStickyUserKey = active.stickyKey;
+    }
+    overlay.hidden = false;
+  }
+
+  function renderStickyUserHeader(rowInfo) {
+    const item = rowInfo?.item;
+    const messageIndex = rowInfo?.messageIndex ?? null;
+    const stickyKey = rowInfo?.stickyKey || getStickyUserKey(item, rowInfo?.itemIndex);
+    const fullText = String(getMessageTextToRender(item, "user") || "").trim();
+    const oneLineText = fullText.replace(/\s+/g, " ").trim();
+    const attachments = getMessageAttachments(item);
+    const attachmentOnly = formatTemplate(
+      i18n.stickyUserAttachmentOnly || "{0} attachment(s)",
+      attachments.length,
+    );
+    const summarySource = oneLineText || (attachments.length > 0 ? attachmentOnly : getSafeUiText(i18n.roleUser, "User"));
+    const summary = truncatePlainText(summarySource, STICKY_USER_SUMMARY_LIMIT);
+    const previewText = truncatePlainText(fullText || summarySource, STICKY_USER_PREVIEW_LIMIT);
+    const canExpand = !!fullText && (fullText.includes("\n") || fullText.length > STICKY_USER_SUMMARY_LIMIT);
+    const expanded = canExpand && expandedStickyUserKeys.has(stickyKey);
+    const previewId = `sticky-user-preview-${getStickyUserSafeDomKey(stickyKey)}`;
+
+    const root = el("div", { className: "userStickyHeader" });
+    root.dataset.pageSearchIgnore = "true";
+    root.classList.toggle("userStickyHeader-expanded", expanded);
+
+    const row = el("div", { className: "userStickyHeaderRow" });
+    const main = el("button", { type: "button", className: "userStickyHeaderMain" });
+    const ariaSummary = summarySource || getSafeUiText(i18n.roleUser, "User");
+    main.setAttribute(
+      "aria-label",
+      formatTemplate(i18n.stickyUserAriaLabel || "Current user prompt: {0}", ariaSummary),
+    );
+    main.title = getSafeUiText(i18n.stickyUserOpenOriginal, "Jump to original user prompt");
+    if (typeof messageIndex === "number" && document.getElementById(`msg-${messageIndex}`)) {
+      main.setAttribute("aria-controls", `msg-${messageIndex}`);
+    }
+    main.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      scrollToOriginalUserPrompt(rowInfo);
+    });
+
+    const role = el("span", { className: "userStickyHeaderRole" });
+    role.textContent = getSafeUiText(i18n.roleUser, "User");
+    main.appendChild(role);
+    if (typeof messageIndex === "number") {
+      const index = el("span", { className: "userStickyHeaderIndex" });
+      index.textContent = `#${messageIndex}`;
+      main.appendChild(index);
+    }
+    const text = el("span", { className: "userStickyHeaderText" });
+    text.textContent = summary;
+    main.appendChild(text);
+    row.appendChild(main);
+
+    let toggle = null;
+    let preview = null;
+    if (canExpand) {
+      toggle = el("button", { type: "button", className: "userStickyHeaderToggle" });
+      toggle.setAttribute("aria-controls", previewId);
+      syncStickyUserToggle(toggle, expanded);
+      row.appendChild(toggle);
+    }
+    root.appendChild(row);
+
+    if (canExpand) {
+      preview = el("div", { className: "userStickyHeaderPreview", id: previewId });
+      preview.textContent = previewText;
+      preview.hidden = !expanded;
+      root.appendChild(preview);
+      toggle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const nextExpanded = !expandedStickyUserKeys.has(stickyKey);
+        if (nextExpanded) expandedStickyUserKeys.add(stickyKey);
+        else expandedStickyUserKeys.delete(stickyKey);
+        root.classList.toggle("userStickyHeader-expanded", nextExpanded);
+        preview.hidden = !nextExpanded;
+        syncStickyUserToggle(toggle, nextExpanded);
+      });
+    }
+
+    return root;
+  }
+
+  function syncStickyUserToggle(button, expanded) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    button.textContent = expanded ? i18n.showLess || "Show less" : i18n.showMore || "Show more";
+    button.setAttribute("aria-expanded", expanded ? "true" : "false");
+  }
+
+  function scrollToOriginalUserPrompt(rowInfo) {
+    const safeIndex = rowInfo && typeof rowInfo.messageIndex === "number" ? rowInfo.messageIndex : null;
+    const target =
+      typeof safeIndex === "number" ? document.getElementById(`msg-${safeIndex}`) : rowInfo?.element ?? null;
+    if (!(target instanceof HTMLElement)) return;
+    suppressStickyUserUntilUserScroll();
+    if (typeof safeIndex === "number") selectedMessageIndex = safeIndex;
+    clearHighlights();
+    target.classList.add("highlight");
+    scrollElementIntoRootView(target, { behavior: "smooth", block: "start" });
+    window.setTimeout(() => {
+      target.classList.remove("highlight");
+    }, 1800);
+  }
+
+  function truncatePlainText(value, limit) {
+    const text = String(value || "");
+    const max = Math.max(1, Math.floor(Number(limit) || 1));
+    if (text.length <= max) return text;
+    return `${text.slice(0, Math.max(0, max - 3))}...`;
+  }
+
   function renderItem(item, itemIndex) {
     const cardKey = buildTimelineCardKey(item, itemIndex);
     const itemType = item && typeof item.type === "string" ? item.type : "note";
@@ -2210,6 +3136,9 @@
       getTimeZone,
       getAriaLabel: () => getSafeUiText(i18n.timeGuideDates, "Dates"),
       getItems: getTimeGuideItems,
+      onActivatePeriod: (period) => {
+        if (period && period.role === "user") suppressStickyUserUntilUserScroll();
+      },
     });
     return timeGuide;
   }
@@ -2530,6 +3459,9 @@
       bubble.appendChild(expandRow);
     }
 
+    const memoryCitation = role === "assistant" ? renderMemoryCitation(item.memoryCitation) : null;
+    if (memoryCitation) bubble.appendChild(memoryCitation);
+
     if (role === "user" || role === "assistant") {
       const actions = el("div", { className: "bubbleActions" });
       const btn = el("button", { type: "button", className: "iconBtn" });
@@ -2548,6 +3480,109 @@
 
     row.appendChild(bubble);
     return row;
+  }
+
+  function renderMemoryCitation(citation) {
+    if (!citation || typeof citation !== "object") return null;
+    const entries = normalizeMemoryCitationEntries(citation.entries);
+    const rolloutIds = normalizeMemoryCitationRolloutIds(citation.rolloutIds);
+    if (entries.length === 0 && rolloutIds.length === 0) return null;
+
+    const details = el("details", { className: "memoryCitation" });
+    const summary = el("summary", { className: "memoryCitationSummary" });
+    const count = entries.length > 0 ? entries.length : rolloutIds.length;
+    summary.textContent = formatTemplate(i18n.memoryCitationSummary || "Referenced memory ({0})", count);
+    details.appendChild(summary);
+
+    const body = el("div", { className: "memoryCitationBody" });
+    if (entries.length > 0) {
+      const list = el("div", { className: "memoryCitationEntryList" });
+      for (const entry of entries) {
+        list.appendChild(renderMemoryCitationEntry(entry));
+      }
+      body.appendChild(list);
+    }
+    if (rolloutIds.length > 0) {
+      body.appendChild(renderMemoryCitationRolloutIds(rolloutIds));
+    }
+    details.appendChild(body);
+    return details;
+  }
+
+  function renderMemoryCitationEntry(entry) {
+    const item = el("div", { className: "memoryCitationEntry" });
+    const location = el("div", { className: "memoryCitationLocation" });
+    location.textContent = formatMemoryCitationLocation(entry);
+    item.appendChild(location);
+
+    const note = typeof entry.note === "string" ? entry.note.trim() : "";
+    if (note) {
+      const noteEl = el("div", { className: "memoryCitationNote" });
+      const label = el("span", { className: "memoryCitationNoteLabel" });
+      label.textContent = `${i18n.memoryCitationNote || "Note"}:`;
+      const text = el("span", { className: "memoryCitationNoteText" });
+      text.textContent = note;
+      noteEl.appendChild(label);
+      noteEl.appendChild(text);
+      item.appendChild(noteEl);
+    }
+    return item;
+  }
+
+  function renderMemoryCitationRolloutIds(rolloutIds) {
+    const section = el("div", { className: "memoryCitationRollouts" });
+    const title = el("div", { className: "memoryCitationRolloutsTitle" });
+    title.textContent = i18n.memoryCitationRelatedSessions || "Related sessions";
+    section.appendChild(title);
+    const list = el("div", { className: "memoryCitationRolloutList" });
+    for (const id of rolloutIds) {
+      const code = el("code", { className: "memoryCitationRolloutId" });
+      code.textContent = id;
+      list.appendChild(code);
+    }
+    section.appendChild(list);
+    return section;
+  }
+
+  function normalizeMemoryCitationEntries(value) {
+    if (!Array.isArray(value)) return [];
+    const entries = [];
+    for (const raw of value) {
+      if (!raw || typeof raw !== "object") continue;
+      const path = typeof raw.path === "string" ? raw.path.trim() : "";
+      if (!path) continue;
+      entries.push({
+        path,
+        lineStart: normalizeMemoryCitationLine(raw.lineStart),
+        lineEnd: normalizeMemoryCitationLine(raw.lineEnd),
+        note: typeof raw.note === "string" ? raw.note.trim() : "",
+      });
+    }
+    return entries;
+  }
+
+  function normalizeMemoryCitationRolloutIds(value) {
+    if (!Array.isArray(value)) return [];
+    return value.map((id) => (typeof id === "string" ? id.trim() : "")).filter((id) => id.length > 0);
+  }
+
+  function normalizeMemoryCitationLine(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+    const line = Math.floor(value);
+    return line > 0 ? line : undefined;
+  }
+
+  function formatMemoryCitationLocation(entry) {
+    const path = entry && typeof entry.path === "string" ? entry.path : "";
+    const lineStart = normalizeMemoryCitationLine(entry && entry.lineStart);
+    const lineEnd = normalizeMemoryCitationLine(entry && entry.lineEnd);
+    if (lineStart !== undefined && lineEnd !== undefined && lineEnd !== lineStart) {
+      return formatTemplate(i18n.memoryCitationEntryRange || "{0}:{1}-{2}", path, lineStart, lineEnd);
+    }
+    if (lineStart !== undefined) {
+      return formatTemplate(i18n.memoryCitationEntryLine || "{0}:{1}", path, lineStart);
+    }
+    return path;
   }
 
   function getMessageModelMetaText(item) {
@@ -5318,6 +6353,7 @@
     render();
     const elTarget = document.getElementById(`msg-${messageIndex}`);
     if (!elTarget) return;
+    if (isUserMessageIndex(messageIndex)) suppressStickyUserUntilUserScroll();
     elTarget.classList.add("highlight");
     elTarget.scrollIntoView({ block: "center" });
   }
@@ -5455,6 +6491,7 @@
       return;
     }
     elTarget.classList.add("highlight");
+    if (isUserMessageIndex(messageIndex)) suppressStickyUserUntilUserScroll();
     elTarget.scrollIntoView({ block: "center" });
     finish();
     setTimeout(() => {
@@ -5468,6 +6505,76 @@
     const elTarget = document.getElementById(`msg-${messageIndex}`);
     if (!elTarget) return;
     elTarget.classList.add("highlight");
+  }
+
+  function applyPageSearchSeed(seed) {
+    if (!(pageSearchBarEl instanceof HTMLElement) || !(pageSearchInputEl instanceof HTMLInputElement)) return;
+    pendingPageSearchSeed = null;
+    applyPageSearchPanelWidth();
+    pageSearchBarEl.hidden = false;
+    document.body.classList.add("pageSearchOpen");
+    updateToolbarCompactMode();
+    applyPageSearchSeedCore(seed, { fallbackToNearest: false });
+    suppressNextPageSearchFocusSuggestions = true;
+    pageSearchInputEl.focus();
+    pageSearchInputEl.select();
+  }
+
+  function applyPendingPageSearchSeedOnOpen() {
+    if (!(pageSearchInputEl instanceof HTMLInputElement)) return false;
+    const seed = pendingPageSearchSeed;
+    if (!seed) return false;
+    pendingPageSearchSeed = null;
+    return applyPageSearchSeedCore(seed, { fallbackToNearest: true });
+  }
+
+  function applyPageSearchSeedCore(seed, options = {}) {
+    pageSearchInputEl.value = seed.queryInput;
+    pageSearchCaseSensitive = seed.caseSensitive === true;
+    hidePageSearchSuggestions();
+    refreshPageSearchResults({ preserveIndex: false, reveal: false });
+    commitCurrentPageSearchQuery();
+    if (typeof seed.preferredMessageIndex === "number") {
+      activatePageSearchResultForMessageIndex(seed.preferredMessageIndex);
+    } else if (pageSearchResults.length > 0) {
+      const fallbackIndex = options.fallbackToNearest ? findNearestPageSearchResultToScrollPosition() : 0;
+      activatePageSearchResult(fallbackIndex >= 0 ? fallbackIndex : 0, { reveal: false });
+    }
+    return true;
+  }
+
+  function activatePageSearchResultForMessageIndex(messageIndex) {
+    if (!Number.isFinite(messageIndex) || pageSearchResults.length === 0) return false;
+    const target = Math.max(0, Math.floor(messageIndex));
+    const index = pageSearchResults.findIndex((result) => result && result.messageIndex === target);
+    if (index >= 0) {
+      activatePageSearchResult(index, { reveal: false });
+      return true;
+    }
+    const fallbackIndex = findNearestPageSearchResultToScrollPosition();
+    activatePageSearchResult(fallbackIndex >= 0 ? fallbackIndex : 0, { reveal: false });
+    return false;
+  }
+
+  function findNearestPageSearchResultToScrollPosition() {
+    if (!Array.isArray(pageSearchResults) || pageSearchResults.length === 0) return -1;
+    const root = getScrollRoot();
+    const rootRect = root instanceof HTMLElement ? root.getBoundingClientRect() : { top: 0 };
+    const targetTop = Number.isFinite(rootRect.top) ? rootRect.top : 0;
+    let bestIndex = -1;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < pageSearchResults.length; i += 1) {
+      const mark = pageSearchResults[i]?.mark;
+      if (!(mark instanceof HTMLElement)) continue;
+      const rect = mark.getBoundingClientRect();
+      if (rect.width <= 0 && rect.height <= 0) continue;
+      const distance = Math.abs(rect.top - targetTop);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
+      }
+    }
+    return bestIndex;
   }
 
   function restoreScroll(scrollY, onRestored) {
@@ -5645,6 +6752,7 @@
       hostIndex: hostMessageIndex,
       scrollTop: getScrollTop(),
     });
+    if (isUserMessageIndex(targetMessageIndex)) suppressStickyUserUntilUserScroll();
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         elTarget.scrollIntoView({ block: "start" });
@@ -5740,18 +6848,38 @@
     };
   }
 
-  function shouldAutoShowDetails(model, revealMessageIndex, revealTarget) {
-    if (!model || !Array.isArray(model.items)) return false;
-    if (revealTarget) return false;
-    if (typeof revealMessageIndex !== "number") return false;
-    for (const item of model.items) {
+  function normalizePageSearchSeed(value) {
+    if (!value || typeof value !== "object") return null;
+    const queryInput = typeof value.queryInput === "string" ? value.queryInput.trim() : "";
+    if (!queryInput) return null;
+    const preferredMessageIndex =
+      typeof value.preferredMessageIndex === "number" && Number.isFinite(value.preferredMessageIndex)
+        ? Math.max(0, Math.floor(value.preferredMessageIndex))
+        : undefined;
+    return {
+      queryInput: queryInput.slice(0, 1000),
+      caseSensitive: value.caseSensitive === true,
+      ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
+      ...(value.autoOpen === false ? { autoOpen: false } : {}),
+    };
+  }
+
+  function normalizeSearchHistoryCandidates(value) {
+    if (!Array.isArray(value)) return [];
+    const out = [];
+    const seen = new Set();
+    for (const item of value) {
       if (!item || typeof item !== "object") continue;
-      if (item.type !== "message") continue;
-      if (typeof item.messageIndex !== "number") continue;
-      if (item.messageIndex !== revealMessageIndex) continue;
-      return item.role === "user";
+      const queryInput = typeof item.queryInput === "string" ? item.queryInput.trim() : "";
+      if (!queryInput) continue;
+      const key = typeof item.key === "string" ? item.key.trim() : "";
+      if (!key) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ key, queryInput: queryInput.slice(0, 1000) });
+      if (out.length >= MAX_PAGE_SEARCH_HISTORY_CANDIDATES) break;
     }
-    return false;
+    return out;
   }
 
   function renderMarkdownInto(container, markdownText) {

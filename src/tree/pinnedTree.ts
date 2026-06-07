@@ -4,13 +4,17 @@ import type { HistoryService } from "../services/historyService";
 import type { PinEntry, PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { ProjectAliasStore } from "../services/projectAliasStore";
+import { NO_CWD_PROJECT_KEY, type ProjectAssociationStore } from "../services/projectAssociationStore";
 import type { ArchiveLocationFilter, SessionSource, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
 import type { DateScope } from "../types/dateScope";
 import {
   HistoryEmptyNode,
   MissingPinnedNode,
   PinnedDropHintNode,
+  type ProjectAssociatedSource,
+  type ProjectParentAssociation,
   ProjectNode,
+  RelatedGroupNode,
   SessionNode,
   TreeNode,
   missingPinnedLabel,
@@ -24,13 +28,22 @@ import { safeDisplayPath, truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
 import { buildSessionDescription } from "./sessionDescriptionUtils";
 import { buildSessionHoverTooltip } from "./sessionTooltipUtils";
-
-const NO_CWD_PROJECT_KEY = "__no_cwd__";
+import { matchProjectByCanonicalKey } from "../services/projectPathMapper";
+import {
+  appendAssociatedSourceLines,
+  buildAssociatedSources,
+  buildDirectGroupOnlySourcesByTargetKey,
+  buildProjectGroupTreeNodes,
+  compareProjectTreeNodes,
+  type ProjectGroupTreeBuildContext,
+} from "./projectGroupTreeBuilder";
 
 export type PinnedSortMode = "pinnedAt" | "historyDate";
 
 type PinnedVisibleEntry = {
   projectKey: string;
+  relocationProjectKey: string;
+  originalProjectKey: string;
   cwd: string | null;
   pinnedAt: number;
   fsPath: string;
@@ -38,21 +51,39 @@ type PinnedVisibleEntry = {
   session: SessionSummary | null;
 };
 
+type PinnedProjectBucket = {
+  key: string;
+  groupKey: string;
+  cwd: string | null;
+  entries: PinnedVisibleEntry[];
+  associatedSourceCwds: Map<string, string>;
+  hasTargetSession: boolean;
+};
+
+type PinnedProjectBuildContext = ProjectGroupTreeBuildContext<PinnedProjectBucket>;
+
 // Provides the pinned sessions view.
 export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
   private readonly historyService: HistoryService;
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;
   private readonly projectAliasStore: ProjectAliasStore;
+  private readonly projectAssociationStore: ProjectAssociationStore;
   private filter: DateScope;
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
   private archiveLocationFilter: ArchiveLocationFilter;
   private projectCwd: string | null;
+  private projectCwdKey: string | null = null;
+  private projectScopeCwd: string | null;
+  private projectScopeCwdKey: string | null = null;
   private projectGrouped: boolean;
   private sortMode: PinnedSortMode;
   private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly canonicalProjectKeyCache = new Map<string, string>();
+  private visibleEntriesCache: PinnedVisibleEntry[] | null = null;
+  private projectEntriesByRelocationKey = new Map<string, PinnedVisibleEntry[]>();
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   private initialLoadComplete = false;
   public readonly onDidChangeTreeData = this.emitter.event;
@@ -62,11 +93,13 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     pinStore: PinStore,
     annotationStore: SessionAnnotationStore,
     projectAliasStore: ProjectAliasStore,
+    projectAssociationStore: ProjectAssociationStore,
     filter: DateScope,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
     archiveLocationFilter: ArchiveLocationFilter,
     projectCwd: string | null,
+    projectScopeCwd: string | null,
     projectGrouped: boolean,
     sortMode: PinnedSortMode,
     extensionUri: vscode.Uri,
@@ -75,11 +108,14 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
     this.projectAliasStore = projectAliasStore;
+    this.projectAssociationStore = projectAssociationStore;
     this.filter = filter;
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
     this.archiveLocationFilter = archiveLocationFilter;
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
+    this.projectScopeCwd =
+      typeof projectScopeCwd === "string" && projectScopeCwd.trim().length > 0 ? projectScopeCwd.trim() : null;
     this.projectGrouped = projectGrouped;
     this.sortMode = normalizePinnedSortMode(sortMode);
     this.codexIconPath = {
@@ -90,9 +126,13 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-claude.svg"),
       dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-claude.svg"),
     };
+    this.recomputeProjectFilterKeys();
   }
 
   public refresh(): void {
+    this.canonicalProjectKeyCache.clear();
+    this.clearVisibleEntriesCache();
+    this.recomputeProjectFilterKeys();
     this.emitter.fire();
   }
 
@@ -104,35 +144,53 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 
   public setTagFilter(tags: readonly string[]): void {
     this.tagFilter = normalizeTagFilter(tags);
+    this.clearVisibleEntriesCache();
   }
 
   public setFilter(filter: DateScope): void {
     this.filter = filter;
+    this.clearVisibleEntriesCache();
   }
 
   public setSourceFilter(sourceFilter: SessionSourceFilter): void {
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
+    this.clearVisibleEntriesCache();
   }
 
   public setArchiveLocationFilter(archiveLocationFilter: ArchiveLocationFilter): void {
     this.archiveLocationFilter = archiveLocationFilter;
+    this.clearVisibleEntriesCache();
   }
 
   public setProjectFilter(projectCwd: string | null): void {
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
+    this.canonicalProjectKeyCache.clear();
+    this.clearVisibleEntriesCache();
+    this.recomputeProjectFilterKeys();
+  }
+
+  public setProjectScopeFilter(projectScopeCwd: string | null): void {
+    this.projectScopeCwd =
+      typeof projectScopeCwd === "string" && projectScopeCwd.trim().length > 0 ? projectScopeCwd.trim() : null;
+    this.canonicalProjectKeyCache.clear();
+    this.clearVisibleEntriesCache();
+    this.recomputeProjectFilterKeys();
   }
 
   public setProjectGrouped(projectGrouped: boolean): void {
     this.projectGrouped = projectGrouped;
+    this.clearVisibleEntriesCache();
   }
 
   public setSortMode(sortMode: PinnedSortMode): void {
     this.sortMode = normalizePinnedSortMode(sortMode);
+    this.clearVisibleEntriesCache();
   }
 
   public setFilters(
     filter: DateScope,
     projectCwd: string | null,
+    projectScopeCwd: string | null,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
     archiveLocationFilter: ArchiveLocationFilter,
@@ -140,6 +198,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     // Update filters in bulk; the caller triggers refresh.
     this.setFilter(filter);
     this.setProjectFilter(projectCwd);
+    this.setProjectScopeFilter(projectScopeCwd);
     this.setSourceFilter(sourceFilter);
     this.setTagFilter(tagFilter);
     this.setArchiveLocationFilter(archiveLocationFilter);
@@ -187,11 +246,10 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   }
 
   private matchesProject(session: SessionSummary): boolean {
-    const projectCwd = this.projectCwd;
-    if (!projectCwd) return true;
-    const cwd = getSessionCwd(session);
-    if (!cwd) return false;
-    return normalizeProjectKey(cwd) === normalizeProjectKey(projectCwd);
+    return matchProjectByCanonicalKey(getSessionCwd(session), {
+      projectKey: this.projectCwdKey,
+      projectScopeKey: this.projectScopeCwdKey,
+    }, (cwd) => this.getCanonicalProjectKey(cwd));
   }
 
   private matchesMissingPinnedSource(fsPath: string): boolean {
@@ -214,36 +272,30 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       item.contextValue = toTreeItemContextValue(element);
       item.iconPath = new vscode.ThemeIcon("root-folder");
       if (element.alias) {
-        item.tooltip = t(
-          this.sortMode === "historyDate"
-            ? "tree.tooltip.pinnedProject.historyDateWithAlias"
-            : "tree.tooltip.pinnedProject.pinnedAtWithAlias",
-          element.alias,
-          element.cwd ?? t("tree.project.noCwd"),
-          element.sessionCount,
-          element.latestLabel,
-        );
+        item.tooltip = this.buildProjectTooltip(element, true);
       } else {
-        item.tooltip = t(
-          this.sortMode === "historyDate"
-            ? "tree.tooltip.pinnedProject.historyDate"
-            : "tree.tooltip.pinnedProject.pinnedAt",
-          element.cwd ?? t("tree.project.noCwd"),
-          element.sessionCount,
-          element.latestLabel,
-        );
+        item.tooltip = this.buildProjectTooltip(element, false);
       }
+      return item;
+    }
+    if (element instanceof RelatedGroupNode) {
+      const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Collapsed);
+      item.description = element.description;
+      item.contextValue = toTreeItemContextValue(element);
+      item.iconPath = new vscode.ThemeIcon("folder-library");
+      item.tooltip = this.buildRelatedGroupTooltip(element);
       return item;
     }
     if (element instanceof SessionNode) {
       // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
       const shortTitle = truncateByDisplayWidth(element.session.displayTitle, 40, "...");
       const annotation = this.annotationStore.get(element.session.fsPath);
-      const projectAlias = this.projectAliasStore.getAliasByCwd(getSessionCwd(element.session));
+      const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(element.session));
+      const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
       const item = new vscode.TreeItem(
         `${element.session.localDate} ${element.session.timeLabel} ${shortTitle}`,
       );
-      item.description = buildSessionDescription(element.session, annotation?.tags ?? [], projectAlias);
+      item.description = buildSessionDescription(element.session, annotation?.tags ?? [], projectAlias, projectDisplayCwd);
       item.contextValue = toTreeItemContextValue(element);
       // Show source-specific icons (Codex/Claude) in the list row.
       item.iconPath = this.resolveSourceIconPath(element.session.source);
@@ -263,6 +315,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         description: typeof item.description === "string" ? item.description : undefined,
         mode: getConfig().previewTooltipMode,
         projectAlias,
+        projectDisplayCwd,
       });
       return item;
     }
@@ -295,9 +348,10 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
     if (element) {
       if (element instanceof ProjectNode) {
-        return this.collectVisibleEntries()
-          .filter((entry) => entry.projectKey === element.key)
-          .map((entry) => entry.node);
+        return this.getProjectEntries(element.key).map((entry) => entry.node);
+      }
+      if (element instanceof RelatedGroupNode) {
+        return [...element.children];
       }
       return [];
     }
@@ -319,6 +373,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   }
 
   private collectVisibleEntries(): PinnedVisibleEntry[] {
+    if (this.visibleEntriesCache) return this.visibleEntriesCache;
     const pins = this.pinStore.getAll();
     const entries: PinnedVisibleEntry[] = [];
     for (const p of pins) {
@@ -330,8 +385,11 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         if (!this.matchesTags(s.fsPath)) continue;
         if (!this.matchesProject(s)) continue;
         const cwd = getSessionCwd(s);
+        const originalProjectKey = cwd ? normalizeProjectKey(cwd) : NO_CWD_PROJECT_KEY;
         entries.push({
-          projectKey: cwd ? normalizeProjectKey(cwd) : NO_CWD_PROJECT_KEY,
+          projectKey: cwd ? this.getCanonicalProjectKey(cwd) : NO_CWD_PROJECT_KEY,
+          relocationProjectKey: cwd ? this.getRelocationProjectKey(cwd) : NO_CWD_PROJECT_KEY,
+          originalProjectKey,
           cwd,
           pinnedAt: p.pinnedAt,
           fsPath: s.fsPath,
@@ -345,6 +403,8 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         if (this.projectCwd) continue;
         entries.push({
           projectKey: NO_CWD_PROJECT_KEY,
+          relocationProjectKey: NO_CWD_PROJECT_KEY,
+          originalProjectKey: NO_CWD_PROJECT_KEY,
           cwd: null,
           pinnedAt: p.pinnedAt,
           fsPath: p.fsPath,
@@ -354,43 +414,172 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       }
     }
     entries.sort((a, b) => comparePinnedVisibleEntries(a, b, this.sortMode));
+    this.visibleEntriesCache = entries;
+    this.projectEntriesByRelocationKey = buildProjectEntriesByRelocationKey(entries);
     return entries;
   }
 
-  private buildProjectNodes(entries: readonly PinnedVisibleEntry[]): ProjectNode[] {
-    const groups = new Map<string, { cwd: string | null; entries: PinnedVisibleEntry[] }>();
+  private getProjectEntries(projectKey: string): PinnedVisibleEntry[] {
+    this.collectVisibleEntries();
+    return this.projectEntriesByRelocationKey.get(projectKey) ?? [];
+  }
 
+  private clearVisibleEntriesCache(): void {
+    this.visibleEntriesCache = null;
+    this.projectEntriesByRelocationKey.clear();
+  }
+
+  private buildProjectNodes(entries: readonly PinnedVisibleEntry[]): TreeNode[] {
+    const context = this.buildProjectBuildContext(entries);
+    const projectOrder = buildPinnedProjectOrder(context.buckets);
+    return buildProjectGroupTreeNodes({
+      context,
+      createProjectNode: (bucket, parentAssociation) => this.createProjectNodeFromBucket(bucket, parentAssociation),
+      getRepresentativeCwd: (targetKey, bucket) =>
+        this.projectAssociationStore.getRepresentativeTargetCwd(targetKey) ?? bucket?.cwd ?? null,
+      getAliasByCwd: (cwd) => this.projectAliasStore.getAliasByCwd(cwd) ?? null,
+      buildProjectLabel,
+      compareNodes: (left, right) => comparePinnedProjectTreeNodes(left, right, projectOrder),
+    });
+  }
+
+  private buildProjectBuildContext(entries: readonly PinnedVisibleEntry[]): PinnedProjectBuildContext {
+    const buckets = new Map<string, PinnedProjectBucket>();
     for (const entry of entries) {
-      const existing = groups.get(entry.projectKey);
+      const key = entry.relocationProjectKey;
+      const existing = buckets.get(key);
       if (existing) {
         existing.entries.push(entry);
-        if (!existing.cwd && entry.cwd) existing.cwd = entry.cwd;
+        if (entry.cwd && entry.originalProjectKey === key) {
+          existing.cwd = entry.cwd;
+          existing.hasTargetSession = true;
+        } else if (entry.cwd) {
+          existing.associatedSourceCwds.set(entry.originalProjectKey, entry.cwd);
+        }
         continue;
       }
-      groups.set(entry.projectKey, { cwd: entry.cwd, entries: [entry] });
+      const representativeCwd =
+        entry.cwd && entry.originalProjectKey === key ? entry.cwd : this.projectAssociationStore.getRepresentativeTargetCwd(key);
+      const associatedSourceCwds = new Map<string, string>();
+      if (entry.cwd && entry.originalProjectKey !== key) {
+        associatedSourceCwds.set(entry.originalProjectKey, entry.cwd);
+      }
+      buckets.set(key, {
+        key,
+        groupKey: entry.projectKey,
+        cwd: representativeCwd ?? entry.cwd,
+        entries: [entry],
+        associatedSourceCwds,
+        hasTargetSession: !!entry.cwd && entry.originalProjectKey === key,
+      });
     }
 
-    return Array.from(groups.entries()).map(([key, group]) => {
-      const first = group.entries[0] ?? null;
-      const latestLabel = formatProjectLatestLabel(first, this.sortMode);
-      const fallbackLabel = buildProjectLabel(group.cwd);
-      const alias = this.projectAliasStore.getAliasByCwd(group.cwd) ?? null;
-      return new ProjectNode({
-        key,
-        label: alias ?? fallbackLabel,
-        cwd: group.cwd,
-        alias,
-        fallbackLabel,
-        sessionCount: group.entries.length,
-        latestLabel,
-        description: buildProjectDescription(group.cwd, group.entries.length),
-      });
+    return {
+      buckets,
+      directGroupOnlySourcesByTargetKey: buildDirectGroupOnlySourcesByTargetKey(this.projectAssociationStore.getAll()),
+    };
+  }
+
+  private createProjectNodeFromBucket(
+    group: PinnedProjectBucket,
+    parentAssociation: ProjectParentAssociation | null = null,
+  ): ProjectNode {
+    const first = group.entries[0] ?? null;
+    const latestLabel = formatProjectLatestLabel(first, this.sortMode);
+    const fallbackLabel = buildProjectLabel(group.cwd);
+    const alias = this.projectAliasStore.getAliasByCwd(group.cwd) ?? null;
+    const associatedSources = buildAssociatedSources(
+      group.cwd ? this.projectAssociationStore.getRelocationSourcesForTargetCwd(group.cwd) : [],
+      group.associatedSourceCwds,
+    );
+    return new ProjectNode({
+      key: group.key,
+      label: alias ?? fallbackLabel,
+      cwd: group.cwd,
+      alias,
+      fallbackLabel,
+      sessionCount: group.entries.length,
+      latestLabel,
+      description: buildProjectDescription(
+        group.cwd,
+        group.entries.length,
+        associatedSources.length,
+        !group.hasTargetSession && associatedSources.length > 0,
+      ),
+      associatedSources,
+      targetMissingHistory: !group.hasTargetSession && associatedSources.length > 0,
+      parentAssociation,
     });
+  }
+
+  private getCanonicalProjectKey(cwd: string): string {
+    const key = normalizeProjectKey(cwd);
+    const cached = this.canonicalProjectKeyCache.get(key);
+    if (cached) return cached;
+    const canonical = this.projectAssociationStore.getCanonicalProjectKey(cwd) ?? key;
+    this.canonicalProjectKeyCache.set(key, canonical);
+    return canonical;
+  }
+
+  private recomputeProjectFilterKeys(): void {
+    this.projectCwdKey = this.projectCwd ? this.getCanonicalProjectKey(this.projectCwd) : null;
+    this.projectScopeCwdKey = this.projectScopeCwd ? this.getCanonicalProjectKey(this.projectScopeCwd) : null;
+  }
+
+  private getRelocationProjectKey(cwd: string): string {
+    return this.projectAssociationStore.getRelocationProjectKey(cwd) ?? normalizeProjectKey(cwd);
+  }
+
+  private getProjectDisplayCwd(cwd: string | null): string | null {
+    if (!cwd) return null;
+    return this.projectAssociationStore.getDisplayCwd(cwd) ?? cwd;
+  }
+
+  private buildProjectTooltip(element: ProjectNode, withAlias: boolean): string {
+    const lines = [
+      withAlias
+        ? t(
+            this.sortMode === "historyDate"
+              ? "tree.tooltip.pinnedProject.historyDateWithAlias"
+              : "tree.tooltip.pinnedProject.pinnedAtWithAlias",
+            element.alias ?? element.label,
+            element.cwd ?? t("tree.project.noCwd"),
+            element.sessionCount,
+            element.latestLabel,
+          )
+        : t(
+            this.sortMode === "historyDate"
+              ? "tree.tooltip.pinnedProject.historyDate"
+              : "tree.tooltip.pinnedProject.pinnedAt",
+            element.cwd ?? t("tree.project.noCwd"),
+            element.sessionCount,
+            element.latestLabel,
+          ),
+    ];
+    if (element.targetMissingHistory) lines.push(t("projectAssociation.target.missingHistory"));
+    appendAssociatedSourceLines(lines, element.associatedSources, formatProjectAssociationMode);
+    return lines.join("\n");
+  }
+
+  private buildRelatedGroupTooltip(element: RelatedGroupNode): string {
+    const lines = [
+      t(
+        "projectAssociation.group.tooltip",
+        element.alias ?? element.fallbackLabel,
+        element.cwd ?? t("tree.project.noCwd"),
+        element.projectCount,
+        element.sessionCount,
+        element.latestLabel,
+      ),
+    ];
+    appendAssociatedSourceLines(lines, element.directSources, formatProjectAssociationMode);
+    return lines.join("\n");
   }
 
   private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {
     return source === "claude" ? this.claudeIconPath : this.codexIconPath;
   }
+
 }
 
 function normalizePinnedSortMode(value: PinnedSortMode): PinnedSortMode {
@@ -404,6 +593,54 @@ function comparePinnedVisibleEntries(
 ): number {
   if (sortMode === "historyDate") return compareByHistoryDate(left, right);
   return compareByPinnedAt(left, right);
+}
+
+function buildProjectEntriesByRelocationKey(
+  entries: readonly PinnedVisibleEntry[],
+): Map<string, PinnedVisibleEntry[]> {
+  const out = new Map<string, PinnedVisibleEntry[]>();
+  for (const entry of entries) {
+    const bucket = out.get(entry.relocationProjectKey);
+    if (bucket) bucket.push(entry);
+    else out.set(entry.relocationProjectKey, [entry]);
+  }
+  return out;
+}
+
+function buildPinnedProjectOrder(buckets: ReadonlyMap<string, PinnedProjectBucket>): Map<string, number> {
+  const out = new Map<string, number>();
+  let index = 0;
+  for (const key of buckets.keys()) {
+    out.set(key, index);
+    index += 1;
+  }
+  return out;
+}
+
+function comparePinnedProjectTreeNodes(
+  left: TreeNode,
+  right: TreeNode,
+  projectOrder: ReadonlyMap<string, number>,
+): number {
+  const leftOrder = getPinnedProjectTreeOrder(left, projectOrder);
+  const rightOrder = getPinnedProjectTreeOrder(right, projectOrder);
+  if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+  return compareProjectTreeNodes(left, right);
+}
+
+function getPinnedProjectTreeOrder(node: TreeNode, projectOrder: ReadonlyMap<string, number>): number {
+  if (node instanceof ProjectNode) {
+    return projectOrder.get(node.key) ?? Number.MAX_SAFE_INTEGER;
+  }
+  if (node instanceof RelatedGroupNode) {
+    const ownOrder = projectOrder.get(node.key);
+    if (ownOrder !== undefined) return ownOrder;
+    return node.children.reduce(
+      (best, child) => Math.min(best, getPinnedProjectTreeOrder(child, projectOrder)),
+      Number.MAX_SAFE_INTEGER,
+    );
+  }
+  return Number.MAX_SAFE_INTEGER;
 }
 
 function compareByPinnedAt(left: PinnedVisibleEntry, right: PinnedVisibleEntry): number {
@@ -466,9 +703,21 @@ function buildProjectLabel(cwd: string | null): string {
   return base.length > 0 ? base : safeDisplayPath(cwd, 60);
 }
 
-function buildProjectDescription(cwd: string | null, pinCount: number): string {
+function buildProjectDescription(
+  cwd: string | null,
+  pinCount: number,
+  associatedSourceCount = 0,
+  targetMissingHistory = false,
+): string {
   if (!cwd) return String(pinCount);
-  return `${pinCount}  ${safeDisplayPath(cwd, 56)}`;
+  const parts = [`${pinCount}  ${safeDisplayPath(cwd, 56)}`];
+  if (associatedSourceCount > 0) parts.push(t("projectAssociation.description.relatedPaths", associatedSourceCount));
+  if (targetMissingHistory) parts.push(t("projectAssociation.target.missingHistory"));
+  return parts.join("  ");
+}
+
+function formatProjectAssociationMode(mode: ProjectAssociatedSource["mode"]): string {
+  return mode === "groupOnly" ? t("projectAssociation.mode.groupOnly") : t("projectAssociation.mode.relocate");
 }
 
 function normalizeTagFilter(values: readonly string[]): string[] {

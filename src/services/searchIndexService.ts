@@ -11,9 +11,10 @@ import {
   extractClaudeMessageContent,
   extractCodexMessageContent,
 } from "../chat/chatAttachments";
+import { splitTrailingMemoryCitationBlock } from "../chat/memoryCitation";
 import type { DebugLogger } from "./logger";
 
-const SEARCH_INDEX_FILE_VERSION = 8;
+const SEARCH_INDEX_FILE_VERSION = 9;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
 
@@ -352,7 +353,11 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
     if (role !== "user" && role !== "assistant" && role !== "developer") return true;
 
     const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false });
-    const text = normalizeWhitespace([extracted.text, buildAttachmentSearchText(extracted.attachments)].filter(Boolean).join("\n"));
+    const messageText =
+      role === "assistant" ? splitTrailingMemoryCitationBlock(extracted.text).text : extracted.text;
+    const text = normalizeWhitespace(
+      [messageText, buildAttachmentSearchText(extracted.attachments)].filter(Boolean).join("\n"),
+    );
     if (!text && extracted.attachments.length === 0) return true;
 
     if (role === "user" || role === "assistant") state.messageIndex += 1;
