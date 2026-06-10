@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-06-07
-- 対象バージョン: 2.5.0
+- 最終更新: 2026-06-10
+- 対象バージョン: 2.5.1
 
 ## 1. 概要
 
@@ -203,6 +203,7 @@
   - 保存先: `globalStorageUri/cache.v9.json`
   - 用途: 一覧表示用の要約キャッシュ
   - 通常起動時は、有効な cache context であれば filesystem scan / stat を待たずに cache から `HistoryIndex` を即時表示し、その後 background refresh で最新状態へ更新する
+  - `cache.v9.json` が破損して JSON parse error になった場合は、破損内容を退避せず削除し、通常の refresh で再生成する
   - セッションファイル処理は上限付き並列で行う（無制限 `Promise.all` は使わない）
   - 再利用条件:
     - `sessionsRoot`
@@ -231,6 +232,7 @@
   - 保存先: `globalStorageUri/search-index.v2.json`
   - 内部 file version: 9
   - 用途: 繰り返し検索を高速化する増分インデックス
+  - `search-index.v2.json` が破損して JSON parse error になった場合は、破損内容を退避せず削除し、次回検索時に再構築する
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
   - 再利用条件:
     - `sessionsRoot`
@@ -251,6 +253,11 @@
   - Claude text document の text は上限内だけ検索対象にし、PDF / Office / binary / base64 document の本文は検索対象にしない
   - Codex file reference は履歴に保存された label / path だけを検索対象にし、参照先ファイルは読み込まない
   - 保存形式: 整形なし JSON（サイズ削減のため）
+- JSON 永続化:
+  - JSON 読み込み失敗は `missing` / `parseError` / `readError` に分け、parse error だけを再生成可能な破損ファイルとして削除する
+  - 権限エラーや provider unavailable などの read error では既存ファイルを削除しない
+  - JSON 書き込みは同一ディレクトリの一時ファイルへ書いた後に rename する。rename に失敗した場合は従来互換の直接書き込みへフォールバックし、フォールバックも失敗した場合は書き込み済み一時ファイルを残す
+  - 診断ログには reason や削除成否だけを出し、JSON 本文やセッションパスは出さない
 - Handoff 生成ファイル:
   - 保存先: `globalStorageUri/handoffs/<source>/<source-root-relative-path-with-final-stem>/`
   - 例: Claude の `~/.claude/projects/<project>/<session>.jsonl` は `handoffs/claude/<project>/<session>/handoff.md` に対応する
@@ -278,8 +285,8 @@
   - 実行前に Handoff 件数と容量を確認ダイアログで表示する
 - `Empty Trash`:
   - `deleted` と `undo-delete` を手動削除する
-  - あわせて旧世代の `cache.v*.json` / `search-index.v*.json` も削除する
-  - ダイアログと Status 表示上の件数は「ゴミ箱件数」のみを扱う
+  - あわせて旧世代の `cache.v*.json` / `search-index.v*.json` と、1 時間以上古い `*.tmp-*.json` も削除する。ただし現在の `cache.v9.json` / `search-index.v2.json` は削除しない
+  - ダイアログでは古い一時ファイルの件数を個別表示せず、ストレージ整理として扱う。Status 表示上の件数は「ゴミ箱件数」のみを扱う
 - 自動削除:
   - 履歴キャッシュ、検索インデックス、ゴミ箱はユーザー操作 (`Empty Trash` / `Rebuild Cache`) に委ねる
   - Handoff 生成ファイルは作成時に古い世代だけを整理し、全削除はユーザー操作 (`Delete Handoff Files`) に委ねる
@@ -541,9 +548,18 @@
 
 ### 4.3 履歴キャッシュ
 
+- `src/storage/cacheFiles.ts`
+  - 現行の履歴キャッシュ名 (`cache.v9.json`) と検索インデックス名 (`search-index.v2.json`) を一元管理する
+  - `Empty Trash` の旧世代判定も同じ定数と pattern を使い、現行ファイル名の drift を防ぐ
+- `src/storage/jsonStorage.ts`
+  - `readJsonDetailed()` は JSON 読み込み結果を `ok` / `missing` / `parseError` / `readError` として返す
+  - `readJsonOrDropCorrupt()` は parse error のときだけ対象 JSON を best-effort で削除し、履歴キャッシュ / 検索インデックスで共通利用する
+  - read / delete result は `errorName` だけを保持し、JSON 本文や path を含み得る `errorMessage` は保持しない
+  - `writeJson()` は同一ディレクトリの一時ファイルへ書いてから rename し、rename 失敗時は直接書き込みへフォールバックする。フォールバック失敗時は一時ファイルを残す
 - `src/services/historyService.ts`
-  - `cache.v9.json` を読み書きする
+  - `cache.v9.json` を読み書きする。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
   - 有効な cache context から `HistoryIndex` を復元し、初回表示を先に完了できるようにする
+  - cache 読み込み時の parse error は cache を削除して `null` 扱いにし、read error は削除せず `null` 扱いにする
   - 変更のないファイルはキャッシュ済み `summary` を再利用する
   - ファイルごとの `stat` / キャッシュ判定 / `buildSessionSummary` は最大 4 並列で処理する
   - `HistoryIndex.byCacheKey` を構築し、`findByFsPath()` は `Map` で引く
@@ -600,9 +616,10 @@
 ### 4.5 検索インデックス
 
 - `src/services/searchIndexService.ts`
-  - `search-index.v2.json` を管理する
-  - `SEARCH_INDEX_FILE_VERSION = 8` とし、attachment metadata 追加前の既存インデックスは再構築対象にする
+  - `search-index.v2.json` を管理する。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
+  - `SEARCH_INDEX_FILE_VERSION = 9` とし、archive context / file change hints / attachment metadata 追加前の既存インデックスは再構築対象にする
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
+  - 検索インデックス読み込み時の parse error はインデックスを削除して `null` 扱いにし、次回検索時に再構築する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
   - index context に `codexArchivedSessionsRoot` と `includeCodexArchived` を含め、archived root / 有効状態の変更を検知する
   - JSONL をストリーミングで読み、検索対象メッセージ列を構築する
@@ -695,7 +712,7 @@
   - キャッシュフォルダ全体容量を集計する
   - `undo-delete` / `deleted` 件数を合算して返す
   - `handoffs` 配下の Handoff 件数 / 容量も集計する。件数は `handoff.md` の数、容量は `metadata.json` を含む配下全体の合算とする
-  - `Empty Trash` 実行時に旧世代キャッシュ / インデックスも整理する
+  - `Empty Trash` 実行時に旧世代キャッシュ / インデックスと、1 時間以上古い `*.tmp-*.json` も整理する
 
 ### 4.8 注釈 / ピン / 保存済み検索 / プロジェクト関連付け
 
@@ -1007,7 +1024,17 @@ npm run package
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 
-### 5.4 v2.5.0 リリースメモ（2026-06-07）
+### 5.4 v2.5.1 リリースメモ（2026-06-10）
+
+**修正された機能**
+
+- `Empty Trash` が現行の `cache.v9.json` を旧世代キャッシュとして削除し得る問題を修正した
+- 履歴キャッシュ / 検索インデックスの現行ファイル名を `src/storage/cacheFiles.ts` に一元化し、書き込み先と保守処理の drift を防ぐようにした
+- 履歴キャッシュ / 検索インデックスの JSON parse error を missing / read error と切り分け、破損時は退避せず削除して再生成できるようにした
+- JSON 書き込みを一時ファイル経由の best-effort atomic write に変更し、rename に失敗する provider では直接書き込みへフォールバックするようにした。古い孤立一時ファイルは `Empty Trash` で内部的に回収できるようにした
+- `package.json` / `package-lock.json` のバージョンを `2.5.1` に更新した
+
+### 5.5 v2.5.0 リリースメモ（2026-06-07）
 
 **追加された機能**
 
@@ -1039,7 +1066,7 @@ npm run package
 - ピン留めビューのプロジェクト並び順が、同じ時間に更新された場合に崩れることがある問題を修正した
 - `package.json` / `package-lock.json` のバージョンを `2.5.0` に更新した
 
-### 5.5 v2.4.1 リリースメモ（2026-05-26）
+### 5.6 v2.4.1 リリースメモ（2026-05-26）
 
 - プロジェクト (`cwd`) に、この拡張機能内だけの別名を設定 / 消去できるようにした
 - プロジェクト別名は History / Pinned のプロジェクト見出し、セッション行、tooltip、絞り込み表示、Status、Search の scope / セッション表示に反映する
@@ -1052,7 +1079,7 @@ npm run package
 - Chat Webview で `::code-comment{...}` directive をレビューコメントカードとして表示し、comma 区切りや複数行、未知 segment を含む出力も既知キーから復元できるようにした
 - `package.json` のバージョンを `2.4.1` に更新した
 
-### 5.6 v2.4.0 リリースメモ（2026-05-23）
+### 5.7 v2.4.0 リリースメモ（2026-05-23）
 
 - History に `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位` のプロジェクト表示 mode を追加した
 - プロジェクト判定用 key を全 OS で大文字小文字非区別に統一した
@@ -1070,7 +1097,7 @@ npm run package
 - Codex の `# Files mentioned by the user:` block が IDE context 後ろにある場合も、HTML / log / JSON などの file reference attachment として表示されるように修正した
 - `package.json` / `package-lock.json` のバージョンを `2.4.0` に更新した
 
-### 5.7 v2.3.0 リリースメモ（2026-05-22）
+### 5.8 v2.3.0 リリースメモ（2026-05-22）
 
 - Chat message の添付モデルを `attachments` に統合し、画像も `type: "image"` の attachment として扱うようにした
 - Claude Code の `type: "document"` を document card として表示できるようにした
@@ -1104,7 +1131,7 @@ npm run package
 - Resume / Handoff では clean text と attachment summary を使い、raw tag / `Files mentioned` block の重複やバイナリ再添付を避けるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.3.0` に更新した
 
-### 5.8 v2.2.0 リリースメモ（2026-05-21）
+### 5.9 v2.2.0 リリースメモ（2026-05-21）
 
 - Codex の通常 `sessions` に加えて、任意で `archived_sessions` を読み込めるようにした
 - `codexHistoryViewer.codex.archivedSessions.enabled` と `codexHistoryViewer.codex.archivedSessionsRoot` を追加した
@@ -1138,7 +1165,7 @@ npm run package
 - 検索インデックスの context に archived root / archived 有効状態を含めるようにした
 - `package.json` のバージョンを `2.2.0` に更新した
 
-### 5.9 v2.1.0 リリースメモ（2026-05-19）
+### 5.10 v2.1.0 リリースメモ（2026-05-19）
 
 - Codex / Claude Code 間の Handoff を新規実装した
 - History / Pinned / Search のセッション右クリックに、`他のAIへ引継ぎ` 階層メニューを追加した
@@ -1158,7 +1185,7 @@ npm run package
 - チャット表示内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
 - `package.json` / `package-lock.json` のバージョンを `2.1.0` に更新した
 
-### 5.10 v2.0.1 リリースメモ（2026-05-15）
+### 5.11 v2.0.1 リリースメモ（2026-05-15）
 
 - 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
 - しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
@@ -1182,7 +1209,7 @@ npm run package
 - ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
 - `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
 
-### 5.11 v2.0.0 リリースメモ（2026-05-14）
+### 5.12 v2.0.0 リリースメモ（2026-05-14）
 
 - ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる File AI Change History を追加した
 - カスタムタイトル操作を QuickPick 入口へ統一し、チャット履歴ビューアのヘッダーからも設定 / 消去できるようにした
@@ -1200,7 +1227,7 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.12 v1.5.1 リリースメモ（2026-05-08）
+### 5.13 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
@@ -1211,7 +1238,7 @@ npm run package
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.13 v1.5.0 リリースメモ（2026-05-07）
+### 5.14 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -1220,7 +1247,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.14 v1.4.3 リリースメモ（2026-04-30）
+### 5.15 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -1404,10 +1431,13 @@ npm run package
 - `toolCallsAndOutputs` でも Codex の `custom_tool_call_output` の stdout / stderr 全文や diff 本文は検索インデックスへ入らない
 - `search.indexToolContent` 変更時に検索インデックス再作成の通知が出て、`Rebuild Search Index` で検索インデックスだけ再作成できる
 - `Rebuild Cache` 実行前に確認が出て、履歴キャッシュと検索インデックスが再作成される
+- 破損した `cache.v9.json` がある状態で起動 / refresh すると、parse error として削除され、履歴キャッシュが再生成される
+- 破損した `search-index.v2.json` がある状態で検索すると、parse error として削除され、検索インデックスが再構築される
 - `Delete` 実行後に `undo-delete` / `deleted` の扱いと `Undo Last Action` が整合する
 - `Delete` 後に該当チャットパネルが閉じ、存在しないセッションを開こうとしてもゴーストパネルが残らない
 - Undo 付き通知のボタンと Undo 完了メッセージが `ui.language` に応じて表示される
 - `Empty Trash` 実行後に Status のゴミ箱件数が 0 になり、旧世代キャッシュも削除される
+- `Empty Trash` 実行後も現行の `cache.v9.json` / `search-index.v2.json` は削除されず、旧世代の `cache.v*.json` / `search-index.v*.json` と 1 時間以上古い `*.tmp-*.json` だけが削除される
 - Control ビューと Command Palette に `Debug Info (Copy)` が出ない
 - `debug.logging.enabled` を `true` にすると OutputChannel に履歴 refresh / 検索インデックスの診断ログが出る
 - 診断ログにセッションパス、セッションID、メッセージ本文が含まれない

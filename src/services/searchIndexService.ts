@@ -4,7 +4,8 @@ import * as readline from "node:readline";
 import * as vscode from "vscode";
 import type { SearchIndexToolContent } from "../settings";
 import type { HistoryIndex } from "../sessions/sessionTypes";
-import { readJson, writeJson } from "../storage/jsonStorage";
+import { SEARCH_INDEX_FILE_NAME } from "../storage/cacheFiles";
+import { formatJsonReadOrDropCorruptDebug, readJsonOrDropCorrupt, writeJson } from "../storage/jsonStorage";
 import { normalizeWhitespace } from "../utils/textUtils";
 import {
   buildAttachmentSearchText,
@@ -86,7 +87,7 @@ export class SearchIndexService {
   private readonly entries = new Map<string, SearchIndexEntryV1>();
 
   constructor(globalStorageUri: vscode.Uri, logger?: DebugLogger) {
-    this.cacheUri = vscode.Uri.joinPath(globalStorageUri, "search-index.v2.json");
+    this.cacheUri = vscode.Uri.joinPath(globalStorageUri, SEARCH_INDEX_FILE_NAME);
     this.logger = logger;
   }
 
@@ -234,7 +235,7 @@ export class SearchIndexService {
       return;
     }
 
-    const raw = await readJson<SearchIndexFileV2>(this.cacheUri);
+    const raw = await this.readCacheFile();
     if (!isValidCacheFile(raw) || !isSameContext(raw.context, normalizedContext)) {
       this.context = normalizedContext;
       this.entries.clear();
@@ -248,6 +249,15 @@ export class SearchIndexService {
       this.entries.set(key, entry);
     }
     this.loaded = true;
+  }
+
+  private async readCacheFile(): Promise<SearchIndexFileV2 | null> {
+    const outcome = await readJsonOrDropCorrupt<SearchIndexFileV2>(this.cacheUri);
+    const { result } = outcome;
+    if (result.ok) return result.value;
+    const debugMessage = formatJsonReadOrDropCorruptDebug("search.index readCache", outcome);
+    if (debugMessage) this.logger?.debug(debugMessage);
+    return null;
   }
 
   private async save(): Promise<void> {

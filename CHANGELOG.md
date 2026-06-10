@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.1] - 2026-06-10
+
+### Fixed
+
+- Fixed cache cleanup so `Empty Trash` no longer treats the current history cache as a legacy file.
+- Centralized current cache and search index file names to prevent drift between write paths and maintenance cleanup.
+- Hardened history cache, search index, and JSON persistence handling so regeneratable corrupt files can be cleaned up safely.
+
 ## [2.5.0] - 2026-06-07
 
 ### Added

@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **2.5.0** (2026-06-07).
+Latest release: **2.5.1** (2026-06-10).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -140,7 +140,7 @@ Most settings are available from VS Code Settings under **Codex History Viewer**
 - `codexHistoryViewer.handoff.enabled`: show cross-agent handoff actions.
 - `codexHistoryViewer.search.indexToolContent`: control search index tool-content scope.
 - `codexHistoryViewer.fileChangeHistory.explorerContextMenu.enabled`: show **File AI Change History** in Explorer.
-- `codexHistoryViewer.autoRefresh.enabled`: refresh History and opt-in chat tabs when local session files change.
+- `codexHistoryViewer.autoRefresh.enabled`: watch local session files and refresh the History tree and opted-in chat tabs when the VS Code window is focused and the History tree is visible or an opted-in chat tab is open.
 - `codexHistoryViewer.chat.openPosition`: open chat at top, last viewed message, or latest rendered card.
 - `codexHistoryViewer.chat.stickyUserPrompt`: keep the current user prompt visible while scrolling chat history.
 - `codexHistoryViewer.chat.performanceMode`: choose default chat rendering performance mode.
@@ -148,6 +148,19 @@ Most settings are available from VS Code Settings under **Codex History Viewer**
 - `codexHistoryViewer.images.enabled`: show supported image attachments.
 - `codexHistoryViewer.ui.timeGuide.enabled`: enable compact date guides and bookmark controls.
 - `codexHistoryViewer.ui.language`: choose `auto`, `en`, or `ja`.
+
+### Suggested Settings
+
+The defaults are designed for regular use. These settings are useful starting points when you want a lighter UI, richer search, or more active refresh behavior:
+
+| Situation | Suggested settings |
+| --- | --- |
+| Large sessions or many diffs | Keep `codexHistoryViewer.chat.performanceMode` set to `auto`, or use `simplified` if chat views feel heavy. |
+| Faster, narrower search | Use `codexHistoryViewer.search.indexToolContent: toolCalls` instead of `toolCallsAndOutputs`, and lower `codexHistoryViewer.search.maxResults` if needed. |
+| Long sessions, bookmarks, or frequent timeline jumps | Enable `codexHistoryViewer.ui.timeGuide.enabled`. |
+| Frequent image-heavy sessions | Lower `codexHistoryViewer.images.thumbnailSize` or `codexHistoryViewer.images.maxSizeMB`. |
+| Live-updating session files | Enable `codexHistoryViewer.autoRefresh.enabled` when you want the History tree and opted-in chat tabs to refresh while the VS Code window is focused. |
+| Restoring chat tabs after reload | Enable `codexHistoryViewer.webview.restoreAfterReload` only if you accept the experimental duplicate-tab caveat. |
 
 If history or search results look stale, run **Control > Rebuild Cache**. It recreates both the history cache and search index after confirmation.
 
@@ -165,16 +178,11 @@ For the full command list with per-command descriptions, see:
 - If the official Codex extension stops reopening a conversation, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.5.0
+## What's New in 2.5.1
 
-- Added **Project Association** so related project histories can be linked or grouped without moving the original history files.
-- Added separate **List / Project** display and **All / Current Project Group** scope controls to History and Pinned.
-- Added **shared search history** across global search and in-page search (chat viewer and File AI Change History).
-- Added **regular expression search** and richer query syntax to in-page search (chat viewer and File AI Change History), including exact matching and search-history suggestions.
-- Added Codex memory citation display and a sticky current user prompt in chat history.
-- Changed global search to follow the current History target, including project scope, tags, Codex/Claude source, archive visibility, and date filters.
-- Changed search history and saved searches to store, display, and reuse only query text, with per-item deletion from their QuickPicks.
-- Fixed File AI Change History in-page search so the “No more history” label is not matched, and fixed Pinned project ordering for same-time updates.
+- Improved cache cleanup reliability so maintenance actions do not remove the current history cache.
+- Hardened history cache and search index recovery when regeneratable cache files become corrupt.
+- Improved JSON persistence reliability for cache and index writes.
 
 ## Changelog
 

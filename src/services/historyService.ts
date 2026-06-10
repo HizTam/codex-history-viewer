@@ -5,7 +5,8 @@ import type { HistoryIndex, HistoryRoots, SessionSummary } from "../sessions/ses
 import { buildSessionSummary } from "../sessions/sessionSummary";
 import { resolveSessionDisplayTitle, resolveSessionDisplayTitles } from "../sessions/sessionTitleResolver";
 import { normalizeCacheKey } from "../utils/fsUtils";
-import { readJson, writeJson } from "../storage/jsonStorage";
+import { HISTORY_CACHE_FILE_NAME, HISTORY_CACHE_FILE_PATTERN } from "../storage/cacheFiles";
+import { formatJsonReadOrDropCorruptDebug, readJsonOrDropCorrupt, writeJson } from "../storage/jsonStorage";
 import { getDateTimeSettingsKey, resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { CodexTitleStore } from "./codexTitleStore";
 import type { SessionTitleOverrideStore } from "./sessionTitleOverrideStore";
@@ -18,8 +19,6 @@ interface CacheEntryV1 {
 }
 
 const SUMMARY_CACHE_ALGO_VERSION = 9;
-const HISTORY_CACHE_FILE_NAME = "cache.v9.json";
-const HISTORY_CACHE_FILE_PATTERN = /^cache\.v\d+\.json$/i;
 const HISTORY_REFRESH_CONCURRENCY = 4;
 
 interface CacheFileV9 {
@@ -189,7 +188,7 @@ export class HistoryService {
     const startedAt = nowMs();
     const dateTime = resolveDateTimeSettings();
     const dateTimeSettingsKey = getDateTimeSettingsKey(dateTime);
-    const cache = await readJson<CacheFileV9>(this.getCacheUri());
+    const cache = await this.readCacheFile();
     if (!this.isFreshCache(cache, dateTimeSettingsKey)) {
       this.logger?.debug(`history.cacheImmediate miss totalMs=${elapsedMs(startedAt)}`);
       return false;
@@ -236,7 +235,7 @@ export class HistoryService {
     const dateTimeSettingsKey = getDateTimeSettingsKey(dateTime);
 
     const cacheUri = this.getCacheUri();
-    const cache = options.forceRebuildCache ? null : await readJson<CacheFileV9>(cacheUri);
+    const cache = options.forceRebuildCache ? null : await this.readCacheFile();
 
     const cachedEntries: Record<string, CacheEntryV1> = this.isFreshCache(cache, dateTimeSettingsKey)
       ? cache.entries
@@ -418,6 +417,16 @@ export class HistoryService {
 
   private getCacheUri(): vscode.Uri {
     return vscode.Uri.joinPath(this.globalStorageUri, HISTORY_CACHE_FILE_NAME);
+  }
+
+  private async readCacheFile(): Promise<CacheFileV9 | null> {
+    const cacheUri = this.getCacheUri();
+    const outcome = await readJsonOrDropCorrupt<CacheFileV9>(cacheUri);
+    const { result } = outcome;
+    if (result.ok) return result.value;
+    const debugMessage = formatJsonReadOrDropCorruptDebug("history.cacheRead", outcome);
+    if (debugMessage) this.logger?.debug(debugMessage);
+    return null;
   }
 
   private isFreshCache(cache: CacheFileV9 | null, dateTimeSettingsKey: string): cache is CacheFileV9 {

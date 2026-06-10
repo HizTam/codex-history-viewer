@@ -3685,7 +3685,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      const confirmMessage = t("trash.deleteConfirm", trashCount);
+      const confirmMessage = t("trash.deleteConfirm");
       const choice = await vscode.window.showWarningMessage(confirmMessage, { modal: true }, "OK");
       if (choice !== "OK") return;
 
@@ -3695,13 +3695,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       if (result.failedPaths.length > 0) {
         void vscode.window.showWarningMessage(
-          t("trash.cleanupPartialFailed", result.removedTrashFiles, result.failedPaths.length),
+          t("trash.cleanupPartialFailed", result.failedPaths.length),
         );
         return;
       }
 
       void vscode.window.showInformationMessage(
-        t("trash.removed", result.removedTrashFiles),
+        t("trash.removed"),
       );
     }),
   );

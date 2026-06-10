@@ -1,12 +1,15 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import {
+  HISTORY_CACHE_FILE_NAME,
+  HISTORY_CACHE_FILE_PATTERN,
+  SEARCH_INDEX_FILE_NAME,
+  SEARCH_INDEX_FILE_PATTERN,
+} from "../storage/cacheFiles";
 
 const TRASH_DIR_NAMES = ["undo-delete", "deleted"] as const;
-
-const CURRENT_HISTORY_CACHE_FILE = "cache.v8.json";
-const CURRENT_SEARCH_INDEX_FILE = "search-index.v2.json";
-const HISTORY_CACHE_FILE_PATTERN = /^cache\.v\d+\.json$/i;
-const SEARCH_INDEX_FILE_PATTERN = /^search-index\.v\d+\.json$/i;
+const ORPHANED_TEMP_JSON_MIN_AGE_MS = 60 * 60 * 1000;
+const TEMP_JSON_FILE_PATTERN = /^.+\.tmp-[a-z0-9]+-[a-z0-9]*\.json$/i;
 
 export interface StorageStats {
   globalStorageBytes: number;
@@ -54,7 +57,7 @@ export async function collectStorageStats(globalStorageUri: vscode.Uri): Promise
   return { globalStorageBytes, trashFileCount, trashBytes, handoffCount, handoffBytes };
 }
 
-// Manually clean trash-equivalent data and legacy cache/index files.
+// Manually clean trash-equivalent data, legacy cache files, and old temp files.
 export async function emptyTrashAndCleanupLegacy(globalStorageUri: vscode.Uri): Promise<EmptyTrashResult> {
   const failedPaths: string[] = [];
   let removedTrashFiles = 0;
@@ -79,9 +82,12 @@ export async function emptyTrashAndCleanupLegacy(globalStorageUri: vscode.Uri): 
   return { removedTrashFiles, removedLegacyFiles, failedPaths };
 }
 
-// List legacy cache/index files that are no longer used by current versions.
+// List generated files that are safe to remove from global storage.
 export async function listLegacyFiles(globalStorageUri: vscode.Uri): Promise<vscode.Uri[]> {
   const out: vscode.Uri[] = [];
+  const currentHistoryCacheFile = HISTORY_CACHE_FILE_NAME.toLowerCase();
+  const currentSearchIndexFile = SEARCH_INDEX_FILE_NAME.toLowerCase();
+  const now = Date.now();
   let entries: [string, vscode.FileType][];
   try {
     entries = await vscode.workspace.fs.readDirectory(globalStorageUri);
@@ -92,19 +98,27 @@ export async function listLegacyFiles(globalStorageUri: vscode.Uri): Promise<vsc
   for (const [name, type] of entries) {
     if ((type & vscode.FileType.File) === 0) continue;
     const lowerName = name.toLowerCase();
+    const fileUri = vscode.Uri.joinPath(globalStorageUri, name);
 
     if (
       HISTORY_CACHE_FILE_PATTERN.test(lowerName) &&
-      lowerName !== CURRENT_HISTORY_CACHE_FILE
+      lowerName !== currentHistoryCacheFile
     ) {
-      out.push(vscode.Uri.joinPath(globalStorageUri, name));
+      out.push(fileUri);
       continue;
     }
     if (
       SEARCH_INDEX_FILE_PATTERN.test(lowerName) &&
-      lowerName !== CURRENT_SEARCH_INDEX_FILE
+      lowerName !== currentSearchIndexFile
     ) {
-      out.push(vscode.Uri.joinPath(globalStorageUri, name));
+      out.push(fileUri);
+      continue;
+    }
+    if (
+      TEMP_JSON_FILE_PATTERN.test(lowerName) &&
+      await isOlderThan(fileUri, now, ORPHANED_TEMP_JSON_MIN_AGE_MS)
+    ) {
+      out.push(fileUri);
     }
   }
 
@@ -186,6 +200,15 @@ async function readFileSize(fileUri: vscode.Uri): Promise<number | null> {
     return st.size;
   } catch {
     return null;
+  }
+}
+
+async function isOlderThan(fileUri: vscode.Uri, now: number, minAgeMs: number): Promise<boolean> {
+  try {
+    const st = await vscode.workspace.fs.stat(fileUri);
+    return Number.isFinite(st.mtime) && now - st.mtime >= minAgeMs;
+  } catch {
+    return false;
   }
 }
 
