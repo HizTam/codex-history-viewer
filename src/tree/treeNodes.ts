@@ -35,6 +35,12 @@ export interface ProjectParentAssociation {
   mode: ProjectAssociatedSourceMode;
 }
 
+export interface ProjectSortMetadata {
+  createdSortKey: string | null;
+  lastActivitySortKey: string | null;
+  stableKey: string;
+}
+
 export class YearNode {
   public readonly kind = "year";
   public readonly year: string;
@@ -85,6 +91,7 @@ export class ProjectNode {
   public readonly associatedSources: readonly ProjectAssociatedSource[];
   public readonly targetMissingHistory: boolean;
   public readonly parentAssociation: ProjectParentAssociation | null;
+  public readonly sort: ProjectSortMetadata;
 
   constructor(params: {
     key: string;
@@ -98,6 +105,7 @@ export class ProjectNode {
     associatedSources?: readonly ProjectAssociatedSource[];
     targetMissingHistory?: boolean;
     parentAssociation?: ProjectParentAssociation | null;
+    sort?: ProjectSortMetadata;
   }) {
     this.key = params.key;
     this.label = params.label;
@@ -110,6 +118,7 @@ export class ProjectNode {
     this.associatedSources = params.associatedSources ?? [];
     this.targetMissingHistory = params.targetMissingHistory ?? false;
     this.parentAssociation = params.parentAssociation ?? null;
+    this.sort = params.sort ?? { createdSortKey: null, lastActivitySortKey: null, stableKey: params.key };
   }
 }
 
@@ -127,6 +136,7 @@ export class RelatedGroupNode {
   public readonly directSources: readonly ProjectAssociatedSource[];
   public readonly children: readonly TreeNode[];
   public readonly parentAssociation: ProjectParentAssociation | null;
+  public readonly sort: ProjectSortMetadata;
 
   constructor(params: {
     key: string;
@@ -141,6 +151,7 @@ export class RelatedGroupNode {
     directSources?: readonly ProjectAssociatedSource[];
     children?: readonly TreeNode[];
     parentAssociation?: ProjectParentAssociation | null;
+    sort?: ProjectSortMetadata;
   }) {
     this.key = params.key;
     this.label = params.label;
@@ -154,6 +165,7 @@ export class RelatedGroupNode {
     this.directSources = params.directSources ?? [];
     this.children = params.children ?? [];
     this.parentAssociation = params.parentAssociation ?? null;
+    this.sort = params.sort ?? { createdSortKey: null, lastActivitySortKey: null, stableKey: params.key };
   }
 }
 

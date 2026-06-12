@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **2.5.1** (2026-06-10).
+Latest release: **2.6.0** (2026-06-12).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -15,7 +15,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 ## Highlights
 
 - **Revisit past Codex CLI and Claude Code sessions** that are no longer easy to access from the active editor flow.
-- Browse sessions in a year / month / day tree, a latest-first list, or project views with related project groups.
+- Browse sessions in a year / month / day tree, a sortable session list, or project views with related project groups.
 - Optionally include Codex `archived_sessions` when the Codex source is enabled, and switch archive visibility instantly.
 - Show valid cached History and Pinned data immediately at startup while local session files refresh in the background.
 - Search across prompts, responses, tool output, tags, notes, and attachment metadata, with shared search history.
@@ -25,7 +25,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Keep open chat tabs up to date with header-controlled auto-refresh modes.
 - Show supported image attachments, Claude documents, and file references from Codex / Claude sessions as compact cards.
 - Organize sessions with pins, tags, notes, custom titles, project aliases, project associations, saved searches, search history, display modes, and filters.
-- Keep Pinned filters independent from History/Search, including project scope, source, archive visibility, tags, and sort mode.
+- Keep Pinned filters independent from History/Search, including project scope, source, archive visibility, tags, and saved sort preferences.
 - Experimental opt-in restoration for chat and file-change history Webviews after Reload Window or VS Code restart.
 - Resume past sessions through the official Codex and Claude Code VS Code extensions.
 - Create handoff files and prompts when moving work to another AI tool.
@@ -34,9 +34,9 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 
 1. Open the Activity Bar and select **Codex History**.
 2. Use **Control** for global actions such as settings, import, rebuild cache, empty trash, and search defaults.
-3. Browse sessions under **History** and switch between date-grouped/latest-first layouts, List/Project display, and All/Current Project Group scope.
+3. Browse sessions under **History** and switch between date-grouped/session-list layouts, List/Project display, All/Current Project Group scope, and saved sort preferences.
 4. Select a session to open the reusable chat tab, or run **Open in New Tab (Chat)** to keep it in its own tab.
-5. Use **Pinned** for saved sessions with its own date, project, source, archive, tag, and sort controls.
+5. Use **Pinned** for saved sessions with its own date, project, source, archive, tag, and saved sort controls.
 6. Run **Search...** and refine with roles, query syntax, search history, saved searches, and the current History filters.
 7. Use context menus or chat header actions to edit tags/notes and run bulk tag operations when needed.
 8. Enable **File Change History > Explorer Context Menu: Enabled** when you want file-level AI diff history from file right-click menus.
@@ -45,13 +45,13 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 
 ## History and Pinned Organization
 
-History and Pinned separate project organization into display and scope controls. Display can switch between **List** and **Project** views, while scope can switch between **All** and **Current Project Group**. Project matching is case-insensitive across platforms. Project views preserve the existing layout choice: latest-first history becomes `Project -> Session`, while date-grouped history becomes `Project -> Year -> Month -> Day -> Session`.
+History and Pinned separate project organization into display and scope controls. Display can switch between **List** and **Project** views, while scope can switch between **All** and **Current Project Group**. Project matching is case-insensitive across platforms. Project views preserve the existing layout choice: session-list history becomes `Project -> Session`, while date-grouped history becomes `Project -> Year -> Month -> Day -> Session`.
 
 Project folders can have extension-local aliases from the History or Pinned project context menu. Aliases are stored in VS Code extension state without changing Codex or Claude Code history files. When set, aliases appear in project headings, session descriptions, tooltips, filter summaries, Status, and Search scope/session display while the original path remains available in detailed metadata.
 
 Project associations can link another project's history into the current project display or group related projects together without moving the original history files. Associations are available from project context menus and are reflected in History, Pinned, Search, File AI Change History, and handoff content.
 
-Pinned has its own project scope, source, archive visibility, date, and tag filters. It does not follow History/Search filter state, so saved sessions can stay focused on a different project or source while you browse and search elsewhere. Pinned can also switch between pinned-date order and session-date order.
+Pinned has its own project scope, source, archive visibility, date, tag filters, and saved sort preference. It does not follow History/Search filter state, so saved sessions can stay focused on a different project or source while you browse and search elsewhere. History can sort by started date, last activity date, or name. Pinned can sort by pinned time, started date, last activity date, or name.
 
 ## Chat Viewer
 
@@ -178,11 +178,12 @@ For the full command list with per-command descriptions, see:
 - If the official Codex extension stops reopening a conversation, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.5.1
+## What's New in 2.6.0
 
-- Improved cache cleanup reliability so maintenance actions do not remove the current history cache.
-- Hardened history cache and search index recovery when regeneratable cache files become corrupt.
-- Improved JSON persistence reliability for cache and index writes.
+- Added History sorting by started date, last activity date, and name.
+- Added Pinned sorting by pinned time, started date, last activity date, and name.
+- Sort preferences are saved per workspace.
+- Improved History selection tracking after changing the display mode or sort order.
 
 ## Changelog
 

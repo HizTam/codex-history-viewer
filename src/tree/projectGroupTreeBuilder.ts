@@ -1,7 +1,9 @@
 import type { ProjectAssociation } from "../services/projectAssociationStore";
 import { t } from "../i18n";
+import { maxSessionSortKey, minSessionSortKey } from "../sessions/sessionSortKeys";
 import {
   ProjectNode,
+  type ProjectSortMetadata,
   RelatedGroupNode,
   type ProjectAssociatedSource,
   type ProjectParentAssociation,
@@ -104,6 +106,7 @@ function buildProjectSubtree<TBucket extends ProjectGroupBucketBase>(
     const next = getProjectTreeLatestLabel(child);
     return !best || (next && best < next) ? next : best;
   }, "");
+  const sort = buildRelatedGroupSortMetadata(targetKey, sortedChildren);
   const directSources = getDirectGroupOnlySources(options.context, targetKey).map((source) => ({
     cwd: source.sourceCwd,
     mode: source.mode,
@@ -122,6 +125,7 @@ function buildProjectSubtree<TBucket extends ProjectGroupBucketBase>(
     directSources,
     children: sortedChildren,
     parentAssociation,
+    sort,
   });
 }
 
@@ -196,4 +200,17 @@ function getProjectTreeProjectCount(node: TreeNode): number {
   if (node instanceof ProjectNode) return 1;
   if (node instanceof RelatedGroupNode) return node.projectCount;
   return 0;
+}
+
+function buildRelatedGroupSortMetadata(targetKey: string, children: readonly TreeNode[]): ProjectSortMetadata {
+  let createdSortKey: string | null = null;
+  let lastActivitySortKey: string | null = null;
+
+  for (const child of children) {
+    if (!(child instanceof ProjectNode || child instanceof RelatedGroupNode)) continue;
+    createdSortKey = minSessionSortKey(createdSortKey, child.sort.createdSortKey);
+    lastActivitySortKey = maxSessionSortKey(lastActivitySortKey, child.sort.lastActivitySortKey);
+  }
+
+  return { createdSortKey, lastActivitySortKey, stableKey: targetKey };
 }

@@ -8,9 +8,47 @@ export interface SessionTooltipAnnotation {
   note: string;
 }
 
+export type SessionDateAxis = "display" | "started" | "lastActivity";
+export type SessionDateLabelKey = "tree.tooltip.sessionDate.started" | "tree.tooltip.sessionDate.lastActivity";
+
 export function buildTreeRowTooltip(label: string, description?: string): string {
   const parts = [label.trim(), String(description ?? "").trim()].filter((x) => x.length > 0);
   return parts.join(" ");
+}
+
+export function sessionDateLabelKeyForAxis(axis: SessionDateAxis): SessionDateLabelKey | undefined {
+  switch (axis) {
+    case "started":
+      return "tree.tooltip.sessionDate.started";
+    case "lastActivity":
+      return "tree.tooltip.sessionDate.lastActivity";
+    default:
+      return undefined;
+  }
+}
+
+export function getSessionDatePartsForAxis(
+  session: SessionSummary,
+  axis: SessionDateAxis,
+): { localDate: string; timeLabel: string } {
+  if (axis === "started") {
+    const localDate = String(session.startedLocalDate ?? "").trim();
+    if (localDate) return { localDate, timeLabel: String(session.startedTimeLabel ?? "").trim() };
+  }
+  if (axis === "lastActivity") {
+    const localDate = String(session.lastActivityLocalDate ?? "").trim();
+    if (localDate) return { localDate, timeLabel: String(session.lastActivityTimeLabel ?? "").trim() };
+    return getSessionDatePartsForAxis(session, "started");
+  }
+  return {
+    localDate: String(session.localDate ?? "").trim(),
+    timeLabel: String(session.timeLabel ?? "").trim(),
+  };
+}
+
+export function formatSessionDateTimeForAxis(session: SessionSummary, axis: SessionDateAxis): string {
+  const { localDate, timeLabel } = getSessionDatePartsForAxis(session, axis);
+  return formatSessionDateTime(localDate, timeLabel);
 }
 
 export function buildSessionHoverTooltip(params: {
@@ -21,14 +59,22 @@ export function buildSessionHoverTooltip(params: {
   mode: PreviewTooltipMode;
   projectAlias?: string;
   projectDisplayCwd?: string | null;
+  primaryDateTime?: string;
+  primaryDateLabelKey?: SessionDateLabelKey;
 }): string | vscode.MarkdownString {
-  const { session, annotation, label, description, mode, projectAlias, projectDisplayCwd } = params;
-  if (mode === "titleOnly") return buildTreeRowTooltip(label, description);
+  const { session, annotation, label, description, mode, projectAlias, projectDisplayCwd, primaryDateLabelKey } = params;
+  if (mode === "titleOnly") {
+    const tooltipLabel =
+      primaryDateLabelKey && params.primaryDateTime
+        ? `${t(primaryDateLabelKey, params.primaryDateTime)} ${String(session.displayTitle ?? "").trim() || label}`
+        : label;
+    return buildTreeRowTooltip(tooltipLabel, description);
+  }
 
   const md = new vscode.MarkdownString(undefined, true);
   md.isTrusted = false;
   appendSessionTooltipTitleLines(md, session);
-  appendSessionTooltipDateLines(md, session);
+  appendSessionTooltipDateLines(md, session, params.primaryDateTime, primaryDateLabelKey);
   appendSessionMetadataLines(md, session, annotation, projectAlias, projectDisplayCwd);
 
   if (mode === "compact") return md;
@@ -42,17 +88,45 @@ export function buildSessionHoverTooltip(params: {
   return md;
 }
 
-export function appendSessionTooltipDateLines(md: vscode.MarkdownString, session: SessionSummary): void {
-  const displayDateTime = formatSessionDateTime(session.localDate, session.timeLabel);
+export function appendSessionTooltipDateLines(
+  md: vscode.MarkdownString,
+  session: SessionSummary,
+  primaryDateTime?: string,
+  primaryDateLabelKey?: SessionDateLabelKey,
+): void {
+  const displayDateTime = primaryDateTime ?? formatSessionDateTime(session.localDate, session.timeLabel);
   const startedDateTime = formatSessionDateTime(session.startedLocalDate, session.startedTimeLabel);
   const lastActivityDateTime = formatSessionDateTime(session.lastActivityLocalDate, session.lastActivityTimeLabel);
 
-  md.appendMarkdown(`**${escapeForMarkdown(displayDateTime)}**  \n`);
+  if (startedDateTime === lastActivityDateTime) {
+    const primaryLine = primaryDateLabelKey ? t(primaryDateLabelKey, displayDateTime) : displayDateTime;
+    md.appendMarkdown(`**${escapeForMarkdown(primaryLine)}**  \n`);
+    return;
+  }
 
-  if (startedDateTime === lastActivityDateTime) return;
+  const highlightedKey = primaryDateLabelKey ?? inferDateLabelKey(displayDateTime, startedDateTime, lastActivityDateTime);
+  appendSessionDateDetailLine(md, "tree.tooltip.sessionDate.started", startedDateTime, highlightedKey);
+  appendSessionDateDetailLine(md, "tree.tooltip.sessionDate.lastActivity", lastActivityDateTime, highlightedKey);
+}
 
-  md.appendMarkdown(`Started: ${escapeForMarkdown(startedDateTime)}  \n`);
-  md.appendMarkdown(`Last activity: ${escapeForMarkdown(lastActivityDateTime)}  \n`);
+function appendSessionDateDetailLine(
+  md: vscode.MarkdownString,
+  key: SessionDateLabelKey,
+  value: string,
+  highlightedKey: SessionDateLabelKey | undefined,
+): void {
+  const line = escapeForMarkdown(t(key, value));
+  md.appendMarkdown(key === highlightedKey ? `**${line}**  \n` : `${line}  \n`);
+}
+
+function inferDateLabelKey(
+  displayDateTime: string,
+  startedDateTime: string,
+  lastActivityDateTime: string,
+): SessionDateLabelKey | undefined {
+  if (displayDateTime === startedDateTime) return "tree.tooltip.sessionDate.started";
+  if (displayDateTime === lastActivityDateTime) return "tree.tooltip.sessionDate.lastActivity";
+  return undefined;
 }
 
 export function appendSessionTooltipTitleLines(md: vscode.MarkdownString, session: SessionSummary): void {
@@ -107,7 +181,10 @@ function appendSessionMetadataLines(
 }
 
 function formatSessionDateTime(localDate: string, timeLabel: string): string {
-  return `${localDate} ${timeLabel}`;
+  const datePart = String(localDate ?? "").trim();
+  const timePart = String(timeLabel ?? "").trim();
+  if (!datePart) return timePart;
+  return timePart ? `${datePart} ${timePart}` : datePart;
 }
 
 function escapeForMarkdown(value: string): string {

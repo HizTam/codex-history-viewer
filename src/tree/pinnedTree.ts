@@ -6,6 +6,12 @@ import type { SessionAnnotationStore } from "../services/sessionAnnotationStore"
 import type { ProjectAliasStore } from "../services/projectAliasStore";
 import { NO_CWD_PROJECT_KEY, type ProjectAssociationStore } from "../services/projectAssociationStore";
 import type { ArchiveLocationFilter, SessionSource, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
+import {
+  compareNullableSessionSortKeys,
+  getSessionCreatedSortKey,
+  getSessionDisplayDateSortKey,
+  getSessionLastActivitySortKey,
+} from "../sessions/sessionSortKeys";
 import type { DateScope } from "../types/dateScope";
 import {
   HistoryEmptyNode,
@@ -27,7 +33,12 @@ import { normalizeProjectKey } from "../utils/fsUtils";
 import { safeDisplayPath, truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
 import { buildSessionDescription } from "./sessionDescriptionUtils";
-import { buildSessionHoverTooltip } from "./sessionTooltipUtils";
+import {
+  buildSessionHoverTooltip,
+  formatSessionDateTimeForAxis,
+  sessionDateLabelKeyForAxis,
+  type SessionDateAxis,
+} from "./sessionTooltipUtils";
 import { matchProjectByCanonicalKey } from "../services/projectPathMapper";
 import {
   appendAssociatedSourceLines,
@@ -38,7 +49,15 @@ import {
   type ProjectGroupTreeBuildContext,
 } from "./projectGroupTreeBuilder";
 
-export type PinnedSortMode = "pinnedAt" | "historyDate";
+export type PinnedSortMode =
+  | "pinnedAtDesc"
+  | "pinnedAtAsc"
+  | "createdDesc"
+  | "createdAsc"
+  | "lastActivityDesc"
+  | "lastActivityAsc"
+  | "titleAsc"
+  | "titleDesc";
 
 type PinnedVisibleEntry = {
   projectKey: string;
@@ -292,8 +311,9 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       const annotation = this.annotationStore.get(element.session.fsPath);
       const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(element.session));
       const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
+      const dateAxis = getSessionDateAxisForPinnedSortMode(this.sortMode);
       const item = new vscode.TreeItem(
-        `${element.session.localDate} ${element.session.timeLabel} ${shortTitle}`,
+        `${formatSessionDateTimeForAxis(element.session, dateAxis)} ${shortTitle}`,
       );
       item.description = buildSessionDescription(element.session, annotation?.tags ?? [], projectAlias, projectDisplayCwd);
       item.contextValue = toTreeItemContextValue(element);
@@ -316,6 +336,8 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         mode: getConfig().previewTooltipMode,
         projectAlias,
         projectDisplayCwd,
+        primaryDateTime: getPinnedSessionTooltipDateTime(element.session, dateAxis),
+        primaryDateLabelKey: getPinnedSessionTooltipDateLabelKey(dateAxis),
       });
       return item;
     }
@@ -539,18 +561,18 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     const lines = [
       withAlias
         ? t(
-            this.sortMode === "historyDate"
-              ? "tree.tooltip.pinnedProject.historyDateWithAlias"
-              : "tree.tooltip.pinnedProject.pinnedAtWithAlias",
+            isPinnedAtSortMode(this.sortMode)
+              ? "tree.tooltip.pinnedProject.pinnedAtWithAlias"
+              : "tree.tooltip.pinnedProject.historyDateWithAlias",
             element.alias ?? element.label,
             element.cwd ?? t("tree.project.noCwd"),
             element.sessionCount,
             element.latestLabel,
           )
         : t(
-            this.sortMode === "historyDate"
-              ? "tree.tooltip.pinnedProject.historyDate"
-              : "tree.tooltip.pinnedProject.pinnedAt",
+            isPinnedAtSortMode(this.sortMode)
+              ? "tree.tooltip.pinnedProject.pinnedAt"
+              : "tree.tooltip.pinnedProject.historyDate",
             element.cwd ?? t("tree.project.noCwd"),
             element.sessionCount,
             element.latestLabel,
@@ -582,8 +604,23 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 
 }
 
-function normalizePinnedSortMode(value: PinnedSortMode): PinnedSortMode {
-  return value === "historyDate" ? "historyDate" : "pinnedAt";
+function normalizePinnedSortMode(value: unknown): PinnedSortMode {
+  switch (value) {
+    case "pinnedAtAsc":
+    case "createdDesc":
+    case "createdAsc":
+    case "lastActivityDesc":
+    case "lastActivityAsc":
+    case "titleAsc":
+    case "titleDesc":
+      return value;
+    case "historyDate":
+      return getConfig().historyDateBasis === "lastActivity" ? "lastActivityDesc" : "createdDesc";
+    case "pinnedAt":
+    case "pinnedAtDesc":
+    default:
+      return "pinnedAtDesc";
+  }
 }
 
 function comparePinnedVisibleEntries(
@@ -591,8 +628,22 @@ function comparePinnedVisibleEntries(
   right: PinnedVisibleEntry,
   sortMode: PinnedSortMode,
 ): number {
-  if (sortMode === "historyDate") return compareByHistoryDate(left, right);
-  return compareByPinnedAt(left, right);
+  switch (sortMode) {
+    case "pinnedAtAsc":
+      return compareByPinnedAt(left, right, "asc");
+    case "createdDesc":
+    case "createdAsc":
+      return compareBySessionTime(left, right, sortMode, getSessionCreatedSortKey);
+    case "lastActivityDesc":
+    case "lastActivityAsc":
+      return compareBySessionTime(left, right, sortMode, getSessionLastActivitySortKey);
+    case "titleAsc":
+    case "titleDesc":
+      return compareBySessionTitle(left, right, sortMode);
+    case "pinnedAtDesc":
+    default:
+      return compareByPinnedAt(left, right, "desc");
+  }
 }
 
 function buildProjectEntriesByRelocationKey(
@@ -643,29 +694,70 @@ function getPinnedProjectTreeOrder(node: TreeNode, projectOrder: ReadonlyMap<str
   return Number.MAX_SAFE_INTEGER;
 }
 
-function compareByPinnedAt(left: PinnedVisibleEntry, right: PinnedVisibleEntry): number {
+function compareByPinnedAt(left: PinnedVisibleEntry, right: PinnedVisibleEntry, direction: "asc" | "desc"): number {
   return (
-    compareNumberDesc(left.pinnedAt, right.pinnedAt) ||
-    compareSessionDisplayDateDesc(left.session, right.session) ||
+    compareNumber(left.pinnedAt, right.pinnedAt, direction) ||
+    compareSessionDisplayDate(left.session, right.session, direction) ||
     compareFsPath(left.fsPath, right.fsPath)
   );
 }
 
-function compareByHistoryDate(left: PinnedVisibleEntry, right: PinnedVisibleEntry): number {
+function compareBySessionTime(
+  left: PinnedVisibleEntry,
+  right: PinnedVisibleEntry,
+  sortMode: "createdDesc" | "createdAsc" | "lastActivityDesc" | "lastActivityAsc",
+  getSortKey: (session: SessionSummary) => string | null,
+): number {
   if (left.session && !right.session) return -1;
   if (!left.session && right.session) return 1;
+  if (!left.session || !right.session) {
+    return compareNumberDesc(left.pinnedAt, right.pinnedAt) || compareFsPath(left.fsPath, right.fsPath);
+  }
+  const direction = sortMode.endsWith("Asc") ? "asc" : "desc";
   return (
-    compareSessionDisplayDateDesc(left.session, right.session) ||
+    compareNullableSessionSortKeys(getSortKey(left.session), getSortKey(right.session), direction) ||
+    compareLabels(left.session.displayTitle, right.session.displayTitle) ||
+    compareNumber(left.pinnedAt, right.pinnedAt, direction) ||
+    compareFsPath(left.fsPath, right.fsPath)
+  );
+}
+
+function compareBySessionTitle(
+  left: PinnedVisibleEntry,
+  right: PinnedVisibleEntry,
+  sortMode: "titleAsc" | "titleDesc",
+): number {
+  if (left.session && !right.session) return -1;
+  if (!left.session && right.session) return 1;
+  if (!left.session || !right.session) {
+    return compareNumberDesc(left.pinnedAt, right.pinnedAt) || compareFsPath(left.fsPath, right.fsPath);
+  }
+  const title = compareLabels(left.session.displayTitle, right.session.displayTitle);
+  if (title !== 0) return sortMode === "titleDesc" ? -title : title;
+  return (
+    compareNullableSessionSortKeys(getSessionCreatedSortKey(left.session), getSessionCreatedSortKey(right.session), "desc") ||
     compareNumberDesc(left.pinnedAt, right.pinnedAt) ||
     compareFsPath(left.fsPath, right.fsPath)
   );
 }
 
-function compareSessionDisplayDateDesc(left: SessionSummary | null, right: SessionSummary | null): number {
+function compareSessionDisplayDate(left: SessionSummary | null, right: SessionSummary | null, direction: "asc" | "desc"): number {
   if (!left || !right) return 0;
-  if (left.localDate !== right.localDate) return left.localDate < right.localDate ? 1 : -1;
-  if (left.timeLabel !== right.timeLabel) return left.timeLabel < right.timeLabel ? 1 : -1;
-  return 0;
+  return compareNullableSessionSortKeys(getSessionDisplayDateSortKey(left), getSessionDisplayDateSortKey(right), direction);
+}
+
+function compareLabels(left: string, right: string): number {
+  return String(left ?? "").localeCompare(String(right ?? ""), undefined, { sensitivity: "base", numeric: true });
+}
+
+function compareNumber(left: number, right: number, direction: "asc" | "desc"): number {
+  return direction === "asc" ? compareNumberAsc(left, right) : compareNumberDesc(left, right);
+}
+
+function compareNumberAsc(left: number, right: number): number {
+  const leftValue = Number.isFinite(left) ? left : 0;
+  const rightValue = Number.isFinite(right) ? right : 0;
+  return leftValue - rightValue;
 }
 
 function compareNumberDesc(left: number, right: number): number {
@@ -678,12 +770,65 @@ function compareFsPath(left: string, right: string): number {
   return left.localeCompare(right);
 }
 
+function getSessionDateAxisForPinnedSortMode(sortMode: PinnedSortMode): SessionDateAxis {
+  if (sortMode === "createdDesc" || sortMode === "createdAsc") return "started";
+  if (sortMode === "lastActivityDesc" || sortMode === "lastActivityAsc") return "lastActivity";
+  return "display";
+}
+
+function getPinnedSessionTooltipDateLabelKey(axis: SessionDateAxis) {
+  if (!isPinnedSessionDateAxisDifferentFromBasis(axis)) return undefined;
+  return sessionDateLabelKeyForAxis(getDateBasisAxis());
+}
+
+function getPinnedSessionTooltipDateTime(session: SessionSummary, axis: SessionDateAxis): string {
+  return formatSessionDateTimeForAxis(
+    session,
+    isPinnedSessionDateAxisDifferentFromBasis(axis) ? getDateBasisAxis() : axis,
+  );
+}
+
+function isPinnedSessionDateAxisDifferentFromBasis(axis: SessionDateAxis): boolean {
+  if (axis === "display") return false;
+  return axis !== getDateBasisAxis();
+}
+
+function getDateBasisAxis(): SessionDateAxis {
+  return getConfig().historyDateBasis === "lastActivity" ? "lastActivity" : "started";
+}
+
 function formatProjectLatestLabel(entry: PinnedVisibleEntry | null, sortMode: PinnedSortMode): string {
   if (!entry) return "-";
-  if (sortMode === "historyDate") {
-    return entry.session ? `${entry.session.localDate} ${entry.session.timeLabel}` : "-";
+  if (isPinnedAtSortMode(sortMode)) return formatPinnedAtLabel(entry.pinnedAt);
+  if (!entry.session) return "-";
+  if (sortMode === "createdDesc" || sortMode === "createdAsc") {
+    return formatCreatedSessionDateLabel(entry.session);
   }
-  return formatPinnedAtLabel(entry.pinnedAt);
+  if (sortMode === "lastActivityDesc" || sortMode === "lastActivityAsc") {
+    return formatLastActivitySessionDateLabel(entry.session);
+  }
+  return formatSessionDateLabel(entry.session.localDate, entry.session.timeLabel);
+}
+
+function isPinnedAtSortMode(sortMode: PinnedSortMode): boolean {
+  return sortMode === "pinnedAtDesc" || sortMode === "pinnedAtAsc";
+}
+
+function formatSessionDateLabel(date: string, time: string): string {
+  const datePart = String(date ?? "").trim();
+  const timePart = String(time ?? "").trim();
+  if (!datePart) return "-";
+  return timePart ? `${datePart} ${timePart}` : datePart;
+}
+
+function formatCreatedSessionDateLabel(session: SessionSummary): string {
+  const started = formatSessionDateLabel(session.startedLocalDate, session.startedTimeLabel);
+  return started === "-" ? formatSessionDateLabel(session.localDate, session.timeLabel) : started;
+}
+
+function formatLastActivitySessionDateLabel(session: SessionSummary): string {
+  const lastActivity = formatSessionDateLabel(session.lastActivityLocalDate, session.lastActivityTimeLabel);
+  return lastActivity === "-" ? formatCreatedSessionDateLabel(session) : lastActivity;
 }
 
 function formatPinnedAtLabel(pinnedAt: number): string {

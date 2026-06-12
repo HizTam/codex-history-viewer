@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-06-10
-- 対象バージョン: 2.5.1
+- 最終更新: 2026-06-12
+- 対象バージョン: 2.6.0
 
 ## 1. 概要
 
@@ -47,22 +47,23 @@
   - プロジェクト表示: `一覧表示` / `プロジェクト別表示`
   - プロジェクト対象範囲: `すべて` / `現在のプロジェクトグループ`
   - プロジェクト (`cwd`) に別名が設定されている場合は、プロジェクト見出し、セッション行の CWD 表示、tooltip、絞り込み表示で別名を優先する
-  - 表示順: `ピン留め日順` / `セッション日付順`
-  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、表示順切替、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、再読み込み、エクスポート、Undo
+  - 表示順: More Actions から `ピン留め順 新しい順 / 古い順`、`開始日時 新しい順 / 古い順`、`最終メッセージ日時 新しい順 / 古い順`、`名前 昇順 / 降順` を選択する
+  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、再読み込み、エクスポート、Undo。表示順は toolbar には置かず More Actions に集約する
   - `History` / `Search` の絞り込み、ソース、アーカイブ表示とは独立して状態を保持する
   - 欠損ピンも表示対象
   - 欠損ピンは日付スコープまたは現在プロジェクト絞り込みでは非表示にし、プロジェクト別表示では `CWD なし` 配下に集約する
   - `History` / `Search` からのドラッグ&ドロップで追加可能
   - Codex アーカイブ済みセッションのピンは、Pinned 独自のソースとアーカイブ表示が対象に含めるときだけ表示する
   - 公式側でアーカイブされてパスが変わったピンは、session identity で追従する
-- **History**: 年 / 月 / 日でグルーピングした履歴ツリー、または最新順のフラット一覧
-  - 表示モード: `日付別` / `最新順`
+- **History**: 年 / 月 / 日でグルーピングした履歴ツリー、またはセッション一覧のフラット一覧
+  - 表示モード: `日付別` / `セッション一覧`
+  - 表示順: More Actions から `開始日時 新しい順 / 古い順`、`最終メッセージ日時 新しい順 / 古い順`、`名前 昇順 / 降順` を選択する
   - 絞り込み: 日付スコープ / プロジェクト (`cwd`) / ソース / アーカイブ表示 / タグ
   - プロジェクト表示: `一覧表示` / `プロジェクト別表示`
   - プロジェクト対象範囲: `すべて` / `現在のプロジェクトグループ`
   - プロジェクト (`cwd`) に別名が設定されている場合は、プロジェクト見出し、セッション行の CWD 表示、tooltip、絞り込み表示で別名を優先する
-  - `プロジェクト別表示` では、`最新順` は `Project -> Session`、`日付別` は `Project -> Year -> Month -> Day -> Session` として表示する
-  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、表示モード切替、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、再読み込み、エクスポート、Undo など
+  - `プロジェクト別表示` では、`セッション一覧` は `Project -> Session`、`日付別` は `Project -> Year -> Month -> Day -> Session` として表示する
+  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、表示モード切替、並び替え、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、再読み込み、エクスポート、Undo など
   - `絞り込み解除` は日付 / プロジェクト CWD / ソース / アーカイブ表示 / タグを解除し、プロジェクト表示と対象範囲は表示状態として維持する
   - 複数選択で開く / エクスポート / Promote / Delete が可能
   - Codex アーカイブ済みセッションは、アーカイブ表示が `すべて` または `アーカイブのみ` のときに表示し、アイコン / 説明 / tooltip で通常履歴と区別する
@@ -122,6 +123,7 @@
 - `codexHistoryViewer.sources.enabled` に `codex` が含まれていない場合は、`codexHistoryViewer.codex.archivedSessions.enabled = true` でも archived sessions を使用しない
 - `archiveLocationFilter` は History と Search の検索対象範囲用として workspace ごとに保持し、既定は `通常のみ` とする
 - Pinned は `pinnedArchiveLocationFilter` を別に保持し、History と Pinned の view title action からそれぞれ独立して `通常のみ` / `すべて` / `アーカイブのみ` を切り替えられる。Search は History 側のアーカイブ表示を検索対象範囲として参照する
+- History のソース絞り込みが `claude` の場合、History のアーカイブ表示切替は toolbar では disabled 表示にし、More Actions ではアーカイブ表示 group を非表示にする
 - Pinned のソース絞り込みが `claude` の場合、Pinned のアーカイブ表示切替は disabled 表示かつ実行しても状態を変更しない
 - archived 由来の session は `storage.archiveState = "archived"`、`rootKind = "codexArchivedSessions"` として扱う
 - active と archived に同じ session identity がある場合は active を優先し、重複表示を避ける
@@ -1024,7 +1026,31 @@ npm run package
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 
-### 5.4 v2.5.1 リリースメモ（2026-06-10）
+### 5.4 v2.6.0 リリースメモ（2026-06-12）
+
+**追加された機能**
+
+- History に開始日時、最終メッセージ日時、名前の昇順 / 降順ソートを追加した。ソート設定は workspaceState に保存し、次回起動後も維持する
+- Pinned にピン留め順、開始日時、最終メッセージ日時、名前の昇順 / 降順ソートを追加した。Pinned のソート設定も workspaceState に保存する
+- History / Pinned の More Actions に並び替え項目を追加し、現在の選択項目には `（現在）` / ` (Current)` を付けて表示する
+
+**変更された機能**
+
+- History の `最新順` 表示名を `セッション一覧` に変更した。内部の view mode 名は互換性のため `latest` を維持する
+- History の表示形式、表示対象、表示モード、並び替えを変更したとき、選択中セッションを可能な範囲で新しいツリー上へ追従して reveal するようにした
+- History の日付別表示では、Year / Month / Day の bucket は既存の日付基準を維持し、同一日内の session row だけを選択中の sort order で並び替える
+- 日付系 sort の session row は sort 軸の日時を表示し、Date Basis と異なる場合は tooltip で Date Basis 側の日時を補足する。`titleOnly` tooltip では Date Basis 側のみ、`compact` / `full` tooltip では開始日時と最終メッセージ日時の両方を確認できる
+- Project 表示では、History / Pinned ともに選択中の sort order に沿って Project node と配下セッションを並べる。名前順ではカスタムタイトル解決後の表示名を使う
+- More Actions には操作できる項目だけを表示し、ソースが 1 種類だけ有効な場合の source 選択や、History で Claude Code のみ選択中の archive 表示は group ごと非表示にする
+- Pinned の sort toggle icon は toolbar から外し、表示順の変更は More Actions に集約した
+- Pinned project tooltip の代表日時表現を `最終ピン留め` / `最新セッション` から、昇順や名前順でも破綻しにくい `ピン留め日時` / `セッション日時` に変更した
+
+**修正された機能**
+
+- sort / 表示状態の切り替え後に、選択中の履歴が見失われやすい問題を軽減した
+- `package.json` / `package-lock.json` のバージョンを `2.6.0` に更新した
+
+### 5.5 v2.5.1 リリースメモ（2026-06-10）
 
 **修正された機能**
 
@@ -1034,7 +1060,7 @@ npm run package
 - JSON 書き込みを一時ファイル経由の best-effort atomic write に変更し、rename に失敗する provider では直接書き込みへフォールバックするようにした。古い孤立一時ファイルは `Empty Trash` で内部的に回収できるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.5.1` に更新した
 
-### 5.5 v2.5.0 リリースメモ（2026-06-07）
+### 5.6 v2.5.0 リリースメモ（2026-06-07）
 
 **追加された機能**
 
@@ -1066,7 +1092,7 @@ npm run package
 - ピン留めビューのプロジェクト並び順が、同じ時間に更新された場合に崩れることがある問題を修正した
 - `package.json` / `package-lock.json` のバージョンを `2.5.0` に更新した
 
-### 5.6 v2.4.1 リリースメモ（2026-05-26）
+### 5.7 v2.4.1 リリースメモ（2026-05-26）
 
 - プロジェクト (`cwd`) に、この拡張機能内だけの別名を設定 / 消去できるようにした
 - プロジェクト別名は History / Pinned のプロジェクト見出し、セッション行、tooltip、絞り込み表示、Status、Search の scope / セッション表示に反映する
@@ -1079,7 +1105,7 @@ npm run package
 - Chat Webview で `::code-comment{...}` directive をレビューコメントカードとして表示し、comma 区切りや複数行、未知 segment を含む出力も既知キーから復元できるようにした
 - `package.json` のバージョンを `2.4.1` に更新した
 
-### 5.7 v2.4.0 リリースメモ（2026-05-23）
+### 5.8 v2.4.0 リリースメモ（2026-05-23）
 
 - History に `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位` のプロジェクト表示 mode を追加した
 - プロジェクト判定用 key を全 OS で大文字小文字非区別に統一した
@@ -1097,7 +1123,7 @@ npm run package
 - Codex の `# Files mentioned by the user:` block が IDE context 後ろにある場合も、HTML / log / JSON などの file reference attachment として表示されるように修正した
 - `package.json` / `package-lock.json` のバージョンを `2.4.0` に更新した
 
-### 5.8 v2.3.0 リリースメモ（2026-05-22）
+### 5.9 v2.3.0 リリースメモ（2026-05-22）
 
 - Chat message の添付モデルを `attachments` に統合し、画像も `type: "image"` の attachment として扱うようにした
 - Claude Code の `type: "document"` を document card として表示できるようにした
@@ -1131,7 +1157,7 @@ npm run package
 - Resume / Handoff では clean text と attachment summary を使い、raw tag / `Files mentioned` block の重複やバイナリ再添付を避けるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.3.0` に更新した
 
-### 5.9 v2.2.0 リリースメモ（2026-05-21）
+### 5.10 v2.2.0 リリースメモ（2026-05-21）
 
 - Codex の通常 `sessions` に加えて、任意で `archived_sessions` を読み込めるようにした
 - `codexHistoryViewer.codex.archivedSessions.enabled` と `codexHistoryViewer.codex.archivedSessionsRoot` を追加した
@@ -1165,7 +1191,7 @@ npm run package
 - 検索インデックスの context に archived root / archived 有効状態を含めるようにした
 - `package.json` のバージョンを `2.2.0` に更新した
 
-### 5.10 v2.1.0 リリースメモ（2026-05-19）
+### 5.11 v2.1.0 リリースメモ（2026-05-19）
 
 - Codex / Claude Code 間の Handoff を新規実装した
 - History / Pinned / Search のセッション右クリックに、`他のAIへ引継ぎ` 階層メニューを追加した
@@ -1185,7 +1211,7 @@ npm run package
 - チャット表示内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
 - `package.json` / `package-lock.json` のバージョンを `2.1.0` に更新した
 
-### 5.11 v2.0.1 リリースメモ（2026-05-15）
+### 5.12 v2.0.1 リリースメモ（2026-05-15）
 
 - 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
 - しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
@@ -1209,7 +1235,7 @@ npm run package
 - ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
 - `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
 
-### 5.12 v2.0.0 リリースメモ（2026-05-14）
+### 5.13 v2.0.0 リリースメモ（2026-05-14）
 
 - ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる File AI Change History を追加した
 - カスタムタイトル操作を QuickPick 入口へ統一し、チャット履歴ビューアのヘッダーからも設定 / 消去できるようにした
@@ -1227,7 +1253,7 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.13 v1.5.1 リリースメモ（2026-05-08）
+### 5.14 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
@@ -1238,7 +1264,7 @@ npm run package
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.14 v1.5.0 リリースメモ（2026-05-07）
+### 5.15 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -1247,7 +1273,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.15 v1.4.3 リリースメモ（2026-04-30）
+### 5.16 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -1374,15 +1400,20 @@ npm run package
 - `handoff.md` の本文ラベルは英語で、tool call / tool output 本文は含まれない
 - `引き継ぎファイルを削除` 実行後、Status の Handoff 件数 / 容量が更新される
 - `History` の日付 / プロジェクト / ソース / アーカイブ表示 / タグ絞り込みが期待どおり動く
-- `History` の表示モードを `日付別` / `最新順` で切り替えられ、選択中セッションの操作が維持される
+- `History` の表示モードを `日付別` / `セッション一覧` で切り替えられ、選択中セッションが可能な範囲で新しいツリー上へ追従する
+- `History` の More Actions から、開始日時 / 最終メッセージ日時 / 名前の昇順 / 降順を切り替えられ、現在値には `（現在）` が表示される
+- Date Basis と日付系 sort 軸が異なる場合、History / Pinned の session row は sort 軸の日時を表示し、tooltip は Date Basis 側の日時を補足する。`titleOnly` は Date Basis 側のみ、`compact` / `full` は両方の日時を表示する
+- `History` の More Actions では、ソースが 1 種類だけ有効な場合に source 選択が表示されず、ソースが `Claude Code` の場合に archive 表示 group が表示されない
 - `History` のプロジェクト表示を `一覧表示` / `プロジェクト別表示` で切り替えられ、対象範囲を `すべて` / `現在のプロジェクトグループ` で切り替えられる
-- `History` の `プロジェクト別表示` で、`最新順` と `日付別` の階層がそれぞれ期待どおりになる
+- `History` の `プロジェクト別表示` で、`セッション一覧` と `日付別` の階層がそれぞれ期待どおりになる
 - `History` の絞り込み解除は、非絞り込み時に disabled 表示になり、日付 / プロジェクト CWD / ソース / アーカイブ表示 / タグを解除して、プロジェクト表示と対象範囲は解除しない
 - `Pinned` のプロジェクト表示を `一覧表示` / `プロジェクト別表示` で切り替えられ、対象範囲を `すべて` / `現在のプロジェクトグループ` で切り替えられる。History のプロジェクト表示には影響しない
 - `Pinned` の日付 / プロジェクト / ソース / アーカイブ表示 / タグ絞り込みが期待どおり動き、History / Search 側の絞り込みに影響しない
 - `Pinned` のソース切替を `all` / `codex` / `claude` で切り替えられ、History 側のソース切替に影響しない
 - `Pinned` のソースが `claude` のとき、Pinned のアーカイブ表示切替が disabled になり、Command Palette から実行しても状態が変わらない
-- `Pinned` の表示順を `ピン留め日順` / `セッション日付順` で切り替えられ、プロジェクト tooltip の基準表示も切り替わる
+- `Pinned` の More Actions から、ピン留め順 / 開始日時 / 最終メッセージ日時 / 名前の昇順 / 降順を切り替えられ、現在値には `（現在）` が表示される
+- `Pinned` の toolbar には表示順切替 icon が表示されず、表示順の変更は More Actions に集約される
+- `Pinned` のプロジェクト tooltip は、表示順に応じた代表日時を `ピン留め日時` / `セッション日時` として表示する
 - `Pinned` の絞り込み解除は日付 / プロジェクト / ソース / アーカイブ表示 / タグを解除し、プロジェクト表示、対象範囲、表示順は維持する
 - `History` の再読み込み、`Pinned` の再読み込み、`Search` の `Rerun Search` が、それぞれセッションのエクスポートのすぐ左に表示される
 - History / Pinned の右クリックから QuickPick 経由でカスタムタイトルを設定 / 消去でき、History / Pinned / チャット Webview タイトルへ反映される
