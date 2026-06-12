@@ -5,7 +5,12 @@ import { getConfig, type CodexHistoryViewerConfig } from "./settings";
 import { HistoryService } from "./services/historyService";
 import type { ArchiveLocationFilter, SessionSourceFilter, SessionSummary } from "./sessions/sessionTypes";
 import { PinnedTreeDataProvider, type PinnedSortMode } from "./tree/pinnedTree";
-import { HistoryTreeDataProvider, type HistoryViewMode } from "./tree/historyTree";
+import {
+  HistoryTreeDataProvider,
+  type HistoryRevealIdentity,
+  type HistorySortOrder,
+  type HistoryViewMode,
+} from "./tree/historyTree";
 import { SearchTreeDataProvider } from "./tree/searchTree";
 import { TranscriptContentProvider } from "./transcript/transcriptProvider";
 import { TranscriptDocumentLinkProvider } from "./transcript/transcriptDocumentLinkProvider";
@@ -106,6 +111,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const config = getConfig();
   const HISTORY_FILTER_KEY = "codexHistoryViewer.historyFilter.v1";
   const HISTORY_VIEW_MODE_KEY = "codexHistoryViewer.historyViewMode.v1";
+  const HISTORY_SORT_ORDER_KEY = "codexHistoryViewer.historySortOrder.v1";
   const HISTORY_PROJECT_FILTER_KEY = "codexHistoryViewer.historyProjectFilter.v1";
   const HISTORY_PROJECT_GROUPED_KEY = "codexHistoryViewer.historyProjectGrouped.v1";
   const HISTORY_PROJECT_DISPLAY_KEY = "codexHistoryViewer.historyProjectDisplay.v1";
@@ -142,7 +148,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       logger.debug(`pinned.archiveLocation.migration failed error=${sanitizeDebugError(error)}`);
     }
   }
-  let pinnedSortMode: PinnedSortMode = sanitizePinnedSortMode(context.workspaceState.get(PINNED_SORT_MODE_KEY));
+  const pinnedSortModeRaw = context.workspaceState.get(PINNED_SORT_MODE_KEY);
+  let pinnedSortMode: PinnedSortMode = sanitizePinnedSortMode(pinnedSortModeRaw, config.historyDateBasis);
+  if (isLegacyPinnedSortModeValue(pinnedSortModeRaw)) {
+    try {
+      await context.workspaceState.update(PINNED_SORT_MODE_KEY, pinnedSortMode);
+    } catch (error) {
+      logger.debug(`pinned.sortMode.migration failed error=${sanitizeDebugError(error)}`);
+    }
+  }
 
   const updateUiLanguageContext = (): void => {
     // Keep the UI language context up to date for menu visibility switching.
@@ -278,6 +292,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasSearchResults", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyTagFiltered", false);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyViewMode", "date");
+  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historySortOrder", "createdDesc");
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectDisplay", "list");
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectScope", "all");
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.pinnedProjectDisplay", "list");
@@ -298,6 +313,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasMixedArchiveSelection", false);
 
   let historyViewMode: HistoryViewMode = sanitizeHistoryViewMode(context.workspaceState.get(HISTORY_VIEW_MODE_KEY));
+  const historySortOrderRaw = context.workspaceState.get(HISTORY_SORT_ORDER_KEY);
+  let historySortOrderExplicit = isHistorySortOrderValue(historySortOrderRaw);
+  let historySortOrder: HistorySortOrder = sanitizeHistorySortOrder(historySortOrderRaw, config.historyDateBasis);
   let historyFilter: DateScope = sanitizeDateScope(context.workspaceState.get(HISTORY_FILTER_KEY));
   let historyProjectCwd: string | null = sanitizeProjectCwd(context.workspaceState.get(HISTORY_PROJECT_FILTER_KEY));
   const historyProjectDisplayRaw = context.workspaceState.get(HISTORY_PROJECT_DISPLAY_KEY);
@@ -385,6 +403,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     projectAliasStore,
     projectAssociationStore,
     historyViewMode,
+    historySortOrder,
     historyFilter,
     historyProjectCwd,
     resolveProjectScopeCwd(historyProjectScope),
@@ -958,6 +977,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyFiltered", filterSummary.length > 0);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyTagFiltered", historyTagFilter.length > 0);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyViewMode", historyViewMode);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historySortOrder", historySortOrder);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectDisplay", historyProjectDisplay);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectScope", historyProjectScope);
     void vscode.commands.executeCommand(
@@ -1051,6 +1071,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return true;
   };
 
+  const captureHistoryRevealIdentity = (): HistoryRevealIdentity | null =>
+    historyProvider.createRevealIdentity(historyView.selection[0]);
+
+  const revealHistorySelection = async (identity: HistoryRevealIdentity | null): Promise<void> => {
+    if (!identity) return;
+    const target = historyProvider.resolveRevealTarget(identity);
+    if (!target) return;
+    try {
+      await historyView.reveal(target, { select: true, focus: false, expand: true });
+    } catch (error) {
+      logger.debug(`history.revealSelection failed error=${sanitizeDebugError(error)}`);
+    }
+  };
+
   const applyPinnedTagFilter = async (nextTags: readonly string[], opts: { persist: boolean }): Promise<void> => {
     pinnedTagFilter = sanitizeTagFilter(nextTags);
     pinnedProvider.setTagFilter(pinnedTagFilter);
@@ -1139,7 +1173,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const applyPinnedSortMode = async (nextMode: PinnedSortMode, opts: { persist: boolean }): Promise<void> => {
-    const normalized = sanitizePinnedSortMode(nextMode);
+    const normalized = sanitizePinnedSortMode(nextMode, getConfig().historyDateBasis);
     if (pinnedSortMode === normalized) return;
 
     pinnedSortMode = normalized;
@@ -1193,12 +1227,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const normalized = sanitizeHistoryViewMode(nextMode);
     if (historyViewMode === normalized) return;
 
+    const revealIdentity = captureHistoryRevealIdentity();
     historyViewMode = normalized;
     historyProvider.setViewMode(historyViewMode);
     historyProvider.refresh();
     updateHistoryViewDescription();
+    await revealHistorySelection(revealIdentity);
     if (opts.persist) {
       await context.workspaceState.update(HISTORY_VIEW_MODE_KEY, historyViewMode);
+    }
+  };
+
+  const applyHistorySortOrder = async (nextOrder: HistorySortOrder, opts: { persist: boolean }): Promise<void> => {
+    const normalized = sanitizeHistorySortOrder(nextOrder, getConfig().historyDateBasis);
+    if (historySortOrder === normalized && historySortOrderExplicit) return;
+
+    const revealIdentity = captureHistoryRevealIdentity();
+    historySortOrder = normalized;
+    historySortOrderExplicit = true;
+    historyProvider.setSortOrder(historySortOrder);
+    historyProvider.refresh();
+    updateHistoryViewDescription();
+    statusProvider.refresh();
+    await revealHistorySelection(revealIdentity);
+    if (opts.persist) {
+      await context.workspaceState.update(HISTORY_SORT_ORDER_KEY, historySortOrder);
     }
   };
 
@@ -1208,6 +1261,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   ): Promise<void> => {
     const previousProjectCwd = historyProjectCwd;
     const previousProjectScope = historyProjectScope;
+    const revealIdentity = captureHistoryRevealIdentity();
     if ("projectCwd" in next) historyProjectCwd = sanitizeProjectCwd(next.projectCwd);
     if (next.display) historyProjectDisplay = sanitizeProjectDisplayMode(next.display);
     if (next.scope) historyProjectScope = sanitizeProjectScopeMode(next.scope);
@@ -1218,6 +1272,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     updateHistoryViewDescription();
     updateSearchViewDescription();
     statusProvider.refresh();
+    await revealHistorySelection(revealIdentity);
     if (opts.persist) {
       await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, historyProjectCwd ?? "");
       await context.workspaceState.update(HISTORY_PROJECT_DISPLAY_KEY, historyProjectDisplay);
@@ -1250,6 +1305,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       previousProjectCwd !== nextProjectCwd ||
       previousSource !== nextSource ||
       !isSameTagFilter(previousTags, nextTags);
+    const revealIdentity = captureHistoryRevealIdentity();
 
     historyFilter = nextDate;
     historyProjectCwd = nextProjectCwd;
@@ -1268,6 +1324,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     updateHistoryViewDescription();
     updateSearchViewDescription();
     statusProvider.refresh();
+    await revealHistorySelection(revealIdentity);
     if (opts.persist) {
       await context.workspaceState.update(HISTORY_FILTER_KEY, historyFilter);
       await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, historyProjectCwd ?? "");
@@ -1437,6 +1494,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           pinnedProvider.refresh();
           void context.workspaceState.update(PINNED_SOURCE_FILTER_KEY, pinnedSourceFilter);
         }
+      }
+
+      if (historyDateBasisChanged && !historySortOrderExplicit) {
+        historySortOrder = defaultHistorySortOrder(getConfig().historyDateBasis);
+        historyProvider.setSortOrder(historySortOrder);
       }
 
       if (uiLanguageChanged) updateUiLanguageContext();
@@ -2945,6 +3007,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await applyHistoryViewMode(historyViewMode === "latest" ? "date" : "latest", { persist: true });
     }),
   );
+
+  const registerHistorySortCommand = (commandId: string, sortOrder: HistorySortOrder): void => {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(commandId, async () => {
+        await applyHistorySortOrder(sortOrder, { persist: true });
+      }),
+    );
+  };
+
+  registerHistorySortCommand("codexHistoryViewer.setHistorySortCreatedDesc", "createdDesc");
+  registerHistorySortCommand("codexHistoryViewer.setHistorySortCreatedAsc", "createdAsc");
+  registerHistorySortCommand("codexHistoryViewer.setHistorySortLastActivityDesc", "lastActivityDesc");
+  registerHistorySortCommand("codexHistoryViewer.setHistorySortLastActivityAsc", "lastActivityAsc");
+  registerHistorySortCommand("codexHistoryViewer.setHistorySortTitleAsc", "titleAsc");
+  registerHistorySortCommand("codexHistoryViewer.setHistorySortTitleDesc", "titleDesc");
+
+  const registerPinnedSortCommand = (commandId: string, sortMode: PinnedSortMode): void => {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(commandId, async () => {
+        await applyPinnedSortMode(sortMode, { persist: true });
+      }),
+    );
+  };
+
+  registerPinnedSortCommand("codexHistoryViewer.setPinnedSortPinnedAtDesc", "pinnedAtDesc");
+  registerPinnedSortCommand("codexHistoryViewer.setPinnedSortPinnedAtAsc", "pinnedAtAsc");
+  registerPinnedSortCommand("codexHistoryViewer.setPinnedSortCreatedDesc", "createdDesc");
+  registerPinnedSortCommand("codexHistoryViewer.setPinnedSortCreatedAsc", "createdAsc");
+  registerPinnedSortCommand("codexHistoryViewer.setPinnedSortLastActivityDesc", "lastActivityDesc");
+  registerPinnedSortCommand("codexHistoryViewer.setPinnedSortLastActivityAsc", "lastActivityAsc");
+  registerPinnedSortCommand("codexHistoryViewer.setPinnedSortTitleAsc", "titleAsc");
+  registerPinnedSortCommand("codexHistoryViewer.setPinnedSortTitleDesc", "titleDesc");
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.refreshStatusPane", async () => {
@@ -5148,6 +5242,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
+  const registerHistoryProjectDisplayCommand = (commandId: string, display: ProjectDisplayMode): void => {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(commandId, async () => {
+        if (historyProjectDisplay === display) return;
+        await applyHistoryProjectState({ display }, { persist: true });
+      }),
+    );
+  };
+
+  registerHistoryProjectDisplayCommand("codexHistoryViewer.setHistoryProjectDisplayList", "list");
+  registerHistoryProjectDisplayCommand("codexHistoryViewer.setHistoryProjectDisplayProject", "project");
+
+  const registerHistoryProjectScopeCommand = (commandId: string, scope: ProjectScopeMode): void => {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(commandId, async () => {
+        if (historyProjectScope === scope) return;
+        if (scope === "currentGroup" && !resolveCurrentWorkspaceFolder()) {
+          void vscode.window.showInformationMessage(t("history.project.scope.noWorkspace"));
+          return;
+        }
+        await applyHistoryProjectState({ scope }, { persist: true });
+      }),
+    );
+  };
+
+  registerHistoryProjectScopeCommand("codexHistoryViewer.setHistoryProjectScopeAll", "all");
+  registerHistoryProjectScopeCommand("codexHistoryViewer.setHistoryProjectScopeCurrentGroup", "currentGroup");
+
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.cycleHistorySourceFilter", async () => {
       await cycleHistorySourceFilter();
@@ -5213,6 +5335,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
     }),
   );
+
+  const registerHistorySourceFilterCommand = (commandId: string, source: SessionSourceFilter): void => {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(commandId, async () => {
+        const normalized = constrainHistorySourceFilter(source);
+        if (historySourceFilter === normalized) return;
+        await applyHistoryFilters(
+          {
+            date: historyFilter,
+            projectCwd: historyProjectCwd,
+            source: normalized,
+            tags: historyTagFilter,
+          },
+          { persist: true },
+        );
+      }),
+    );
+  };
+
+  registerHistorySourceFilterCommand("codexHistoryViewer.setHistorySourceFilterAll", "all");
+  registerHistorySourceFilterCommand("codexHistoryViewer.setHistorySourceFilterCodex", "codex");
+  registerHistorySourceFilterCommand("codexHistoryViewer.setHistorySourceFilterClaude", "claude");
+
+  const registerHistoryArchiveLocationCommand = (commandId: string, archiveLocation: ArchiveLocationFilter): void => {
+    context.subscriptions.push(
+      vscode.commands.registerCommand(commandId, async () => {
+        if (historySourceFilter === "claude") return false;
+        return applyArchiveLocationFilter(archiveLocation, { persist: true, rerunSearch: true });
+      }),
+    );
+  };
+
+  registerHistoryArchiveLocationCommand("codexHistoryViewer.setHistoryArchiveLocationActiveOnly", "activeOnly");
+  registerHistoryArchiveLocationCommand("codexHistoryViewer.setHistoryArchiveLocationAll", "all");
+  registerHistoryArchiveLocationCommand("codexHistoryViewer.setHistoryArchiveLocationArchivedOnly", "archivedOnly");
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.restoreArchivedSession", async (elementOrArgs?: unknown) => {
@@ -5553,10 +5710,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedArchiveLocationArchivedOnly", "codexHistoryViewer.filterPinnedArchiveLocation");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.pinnedArchiveLocationDisabled", "codexHistoryViewer.filterPinnedArchiveLocation");
   registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedArchiveLocationDisabled", "codexHistoryViewer.filterPinnedArchiveLocation");
-  registerUiCommandAlias("codexHistoryViewer.ui.ja.pinnedSortPinnedAt", "codexHistoryViewer.togglePinnedSortMode");
-  registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedSortPinnedAt", "codexHistoryViewer.togglePinnedSortMode");
-  registerUiCommandAlias("codexHistoryViewer.ui.ja.pinnedSortHistoryDate", "codexHistoryViewer.togglePinnedSortMode");
-  registerUiCommandAlias("codexHistoryViewer.ui.en.pinnedSortHistoryDate", "codexHistoryViewer.togglePinnedSortMode");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.pinSession", "codexHistoryViewer.pinSession");
   registerUiCommandAlias("codexHistoryViewer.ui.en.pinSession", "codexHistoryViewer.pinSession");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.unpinSession", "codexHistoryViewer.unpinSession");
@@ -5577,6 +5730,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.historyViewLatestCurrent", "codexHistoryViewer.toggleHistoryViewMode");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.historyViewDateCurrent", "codexHistoryViewer.toggleHistoryViewMode");
   registerUiCommandAlias("codexHistoryViewer.ui.en.historyViewDateCurrent", "codexHistoryViewer.toggleHistoryViewMode");
+
+  const registerHistoryMenuAlias = (suffix: string, targetCommand: string): void => {
+    for (const lang of ["ja", "en"] as const) {
+      registerUiCommandAlias(`codexHistoryViewer.ui.${lang}.${suffix}`, targetCommand);
+      registerUiCommandAlias(`codexHistoryViewer.ui.${lang}.${suffix}Checked`, targetCommand);
+    }
+  };
+
+  registerHistoryMenuAlias("historyMenuSortCreatedDesc", "codexHistoryViewer.setHistorySortCreatedDesc");
+  registerHistoryMenuAlias("historyMenuSortCreatedAsc", "codexHistoryViewer.setHistorySortCreatedAsc");
+  registerHistoryMenuAlias("historyMenuSortLastActivityDesc", "codexHistoryViewer.setHistorySortLastActivityDesc");
+  registerHistoryMenuAlias("historyMenuSortLastActivityAsc", "codexHistoryViewer.setHistorySortLastActivityAsc");
+  registerHistoryMenuAlias("historyMenuSortTitleAsc", "codexHistoryViewer.setHistorySortTitleAsc");
+  registerHistoryMenuAlias("historyMenuSortTitleDesc", "codexHistoryViewer.setHistorySortTitleDesc");
+  registerHistoryMenuAlias("historyMenuViewSessions", "codexHistoryViewer.showHistoryLatestView");
+  registerHistoryMenuAlias("historyMenuViewDate", "codexHistoryViewer.showHistoryDateView");
+  registerHistoryMenuAlias("historyMenuProjectDisplayList", "codexHistoryViewer.setHistoryProjectDisplayList");
+  registerHistoryMenuAlias("historyMenuProjectDisplayProject", "codexHistoryViewer.setHistoryProjectDisplayProject");
+  registerHistoryMenuAlias("historyMenuProjectScopeAll", "codexHistoryViewer.setHistoryProjectScopeAll");
+  registerHistoryMenuAlias(
+    "historyMenuProjectScopeCurrentGroup",
+    "codexHistoryViewer.setHistoryProjectScopeCurrentGroup",
+  );
+  registerHistoryMenuAlias("historyMenuSourceAll", "codexHistoryViewer.setHistorySourceFilterAll");
+  registerHistoryMenuAlias("historyMenuSourceCodex", "codexHistoryViewer.setHistorySourceFilterCodex");
+  registerHistoryMenuAlias("historyMenuSourceClaude", "codexHistoryViewer.setHistorySourceFilterClaude");
+  registerHistoryMenuAlias(
+    "historyMenuArchiveLocationActiveOnly",
+    "codexHistoryViewer.setHistoryArchiveLocationActiveOnly",
+  );
+  registerHistoryMenuAlias("historyMenuArchiveLocationAll", "codexHistoryViewer.setHistoryArchiveLocationAll");
+  registerHistoryMenuAlias(
+    "historyMenuArchiveLocationArchivedOnly",
+    "codexHistoryViewer.setHistoryArchiveLocationArchivedOnly",
+  );
+
+  const registerPinnedMenuSortAlias = (suffix: string, targetCommand: string): void => {
+    for (const lang of ["ja", "en"] as const) {
+      registerUiCommandAlias(`codexHistoryViewer.ui.${lang}.${suffix}`, targetCommand);
+      registerUiCommandAlias(`codexHistoryViewer.ui.${lang}.${suffix}Checked`, targetCommand);
+    }
+  };
+
+  registerPinnedMenuSortAlias("pinnedMenuSortPinnedAtDesc", "codexHistoryViewer.setPinnedSortPinnedAtDesc");
+  registerPinnedMenuSortAlias("pinnedMenuSortPinnedAtAsc", "codexHistoryViewer.setPinnedSortPinnedAtAsc");
+  registerPinnedMenuSortAlias("pinnedMenuSortCreatedDesc", "codexHistoryViewer.setPinnedSortCreatedDesc");
+  registerPinnedMenuSortAlias("pinnedMenuSortCreatedAsc", "codexHistoryViewer.setPinnedSortCreatedAsc");
+  registerPinnedMenuSortAlias("pinnedMenuSortLastActivityDesc", "codexHistoryViewer.setPinnedSortLastActivityDesc");
+  registerPinnedMenuSortAlias("pinnedMenuSortLastActivityAsc", "codexHistoryViewer.setPinnedSortLastActivityAsc");
+  registerPinnedMenuSortAlias("pinnedMenuSortTitleAsc", "codexHistoryViewer.setPinnedSortTitleAsc");
+  registerPinnedMenuSortAlias("pinnedMenuSortTitleDesc", "codexHistoryViewer.setPinnedSortTitleDesc");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.refreshStatusPane", "codexHistoryViewer.refreshStatusPane");
   registerUiCommandAlias("codexHistoryViewer.ui.en.refreshStatusPane", "codexHistoryViewer.refreshStatusPane");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.search", "codexHistoryViewer.search");
@@ -5815,8 +6019,32 @@ function sanitizeProjectScopeMode(value: unknown): ProjectScopeMode {
   return value === "currentGroup" ? "currentGroup" : "all";
 }
 
-function sanitizePinnedSortMode(value: unknown): PinnedSortMode {
-  return value === "historyDate" ? "historyDate" : "pinnedAt";
+function sanitizePinnedSortMode(
+  value: unknown,
+  historyDateBasis: CodexHistoryViewerConfig["historyDateBasis"],
+): PinnedSortMode {
+  const s = typeof value === "string" ? value.trim() : "";
+  switch (s) {
+    case "pinnedAtAsc":
+    case "createdDesc":
+    case "createdAsc":
+    case "lastActivityDesc":
+    case "lastActivityAsc":
+    case "titleAsc":
+    case "titleDesc":
+      return s;
+    case "historyDate":
+      return historyDateBasis === "lastActivity" ? "lastActivityDesc" : "createdDesc";
+    case "pinnedAt":
+    case "pinnedAtDesc":
+    default:
+      return "pinnedAtDesc";
+  }
+}
+
+function isLegacyPinnedSortModeValue(value: unknown): boolean {
+  const s = typeof value === "string" ? value.trim() : "";
+  return s === "pinnedAt" || s === "historyDate";
 }
 
 function sanitizeBoolean(value: unknown, fallback: boolean): boolean {
@@ -5872,6 +6100,31 @@ function sanitizeHistoryViewMode(value: unknown): HistoryViewMode {
   return s === "latest" ? "latest" : "date";
 }
 
+function sanitizeHistorySortOrder(value: unknown, historyDateBasis: CodexHistoryViewerConfig["historyDateBasis"]): HistorySortOrder {
+  const s = typeof value === "string" ? value.trim() : "";
+  if (isHistorySortOrderValue(s)) return s;
+  return defaultHistorySortOrder(historyDateBasis);
+}
+
+function isHistorySortOrderValue(value: unknown): value is HistorySortOrder {
+  const s = typeof value === "string" ? value.trim() : "";
+  switch (s) {
+    case "createdDesc":
+    case "createdAsc":
+    case "lastActivityDesc":
+    case "lastActivityAsc":
+    case "titleAsc":
+    case "titleDesc":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function defaultHistorySortOrder(historyDateBasis: CodexHistoryViewerConfig["historyDateBasis"]): HistorySortOrder {
+  return historyDateBasis === "lastActivity" ? "lastActivityDesc" : "createdDesc";
+}
+
 function sanitizeArchiveLocationFilter(value: unknown, legacyShowArchivedSessions?: unknown): ArchiveLocationFilter {
   const s = typeof value === "string" ? value.trim() : "";
   if (s === "activeOnly" || s === "all" || s === "archivedOnly") return s;
@@ -5906,7 +6159,7 @@ function nextArchiveLocationFilter(value: ArchiveLocationFilter): ArchiveLocatio
 }
 
 function nextPinnedSortMode(value: PinnedSortMode): PinnedSortMode {
-  return value === "pinnedAt" ? "historyDate" : "pinnedAt";
+  return value === "pinnedAtDesc" ? "lastActivityDesc" : "pinnedAtDesc";
 }
 
 function matchesArchiveLocationFilter(session: SessionSummary, archiveLocationFilter: ArchiveLocationFilter): boolean {

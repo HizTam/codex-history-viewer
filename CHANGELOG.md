@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.0] - 2026-06-12
+
+### Added
+
+- Added sorting to the History view by started date, last activity date, and name in ascending or descending order.
+- Added sorting to the Pinned view by pinned time, started date, last activity date, and name in ascending or descending order.
+- Added workspace-scoped persistence for History and Pinned sort preferences.
+
+### Changed
+
+- Moved Pinned sorting into the More Actions menu and removed the pinned sort toggle from the view header.
+
+### Fixed
+
+- Improved History view selection tracking after changing the display mode or sort order.
+
 ## [2.5.1] - 2026-06-10
 
 ### Fixed

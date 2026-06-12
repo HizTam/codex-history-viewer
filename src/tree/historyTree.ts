@@ -12,6 +12,7 @@ import {
   MonthNode,
   type ProjectAssociatedSource,
   type ProjectParentAssociation,
+  type ProjectSortMetadata,
   RelatedGroupNode,
   ProjectDayNode,
   ProjectMonthNode,
@@ -22,24 +23,54 @@ import {
   toTreeItemContextValue,
 } from "./treeNodes";
 import type { ArchiveLocationFilter, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
+import {
+  compareNullableSessionSortKeys,
+  getSessionCreatedSortKey,
+  getSessionLastActivitySortKey,
+  maxSessionSortKey,
+  minSessionSortKey,
+} from "../sessions/sessionSortKeys";
 import type { DateScope } from "../types/dateScope";
 import { getConfig } from "../settings";
 import { normalizeProjectKey } from "../utils/fsUtils";
 import { safeDisplayPath, truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
 import { buildSessionDescription } from "./sessionDescriptionUtils";
-import { buildSessionHoverTooltip } from "./sessionTooltipUtils";
+import {
+  buildSessionHoverTooltip,
+  formatSessionDateTimeForAxis,
+  getSessionDatePartsForAxis,
+  sessionDateLabelKeyForAxis,
+  type SessionDateAxis,
+} from "./sessionTooltipUtils";
 import { matchProjectByCanonicalKey } from "../services/projectPathMapper";
 import {
   appendAssociatedSourceLines,
   buildAssociatedSources,
   buildDirectGroupOnlySourcesByTargetKey,
   buildProjectGroupTreeNodes,
-  compareProjectTreeNodes,
   type ProjectGroupTreeBuildContext,
 } from "./projectGroupTreeBuilder";
 
 export type HistoryViewMode = "date" | "latest";
+export type HistorySortOrder =
+  | "createdDesc"
+  | "createdAsc"
+  | "lastActivityDesc"
+  | "lastActivityAsc"
+  | "titleAsc"
+  | "titleDesc";
+
+export type HistoryRevealIdentity =
+  | { kind: "session"; fsPath: string }
+  | { kind: "project"; key: string; parentKey: string | null }
+  | { kind: "relatedGroup"; key: string; parentKey: string | null }
+  | { kind: "year"; year: string }
+  | { kind: "month"; year: string; month: string }
+  | { kind: "day"; year: string; month: string; day: string }
+  | { kind: "projectYear"; projectKey: string; year: string }
+  | { kind: "projectMonth"; projectKey: string; year: string; month: string }
+  | { kind: "projectDay"; projectKey: string; year: string; month: string; day: string };
 
 type HistoryProjectBucket = {
   key: string;
@@ -69,11 +100,13 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
   private archiveLocationFilter: ArchiveLocationFilter;
+  private sortOrder: HistorySortOrder;
   private initialLoadComplete = false;
   private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly canonicalProjectKeyCache = new Map<string, string>();
   private filteredSessionsCache: SessionSummary[] | null = null;
+  private sortedSessionsCache: SessionSummary[] | null = null;
   private projectSessionsByRelocationKey = new Map<string, SessionSummary[]>();
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   public readonly onDidChangeTreeData = this.emitter.event;
@@ -85,6 +118,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     projectAliasStore: ProjectAliasStore,
     projectAssociationStore: ProjectAssociationStore,
     viewMode: HistoryViewMode,
+    sortOrder: HistorySortOrder,
     filter: DateScope,
     projectCwd: string | null,
     projectScopeCwd: string | null,
@@ -100,6 +134,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.projectAliasStore = projectAliasStore;
     this.projectAssociationStore = projectAssociationStore;
     this.viewMode = viewMode;
+    this.sortOrder = normalizeHistorySortOrder(sortOrder);
     this.filter = filter;
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
     this.projectScopeCwd =
@@ -128,6 +163,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   private clearSessionDerivedCaches(): void {
     this.filteredSessionsCache = null;
+    this.sortedSessionsCache = null;
     this.projectSessionsByRelocationKey.clear();
   }
 
@@ -144,6 +180,12 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public setViewMode(viewMode: HistoryViewMode): void {
     this.viewMode = normalizeHistoryViewMode(viewMode);
+  }
+
+  public setSortOrder(sortOrder: HistorySortOrder): void {
+    this.sortOrder = normalizeHistorySortOrder(sortOrder);
+    this.sortedSessionsCache = null;
+    this.projectSessionsByRelocationKey.clear();
   }
 
   public setProjectFilter(projectCwd: string | null): void {
@@ -289,6 +331,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   public getTreeItem(element: TreeNode): vscode.TreeItem {
     if (element instanceof ProjectNode) {
       const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Collapsed);
+      item.id = buildHistoryTreeItemId(element);
       item.description = element.description;
       item.contextValue = toTreeItemContextValue(element);
       item.iconPath = new vscode.ThemeIcon("root-folder");
@@ -301,6 +344,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     }
     if (element instanceof RelatedGroupNode) {
       const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Collapsed);
+      item.id = buildHistoryTreeItemId(element);
       item.description = element.description;
       item.contextValue = toTreeItemContextValue(element);
       item.iconPath = new vscode.ThemeIcon("folder-library");
@@ -309,18 +353,21 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     }
     if (element instanceof ProjectYearNode) {
       const item = new vscode.TreeItem(element.year, vscode.TreeItemCollapsibleState.Collapsed);
+      item.id = buildHistoryTreeItemId(element);
       item.contextValue = toTreeItemContextValue(element);
       item.tooltip = t("tree.tooltip.year", element.year);
       return item;
     }
     if (element instanceof ProjectMonthNode) {
       const item = new vscode.TreeItem(element.month, vscode.TreeItemCollapsibleState.Collapsed);
+      item.id = buildHistoryTreeItemId(element);
       item.contextValue = toTreeItemContextValue(element);
       item.tooltip = t("tree.tooltip.month", `${element.year}-${element.month}`);
       return item;
     }
     if (element instanceof ProjectDayNode) {
       const item = new vscode.TreeItem(element.day, vscode.TreeItemCollapsibleState.Collapsed);
+      item.id = buildHistoryTreeItemId(element);
       item.description = element.ymd;
       item.contextValue = toTreeItemContextValue(element);
       item.tooltip = t("tree.tooltip.day", element.ymd);
@@ -328,18 +375,21 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     }
     if (element instanceof YearNode) {
       const item = new vscode.TreeItem(element.year, vscode.TreeItemCollapsibleState.Collapsed);
+      item.id = buildHistoryTreeItemId(element);
       item.contextValue = toTreeItemContextValue(element);
       item.tooltip = t("tree.tooltip.year", element.year);
       return item;
     }
     if (element instanceof MonthNode) {
       const item = new vscode.TreeItem(element.month, vscode.TreeItemCollapsibleState.Collapsed);
+      item.id = buildHistoryTreeItemId(element);
       item.contextValue = toTreeItemContextValue(element);
       item.tooltip = t("tree.tooltip.month", `${element.year}-${element.month}`);
       return item;
     }
     if (element instanceof DayNode) {
       const item = new vscode.TreeItem(element.day, vscode.TreeItemCollapsibleState.Collapsed);
+      item.id = buildHistoryTreeItemId(element);
       item.description = element.ymd;
       item.contextValue = toTreeItemContextValue(element);
       item.tooltip = t("tree.tooltip.day", element.ymd);
@@ -362,14 +412,16 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private sessionToTreeItem(session: SessionSummary, pinned: boolean): vscode.TreeItem {
     // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
     const shortTitle = truncateByDisplayWidth(session.displayTitle, 40, "...");
-    const prefix = this.viewMode === "latest" ? `${session.localDate} ${session.timeLabel}` : session.timeLabel;
+    const dateAxis = this.getSessionRowDateAxis();
+    const prefix = this.formatSessionRowDatePrefix(session, dateAxis);
     const label = `${prefix} ${shortTitle}`;
+    const node = new SessionNode(session, pinned);
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
+    item.id = buildHistoryTreeItemId(node);
     const annotation = this.annotationStore.get(session.fsPath);
     const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(session));
     const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
     item.description = buildSessionDescription(session, annotation?.tags ?? [], projectAlias, projectDisplayCwd);
-    const node = new SessionNode(session, pinned);
     item.contextValue = toTreeItemContextValue(node);
     // Show source-specific icons (Codex/Claude) in the list row.
     item.iconPath = this.resolveSourceIconPath(session.source);
@@ -390,8 +442,45 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       mode: getConfig().previewTooltipMode,
       projectAlias,
       projectDisplayCwd,
+      primaryDateTime: this.getSessionTooltipDateTime(session, dateAxis),
+      primaryDateLabelKey: this.getSessionTooltipDateLabelKey(dateAxis),
     });
     return item;
+  }
+
+  private getSessionRowDateAxis(): SessionDateAxis {
+    if (this.sortOrder === "createdAsc" || this.sortOrder === "createdDesc") return "started";
+    if (this.sortOrder === "lastActivityAsc" || this.sortOrder === "lastActivityDesc") return "lastActivity";
+    return "display";
+  }
+
+  private formatSessionRowDatePrefix(session: SessionSummary, axis: SessionDateAxis): string {
+    const shouldShowFullDate = this.viewMode === "latest" || this.isDateAxisDifferentFromBasis(axis);
+    if (shouldShowFullDate) return formatSessionDateTimeForAxis(session, axis);
+
+    const parts = getSessionDatePartsForAxis(session, axis);
+    return parts.timeLabel || formatSessionDateTimeForAxis(session, axis);
+  }
+
+  private getSessionTooltipDateLabelKey(axis: SessionDateAxis) {
+    if (!this.isDateAxisDifferentFromBasis(axis)) return undefined;
+    return sessionDateLabelKeyForAxis(this.getDateBasisAxis());
+  }
+
+  private getSessionTooltipDateTime(session: SessionSummary, axis: SessionDateAxis): string {
+    return formatSessionDateTimeForAxis(
+      session,
+      this.isDateAxisDifferentFromBasis(axis) ? this.getDateBasisAxis() : axis,
+    );
+  }
+
+  private isDateAxisDifferentFromBasis(axis: SessionDateAxis): boolean {
+    if (axis === "display") return false;
+    return axis !== this.getDateBasisAxis();
+  }
+
+  private getDateBasisAxis(): SessionDateAxis {
+    return getConfig().historyDateBasis === "lastActivity" ? "lastActivity" : "started";
   }
 
   private resolveSourceIconPath(source: SessionSummary["source"]): { light: vscode.Uri; dark: vscode.Uri } {
@@ -404,6 +493,16 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     return this.filteredSessionsCache;
   }
 
+  private getSortedSessions(): SessionSummary[] {
+    if (this.sortedSessionsCache) return this.sortedSessionsCache;
+    this.sortedSessionsCache = this.sortSessions(this.getFilteredSessions());
+    return this.sortedSessionsCache;
+  }
+
+  private sortSessions(sessions: readonly SessionSummary[]): SessionSummary[] {
+    return sessions.slice().sort((left, right) => compareSessionsBySortOrder(left, right, this.sortOrder));
+  }
+
   private buildProjectNodes(sessions: readonly SessionSummary[]): TreeNode[] {
     const context = this.buildProjectBuildContext(sessions);
     return buildProjectGroupTreeNodes({
@@ -412,7 +511,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       getRepresentativeCwd: (targetKey, bucket) => this.getRepresentativeCwdForProjectKey(targetKey, bucket?.cwd ?? null),
       getAliasByCwd: (cwd) => this.projectAliasStore.getAliasByCwd(cwd) ?? null,
       buildProjectLabel,
-      compareNodes: compareProjectTreeNodes,
+      compareNodes: (left, right) => this.compareProjectTreeNodes(left, right),
     });
   }
 
@@ -461,7 +560,6 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     group: HistoryProjectBucket,
     parentAssociation: ProjectParentAssociation | null = null,
   ): ProjectNode {
-    const latest = group.sessions[0];
     const fallbackLabel = buildProjectLabel(group.cwd);
     const alias = this.projectAliasStore.getAliasByCwd(group.cwd) ?? null;
     const label = alias ?? fallbackLabel;
@@ -469,6 +567,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       group.cwd ? this.projectAssociationStore.getRelocationSourcesForTargetCwd(group.cwd) : [],
       group.associatedSourceCwds,
     );
+    const sort = buildProjectSortMetadata(group.key, group.sessions);
     const description = buildProjectDescription(
       group.cwd,
       group.sessions.length,
@@ -482,22 +581,55 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       alias,
       fallbackLabel,
       sessionCount: group.sessions.length,
-      latestLabel: latest ? `${latest.localDate} ${latest.timeLabel}` : "",
+      latestLabel: buildLatestDisplayLabel(group.sessions),
       description,
       associatedSources,
       targetMissingHistory: !group.hasTargetSession && associatedSources.length > 0,
       parentAssociation,
+      sort,
     });
   }
 
   private getProjectSessions(projectKey: string): SessionSummary[] {
     const cached = this.projectSessionsByRelocationKey.get(projectKey);
     if (cached) return cached;
-    return this.getFilteredSessions().filter((session) => {
+    return this.getSortedSessions().filter((session) => {
       const cwd = getSessionCwd(session);
       const key = cwd ? this.getRelocationProjectKey(cwd) : NO_CWD_PROJECT_KEY;
       return key === projectKey;
     });
+  }
+
+  private compareProjectTreeNodes(left: TreeNode, right: TreeNode): number {
+    if (!(left instanceof ProjectNode || left instanceof RelatedGroupNode)) {
+      if (!(right instanceof ProjectNode || right instanceof RelatedGroupNode)) return 0;
+      return 1;
+    }
+    if (!(right instanceof ProjectNode || right instanceof RelatedGroupNode)) return -1;
+
+    if (this.sortOrder === "titleAsc" || this.sortOrder === "titleDesc") {
+      const label = compareLabels(left.label, right.label);
+      if (label !== 0) return this.sortOrder === "titleDesc" ? -label : label;
+      return left.sort.stableKey.localeCompare(right.sort.stableKey);
+    }
+
+    const primary =
+      this.sortOrder === "createdAsc" || this.sortOrder === "createdDesc"
+        ? compareNullableSessionSortKeys(
+            left.sort.createdSortKey,
+            right.sort.createdSortKey,
+            this.sortOrder === "createdAsc" ? "asc" : "desc",
+          )
+        : compareNullableSessionSortKeys(
+            left.sort.lastActivitySortKey,
+            right.sort.lastActivitySortKey,
+            this.sortOrder === "lastActivityAsc" ? "asc" : "desc",
+          );
+    if (primary !== 0) return primary;
+
+    const label = compareLabels(left.label, right.label);
+    if (label !== 0) return label;
+    return left.sort.stableKey.localeCompare(right.sort.stableKey);
   }
 
   private getCanonicalProjectKey(cwd: string): string {
@@ -567,7 +699,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   private buildProjectChildren(element: TreeNode | undefined, shouldFilterSessions: boolean): TreeNode[] {
     if (!element) {
-      const nodes = this.buildProjectNodes(this.getFilteredSessions());
+      const nodes = this.buildProjectNodes(this.getSortedSessions());
       return this.withFilteredEmptyFallback(nodes, shouldFilterSessions);
     }
 
@@ -622,7 +754,67 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     return [];
   }
 
+  public getParent(element: TreeNode): TreeNode | null {
+    const identity = this.createRevealIdentity(element);
+    if (!identity) return null;
+    return this.findParentForIdentity(identity, undefined);
+  }
+
+  public createRevealIdentity(element: TreeNode | undefined): HistoryRevealIdentity | null {
+    if (!element) return null;
+    if (element instanceof SessionNode) return { kind: "session", fsPath: element.session.fsPath };
+    if (element instanceof ProjectNode) {
+      return { kind: "project", key: element.key, parentKey: getProjectParentKey(element.parentAssociation) };
+    }
+    if (element instanceof RelatedGroupNode) {
+      return { kind: "relatedGroup", key: element.key, parentKey: getProjectParentKey(element.parentAssociation) };
+    }
+    if (element instanceof YearNode) return { kind: "year", year: element.year };
+    if (element instanceof MonthNode) return { kind: "month", year: element.year, month: element.month };
+    if (element instanceof DayNode) return { kind: "day", year: element.year, month: element.month, day: element.day };
+    if (element instanceof ProjectYearNode) return { kind: "projectYear", projectKey: element.projectKey, year: element.year };
+    if (element instanceof ProjectMonthNode) {
+      return { kind: "projectMonth", projectKey: element.projectKey, year: element.year, month: element.month };
+    }
+    if (element instanceof ProjectDayNode) {
+      return {
+        kind: "projectDay",
+        projectKey: element.projectKey,
+        year: element.year,
+        month: element.month,
+        day: element.day,
+      };
+    }
+    return null;
+  }
+
+  public resolveRevealTarget(identity: HistoryRevealIdentity): TreeNode | null {
+    return this.findRevealTarget(identity, undefined);
+  }
+
+  private findRevealTarget(identity: HistoryRevealIdentity, parent: TreeNode | undefined): TreeNode | null {
+    for (const child of this.getChildrenSync(parent)) {
+      if (matchesRevealIdentity(child, identity)) return child;
+      const nested = this.findRevealTarget(identity, child);
+      if (nested) return nested;
+    }
+    return null;
+  }
+
+  private findParentForIdentity(identity: HistoryRevealIdentity, parent: TreeNode | undefined): TreeNode | null {
+    for (const child of this.getChildrenSync(parent)) {
+      if (matchesRevealIdentity(child, identity)) return parent ?? null;
+      const nested = this.findParentForIdentity(identity, child);
+      if (nested) return nested;
+    }
+    return null;
+  }
+
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
+    return this.getChildrenSync(element);
+  }
+
+  private getChildrenSync(element?: TreeNode): TreeNode[] {
     if (!element && !this.initialLoadComplete) {
       return [new HistoryEmptyNode(t("history.empty.loading"), "sync~spin")];
     }
@@ -642,7 +834,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     }
     if (this.viewMode === "latest") {
       if (element) return [];
-      const nodes = this.getFilteredSessions().map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+      const nodes = this.getSortedSessions().map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
       return this.withFilteredEmptyFallback(nodes, shouldFilterSessions);
     }
 
@@ -714,7 +906,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
           const [yyyy, mm, dd] = filter.ymd.split("-");
           if (!yyyy || !mm || !dd) return [];
           const sessions = idx.byY.get(yyyy)?.get(mm)?.get(dd) ?? [];
-          const filtered = sessions.filter((s) => this.matchesSession(s));
+          const filtered = this.sortSessions(sessions.filter((s) => this.matchesSession(s)));
           return this.withFilteredEmptyFallback(
             filtered.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath))),
             true,
@@ -760,7 +952,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     }
     if (element instanceof DayNode) {
       const sessions = idx.byY.get(element.year)?.get(element.month)?.get(element.day) ?? [];
-      const filtered = sessions.filter((s) => this.matchesSession(s));
+      const filtered = this.sortSessions(sessions.filter((s) => this.matchesSession(s)));
       return filtered.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
     }
     return [];
@@ -791,6 +983,152 @@ function normalizeSourceFilter(value: SessionSourceFilter): SessionSourceFilter 
 
 function normalizeHistoryViewMode(value: HistoryViewMode): HistoryViewMode {
   return value === "latest" ? "latest" : "date";
+}
+
+function normalizeHistorySortOrder(value: HistorySortOrder): HistorySortOrder {
+  switch (value) {
+    case "createdDesc":
+    case "createdAsc":
+    case "lastActivityDesc":
+    case "lastActivityAsc":
+    case "titleAsc":
+    case "titleDesc":
+      return value;
+    default:
+      return "createdDesc";
+  }
+}
+
+function compareSessionsBySortOrder(
+  left: SessionSummary,
+  right: SessionSummary,
+  sortOrder: HistorySortOrder,
+): number {
+  if (sortOrder === "titleAsc" || sortOrder === "titleDesc") {
+    const title = compareLabels(left.displayTitle, right.displayTitle);
+    if (title !== 0) return sortOrder === "titleDesc" ? -title : title;
+    const created = compareNullableSessionSortKeys(getSessionCreatedSortKey(left), getSessionCreatedSortKey(right), "desc");
+    if (created !== 0) return created;
+    return compareStableSessionPath(left, right);
+  }
+
+  const primary =
+    sortOrder === "createdAsc" || sortOrder === "createdDesc"
+      ? compareNullableSessionSortKeys(
+          getSessionCreatedSortKey(left),
+          getSessionCreatedSortKey(right),
+          sortOrder === "createdAsc" ? "asc" : "desc",
+        )
+      : compareNullableSessionSortKeys(
+          getSessionLastActivitySortKey(left),
+          getSessionLastActivitySortKey(right),
+          sortOrder === "lastActivityAsc" ? "asc" : "desc",
+        );
+  if (primary !== 0) return primary;
+
+  const title = compareLabels(left.displayTitle, right.displayTitle);
+  if (title !== 0) return title;
+  return compareStableSessionPath(left, right);
+}
+
+function buildProjectSortMetadata(stableKey: string, sessions: readonly SessionSummary[]): ProjectSortMetadata {
+  let createdSortKey: string | null = null;
+  let lastActivitySortKey: string | null = null;
+  for (const session of sessions) {
+    createdSortKey = minSessionSortKey(createdSortKey, getSessionCreatedSortKey(session));
+    lastActivitySortKey = maxSessionSortKey(lastActivitySortKey, getSessionLastActivitySortKey(session));
+  }
+  return { createdSortKey, lastActivitySortKey, stableKey };
+}
+
+function buildLatestDisplayLabel(sessions: readonly SessionSummary[]): string {
+  let latest = "";
+  for (const session of sessions) {
+    const label = `${session.localDate} ${session.timeLabel}`;
+    if (!latest || latest < label) latest = label;
+  }
+  return latest;
+}
+
+function compareLabels(left: string, right: string): number {
+  return String(left ?? "").localeCompare(String(right ?? ""), undefined, { sensitivity: "base", numeric: true });
+}
+
+function compareStableSessionPath(left: SessionSummary, right: SessionSummary): number {
+  return left.fsPath.localeCompare(right.fsPath);
+}
+
+function getProjectParentKey(parentAssociation: ProjectParentAssociation | null): string | null {
+  return parentAssociation ? `${parentAssociation.mode}:${parentAssociation.targetCwd}:${parentAssociation.sourceCwd}` : null;
+}
+
+function buildHistoryTreeItemId(node: TreeNode): string | undefined {
+  switch (node.kind) {
+    case "session":
+      return `history:session:${encodeTreeItemIdPart(node.session.cacheKey || node.session.fsPath)}`;
+    case "project":
+      return `history:project:${encodeTreeItemIdPart(getProjectParentKey(node.parentAssociation))}:${encodeTreeItemIdPart(node.key)}`;
+    case "relatedGroup":
+      return `history:relatedGroup:${encodeTreeItemIdPart(getProjectParentKey(node.parentAssociation))}:${encodeTreeItemIdPart(node.key)}`;
+    case "year":
+      return `history:date:${encodeTreeItemIdPart(node.year)}`;
+    case "month":
+      return `history:date:${encodeTreeItemIdPart(`${node.year}-${node.month}`)}`;
+    case "day":
+      return `history:date:${encodeTreeItemIdPart(node.ymd)}`;
+    case "projectYear":
+      return `history:project-date:${encodeTreeItemIdPart(node.projectKey)}:${encodeTreeItemIdPart(node.year)}`;
+    case "projectMonth":
+      return `history:project-date:${encodeTreeItemIdPart(node.projectKey)}:${encodeTreeItemIdPart(`${node.year}-${node.month}`)}`;
+    case "projectDay":
+      return `history:project-date:${encodeTreeItemIdPart(node.projectKey)}:${encodeTreeItemIdPart(node.ymd)}`;
+    default:
+      return undefined;
+  }
+}
+
+function encodeTreeItemIdPart(value: string | null | undefined): string {
+  return encodeURIComponent(value ?? "<null>");
+}
+
+function matchesRevealIdentity(node: TreeNode, identity: HistoryRevealIdentity): boolean {
+  switch (identity.kind) {
+    case "session":
+      return node instanceof SessionNode && node.session.fsPath === identity.fsPath;
+    case "project":
+      return node instanceof ProjectNode && node.key === identity.key && getProjectParentKey(node.parentAssociation) === identity.parentKey;
+    case "relatedGroup":
+      return (
+        node instanceof RelatedGroupNode &&
+        node.key === identity.key &&
+        getProjectParentKey(node.parentAssociation) === identity.parentKey
+      );
+    case "year":
+      return node instanceof YearNode && node.year === identity.year;
+    case "month":
+      return node instanceof MonthNode && node.year === identity.year && node.month === identity.month;
+    case "day":
+      return node instanceof DayNode && node.year === identity.year && node.month === identity.month && node.day === identity.day;
+    case "projectYear":
+      return node instanceof ProjectYearNode && node.projectKey === identity.projectKey && node.year === identity.year;
+    case "projectMonth":
+      return (
+        node instanceof ProjectMonthNode &&
+        node.projectKey === identity.projectKey &&
+        node.year === identity.year &&
+        node.month === identity.month
+      );
+    case "projectDay":
+      return (
+        node instanceof ProjectDayNode &&
+        node.projectKey === identity.projectKey &&
+        node.year === identity.year &&
+        node.month === identity.month &&
+        node.day === identity.day
+      );
+    default:
+      return false;
+  }
 }
 
 function getSessionCwd(session: SessionSummary): string | null {
