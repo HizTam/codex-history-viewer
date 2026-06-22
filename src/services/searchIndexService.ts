@@ -6,16 +6,21 @@ import type { SearchIndexToolContent } from "../settings";
 import type { HistoryIndex } from "../sessions/sessionTypes";
 import { SEARCH_INDEX_FILE_NAME } from "../storage/cacheFiles";
 import { formatJsonReadOrDropCorruptDebug, readJsonOrDropCorrupt, writeJson } from "../storage/jsonStorage";
-import { normalizeWhitespace } from "../utils/textUtils";
+import {
+  isCodexUserInstructionsMessageText,
+  normalizeWhitespace,
+} from "../utils/textUtils";
 import {
   buildAttachmentSearchText,
   extractClaudeMessageContent,
+  extractClaudeRequestInterruptionContent,
   extractCodexMessageContent,
+  isCodexTurnAbortedContent,
 } from "../chat/chatAttachments";
 import { splitTrailingMemoryCitationBlock } from "../chat/memoryCitation";
 import type { DebugLogger } from "./logger";
 
-const SEARCH_INDEX_FILE_VERSION = 9;
+const SEARCH_INDEX_FILE_VERSION = 10;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
 
@@ -362,9 +367,13 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
     const role = obj?.payload?.role;
     if (role !== "user" && role !== "assistant" && role !== "developer") return true;
 
+    if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) return true;
+
     const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false });
     const messageText =
       role === "assistant" ? splitTrailingMemoryCitationBlock(extracted.text).text : extracted.text;
+    const suppressMessageText =
+      role === "user" && extracted.attachments.length === 0 && isCodexUserInstructionsMessageText(messageText);
     const text = normalizeWhitespace(
       [messageText, buildAttachmentSearchText(extracted.attachments)].filter(Boolean).join("\n"),
     );
@@ -372,7 +381,7 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
 
     if (role === "user" || role === "assistant") state.messageIndex += 1;
     const anchor = Math.max(1, state.messageIndex);
-    if (text) state.messages.push({ messageIndex: anchor, role, source: "message", text });
+    if (text && !suppressMessageText) state.messages.push({ messageIndex: anchor, role, source: "message", text });
     return true;
   }
 
@@ -471,6 +480,8 @@ async function indexClaudeRecord(obj: any, state: BuildState): Promise<boolean> 
   if (!role) return false;
 
   const rawContent = getClaudeMessageContent(obj);
+  if (role === "user" && extractClaudeRequestInterruptionContent(rawContent)) return true;
+
   const parsed = parseClaudeMessageContent(rawContent);
   const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false });
   const messageText = normalizeWhitespace([extracted.text, buildAttachmentSearchText(extracted.attachments)].filter(Boolean).join("\n"));

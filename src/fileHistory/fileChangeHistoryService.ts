@@ -15,6 +15,7 @@ import {
   buildCodexPatchBookmarkGroupId,
   resolveClaudeToolCallId,
 } from "../services/bookmarkIdentity";
+import { extractClaudeRequestInterruptionContent, isCodexTurnAbortedContent } from "../chat/chatAttachments";
 import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/projectPathMapper";
 import type { SearchIndexService } from "../services/searchIndexService";
@@ -22,7 +23,10 @@ import type { HistoryIndex, SessionSource, SessionSummary } from "../sessions/se
 import { formatYmdHmsInTimeZone, toYmdInTimeZone, ymdToString } from "../utils/dateUtils";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { normalizeCacheKey } from "../utils/fsUtils";
-import { normalizeWhitespace, singleLineSnippet } from "../utils/textUtils";
+import {
+  normalizeWhitespace,
+  singleLineSnippet,
+} from "../utils/textUtils";
 import type {
   FileChangeHistoryCandidate,
   FileChangeHistoryCard,
@@ -277,6 +281,7 @@ async function parseCodexSession(
 
       if (obj?.type === "response_item" && obj?.payload?.type === "message") {
         const role = obj?.payload?.role;
+        if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) continue;
         if (role === "user" || role === "assistant") messageIndex += 1;
         continue;
       }
@@ -388,7 +393,9 @@ async function parseClaudeSession(
       const role = detectClaudeMessageRole(obj);
       if (!role) continue;
 
-      const parsed = parseClaudeMessageContent(getClaudeMessageContent(obj));
+      const rawContent = getClaudeMessageContent(obj);
+      if (role === "user" && extractClaudeRequestInterruptionContent(rawContent)) continue;
+      const parsed = parseClaudeMessageContent(rawContent);
       if (normalizeWhitespace(parsed.messageText)) messageIndex += 1;
       const timestampIso = resolveClaudeDiffTimestamp(obj, session);
 

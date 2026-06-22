@@ -29,6 +29,7 @@ export interface ChatSessionLocation {
 export type ChatTimelineItem =
   | ChatMessageItem
   | ChatToolItem
+  | ChatSystemEventItem
   | ChatUsageItem
   | ChatEnvironmentItem
   | ChatPatchGroupItem
@@ -165,6 +166,22 @@ export interface ChatToolExecution {
   exitCode?: number;
   durationMs?: number;
   error?: string;
+}
+
+export type ChatSystemEventKind = "requestInterrupted";
+export type ChatSystemEventScope = "request" | "toolUse";
+
+export interface ChatSystemEventItem {
+  type: "systemEvent";
+  kind: ChatSystemEventKind;
+  source?: "codex" | "claude";
+  scope?: ChatSystemEventScope;
+  timestampIso?: string;
+  reason?: string;
+  durationMs?: number;
+  turnId?: string;
+  rolledBack?: boolean;
+  rolledBackTurns?: number;
 }
 
 export interface ChatTokenUsage {

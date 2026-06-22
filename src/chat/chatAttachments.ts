@@ -8,6 +8,7 @@ import type {
   ChatImageAttachment,
   ChatImageAttachmentReason,
   ChatSelectionReferenceAttachment,
+  ChatSystemEventScope,
 } from "./chatTypes";
 import type { ChatImageExtractionOptions } from "./chatImageAttachments";
 import {
@@ -16,6 +17,7 @@ import {
   isPotentialImageAttachmentItem,
   stripImagePlaceholders,
 } from "./chatImageAttachments";
+import { getClaudeRequestInterruptedScope, isCodexTurnAbortedMessageText } from "../utils/textUtils";
 
 export const CHAT_TEXT_DOCUMENT_PREVIEW_CHARS = 16_000;
 export const CHAT_TEXT_DOCUMENT_SEARCH_CHARS = 64_000;
@@ -83,6 +85,93 @@ export interface ExtractedMessageContent {
   attachments: ChatAttachment[];
 }
 
+export interface ExtractedCodexTextContent {
+  text: string;
+  hasNonTextContent: boolean;
+}
+
+export interface ClaudeRequestInterruptionContent {
+  scope: ChatSystemEventScope;
+}
+
+export function extractCodexTextContent(content: unknown): ExtractedCodexTextContent {
+  if (typeof content === "string") {
+    const stripped = stripImagePlaceholders(content);
+    const files = extractCodexFilesMentionedFromText(stripped.text);
+    return {
+      text: files.text,
+      hasNonTextContent: stripped.placeholderCount > 0 || files.attachments.length > 0,
+    };
+  }
+
+  const items = normalizeContentItems(content);
+  const texts: string[] = [];
+  let hasNonTextContent = false;
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    const maybeText = readStringField(obj, "text");
+    if (maybeText) {
+      const stripped = stripImagePlaceholders(maybeText);
+      const files = extractCodexFilesMentionedFromText(stripped.text);
+      if (files.text) texts.push(files.text);
+      if (stripped.placeholderCount > 0 || files.attachments.length > 0 || isPotentialImageAttachmentItem(obj)) {
+        hasNonTextContent = true;
+      }
+      continue;
+    }
+    if (Object.keys(obj).length > 0) hasNonTextContent = true;
+  }
+
+  return {
+    text: texts.join(""),
+    hasNonTextContent,
+  };
+}
+
+export function isCodexTurnAbortedContent(content: unknown): boolean {
+  if (!hasTextCandidate(content, "turn_aborted")) return false;
+  const extracted = extractCodexTextContent(content);
+  return !extracted.hasNonTextContent && isCodexTurnAbortedMessageText(extracted.text);
+}
+
+export function extractClaudeRequestInterruptionContent(content: unknown): ClaudeRequestInterruptionContent | null {
+  if (!hasTextCandidate(content, "Request interrupted by user")) return null;
+
+  if (typeof content === "string") {
+    if (hasClaudeIdeTag(content) || stripImagePlaceholders(content).placeholderCount > 0) return null;
+    return toClaudeRequestInterruptionContent(content);
+  }
+
+  const items = normalizeContentItems(content);
+  if (items.length === 0) return null;
+  const texts: string[] = [];
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    const type = normalizeType(readStringField(obj, "type"));
+    if (type === "text" || type === "inputtext" || type === "outputtext" || (!type && typeof obj.text === "string")) {
+      if (isPotentialImageAttachmentItem(obj)) return null;
+      const text = readStringField(obj, "text");
+      if (text === undefined) continue;
+      const stripped = stripImagePlaceholders(text);
+      if (stripped.placeholderCount > 0 || hasClaudeIdeTag(stripped.text)) return null;
+      if (stripped.text.trim()) texts.push(stripped.text);
+      continue;
+    }
+    if (Object.keys(obj).length > 0) return null;
+  }
+
+  return toClaudeRequestInterruptionContent(texts.join(""));
+}
+
+function toClaudeRequestInterruptionContent(text: string): ClaudeRequestInterruptionContent | null {
+  const scope = getClaudeRequestInterruptedScope(text);
+  return scope ? { scope } : null;
+}
+
 export async function extractCodexMessageContent(
   content: unknown,
   sessionCwd?: string,
@@ -94,6 +183,17 @@ export async function extractCodexMessageContent(
   const attachments: ChatAttachment[] = [];
   let placeholderCount = 0;
   let placeholderInsertIndex: number | undefined;
+
+  if (typeof content === "string") {
+    const stripped = stripImagePlaceholders(content);
+    if (stripped.placeholderCount > 0) {
+      placeholderInsertIndex = attachments.length;
+    }
+    placeholderCount += stripped.placeholderCount;
+    const files = extractCodexFilesMentionedFromText(stripped.text);
+    if (files.text) texts.push(files.text);
+    attachments.push(...files.attachments);
+  }
 
   for (const item of items) {
     if (!item || typeof item !== "object") continue;
@@ -733,6 +833,16 @@ function trimPathPunctuation(value: string): string {
 
 function hasClaudeIdeTag(value: string): boolean {
   return /<ide_(?:opened_file|selection)>/iu.test(value);
+}
+
+function hasTextCandidate(content: unknown, needle: string): boolean {
+  if (typeof content === "string") return content.includes(needle);
+  for (const item of normalizeContentItems(content)) {
+    if (!item || typeof item !== "object") continue;
+    const text = readStringField(item as Record<string, unknown>, "text");
+    if (text?.includes(needle)) return true;
+  }
+  return false;
 }
 
 function normalizeImageOptions(options?: ChatImageExtractionOptions): Required<ChatImageExtractionOptions> {

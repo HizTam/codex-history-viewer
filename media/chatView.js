@@ -3066,6 +3066,7 @@
     if (item.type === "message") rendered = renderMessage(item, cardKey);
     else if (item.type === "patchGroup") rendered = renderPatchGroup(item, itemIndex, cardKey);
     else if (item.type === "tool") rendered = shouldRenderToolCard() ? renderTool(item, cardKey) : null;
+    else if (item.type === "systemEvent") rendered = renderSystemEvent(item, cardKey);
     else if (item.type === "usage") rendered = showDetails ? renderUsage(item, cardKey) : null;
     else if (item.type === "environment") rendered = showDetails ? renderEnvironment(item, cardKey) : null;
     else rendered = showDetails ? renderNote(item, cardKey) : null;
@@ -3080,7 +3081,7 @@
 
   function getTimeGuideTargetElement(rendered) {
     if (!(rendered instanceof HTMLElement)) return null;
-    const bubble = rendered.querySelector(".bubble, .usageCard, .environmentCard");
+    const bubble = rendered.querySelector(".bubble, .systemEventCard, .usageCard, .environmentCard");
     return bubble instanceof HTMLElement ? bubble : rendered;
   }
 
@@ -3349,8 +3350,86 @@
     }
     if (item.type === "usage") return getSafeUiText(i18n.usage, "Usage");
     if (item.type === "environment") return getSafeUiText(i18n.environment, "Environment");
+    if (item.type === "systemEvent") return getSystemEventBadgeText(item);
     if (item.type === "note" && typeof item.title === "string" && item.title.trim()) return item.title.trim();
     return `${getSafeUiText(i18n.roleMessage, "Message")} #${itemIndex + 1}`;
+  }
+
+  function renderSystemEvent(item, cardKey) {
+    const row = el("div", { className: "row systemEvent" });
+    const card = el("div", { className: `systemEventCard systemEventCard-${normalizeSystemEventKind(item)}` });
+    applyTimelineCardWidthState(card, cardKey);
+
+    const summary = el("div", { className: "systemEventSummary" });
+    summary.appendChild(el("span", { className: "systemEventBadge", textContent: getSystemEventBadgeText(item) }));
+    summary.appendChild(el("span", { className: "systemEventTitle", textContent: getSystemEventTitleText(item) }));
+    if (item && item.rolledBack === true) {
+      summary.appendChild(
+        el("span", {
+          className: "systemEventMeta systemEventMeta-rolledBack",
+          textContent: getSafeUiText(i18n.systemEventInterruptedRolledBack, "Rolled back"),
+        }),
+      );
+    }
+    if (typeof item.timestampIso === "string" && item.timestampIso.trim()) {
+      const timestamp = el("span", { className: "systemEventMeta", textContent: formatIsoYmdHms(item.timestampIso) });
+      timestamp.title = item.timestampIso;
+      summary.appendChild(timestamp);
+    }
+    card.appendChild(summary);
+
+    const description = getSystemEventDescriptionText(item);
+    if (description) card.appendChild(el("div", { className: "systemEventDescription", textContent: description }));
+
+    if (showDetails) {
+      const details = el("div", { className: "systemEventDetails" });
+      appendUsageDetail(details, i18n.systemEventDetailReason || "Reason", normalizeUsageText(item && item.reason));
+      appendUsageDetail(
+        details,
+        i18n.systemEventDetailDuration || "Duration",
+        typeof item.durationMs === "number" && Number.isFinite(item.durationMs) ? formatDurationMs(item.durationMs) : "",
+      );
+      appendUsageDetail(details, i18n.systemEventDetailTurnId || "Turn ID", normalizeUsageText(item && item.turnId));
+      appendUsageDetail(
+        details,
+        i18n.systemEventDetailRolledBackTurns || "Rolled back turns",
+        typeof item.rolledBackTurns === "number" && Number.isFinite(item.rolledBackTurns)
+          ? String(Math.max(0, Math.floor(item.rolledBackTurns)))
+          : "",
+      );
+      if (details.childElementCount > 0) card.appendChild(details);
+    }
+
+    row.appendChild(card);
+    return row;
+  }
+
+  function normalizeSystemEventKind(item) {
+    return item && item.kind === "requestInterrupted" ? "interrupted" : "generic";
+  }
+
+  function getSystemEventBadgeText(item) {
+    if (item && item.kind === "requestInterrupted") {
+      return getSafeUiText(i18n.systemEventInterruptedBadge, "Request stopped");
+    }
+    return getSafeUiText(i18n.roleMessage, "Message");
+  }
+
+  function getSystemEventTitleText(item) {
+    if (item && item.kind === "requestInterrupted" && item.scope === "toolUse") {
+      return getSafeUiText(i18n.systemEventInterruptedToolUseTitle, "Tool use interrupted");
+    }
+    if (item && item.kind === "requestInterrupted") {
+      return getSafeUiText(i18n.systemEventInterruptedTitle, "Request interrupted");
+    }
+    return getSystemEventBadgeText(item);
+  }
+
+  function getSystemEventDescriptionText(item) {
+    if (item && item.kind === "requestInterrupted") {
+      return getSafeUiText(i18n.systemEventInterruptedDescription, "The previous response was stopped by the user.");
+    }
+    return "";
   }
 
   function renderMessage(item, cardKey) {
@@ -6063,6 +6142,14 @@
       );
       if (timestampIso) return `environment:time:${stableStringHash(timestampIso)}:${envSignature}`;
       return `environment:${envSignature}`;
+    }
+    if (type === "systemEvent") {
+      const kind = normalizePatchGroupKeyPart(item && item.kind) || "event";
+      const source = normalizePatchGroupKeyPart(item && item.source) || "source";
+      const scope = normalizePatchGroupKeyPart(item && item.scope) || "scope";
+      const timestampIso = normalizePatchGroupKeyPart(item && item.timestampIso);
+      if (timestampIso) return `systemEvent:${kind}:${source}:${scope}:${stableStringHash(timestampIso)}`;
+      return `systemEvent:${kind}:${source}:${scope}:${safeIndex}`;
     }
     if (type === "patchGroup") return buildPatchGroupCardKey(item, safeIndex);
     if (type === "tool") {

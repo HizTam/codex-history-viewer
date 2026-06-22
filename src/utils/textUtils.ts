@@ -111,11 +111,41 @@ export function isBoilerplateUserMessageText(text: string): boolean {
   if (t.startsWith("<environment_context>")) return true;
   if (t.startsWith("# AGENTS.md instructions")) return true;
   if (t.startsWith("<INSTRUCTIONS>")) return true;
+  if (isCodexUserInstructionsMessageText(t)) return true;
   // Treat meta tags as boilerplate only when the line contains only the tag payload.
   if (t.startsWith("<ide_opened_file>")) return stripTransportMetaTags(t).length === 0;
   if (t.startsWith("<local-command-caveat>")) return stripTransportMetaTags(t).length === 0;
   if (/^<command-(name|message|args)>/i.test(t)) return stripTransportMetaTags(t).length === 0;
   return false;
+}
+
+export function isCodexTurnAbortedMessageText(text: string): boolean {
+  return isSingleXmlLikeBlock(text, "turn_aborted");
+}
+
+export function isCodexUserInstructionsMessageText(text: string): boolean {
+  return isSingleXmlLikeBlock(text, "user_instructions");
+}
+
+export function getClaudeRequestInterruptedScope(text: string): "request" | "toolUse" | null {
+  const normalized = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (normalized === "[Request interrupted by user]") return "request";
+  if (normalized === "[Request interrupted by user for tool use]") return "toolUse";
+  return null;
+}
+
+export function isClaudeRequestInterruptedMessageText(text: string): boolean {
+  return getClaudeRequestInterruptedScope(text) !== null;
+}
+
+function isSingleXmlLikeBlock(text: string, tagName: string): boolean {
+  const normalized = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!normalized) return false;
+  const openTag = `<${tagName}>`;
+  const closeTag = `</${tagName}>`;
+  if (!normalized.startsWith(openTag) || !normalized.endsWith(closeTag)) return false;
+  const body = normalized.slice(openTag.length, normalized.length - closeTag.length);
+  return !body.includes(openTag) && !body.includes(closeTag);
 }
 
 export function stripTransportMetaTags(text: string): string {
@@ -142,6 +172,7 @@ export function extractCompactUserText(text: string): string | null {
   const compact = stripTransportMetaTags(base);
   // Suppress boilerplate-only user messages after metadata cleanup.
   if (isBoilerplateUserMessageText(compact)) return null;
+  if (isCodexTurnAbortedMessageText(compact) || isClaudeRequestInterruptedMessageText(compact)) return null;
   return compact.length > 0 ? compact : null;
 }
 

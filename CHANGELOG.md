@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.6.1] - 2026-06-22
+
+### Added
+
+- Added dedicated request-interruption cards for Codex and Claude Code history.
+- Added interruption details when available, including reason, duration, turn ID, rollback state, and rolled-back turn count.
+
 ## [2.6.0] - 2026-06-12
 
 ### Added

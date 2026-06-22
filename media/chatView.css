@@ -1050,6 +1050,10 @@ body.vscode-dark .userStickyHeader {
   justify-content: flex-start;
 }
 
+.row.systemEvent {
+  justify-content: flex-start;
+}
+
 .bubble {
   max-width: min(900px, 92%);
   box-sizing: border-box;
@@ -2609,6 +2613,78 @@ body.vscode-high-contrast-light .imagePreviewOverlay {
   min-width: 0;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.systemEventCard {
+  max-width: min(900px, 92%);
+  box-sizing: border-box;
+  width: auto;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 68%, transparent 32%);
+  border-left: 3px solid color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 78%, var(--chv-border) 22%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--chv-tool-bg) 46%, transparent 54%);
+  color: var(--chv-muted);
+  padding: 6px 9px;
+  text-align: left;
+}
+
+.systemEventSummary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.systemEventBadge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 62%, var(--chv-border) 38%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 14%, transparent);
+  color: var(--chv-fg);
+  padding: 1px 7px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.systemEventTitle {
+  color: var(--chv-fg);
+  font-weight: 600;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.systemEventMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.systemEventMeta-rolledBack {
+  color: var(--vscode-charts-yellow, #cca700);
+}
+
+.systemEventDescription {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--chv-muted);
+  overflow-wrap: anywhere;
+}
+
+.systemEventDetails {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 4px 14px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid color-mix(in srgb, var(--chv-border) 70%, transparent 30%);
+  font-size: 11px;
 }
 
 .environmentCard {

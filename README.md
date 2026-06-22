@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **2.6.0** (2026-06-12).
+Latest release: **2.6.1** (2026-06-22).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -20,6 +20,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Show valid cached History and Pinned data immediately at startup while local session files refresh in the background.
 - Search across prompts, responses, tool output, tags, notes, and attachment metadata, with shared search history.
 - View sessions in a chat-like UI with Markdown, code highlighting, math rendering, tool cards, and file-change diffs.
+- Show Codex / Claude Code request interruptions as dedicated timeline cards.
 - Open **File AI Change History** for a workspace file to review Codex / Claude diffs that touched that file.
 - Bookmark important history cards and use date-guide markers to revisit them quickly.
 - Keep open chat tabs up to date with header-controlled auto-refresh modes.
@@ -58,6 +59,8 @@ Pinned has its own project scope, source, archive visibility, date, tag filters,
 The chat viewer renders local session files as readable conversation timelines. It supports Markdown, syntax-highlighted fenced code blocks, KaTeX-compatible math, assistant usage metadata, environment snapshots, tool execution metadata, and grouped file-change cards from patch activity.
 
 Large histories can use the `auto`, `normal`, or `simplified` performance mode. Heavy tool details and large diff rows can be deferred until **Show details** is enabled or an individual entry is expanded.
+
+Request interruptions from Codex and Claude Code render as dedicated timeline cards. When available, details include reason, duration, turn ID, rollback state, and rolled-back turn count.
 
 Chat tabs preserve useful state across reload and auto-refresh, including scroll position, selected message, expanded cards/diffs, detail visibility, diff wrapping, and in-page search state. The experimental opt-in **Restore Webview Tabs After Reload** setting can also restore chat and file-change history panels after **Developer: Reload Window** or VS Code restart. It is disabled by default because VS Code can defer Webview restoration and may occasionally create duplicate tabs when the same history is opened again.
 
@@ -178,12 +181,10 @@ For the full command list with per-command descriptions, see:
 - If the official Codex extension stops reopening a conversation, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.6.0
+## What's New in 2.6.1
 
-- Added History sorting by started date, last activity date, and name.
-- Added Pinned sorting by pinned time, started date, last activity date, and name.
-- Sort preferences are saved per workspace.
-- Improved History selection tracking after changing the display mode or sort order.
+- Added dedicated request-interruption cards for Codex and Claude Code history.
+- Added interruption details when available, including reason, duration, turn ID, rollback state, and rolled-back turn count.
 
 ## Changelog
 

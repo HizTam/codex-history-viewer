@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-06-12
-- 対象バージョン: 2.6.0
+- 最終更新: 2026-06-22
+- 対象バージョン: 2.6.1
 
 ## 1. 概要
 
@@ -619,7 +619,7 @@
 
 - `src/services/searchIndexService.ts`
   - `search-index.v2.json` を管理する。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
-  - `SEARCH_INDEX_FILE_VERSION = 9` とし、archive context / file change hints / attachment metadata 追加前の既存インデックスは再構築対象にする
+  - `SEARCH_INDEX_FILE_VERSION = 10` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering 追加前の既存インデックスは再構築対象にする
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
   - 検索インデックス読み込み時の parse error はインデックスを削除して `null` 扱いにし、次回検索時に再構築する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
@@ -1026,7 +1026,29 @@ npm run package
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 
-### 5.4 v2.6.0 リリースメモ（2026-06-12）
+### 5.4 v2.6.1 リリースメモ（2026-06-22）
+
+**追加された機能**
+
+- Codex / Claude Code のリクエスト中断記録を、通常の user bubble ではなく timeline system event として表示するようにした。Codex の `<turn_aborted>` / `event_msg.turn_aborted` と、Claude Code の `[Request interrupted by user]` / `[Request interrupted by user for tool use]` を対象にする
+- 中断 marker は `リクエスト中断` / `Request stopped` の専用 card として表示し、details off でも履歴上の区切りとして見えるようにした
+- 中断詳細として、取得できる場合は理由、duration、turn id、ロールバック済み状態、ロールバック turn 数を details 表示に出せるようにした
+
+**変更された機能**
+
+- 中断 raw message は user / assistant の `messageIndex` 採番に含めず、通常履歴、patch detail、File History、search index の 4 経路で同じ raw content 判定 helper を使うようにした
+- Codex の raw `<turn_aborted>` と structured `turn_aborted` event は近接 window 内で dedup し、`turn_id` が両方にある場合は一致時だけ merge するようにした
+- Codex `<user_instructions>` は既存 boilerplate context と同じく、通常 user prompt 表示、session preview、検索 index の対象から外すようにした。ただし既存 boilerplate と同じく `messageIndex` 採番は維持する
+- 検索 index cache version を `10` に更新し、中断 raw text や `<user_instructions>` が残った古い index は再構築対象にした
+
+**修正された機能**
+
+- Codex / Claude Code の中断制御メタが user message として表示されたり、検索・preview・sticky user header に混ざったりする問題を修正した
+- Claude Code の中断 record を挟んだ後も、通常履歴、patch detail、File History、search index の `messageIndex` が揃うようにし、Claude diff bookmark group の同期ずれを防ぐようにした
+- Claude Code の text-only 中断 record と tool result / attachment 混在 record を raw content で区別し、混在 record は通常 message として扱うようにした
+- `package.json` / `package-lock.json` のバージョンを `2.6.1` に更新した
+
+### 5.5 v2.6.0 リリースメモ（2026-06-12）
 
 **追加された機能**
 
@@ -1050,7 +1072,7 @@ npm run package
 - sort / 表示状態の切り替え後に、選択中の履歴が見失われやすい問題を軽減した
 - `package.json` / `package-lock.json` のバージョンを `2.6.0` に更新した
 
-### 5.5 v2.5.1 リリースメモ（2026-06-10）
+### 5.6 v2.5.1 リリースメモ（2026-06-10）
 
 **修正された機能**
 
@@ -1060,7 +1082,7 @@ npm run package
 - JSON 書き込みを一時ファイル経由の best-effort atomic write に変更し、rename に失敗する provider では直接書き込みへフォールバックするようにした。古い孤立一時ファイルは `Empty Trash` で内部的に回収できるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.5.1` に更新した
 
-### 5.6 v2.5.0 リリースメモ（2026-06-07）
+### 5.7 v2.5.0 リリースメモ（2026-06-07）
 
 **追加された機能**
 
@@ -1092,7 +1114,7 @@ npm run package
 - ピン留めビューのプロジェクト並び順が、同じ時間に更新された場合に崩れることがある問題を修正した
 - `package.json` / `package-lock.json` のバージョンを `2.5.0` に更新した
 
-### 5.7 v2.4.1 リリースメモ（2026-05-26）
+### 5.8 v2.4.1 リリースメモ（2026-05-26）
 
 - プロジェクト (`cwd`) に、この拡張機能内だけの別名を設定 / 消去できるようにした
 - プロジェクト別名は History / Pinned のプロジェクト見出し、セッション行、tooltip、絞り込み表示、Status、Search の scope / セッション表示に反映する
@@ -1105,7 +1127,7 @@ npm run package
 - Chat Webview で `::code-comment{...}` directive をレビューコメントカードとして表示し、comma 区切りや複数行、未知 segment を含む出力も既知キーから復元できるようにした
 - `package.json` のバージョンを `2.4.1` に更新した
 
-### 5.8 v2.4.0 リリースメモ（2026-05-23）
+### 5.9 v2.4.0 リリースメモ（2026-05-23）
 
 - History に `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位` のプロジェクト表示 mode を追加した
 - プロジェクト判定用 key を全 OS で大文字小文字非区別に統一した
@@ -1123,7 +1145,7 @@ npm run package
 - Codex の `# Files mentioned by the user:` block が IDE context 後ろにある場合も、HTML / log / JSON などの file reference attachment として表示されるように修正した
 - `package.json` / `package-lock.json` のバージョンを `2.4.0` に更新した
 
-### 5.9 v2.3.0 リリースメモ（2026-05-22）
+### 5.10 v2.3.0 リリースメモ（2026-05-22）
 
 - Chat message の添付モデルを `attachments` に統合し、画像も `type: "image"` の attachment として扱うようにした
 - Claude Code の `type: "document"` を document card として表示できるようにした
@@ -1157,7 +1179,7 @@ npm run package
 - Resume / Handoff では clean text と attachment summary を使い、raw tag / `Files mentioned` block の重複やバイナリ再添付を避けるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.3.0` に更新した
 
-### 5.10 v2.2.0 リリースメモ（2026-05-21）
+### 5.11 v2.2.0 リリースメモ（2026-05-21）
 
 - Codex の通常 `sessions` に加えて、任意で `archived_sessions` を読み込めるようにした
 - `codexHistoryViewer.codex.archivedSessions.enabled` と `codexHistoryViewer.codex.archivedSessionsRoot` を追加した
@@ -1191,7 +1213,7 @@ npm run package
 - 検索インデックスの context に archived root / archived 有効状態を含めるようにした
 - `package.json` のバージョンを `2.2.0` に更新した
 
-### 5.11 v2.1.0 リリースメモ（2026-05-19）
+### 5.12 v2.1.0 リリースメモ（2026-05-19）
 
 - Codex / Claude Code 間の Handoff を新規実装した
 - History / Pinned / Search のセッション右クリックに、`他のAIへ引継ぎ` 階層メニューを追加した
@@ -1211,7 +1233,7 @@ npm run package
 - チャット表示内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
 - `package.json` / `package-lock.json` のバージョンを `2.1.0` に更新した
 
-### 5.12 v2.0.1 リリースメモ（2026-05-15）
+### 5.13 v2.0.1 リリースメモ（2026-05-15）
 
 - 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
 - しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
@@ -1235,7 +1257,7 @@ npm run package
 - ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
 - `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
 
-### 5.13 v2.0.0 リリースメモ（2026-05-14）
+### 5.14 v2.0.0 リリースメモ（2026-05-14）
 
 - ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる File AI Change History を追加した
 - カスタムタイトル操作を QuickPick 入口へ統一し、チャット履歴ビューアのヘッダーからも設定 / 消去できるようにした
@@ -1253,7 +1275,7 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.14 v1.5.1 リリースメモ（2026-05-08）
+### 5.15 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
@@ -1264,7 +1286,7 @@ npm run package
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.15 v1.5.0 リリースメモ（2026-05-07）
+### 5.16 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -1273,7 +1295,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.16 v1.4.3 リリースメモ（2026-04-30）
+### 5.17 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した

@@ -15,6 +15,7 @@ import type {
   ChatRole,
   ChatSessionMeta,
   ChatSessionModel,
+  ChatSystemEventItem,
   ChatTimelineItem,
   ChatTokenUsage,
   ChatToolExecution,
@@ -23,13 +24,18 @@ import type {
 } from "./chatTypes";
 import type { ImagesConfig } from "../settings";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
-import { extractCompactUserText, isBoilerplateUserMessageText } from "../utils/textUtils";
+import {
+  extractCompactUserText,
+  isBoilerplateUserMessageText,
+} from "../utils/textUtils";
 import { buildToolPresentation } from "../tools/toolSemantics";
 import {
   assignAttachmentIds,
   extractClaudeMessageContent,
+  extractClaudeRequestInterruptionContent,
   extractCodexMessageContent,
   hasClaudeAttachmentLikeContent,
+  isCodexTurnAbortedContent,
 } from "./chatAttachments";
 import { stripImagePlaceholders } from "./chatImageAttachments";
 import { normalizeMemoryCitationPayload, splitTrailingMemoryCitationBlock } from "./memoryCitation";
@@ -105,6 +111,7 @@ async function readTimelineItems(
   const usageState: UsageBuildState = {};
   const environmentState: EnvironmentBuildState = {};
   const memoryCitationState: MemoryCitationBuildState = {};
+  const interruptionState: InterruptionBuildState = {};
   let messageIndex = 0;
   let lineIndex = 0;
 
@@ -134,6 +141,7 @@ async function readTimelineItems(
           () => messageIndex,
           codexTurnMeta,
           memoryCitationState,
+          interruptionState,
           sessionCwd,
           options,
           lineIndex,
@@ -151,6 +159,7 @@ async function readTimelineItems(
           codexTurnMeta,
           memoryCitationState,
           usageState,
+          interruptionState,
           sessionCwd,
           options,
           lineIndex,
@@ -217,6 +226,7 @@ async function readPatchEntryDetails(
 
       if (obj?.type === "response_item" && obj?.payload?.type === "message") {
         const role = obj?.payload?.role;
+        if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) continue;
         if (role === "user" || role === "assistant") messageIndex += 1;
         continue;
       }
@@ -255,9 +265,11 @@ async function readPatchEntryDetails(
 
       const role = detectClaudeMessageRole(obj);
       if (!role) continue;
-      const parsed = parseClaudeMessageContent(getClaudeMessageContent(obj));
+      const rawContent = getClaudeMessageContent(obj);
+      if (role === "user" && extractClaudeRequestInterruptionContent(rawContent)) continue;
+      const parsed = parseClaudeMessageContent(rawContent);
       const stripped = stripImagePlaceholders(parsed.messageText);
-      if (normalizeText(stripped.text) || hasClaudeAttachmentLikeContent(getClaudeMessageContent(obj))) messageIndex += 1;
+      if (normalizeText(stripped.text) || hasClaudeAttachmentLikeContent(rawContent)) messageIndex += 1;
       for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
         const toolCall = parsed.toolCalls[toolCallIndex]!;
         const callId = resolveClaudeToolCallId(toolCall.callId, lineIndex, toolCallIndex);
@@ -287,6 +299,7 @@ async function indexCodexTimelineRecord(
   currentMessageIndex: () => number,
   codexTurnMeta: ChatMessageModelMeta,
   memoryCitationState: MemoryCitationBuildState,
+  interruptionState: InterruptionBuildState,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
   lineIndex = 0,
@@ -297,6 +310,11 @@ async function indexCodexTimelineRecord(
   if (payloadType === "message") {
     const role = obj?.payload?.role as ChatRole | undefined;
     if (role !== "developer" && role !== "user" && role !== "assistant") return true;
+
+    if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) {
+      appendOrMergeCodexInterruption(items, interruptionState, buildCodexInterruptionFromRaw(obj));
+      return true;
+    }
 
     const parsed = await extractCodexMessageContent(
       obj?.payload?.content,
@@ -338,6 +356,7 @@ async function indexCodexTimelineRecord(
     };
     items.push(item);
     if (role === "assistant") memoryCitationState.lastAssistantItemIndex = items.length - 1;
+    if (role === "user" || role === "assistant") closeCodexInterruptionWindow(interruptionState);
     return true;
   }
 
@@ -423,6 +442,7 @@ function indexCodexEventRecord(
   codexTurnMeta: ChatMessageModelMeta,
   memoryCitationState: MemoryCitationBuildState,
   usageState: UsageBuildState,
+  interruptionState: InterruptionBuildState,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
   lineIndex = 0,
@@ -431,6 +451,14 @@ function indexCodexEventRecord(
 
   const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
   const payloadPhase = typeof obj?.payload?.phase === "string" ? obj.payload.phase : "";
+  if (payloadType === "turn_aborted") {
+    appendOrMergeCodexInterruption(items, interruptionState, buildCodexInterruptionFromEvent(obj));
+    return true;
+  }
+  if (payloadType === "thread_rolled_back") {
+    mergeCodexRollbackIntoInterruption(items, interruptionState, obj);
+    return true;
+  }
   if (payloadPhase === "final_answer") {
     const memoryCitation = normalizeMemoryCitationPayload(obj?.payload?.memory_citation);
     if (
@@ -538,11 +566,24 @@ async function indexClaudeTimelineRecord(
   if (!role) return false;
 
   const rawContent = getClaudeMessageContent(obj);
+  const interruption = role === "user" ? extractClaudeRequestInterruptionContent(rawContent) : null;
+  if (interruption) {
+    const ts = readTimestampIso(obj);
+    items.push({
+      type: "systemEvent",
+      kind: "requestInterrupted",
+      source: "claude",
+      scope: interruption.scope,
+      ...(ts ? { timestampIso: ts } : {}),
+    });
+    return true;
+  }
+
   const parsed = parseClaudeMessageContent(rawContent);
   const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, toImageExtractionOptions(options.images));
   const attachments = extracted.attachments;
   const text = normalizeText(extracted.text);
-  const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+  const ts = readTimestampIso(obj);
 
   if (text || attachments.length > 0) {
     const compactUserText = role === "user" ? extractCompactUserText(text) : null;
@@ -655,6 +696,119 @@ interface UsageBuildState {
 
 interface EnvironmentBuildState {
   lastSignature?: string;
+}
+
+interface InterruptionBuildState {
+  pendingCodexInterruptionItemIndex?: number;
+}
+
+function closeCodexInterruptionWindow(state: InterruptionBuildState): void {
+  state.pendingCodexInterruptionItemIndex = undefined;
+}
+
+function buildCodexInterruptionFromRaw(obj: any): ChatSystemEventItem {
+  return {
+    type: "systemEvent",
+    kind: "requestInterrupted",
+    source: "codex",
+    scope: "request",
+    timestampIso: readTimestampIso(obj),
+  };
+}
+
+function buildCodexInterruptionFromEvent(obj: any): ChatSystemEventItem {
+  const reason = typeof obj?.payload?.reason === "string" ? obj.payload.reason.trim() : "";
+  const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id.trim() : "";
+  const durationMs = normalizeOptionalNonNegativeSafeInteger(obj?.payload?.duration_ms);
+  return {
+    type: "systemEvent",
+    kind: "requestInterrupted",
+    source: "codex",
+    scope: "request",
+    timestampIso: readTimestampIso(obj),
+    ...(reason ? { reason } : {}),
+    ...(typeof durationMs === "number" ? { durationMs } : {}),
+    ...(turnId ? { turnId } : {}),
+  };
+}
+
+function appendOrMergeCodexInterruption(
+  items: ChatTimelineItem[],
+  state: InterruptionBuildState,
+  next: ChatSystemEventItem,
+): void {
+  const pending = getPendingCodexInterruption(items, state);
+  if (pending && canMergeCodexInterruption(pending, next)) {
+    mergeSystemEventItem(pending, next);
+    return;
+  }
+  items.push(next);
+  state.pendingCodexInterruptionItemIndex = items.length - 1;
+}
+
+function mergeCodexRollbackIntoInterruption(
+  items: ChatTimelineItem[],
+  state: InterruptionBuildState,
+  obj: any,
+): void {
+  if (state.pendingCodexInterruptionItemIndex !== items.length - 1) return;
+  const pending = getPendingCodexInterruption(items, state);
+  if (!pending) return;
+  if (!canMergeCodexRollback(pending, obj)) return;
+  pending.rolledBack = true;
+  const rolledBackTurns = readFirstNonNegativeSafeInteger([
+    obj?.payload?.rolled_back_turns,
+    obj?.payload?.rolledBackTurns,
+    obj?.payload?.turn_count,
+    obj?.payload?.turns,
+  ]);
+  if (typeof rolledBackTurns === "number") pending.rolledBackTurns = rolledBackTurns;
+}
+
+function getPendingCodexInterruption(
+  items: ChatTimelineItem[],
+  state: InterruptionBuildState,
+): ChatSystemEventItem | null {
+  const index = state.pendingCodexInterruptionItemIndex;
+  if (typeof index !== "number" || index < 0 || index >= items.length) return null;
+  const item = items[index];
+  return item?.type === "systemEvent" && item.kind === "requestInterrupted" && item.source === "codex" ? item : null;
+}
+
+function canMergeCodexInterruption(current: ChatSystemEventItem, next: ChatSystemEventItem): boolean {
+  const currentTurnId = typeof current.turnId === "string" ? current.turnId.trim() : "";
+  const nextTurnId = typeof next.turnId === "string" ? next.turnId.trim() : "";
+  return !currentTurnId || !nextTurnId || currentTurnId === nextTurnId;
+}
+
+function canMergeCodexRollback(current: ChatSystemEventItem, obj: any): boolean {
+  const currentTurnId = typeof current.turnId === "string" ? current.turnId.trim() : "";
+  const rollbackTurnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id.trim() : "";
+  return !currentTurnId || !rollbackTurnId || currentTurnId === rollbackTurnId;
+}
+
+function mergeSystemEventItem(target: ChatSystemEventItem, source: ChatSystemEventItem): void {
+  if (!target.timestampIso && source.timestampIso) target.timestampIso = source.timestampIso;
+  if (!target.reason && source.reason) target.reason = source.reason;
+  if (typeof target.durationMs !== "number" && typeof source.durationMs === "number") target.durationMs = source.durationMs;
+  if (!target.turnId && source.turnId) target.turnId = source.turnId;
+  if (!target.scope && source.scope) target.scope = source.scope;
+  if (source.rolledBack === true) target.rolledBack = true;
+  if (typeof target.rolledBackTurns !== "number" && typeof source.rolledBackTurns === "number") {
+    target.rolledBackTurns = source.rolledBackTurns;
+  }
+}
+
+function readTimestampIso(obj: any): string | undefined {
+  const timestamp =
+    typeof obj?.timestamp === "string"
+      ? obj.timestamp.trim()
+      : typeof obj?.payload?.timestamp === "string"
+        ? obj.payload.timestamp.trim()
+        : typeof obj?.message?.timestamp === "string"
+          ? obj.message.timestamp.trim()
+          : "";
+  return timestamp || undefined;
 }
 
 function takePendingMemoryCitation(state: MemoryCitationBuildState): ChatMemoryCitation | undefined {
@@ -922,6 +1076,29 @@ function normalizeOptionalInteger(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   const n = Math.max(0, Math.floor(value));
   return Number.isSafeInteger(n) ? n : undefined;
+}
+
+function normalizeOptionalNonNegativeSafeInteger(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const n = Math.floor(value);
+  return n >= 0 && Number.isSafeInteger(n) ? n : undefined;
+}
+
+function readFirstNonNegativeSafeInteger(values: readonly unknown[]): number | undefined {
+  for (const value of values) {
+    const candidate = parseIntegerCandidate(value);
+    const normalized = normalizeOptionalNonNegativeSafeInteger(candidate);
+    if (typeof normalized === "number") return normalized;
+  }
+  return undefined;
+}
+
+function parseIntegerCandidate(value: unknown): number | undefined {
+  if (typeof value === "number") return value;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!/^\d+$/u.test(trimmed)) return undefined;
+  return Number(trimmed);
 }
 
 function normalizeOptionalNumber(value: unknown): number | undefined {
