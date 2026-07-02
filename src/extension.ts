@@ -1445,6 +1445,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const autoRefreshChanged = e.affectsConfiguration("codexHistoryViewer.autoRefresh");
       const chatOpenPositionChanged = e.affectsConfiguration("codexHistoryViewer.chat.openPosition");
       const chatPerformanceModeChanged = e.affectsConfiguration("codexHistoryViewer.chat.performanceMode");
+      const chatTurnTimelineModeChanged = e.affectsConfiguration("codexHistoryViewer.chat.turnTimeline.mode");
       const toolDisplayModeChanged = e.affectsConfiguration("codexHistoryViewer.chat.toolDisplayMode");
       const userLongMessageFoldingChanged = e.affectsConfiguration("codexHistoryViewer.chat.userLongMessageFolding");
       const assistantLongMessageFoldingChanged = e.affectsConfiguration(
@@ -1471,6 +1472,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         !autoRefreshChanged &&
         !chatOpenPositionChanged &&
         !chatPerformanceModeChanged &&
+        !chatTurnTimelineModeChanged &&
         !toolDisplayModeChanged &&
         !longMessageFoldingChanged &&
         !imagesChanged
@@ -1509,7 +1511,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       updateHistoryViewDescription();
       updateSearchViewDescription();
       void autoRefreshService?.configure(getConfig(), computeAutoRefreshConsumerVisible(), vscode.window.state.focused);
-      if (uiLanguageChanged || toolDisplayModeChanged || longMessageFoldingChanged || imagesChanged) chatPanels.refreshPanels();
+      if (uiLanguageChanged || chatTurnTimelineModeChanged || toolDisplayModeChanged || longMessageFoldingChanged || imagesChanged) chatPanels.refreshPanels();
       else chatPanels.refreshI18n();
       if (uiLanguageChanged || timeGuideChanged) fileChangeHistoryPanels.refreshI18n();
       if (searchIndexToolContentChanged) fileChangeHistoryPanels.notifySettingsChanged("indexToolContent");

@@ -261,6 +261,7 @@ body.pageSearchResizing {
   right: 10px;
   bottom: 10px;
   z-index: 3;
+  container: page-search / inline-size;
   display: flex;
   width: min(var(--chv-page-search-width), calc(100vw - 16px));
   flex-direction: column;
@@ -567,24 +568,68 @@ body.pageSearchResizing #pageSearchBar {
 
 .pageSearchResultHeader {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: flex-start;
 }
 
 .pageSearchResultLine {
-  min-width: 38px;
-  padding: 2px 6px;
+  display: inline-flex;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  min-inline-size: 38px;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 8px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--chv-code-bg) 82%, transparent);
   color: var(--chv-muted);
   font-family: var(--vscode-editor-font-family);
   font-size: 11px;
-  line-height: 1.2;
+  line-height: 1.25;
   text-align: center;
+  white-space: nowrap;
+}
+
+.pageSearchResultLine-card {
+  border: 1px solid color-mix(in srgb, var(--chv-accent) 22%, var(--chv-border) 78%);
+  background: color-mix(in srgb, var(--chv-accent) 10%, var(--chv-code-bg) 90%);
+  color: color-mix(in srgb, var(--chv-fg) 78%, var(--chv-muted) 22%);
+}
+
+.pageSearchResultLine-line {
+  min-inline-size: max-content;
+}
+
+.pageSearchResultLineCompact {
+  display: none;
+}
+
+@container page-search (max-width: 420px) {
+  .pageSearchResultLine-line .pageSearchResultLineFull {
+    display: none;
+  }
+
+  .pageSearchResultLine-line .pageSearchResultLineCompact {
+    display: inline;
+  }
+}
+
+.pageSearchResultLine-before {
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 34%, var(--chv-border) 66%);
+  background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 12%, var(--chv-code-bg) 88%);
+  color: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 72%, var(--chv-fg) 28%);
+}
+
+.pageSearchResultLine-after {
+  border: 1px solid color-mix(in srgb, var(--vscode-charts-green, #89d185) 34%, var(--chv-border) 66%);
+  background: color-mix(in srgb, var(--vscode-charts-green, #89d185) 12%, var(--chv-code-bg) 88%);
+  color: color-mix(in srgb, var(--vscode-charts-green, #89d185) 72%, var(--chv-fg) 28%);
 }
 
 .pageSearchResultHeaderText {
   display: flex;
+  flex: 1 1 120px;
   min-width: 0;
   flex-direction: column;
   gap: 3px;
@@ -732,6 +777,7 @@ mark.pageSearchMatch-active {
 }
 
 .sourcePill,
+.cardNumberBadge,
 .metaChip,
 .countBadge {
   display: inline-flex;
@@ -742,6 +788,14 @@ mark.pageSearchMatch-active {
   border-radius: 999px;
   font-size: 12px;
   white-space: nowrap;
+}
+
+.cardNumberBadge {
+  background: color-mix(in srgb, var(--chv-code-bg) 76%, transparent);
+  color: var(--chv-muted);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .sourceIcon {
@@ -809,6 +863,27 @@ mark.pageSearchMatch-active {
 .primaryBtn {
   background: var(--vscode-button-background);
   color: var(--vscode-button-foreground);
+}
+
+.loadMoreBtn {
+  display: inline-flex;
+  min-width: 116px;
+  align-items: center;
+  justify-content: center;
+  border-color: color-mix(in srgb, var(--chv-border) 86%, transparent);
+  background: color-mix(in srgb, var(--chv-tool-bg) 68%, transparent);
+  color: var(--chv-fg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.loadMoreBtn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--chv-accent) 48%, var(--chv-border) 52%);
+  background: color-mix(in srgb, var(--chv-accent) 8%, var(--chv-tool-bg) 92%);
+}
+
+.loadMoreBtn:active:not(:disabled) {
+  background: color-mix(in srgb, var(--chv-accent) 12%, var(--chv-tool-bg) 88%);
 }
 
 .messageNav {

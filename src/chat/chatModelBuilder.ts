@@ -20,9 +20,11 @@ import type {
   ChatTokenUsage,
   ChatToolExecution,
   ChatToolItem,
+  ChatTurnStatus,
+  ChatTurnSummary,
   ChatUsageItem,
 } from "./chatTypes";
-import type { ImagesConfig } from "../settings";
+import type { ChatTurnTimelineMode, ImagesConfig } from "../settings";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import {
   extractCompactUserText,
@@ -31,6 +33,7 @@ import {
 import { buildToolPresentation } from "../tools/toolSemantics";
 import {
   assignAttachmentIds,
+  detectClaudeMaterializedMessageRole,
   extractClaudeMessageContent,
   extractClaudeRequestInterruptionContent,
   extractCodexMessageContent,
@@ -48,6 +51,7 @@ import {
 export interface ChatSessionModelBuildOptions {
   images?: ImagesConfig;
   includeDetails?: boolean;
+  turnTimelineMode?: ChatTurnTimelineMode;
 }
 
 export interface ChatPatchEntryDetailTarget {
@@ -60,14 +64,28 @@ export interface ChatPatchEntryDetailTarget {
   changeType?: ChatPatchChangeType;
 }
 
+interface ChatTimelineBuildResult {
+  items: ChatTimelineItem[];
+  turns?: ChatTurnSummary[];
+  activeTurnId?: string;
+  latestTurnId?: string;
+}
+
 // Parse a session JSONL and build a chat-view model.
 export async function buildChatSessionModel(
   fsPath: string,
   options: ChatSessionModelBuildOptions = {},
 ): Promise<ChatSessionModel> {
   const meta = await readSessionMeta(fsPath);
-  const items = await readTimelineItems(fsPath, meta.cwd, options);
-  return { fsPath, meta, items };
+  const timeline = await readTimelineItems(fsPath, meta.cwd, options);
+  return {
+    fsPath,
+    meta,
+    items: timeline.items,
+    ...(timeline.turns && timeline.turns.length > 0 ? { turns: timeline.turns } : {}),
+    ...(timeline.activeTurnId ? { activeTurnId: timeline.activeTurnId } : {}),
+    ...(timeline.latestTurnId ? { latestTurnId: timeline.latestTurnId } : {}),
+  };
 }
 
 export async function buildChatPatchEntryDetails(
@@ -100,7 +118,7 @@ async function readTimelineItems(
   fsPath: string,
   sessionCwd: string | undefined,
   options: ChatSessionModelBuildOptions,
-): Promise<ChatTimelineItem[]> {
+): Promise<ChatTimelineBuildResult> {
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
@@ -112,6 +130,7 @@ async function readTimelineItems(
   const environmentState: EnvironmentBuildState = {};
   const memoryCitationState: MemoryCitationBuildState = {};
   const interruptionState: InterruptionBuildState = {};
+  const turnState: TurnBuildState | undefined = shouldBuildTurnTimeline(options) ? createTurnBuildState() : undefined;
   let messageIndex = 0;
   let lineIndex = 0;
 
@@ -127,8 +146,8 @@ async function readTimelineItems(
       }
 
       flushPendingClaudeUsageIfNeeded(obj, items, usageState);
-      appendEnvironmentSnapshotIfChanged(obj, items, environmentState, () => messageIndex);
-      if (updateCodexTurnMeta(obj, codexTurnMeta)) {
+      appendEnvironmentSnapshotIfChanged(obj, items, environmentState, () => messageIndex, () => turnState?.activeTurnId);
+      if (updateCodexTurnMeta(obj, codexTurnMeta, turnState)) {
         continue;
       }
       if (
@@ -142,6 +161,7 @@ async function readTimelineItems(
           codexTurnMeta,
           memoryCitationState,
           interruptionState,
+          turnState,
           sessionCwd,
           options,
           lineIndex,
@@ -160,6 +180,7 @@ async function readTimelineItems(
           memoryCitationState,
           usageState,
           interruptionState,
+          turnState,
           sessionCwd,
           options,
           lineIndex,
@@ -188,10 +209,17 @@ async function readTimelineItems(
     stream.close();
   }
 
-  flushPendingPatchGroups(items, pendingPatchGroups);
+  flushPendingPatchGroups(items, pendingPatchGroups, turnState);
   flushPendingClaudeUsage(items, usageState);
   finalizeTimelineItems(items);
-  return items;
+  if (!turnState) return { items };
+  const turnResult = finalizeCodexTurns(items, turnState);
+  return {
+    items,
+    ...(turnResult.turns.length > 0 ? { turns: turnResult.turns } : {}),
+    ...(turnResult.activeTurnId ? { activeTurnId: turnResult.activeTurnId } : {}),
+    ...(turnResult.latestTurnId ? { latestTurnId: turnResult.latestTurnId } : {}),
+  };
 }
 
 async function readPatchEntryDetails(
@@ -300,19 +328,23 @@ async function indexCodexTimelineRecord(
   codexTurnMeta: ChatMessageModelMeta,
   memoryCitationState: MemoryCitationBuildState,
   interruptionState: InterruptionBuildState,
+  turnState: TurnBuildState | undefined,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
   lineIndex = 0,
 ): Promise<boolean> {
   if (obj?.type !== "response_item") return false;
   const payloadType = obj?.payload?.type;
+  const turnId = resolveCodexTurnIdForItem(obj, turnState);
 
   if (payloadType === "message") {
     const role = obj?.payload?.role as ChatRole | undefined;
     if (role !== "developer" && role !== "user" && role !== "assistant") return true;
 
     if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) {
-      appendOrMergeCodexInterruption(items, interruptionState, buildCodexInterruptionFromRaw(obj));
+      appendOrMergeCodexInterruption(items, interruptionState, buildCodexInterruptionFromRaw(obj, turnId));
+      observeCodexItemTurn(turnState, turnId, readTimestampIso(obj));
+      markCodexTurnInterrupted(turnState, turnId, readTimestampIso(obj), { itemBacked: true, lineIndex });
       return true;
     }
 
@@ -346,6 +378,7 @@ async function indexCodexTimelineRecord(
       type: "message",
       role,
       messageIndex: idx,
+      ...(turnId ? { turnId } : {}),
       timestampIso: ts,
       ...(role === "assistant" ? toMessageModelMeta(codexTurnMeta) : {}),
       text,
@@ -355,6 +388,7 @@ async function indexCodexTimelineRecord(
       isContext,
     };
     items.push(item);
+    observeCodexItemTurn(turnState, turnId, ts);
     if (role === "assistant") memoryCitationState.lastAssistantItemIndex = items.length - 1;
     if (role === "user" || role === "assistant") closeCodexInterruptionWindow(interruptionState);
     return true;
@@ -371,6 +405,7 @@ async function indexCodexTimelineRecord(
     const tool: ChatToolItem = {
       type: "tool",
       messageIndex,
+      ...(turnId ? { turnId } : {}),
       timestampIso: ts,
       name,
       callId,
@@ -379,6 +414,7 @@ async function indexCodexTimelineRecord(
     };
     if (!includeDetails) tool.presentation = buildToolPresentation({ ...tool, argumentsText });
     items.push(tool);
+    observeCodexItemTurn(turnState, turnId, ts);
     if (callId) toolByCallId.set(callId, tool);
 
     const customApplyPatchInput = readCodexCustomApplyPatchInput(obj);
@@ -389,6 +425,7 @@ async function indexCodexTimelineRecord(
       if (entries.length > 0) {
         const applyGroupKey = buildApplyPatchPendingGroupKey(patchCallId, lineIndex);
         const group: PendingPatchGroup = {
+          turnId,
           bookmarkGroupId: applyGroupKey,
           messageIndex: messageIndex > 0 ? messageIndex : undefined,
           firstTimestampIso: ts,
@@ -399,6 +436,7 @@ async function indexCodexTimelineRecord(
           totalRemoved: entries.reduce((sum, entry) => sum + entry.removed, 0),
         };
         items.push(toPatchGroupItem(group));
+        observeCodexItemTurn(turnState, turnId, ts);
         pendingPatchGroups.set(applyGroupKey, {
           ...group,
           flushed: true,
@@ -422,11 +460,13 @@ async function indexCodexTimelineRecord(
       callId,
       outputText,
       fallbackMessageIndex: currentMessageIndex(),
+      turnId,
       timestampIso: ts,
       fallbackName: payloadType,
       includeDetails: shouldIncludeDetails(options),
       execution,
     });
+    observeCodexItemTurn(turnState, turnId, ts);
     return true;
   }
 
@@ -443,6 +483,7 @@ function indexCodexEventRecord(
   memoryCitationState: MemoryCitationBuildState,
   usageState: UsageBuildState,
   interruptionState: InterruptionBuildState,
+  turnState: TurnBuildState | undefined,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
   lineIndex = 0,
@@ -452,11 +493,23 @@ function indexCodexEventRecord(
   const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
   const payloadPhase = typeof obj?.payload?.phase === "string" ? obj.payload.phase : "";
   if (payloadType === "turn_aborted") {
-    appendOrMergeCodexInterruption(items, interruptionState, buildCodexInterruptionFromEvent(obj));
+    const turnId = resolveCodexTurnIdForItem(obj, turnState);
+    appendOrMergeCodexInterruption(items, interruptionState, buildCodexInterruptionFromEvent(obj, turnId));
+    observeCodexItemTurn(turnState, turnId, readTimestampIso(obj));
+    markCodexTurnInterrupted(turnState, turnId, readTimestampIso(obj), { itemBacked: true, lineIndex });
     return true;
   }
   if (payloadType === "thread_rolled_back") {
-    mergeCodexRollbackIntoInterruption(items, interruptionState, obj);
+    const explicitTurnId = readCodexRecordTurnId(obj);
+    const turnId = explicitTurnId ?? turnState?.activeTurnId;
+    const rolledBack = mergeCodexRollbackIntoInterruption(items, interruptionState, obj, turnId);
+    const effectiveTurnId = rolledBack?.turnId ?? turnId;
+    if (rolledBack) observeCodexItemTurn(turnState, effectiveTurnId, readTimestampIso(obj));
+    markCodexTurnRolledBack(turnState, effectiveTurnId, readTimestampIso(obj), {
+      itemBacked: !!rolledBack,
+      lineIndex,
+      recordPending: !!explicitTurnId,
+    });
     return true;
   }
   if (payloadPhase === "final_answer") {
@@ -470,8 +523,16 @@ function indexCodexEventRecord(
   }
 
   if (payloadType === "token_count") {
-    const usageItem = buildCodexUsageItem(obj, currentMessageIndex(), codexTurnMeta);
-    if (usageItem && shouldAppendCodexUsage(usageItem, usageState)) items.push(usageItem);
+    const usageItem = buildCodexUsageItem(
+      obj,
+      currentMessageIndex(),
+      codexTurnMeta,
+      resolveCodexUsageTurnId(obj, turnState, lineIndex),
+    );
+    if (usageItem && shouldAppendCodexUsage(usageItem, usageState)) {
+      items.push(usageItem);
+      observeCodexItemTurn(turnState, usageItem.turnId, usageItem.timestampIso);
+    }
     return true;
   }
 
@@ -485,7 +546,7 @@ function indexCodexEventRecord(
   if (payloadType === "patch_apply_end") {
     const key = buildPatchGroupKey(obj, lineIndex);
     const bookmarkGroupId = buildCodexPatchBookmarkGroupId(obj, lineIndex);
-    const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id : undefined;
+    const turnId = resolveCodexTurnIdForItem(obj, turnState);
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
     const patchCallId = callId ?? `patch:${lineIndex}`;
     const timestampIso =
@@ -531,18 +592,37 @@ function indexCodexEventRecord(
   }
 
   if (payloadType === "task_complete") {
-    const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id : undefined;
+    const explicitTurnId = readCodexRecordTurnId(obj);
+    const turnId = explicitTurnId ?? turnState?.activeTurnId;
+    const completionResult = markCodexTurnCompleted(turnState, turnId, readTimestampIso(obj), {
+      lineIndex,
+      recordPending: !!explicitTurnId,
+    });
     if (!turnId) {
-      flushPendingPatchGroups(items, pendingPatchGroups);
+      flushPendingPatchGroups(items, pendingPatchGroups, turnState);
       return true;
     }
-    flushPendingPatchGroup(items, pendingPatchGroups, turnId);
+    const flushedCount = flushPendingPatchGroup(items, pendingPatchGroups, turnId, turnState);
+    if (completionResult === "pending") {
+      const materialized = turnState ? turnState.entries.get(turnId) : undefined;
+      if (materialized && flushedCount > 0) {
+        applyPendingTurnTerminalStatus(turnState!, materialized);
+        if (turnState) {
+          turnState.latestTurnId = materialized.id;
+          clearCompletedLatestFallbackBlock(turnState);
+        }
+      } else if (turnState && explicitTurnId) {
+        setCompletedLatestFallbackBlock(turnState, explicitTurnId, readTimestampIso(obj), lineIndex);
+      }
+    }
     return true;
   }
 
   if (payloadType === "task_started") {
+    const turnId = readCodexRecordTurnId(obj);
     // Finalize any pending patch groups before the next turn begins.
-    flushPendingPatchGroups(items, pendingPatchGroups);
+    flushPendingPatchGroups(items, pendingPatchGroups, turnState);
+    startCodexTurn(turnState, turnId, readTimestampIso(obj), lineIndex);
     memoryCitationState.pendingFinalAnswer = undefined;
     memoryCitationState.lastAssistantItemIndex = undefined;
     return true;
@@ -580,7 +660,7 @@ async function indexClaudeTimelineRecord(
   }
 
   const parsed = parseClaudeMessageContent(rawContent);
-  const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, toImageExtractionOptions(options.images));
+  const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, toImageExtractionOptions(options.images), { role });
   const attachments = extracted.attachments;
   const text = normalizeText(extracted.text);
   const ts = readTimestampIso(obj);
@@ -698,27 +778,546 @@ interface EnvironmentBuildState {
   lastSignature?: string;
 }
 
+interface TurnBuildEntry {
+  id: string;
+  status: ChatTurnStatus;
+  startedAtIso?: string;
+  startedLineIndex?: number;
+  completedAtIso?: string;
+  terminalAtIso?: string;
+  terminalLineIndex?: number;
+  updatedAtIso?: string;
+}
+
+interface PendingTurnTerminalStatus {
+  status: ChatTurnStatus;
+  timestampIso?: string;
+  lineIndex?: number;
+}
+
+interface CompletedLatestFallbackBlock {
+  causeTurnId: string;
+  lineIndex?: number;
+  timestampIso?: string;
+}
+
+interface TurnBuildState {
+  entries: Map<string, TurnBuildEntry>;
+  order: string[];
+  terminalStatusByTurnId: Map<string, PendingTurnTerminalStatus>;
+  completedLatestFallbackBlock?: CompletedLatestFallbackBlock;
+  activeTurnId?: string;
+  latestTurnId?: string;
+}
+
 interface InterruptionBuildState {
   pendingCodexInterruptionItemIndex?: number;
+}
+
+function createTurnBuildState(): TurnBuildState {
+  return {
+    entries: new Map<string, TurnBuildEntry>(),
+    order: [],
+    terminalStatusByTurnId: new Map<string, PendingTurnTerminalStatus>(),
+  };
+}
+
+function readCodexRecordTurnId(obj: any): string | undefined {
+  return normalizeCodexTurnId(obj?.payload?.turn_id ?? obj?.payload?.turnId ?? obj?.turn_id ?? obj?.turnId);
+}
+
+function normalizeCodexTurnId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const cleaned = trimmed.replace(/[\u0000-\u001f\u007f]/gu, "");
+  return cleaned ? cleaned.slice(0, 256) : undefined;
+}
+
+function resolveCodexTurnIdForItem(obj: any, state: TurnBuildState | undefined): string | undefined {
+  if (!state) return undefined;
+  return readCodexRecordTurnId(obj) ?? state.activeTurnId;
+}
+
+function resolveCodexUsageTurnId(
+  obj: any,
+  state: TurnBuildState | undefined,
+  lineIndex?: number,
+): string | undefined {
+  if (!state) return undefined;
+  if (state.activeTurnId) return state.activeTurnId;
+  const explicitTurnId = readCodexRecordTurnId(obj);
+  if (explicitTurnId) return explicitTurnId;
+  if (isCompletedLatestFallbackBlocked(state, lineIndex)) return undefined;
+  const latestTurnId = state.latestTurnId;
+  const latestTurn = latestTurnId ? state.entries.get(latestTurnId) : undefined;
+  return latestTurn && latestTurn.status === "completed" ? latestTurn.id : undefined;
+}
+
+function setCompletedLatestFallbackBlock(
+  state: TurnBuildState | undefined,
+  causeTurnId: string | undefined,
+  timestampIso: string | undefined,
+  lineIndex?: number,
+): void {
+  if (!state || !causeTurnId) return;
+  state.completedLatestFallbackBlock = {
+    causeTurnId,
+    ...(typeof lineIndex === "number" && Number.isFinite(lineIndex) ? { lineIndex } : {}),
+    ...(timestampIso ? { timestampIso } : {}),
+  };
+}
+
+function clearCompletedLatestFallbackBlock(state: TurnBuildState | undefined): void {
+  if (!state) return;
+  state.completedLatestFallbackBlock = undefined;
+}
+
+function clearCompletedLatestFallbackBlockForCause(state: TurnBuildState | undefined, causeTurnId: string | undefined): void {
+  if (!state) return;
+  const normalizedCauseTurnId = normalizeCodexTurnId(causeTurnId);
+  const blockCauseTurnId = normalizeCodexTurnId(state.completedLatestFallbackBlock?.causeTurnId);
+  if (!normalizedCauseTurnId || !blockCauseTurnId || normalizedCauseTurnId !== blockCauseTurnId) return;
+  state.completedLatestFallbackBlock = undefined;
+}
+
+function isCompletedLatestFallbackBlocked(state: TurnBuildState, lineIndex?: number): boolean {
+  const block = state.completedLatestFallbackBlock;
+  if (!block) return false;
+  if (typeof block.lineIndex === "number" && typeof lineIndex === "number" && lineIndex < block.lineIndex) return false;
+  return true;
+}
+
+function ensureCodexTurn(state: TurnBuildState, turnId: string | undefined, fallbackStatus: ChatTurnStatus): TurnBuildEntry | null {
+  if (!turnId) return null;
+  const existing = state.entries.get(turnId);
+  if (existing) return existing;
+
+  const entry: TurnBuildEntry = {
+    id: turnId,
+    status: fallbackStatus,
+  };
+  state.entries.set(turnId, entry);
+  state.order.push(turnId);
+  return entry;
+}
+
+function setTurnUpdatedAt(entry: TurnBuildEntry, timestampIso: string | undefined): void {
+  if (!timestampIso) return;
+  entry.updatedAtIso = maxIsoTimestamp(entry.updatedAtIso, timestampIso);
+}
+
+function getTurnTerminalStatusPriority(status: ChatTurnStatus | undefined): number {
+  if (status === "rolledBack") return 3;
+  if (status === "interrupted") return 2;
+  if (status === "completed") return 1;
+  return 0;
+}
+
+function applyTurnTerminalStatus(
+  entry: TurnBuildEntry,
+  status: ChatTurnStatus,
+  timestampIso: string | undefined,
+  lineIndex?: number,
+): void {
+  if (status === "completed") {
+    if (entry.status !== "rolledBack" && entry.status !== "interrupted") {
+      entry.status = "completed";
+      if (!entry.completedAtIso) entry.completedAtIso = timestampIso;
+      entry.terminalAtIso = maxIsoTimestamp(entry.terminalAtIso, timestampIso);
+      setTurnTerminalLineIndex(entry, lineIndex);
+    }
+  } else if (status === "interrupted") {
+    if (entry.status !== "rolledBack") {
+      entry.status = "interrupted";
+      entry.terminalAtIso = maxIsoTimestamp(entry.terminalAtIso, timestampIso);
+      setTurnTerminalLineIndex(entry, lineIndex);
+    }
+  } else if (status === "rolledBack") {
+    entry.status = "rolledBack";
+    entry.terminalAtIso = maxIsoTimestamp(entry.terminalAtIso, timestampIso);
+    setTurnTerminalLineIndex(entry, lineIndex);
+  }
+  setTurnUpdatedAt(entry, timestampIso);
+}
+
+function applyTurnSummaryTerminalStatus(
+  summary: ChatTurnSummary,
+  status: ChatTurnStatus,
+  timestampIso: string | undefined,
+): void {
+  if (status === "completed") {
+    if (summary.status !== "rolledBack" && summary.status !== "interrupted") {
+      summary.status = "completed";
+      if (!summary.completedAtIso) summary.completedAtIso = timestampIso;
+    }
+  } else if (status === "interrupted") {
+    if (summary.status !== "rolledBack") summary.status = "interrupted";
+  } else if (status === "rolledBack") {
+    summary.status = "rolledBack";
+  }
+  if (timestampIso) summary.updatedAtIso = maxIsoTimestamp(summary.updatedAtIso, timestampIso);
+}
+
+function recordPendingTurnTerminalStatus(
+  state: TurnBuildState,
+  turnId: string | undefined,
+  status: ChatTurnStatus,
+  timestampIso: string | undefined,
+  lineIndex?: number,
+): void {
+  if (!turnId) return;
+  const current = state.terminalStatusByTurnId.get(turnId);
+  if (current && getTurnTerminalStatusPriority(current.status) > getTurnTerminalStatusPriority(status)) return;
+  const nextLineIndex = maxLineIndex(current?.lineIndex, lineIndex);
+  state.terminalStatusByTurnId.set(turnId, {
+    status,
+    timestampIso: current && current.status === status ? maxIsoTimestamp(current.timestampIso, timestampIso) : timestampIso,
+    ...(typeof nextLineIndex === "number" ? { lineIndex: nextLineIndex } : {}),
+  });
+}
+
+function applyPendingTurnTerminalStatus(state: TurnBuildState, entry: TurnBuildEntry): void {
+  const pending = state.terminalStatusByTurnId.get(entry.id);
+  if (!pending) return;
+  applyTurnTerminalStatus(entry, pending.status, pending.timestampIso, pending.lineIndex);
+}
+
+function observeCodexItemTurn(
+  state: TurnBuildState | undefined,
+  turnId: string | undefined,
+  timestampIso: string | undefined,
+): TurnBuildEntry | null {
+  if (!state || !turnId) return null;
+  const entry = ensureCodexTurn(state, turnId, "unknown");
+  if (!entry) return null;
+  applyPendingTurnTerminalStatus(state, entry);
+  setTurnUpdatedAt(entry, timestampIso);
+  state.latestTurnId = entry.id;
+  clearCompletedLatestFallbackBlockForCause(state, entry.id);
+  return entry;
+}
+
+function startCodexTurn(
+  state: TurnBuildState | undefined,
+  turnId: string | undefined,
+  timestampIso: string | undefined,
+  lineIndex?: number,
+): void {
+  if (!state) return;
+  if (!turnId) {
+    state.activeTurnId = undefined;
+    clearCompletedLatestFallbackBlock(state);
+    return;
+  }
+  const entry = ensureCodexTurn(state, turnId, "incomplete");
+  if (!entry) return;
+  const isTerminal = entry.status === "completed" || entry.status === "interrupted" || entry.status === "rolledBack";
+  const terminalReferenceIso = entry.terminalAtIso ?? entry.completedAtIso ?? entry.updatedAtIso ?? entry.startedAtIso;
+  const timestampComparison = compareIsoTimestamps(timestampIso, terminalReferenceIso);
+  const canRestart =
+    !isTerminal ||
+    timestampComparison === 1 ||
+    (timestampComparison === null && isLineIndexClearlyNewer(lineIndex, entry.terminalLineIndex));
+  if (!canRestart) {
+    if (state.activeTurnId === entry.id) state.activeTurnId = undefined;
+    return;
+  }
+
+  entry.status = "incomplete";
+  entry.startedAtIso = timestampIso ?? entry.startedAtIso;
+  setTurnStartedLineIndex(entry, lineIndex);
+  delete entry.completedAtIso;
+  delete entry.terminalAtIso;
+  delete entry.terminalLineIndex;
+  state.terminalStatusByTurnId.delete(entry.id);
+  setTurnUpdatedAt(entry, timestampIso);
+  state.activeTurnId = entry.id;
+  state.latestTurnId = entry.id;
+  clearCompletedLatestFallbackBlock(state);
+}
+
+function observeCodexContextTurn(state: TurnBuildState | undefined, turnId: string | undefined, timestampIso: string | undefined): void {
+  if (!state) return;
+  if (!turnId || state.activeTurnId !== turnId) return;
+  const entry = state.entries.get(turnId);
+  if (!entry || entry.status !== "incomplete") return;
+  setTurnUpdatedAt(entry, timestampIso);
+}
+
+type TurnTerminalUpdateResult = "updated" | "pending" | "ignoredNoTurnId" | "ignoredUnknown";
+
+function markCodexTurnCompleted(
+  state: TurnBuildState | undefined,
+  turnId: string | undefined,
+  timestampIso: string | undefined,
+  options: { lineIndex?: number; recordPending?: boolean } = {},
+): TurnTerminalUpdateResult {
+  if (!state) return "ignoredNoTurnId";
+  if (!turnId) return "ignoredNoTurnId";
+  const entry = state.entries.get(turnId);
+  if (!entry) {
+    if (options.recordPending === true) {
+      recordPendingTurnTerminalStatus(state, turnId, "completed", timestampIso, options.lineIndex);
+      setCompletedLatestFallbackBlock(state, turnId, timestampIso, options.lineIndex);
+      if (state.activeTurnId === turnId) state.activeTurnId = undefined;
+      return "pending";
+    }
+    if (state.activeTurnId === turnId) state.activeTurnId = undefined;
+    return "ignoredUnknown";
+  }
+  applyTurnTerminalStatus(entry, "completed", timestampIso, options.lineIndex);
+  if (state.activeTurnId === entry.id) state.activeTurnId = undefined;
+  state.latestTurnId = entry.id;
+  clearCompletedLatestFallbackBlock(state);
+  return "updated";
+}
+
+function markCodexTurnInterrupted(
+  state: TurnBuildState | undefined,
+  turnId: string | undefined,
+  timestampIso: string | undefined,
+  options: { itemBacked?: boolean; lineIndex?: number } = {},
+): void {
+  if (!state) return;
+  if (!turnId) return;
+  const entry = state.entries.get(turnId);
+  if (!entry) {
+    if (options.itemBacked === true) {
+      recordPendingTurnTerminalStatus(state, turnId, "interrupted", timestampIso, options.lineIndex);
+      setCompletedLatestFallbackBlock(state, turnId, timestampIso, options.lineIndex);
+    }
+    if (state.activeTurnId === turnId) state.activeTurnId = undefined;
+    return;
+  }
+  applyTurnTerminalStatus(entry, "interrupted", timestampIso, options.lineIndex);
+  if (state.activeTurnId === entry.id) state.activeTurnId = undefined;
+  state.latestTurnId = entry.id;
+  clearCompletedLatestFallbackBlock(state);
+}
+
+function markCodexTurnRolledBack(
+  state: TurnBuildState | undefined,
+  turnId: string | undefined,
+  timestampIso: string | undefined,
+  options: { itemBacked?: boolean; lineIndex?: number; recordPending?: boolean } = {},
+): void {
+  if (!state) return;
+  if (!turnId) return;
+  const entry = state.entries.get(turnId);
+  if (!entry) {
+    if (options.itemBacked === true || options.recordPending === true) {
+      recordPendingTurnTerminalStatus(state, turnId, "rolledBack", timestampIso, options.lineIndex);
+      setCompletedLatestFallbackBlock(state, turnId, timestampIso, options.lineIndex);
+    }
+    if (state.activeTurnId === turnId) state.activeTurnId = undefined;
+    return;
+  }
+  applyTurnTerminalStatus(entry, "rolledBack", timestampIso, options.lineIndex);
+  if (state.activeTurnId === entry.id) state.activeTurnId = undefined;
+  state.latestTurnId = entry.id;
+  clearCompletedLatestFallbackBlock(state);
+}
+
+function finalizeCodexTurns(
+  items: ChatTimelineItem[],
+  state: TurnBuildState,
+): { turns: ChatTurnSummary[]; activeTurnId?: string; latestTurnId?: string } {
+  for (const item of items) {
+    const turnId = getTimelineItemTurnId(item);
+    if (turnId && isMeaningfulTurnTimelineItem(item)) ensureCodexTurn(state, turnId, "unknown");
+  }
+
+  const summariesById = new Map<string, ChatTurnSummary>();
+  for (const [turnIndex, turnId] of state.order.entries()) {
+    const entry = state.entries.get(turnId);
+    if (!entry) continue;
+    summariesById.set(turnId, {
+      id: entry.id,
+      sequenceNumber: turnIndex + 1,
+      status: entry.status,
+      ...(entry.startedAtIso ? { startedAtIso: entry.startedAtIso } : {}),
+      ...(entry.completedAtIso ? { completedAtIso: entry.completedAtIso } : {}),
+      ...(entry.updatedAtIso ? { updatedAtIso: entry.updatedAtIso } : {}),
+      itemCount: 0,
+      messageCount: 0,
+      toolCount: 0,
+      patchGroupCount: 0,
+      patchEntryCount: 0,
+      usageRecordCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      systemEventCount: 0,
+    });
+  }
+
+  for (const [itemIndex, item] of items.entries()) {
+    const turnId = getTimelineItemTurnId(item);
+    if (!turnId) continue;
+    const summary = summariesById.get(turnId);
+    if (!summary) continue;
+    const meaningful = isMeaningfulTurnTimelineItem(item);
+    if (!meaningful) continue;
+
+    if (typeof summary.firstItemIndex !== "number") summary.firstItemIndex = itemIndex;
+    summary.lastItemIndex = itemIndex;
+    summary.itemCount += 1;
+    summary.updatedAtIso = maxIsoTimestamp(summary.updatedAtIso, item.timestampIso);
+
+    if (item.type === "message") {
+      summary.messageCount += 1;
+      if (typeof item.messageIndex === "number") {
+        if (typeof summary.firstMessageIndex !== "number") summary.firstMessageIndex = item.messageIndex;
+        summary.lastMessageIndex = item.messageIndex;
+      }
+    } else if (item.type === "tool") {
+      summary.toolCount += 1;
+    } else if (item.type === "patchGroup") {
+      summary.patchGroupCount += 1;
+      summary.patchEntryCount += Math.max(0, item.entryCount || item.entries?.length || 0);
+    } else if (item.type === "usage") {
+      summary.usageRecordCount += 1;
+      addTurnTokenUsage(summary, item.usage);
+    } else if (item.type === "systemEvent") {
+      summary.systemEventCount += 1;
+    }
+  }
+
+  for (const [turnId, pending] of state.terminalStatusByTurnId.entries()) {
+    const summary = summariesById.get(turnId);
+    if (!summary || summary.itemCount <= 0) continue;
+    applyTurnSummaryTerminalStatus(summary, pending.status, pending.timestampIso);
+  }
+
+  const candidateActiveTurnId =
+    state.activeTurnId && summariesById.get(state.activeTurnId) ? normalizeCodexTurnId(state.activeTurnId) : undefined;
+  const visibleTurns = state.order
+    .map((turnId) => summariesById.get(turnId))
+    .filter(
+      (summary): summary is ChatTurnSummary =>
+        !!summary &&
+        (summary.itemCount > 0 || (!!candidateActiveTurnId && summary.id === candidateActiveTurnId)),
+    );
+  const activeTurnId =
+    candidateActiveTurnId && visibleTurns.some((summary) => summary.id === candidateActiveTurnId)
+      ? candidateActiveTurnId
+      : undefined;
+  const latestTurn = visibleTurns
+    .filter((summary) => summary.itemCount > 0)
+    .reduce<ChatTurnSummary | undefined>((latest, summary) => {
+      if (!latest) return summary;
+      const latestIndex = typeof latest.lastItemIndex === "number" ? latest.lastItemIndex : -1;
+      const summaryIndex = typeof summary.lastItemIndex === "number" ? summary.lastItemIndex : -1;
+      return summaryIndex >= latestIndex ? summary : latest;
+    }, undefined);
+  return {
+    turns: visibleTurns,
+    ...(activeTurnId ? { activeTurnId } : {}),
+    ...(latestTurn ? { latestTurnId: latestTurn.id } : {}),
+  };
+}
+
+function getTimelineItemTurnId(item: ChatTimelineItem | undefined): string | undefined {
+  if (!item || typeof item !== "object") return undefined;
+  if (!("turnId" in item)) return undefined;
+  return normalizeCodexTurnId((item as { turnId?: unknown }).turnId);
+}
+
+function isMeaningfulTurnTimelineItem(item: ChatTimelineItem | undefined): boolean {
+  if (!item || typeof item !== "object") return false;
+  return (
+    item.type === "message" ||
+    item.type === "tool" ||
+    item.type === "patchGroup" ||
+    item.type === "usage" ||
+    item.type === "systemEvent"
+  );
+}
+
+function addTurnTokenUsage(summary: ChatTurnSummary, usage: ChatTokenUsage | undefined): void {
+  if (!usage) return;
+  const inputTokens = normalizeTokenTotal(usage.inputTokens);
+  const outputTokens = normalizeTokenTotal(usage.outputTokens);
+  const totalTokens = normalizeTokenTotal(usage.totalTokens);
+  if (typeof inputTokens === "number") summary.inputTokens += inputTokens;
+  if (typeof outputTokens === "number") summary.outputTokens += outputTokens;
+  if (typeof totalTokens === "number") {
+    summary.totalTokens += totalTokens;
+    return;
+  }
+  if (typeof inputTokens === "number" || typeof outputTokens === "number") {
+    summary.totalTokens += (inputTokens ?? 0) + (outputTokens ?? 0);
+  }
+}
+
+function normalizeTokenTotal(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.max(0, Math.floor(value));
+}
+
+function maxIsoTimestamp(current: string | undefined, next: string | undefined): string | undefined {
+  if (!current) return next;
+  if (!next) return current;
+  const currentMs = Date.parse(current);
+  const nextMs = Date.parse(next);
+  if (!Number.isFinite(currentMs)) return next;
+  if (!Number.isFinite(nextMs)) return current;
+  return nextMs > currentMs ? next : current;
+}
+
+function compareIsoTimestamps(candidate: string | undefined, reference: string | undefined): -1 | 0 | 1 | null {
+  if (!candidate || !reference) return null;
+  const candidateMs = Date.parse(candidate);
+  const referenceMs = Date.parse(reference);
+  if (!Number.isFinite(candidateMs) || !Number.isFinite(referenceMs)) return null;
+  if (candidateMs > referenceMs) return 1;
+  if (candidateMs < referenceMs) return -1;
+  return 0;
+}
+
+function maxLineIndex(current: number | undefined, next: number | undefined): number | undefined {
+  const currentSafe = typeof current === "number" && Number.isFinite(current) ? Math.max(0, Math.floor(current)) : undefined;
+  const nextSafe = typeof next === "number" && Number.isFinite(next) ? Math.max(0, Math.floor(next)) : undefined;
+  if (currentSafe === undefined) return nextSafe;
+  if (nextSafe === undefined) return currentSafe;
+  return Math.max(currentSafe, nextSafe);
+}
+
+function setTurnStartedLineIndex(entry: TurnBuildEntry, lineIndex: number | undefined): void {
+  const next = maxLineIndex(entry.startedLineIndex, lineIndex);
+  if (typeof next === "number") entry.startedLineIndex = next;
+}
+
+function setTurnTerminalLineIndex(entry: TurnBuildEntry, lineIndex: number | undefined): void {
+  const next = maxLineIndex(entry.terminalLineIndex, lineIndex);
+  if (typeof next === "number") entry.terminalLineIndex = next;
+}
+
+function isLineIndexClearlyNewer(candidate: number | undefined, reference: number | undefined): boolean {
+  if (typeof candidate !== "number" || typeof reference !== "number") return false;
+  if (!Number.isFinite(candidate) || !Number.isFinite(reference)) return false;
+  return Math.floor(candidate) > Math.floor(reference);
 }
 
 function closeCodexInterruptionWindow(state: InterruptionBuildState): void {
   state.pendingCodexInterruptionItemIndex = undefined;
 }
 
-function buildCodexInterruptionFromRaw(obj: any): ChatSystemEventItem {
+function buildCodexInterruptionFromRaw(obj: any, fallbackTurnId?: string): ChatSystemEventItem {
   return {
     type: "systemEvent",
     kind: "requestInterrupted",
     source: "codex",
     scope: "request",
     timestampIso: readTimestampIso(obj),
+    ...(fallbackTurnId ? { turnId: fallbackTurnId } : {}),
   };
 }
 
-function buildCodexInterruptionFromEvent(obj: any): ChatSystemEventItem {
+function buildCodexInterruptionFromEvent(obj: any, fallbackTurnId?: string): ChatSystemEventItem {
   const reason = typeof obj?.payload?.reason === "string" ? obj.payload.reason.trim() : "";
-  const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id.trim() : "";
+  const turnId = readCodexRecordTurnId(obj) ?? fallbackTurnId;
   const durationMs = normalizeOptionalNonNegativeSafeInteger(obj?.payload?.duration_ms);
   return {
     type: "systemEvent",
@@ -750,12 +1349,14 @@ function mergeCodexRollbackIntoInterruption(
   items: ChatTimelineItem[],
   state: InterruptionBuildState,
   obj: any,
-): void {
-  if (state.pendingCodexInterruptionItemIndex !== items.length - 1) return;
+  fallbackTurnId?: string,
+): ChatSystemEventItem | null {
+  if (state.pendingCodexInterruptionItemIndex !== items.length - 1) return null;
   const pending = getPendingCodexInterruption(items, state);
-  if (!pending) return;
-  if (!canMergeCodexRollback(pending, obj)) return;
+  if (!pending) return null;
+  if (!canMergeCodexRollback(pending, obj, fallbackTurnId)) return null;
   pending.rolledBack = true;
+  if (!pending.turnId && fallbackTurnId) pending.turnId = fallbackTurnId;
   const rolledBackTurns = readFirstNonNegativeSafeInteger([
     obj?.payload?.rolled_back_turns,
     obj?.payload?.rolledBackTurns,
@@ -763,6 +1364,7 @@ function mergeCodexRollbackIntoInterruption(
     obj?.payload?.turns,
   ]);
   if (typeof rolledBackTurns === "number") pending.rolledBackTurns = rolledBackTurns;
+  return pending;
 }
 
 function getPendingCodexInterruption(
@@ -781,9 +1383,9 @@ function canMergeCodexInterruption(current: ChatSystemEventItem, next: ChatSyste
   return !currentTurnId || !nextTurnId || currentTurnId === nextTurnId;
 }
 
-function canMergeCodexRollback(current: ChatSystemEventItem, obj: any): boolean {
+function canMergeCodexRollback(current: ChatSystemEventItem, obj: any, fallbackTurnId?: string): boolean {
   const currentTurnId = typeof current.turnId === "string" ? current.turnId.trim() : "";
-  const rollbackTurnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id.trim() : "";
+  const rollbackTurnId = readCodexRecordTurnId(obj) ?? fallbackTurnId ?? "";
   return !currentTurnId || !rollbackTurnId || currentTurnId === rollbackTurnId;
 }
 
@@ -832,13 +1434,15 @@ function attachMemoryCitationToLastAssistant(
   return true;
 }
 
-function updateCodexTurnMeta(obj: any, meta: ChatMessageModelMeta): boolean {
+function updateCodexTurnMeta(obj: any, meta: ChatMessageModelMeta, turnState: TurnBuildState | undefined): boolean {
   if (obj?.type !== "turn_context" || !obj?.payload || typeof obj.payload !== "object") return false;
 
   const model = normalizeModelMetaValue(obj.payload.model);
   const effort = normalizeModelMetaValue(obj.payload.effort);
+  const turnId = readCodexRecordTurnId(obj);
   meta.model = model;
   meta.effort = effort;
+  observeCodexContextTurn(turnState, turnId, readTimestampIso(obj));
   return true;
 }
 
@@ -865,6 +1469,7 @@ function appendEnvironmentSnapshotIfChanged(
   items: ChatTimelineItem[],
   state: EnvironmentBuildState,
   currentMessageIndex: () => number,
+  currentTurnId: () => string | undefined,
 ): void {
   const snapshot = extractEnvironmentSnapshot(obj);
   if (!snapshot) return;
@@ -875,6 +1480,7 @@ function appendEnvironmentSnapshotIfChanged(
   items.push({
     type: "environment",
     messageIndex: currentMessageIndex() > 0 ? currentMessageIndex() : undefined,
+    ...(currentTurnId() ? { turnId: currentTurnId() } : {}),
     ...snapshot,
   });
 }
@@ -987,7 +1593,12 @@ function flushPendingClaudeUsage(items: ChatTimelineItem[], state: UsageBuildSta
   state.pendingClaudeUsage = undefined;
 }
 
-function buildCodexUsageItem(obj: any, messageIndex: number, meta: ChatMessageModelMeta): ChatUsageItem | null {
+function buildCodexUsageItem(
+  obj: any,
+  messageIndex: number,
+  meta: ChatMessageModelMeta,
+  turnId?: string,
+): ChatUsageItem | null {
   const info = obj?.payload?.info;
   if (!info || typeof info !== "object") return null;
 
@@ -1001,6 +1612,7 @@ function buildCodexUsageItem(obj: any, messageIndex: number, meta: ChatMessageMo
   return {
     type: "usage",
     messageIndex: messageIndex > 0 ? messageIndex : undefined,
+    ...(turnId ? { turnId } : {}),
     timestampIso,
     ...toMessageModelMeta(meta),
     usage,
@@ -1317,13 +1929,14 @@ function attachOrPushToolOutput(
     callId?: string;
     outputText?: string;
     fallbackMessageIndex?: number;
+    turnId?: string;
     timestampIso?: string;
     fallbackName: string;
     includeDetails: boolean;
     execution?: ChatToolExecution;
   },
 ): void {
-  const { callId, outputText, fallbackMessageIndex, timestampIso, fallbackName, includeDetails, execution } = params;
+  const { callId, outputText, fallbackMessageIndex, turnId, timestampIso, fallbackName, includeDetails, execution } = params;
   if (callId && toolByCallId.has(callId)) {
     const tool = toolByCallId.get(callId)!;
     if (includeDetails) tool.outputText = outputText;
@@ -1333,6 +1946,7 @@ function attachOrPushToolOutput(
     if (typeof tool.messageIndex !== "number" && typeof fallbackMessageIndex === "number") {
       tool.messageIndex = fallbackMessageIndex;
     }
+    if (!tool.turnId && turnId) tool.turnId = turnId;
     return;
   }
 
@@ -1340,6 +1954,7 @@ function attachOrPushToolOutput(
   const tool: ChatToolItem = {
     type: "tool",
     messageIndex: fallbackMessageIndex,
+    ...(turnId ? { turnId } : {}),
     timestampIso,
     name: fallbackName,
     callId,
@@ -1362,6 +1977,10 @@ function finalizeTimelineItems(items: ChatTimelineItem[]): void {
 
 function shouldIncludeDetails(options: ChatSessionModelBuildOptions): boolean {
   return options.includeDetails !== false;
+}
+
+function shouldBuildTurnTimeline(options: ChatSessionModelBuildOptions): boolean {
+  return options.turnTimelineMode === "basic" || options.turnTimelineMode === "live";
 }
 
 function toImageExtractionOptions(images?: ImagesConfig): { enabled: boolean; maxBytes: number } {
@@ -1404,19 +2023,35 @@ function flushPendingPatchGroup(
   items: ChatTimelineItem[],
   pendingPatchGroups: Map<string, PendingPatchGroup>,
   turnId: string,
-): void {
-  const group = pendingPatchGroups.get(turnId);
-  if (!group) return;
-  if (!group.flushed) items.push(toPatchGroupItem(group));
-  pendingPatchGroups.delete(turnId);
+  turnState?: TurnBuildState,
+): number {
+  const normalizedTurnId = normalizeCodexTurnId(turnId);
+  if (!normalizedTurnId) return 0;
+  let flushedCount = 0;
+  for (const [key, group] of Array.from(pendingPatchGroups.entries())) {
+    if (normalizeCodexTurnId(group.turnId) !== normalizedTurnId) continue;
+    if (!group.flushed) {
+      const item = toPatchGroupItem(group);
+      items.push(item);
+      observeCodexItemTurn(turnState, item.turnId, item.timestampIso);
+      flushedCount += 1;
+    }
+    pendingPatchGroups.delete(key);
+  }
+  return flushedCount;
 }
 
 function flushPendingPatchGroups(
   items: ChatTimelineItem[],
   pendingPatchGroups: Map<string, PendingPatchGroup>,
+  turnState?: TurnBuildState,
 ): void {
   for (const [key, group] of pendingPatchGroups.entries()) {
-    if (!group.flushed) items.push(toPatchGroupItem(group));
+    if (!group.flushed) {
+      const item = toPatchGroupItem(group);
+      items.push(item);
+      observeCodexItemTurn(turnState, item.turnId, item.timestampIso);
+    }
     pendingPatchGroups.delete(key);
   }
 }
@@ -1436,7 +2071,7 @@ function toPatchGroupItem(group: PendingPatchGroup): ChatPatchGroupItem {
 }
 
 function buildPatchGroupKey(obj: any, fallbackIndex?: number): string {
-  const turnId = typeof obj?.payload?.turn_id === "string" ? obj.payload.turn_id.trim() : "";
+  const turnId = readCodexRecordTurnId(obj) ?? "";
   if (turnId) return turnId;
   const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id.trim() : "";
   if (callId) return `call:${callId}`;
@@ -2477,16 +3112,7 @@ function parseClaudeMessageContent(content: unknown): {
 }
 
 function detectClaudeMessageRole(obj: any): "user" | "assistant" | null {
-  const messageRole = typeof obj?.message?.role === "string" ? obj.message.role : "";
-  if (messageRole === "user" || messageRole === "assistant") return messageRole;
-
-  const envelopeType = typeof obj?.type === "string" ? obj.type : "";
-  if (envelopeType === "user" || envelopeType === "assistant") return envelopeType;
-
-  const topRole = typeof obj?.role === "string" ? obj.role : "";
-  if (topRole === "user" || topRole === "assistant") return topRole;
-
-  return null;
+  return detectClaudeMaterializedMessageRole(obj);
 }
 
 function getClaudeMessageContent(obj: any): unknown {

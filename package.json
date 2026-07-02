@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.6.1",
+  "version": "2.7.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -4892,6 +4892,28 @@
           "description": "%cfg.chatStickyUserPrompt%",
           "scope": "application",
           "order": 105
+        },
+        "codexHistoryViewer.chat.turnTimeline.mode": {
+          "type": "string",
+          "default": "off",
+          "enum": [
+            "off",
+            "basic",
+            "live"
+          ],
+          "enumItemLabels": [
+            "%cfg.chatTurnTimelineMode.labelOff%",
+            "%cfg.chatTurnTimelineMode.labelBasic%",
+            "%cfg.chatTurnTimelineMode.labelLive%"
+          ],
+          "enumDescriptions": [
+            "%cfg.chatTurnTimelineMode.enumOff%",
+            "%cfg.chatTurnTimelineMode.enumBasic%",
+            "%cfg.chatTurnTimelineMode.enumLive%"
+          ],
+          "description": "%cfg.chatTurnTimelineMode%",
+          "scope": "window",
+          "order": 106
         },
         "codexHistoryViewer.images.enabled": {
           "type": "boolean",

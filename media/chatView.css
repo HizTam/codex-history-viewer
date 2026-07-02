@@ -13,6 +13,11 @@
   --chv-tool-bg: var(--vscode-notifications-background, rgba(128, 128, 128, 0.08));
   --chv-code-bg: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
   --chv-accent: var(--vscode-focusBorder);
+  --chv-running-accent: color-mix(
+    in srgb,
+    var(--vscode-testing-iconPassed, #73c991) 74%,
+    var(--vscode-textLink-foreground, #3794ff) 26%
+  );
   /* Derive patch colors from the same webview theme variables used by the rest of the UI. */
   --chv-patch-surface: color-mix(in srgb, var(--chv-code-bg) 68%, var(--chv-assistant-bg) 32%);
   --chv-patch-surface-alt: color-mix(in srgb, var(--chv-tool-bg) 90%, var(--chv-border) 10%);
@@ -891,10 +896,14 @@ mark.pageSearchMatch-active {
 }
 
 #timeline {
-  padding: 10px 12px 18px 12px;
+  padding: 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+body.turnTimelineEnabled #timeline {
+  padding-bottom: 14px;
 }
 
 .chatTurn {
@@ -902,6 +911,325 @@ mark.pageSearchMatch-active {
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+}
+
+.turnBlock {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding-left: 10px;
+}
+
+.turnBlock::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 1px;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--chv-turn-rail, color-mix(in srgb, var(--chv-muted) 50%, var(--chv-border) 50%));
+  opacity: 0.72;
+  pointer-events: none;
+}
+
+.turnBlock > .turnMarker,
+.turnBlock > .chatTurn,
+.turnBlock > .runningTurnAnchorRow,
+.turnBlock > .row {
+  position: relative;
+  z-index: 1;
+}
+
+.turnBlock-collapsed {
+  gap: 6px;
+}
+
+.turnBlock-collapsed > .chatTurn,
+.turnBlock-collapsed > .turnEndMarker,
+.turnBlock-collapsed > .runningTurnAnchorRow,
+.turnBlock-collapsed > .row {
+  display: none;
+}
+
+.turnMarker {
+  box-sizing: border-box;
+  width: 100%;
+  scroll-margin-top: calc(var(--chv-toolbar-height, 44px) + 38px);
+}
+
+.turnMarkerLine {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 2px 0;
+  color: var(--chv-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.turnMarkerLine::before {
+  content: "";
+  grid-column: 1 / -1;
+  grid-row: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--chv-border) 72%, transparent);
+}
+
+.turnStartMarker .turnMarkerLine::before {
+  background: color-mix(in srgb, var(--chv-fg) 14%, var(--chv-border) 86%);
+}
+
+.turnEndMarker .turnMarkerLine::before {
+  background: color-mix(in srgb, var(--chv-fg) 14%, var(--chv-border) 86%);
+}
+
+.turnMarkerMain,
+.turnMarkerCounts {
+  grid-row: 1;
+  z-index: 1;
+  min-width: 0;
+  background: var(--chv-bg);
+}
+
+.turnMarkerMain {
+  display: inline-flex;
+  grid-column: 1;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 7px;
+  justify-self: start;
+  min-width: 0;
+  max-width: 100%;
+  overflow: visible;
+  padding-right: 8px;
+}
+
+.turnMarkerControlSlot {
+  position: absolute;
+  left: -18px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  z-index: 2;
+}
+
+.turnMarkerControlSpacer {
+  display: none;
+}
+
+.turnCollapseIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 72%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--chv-bg) 86%, var(--chv-tool-bg) 14%);
+  color: var(--chv-muted);
+  padding: 0;
+  pointer-events: none;
+}
+
+.turnMarker-toggle {
+  cursor: pointer;
+}
+
+.turnMarker-toggle:hover .turnCollapseIcon {
+  border-color: color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 62%, var(--chv-border) 38%);
+  color: var(--chv-fg);
+}
+
+.turnMarker-toggle:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 2px;
+}
+
+.turnCollapseIcon svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
+.turnMarkerCounts {
+  grid-column: 2;
+  justify-self: end;
+  max-width: min(560px, 44vw);
+  padding-left: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turnCollapsedSummaryMarker .turnMarkerLine {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.turnCollapsedSummaryMain {
+  align-items: center;
+  flex-wrap: nowrap;
+  row-gap: 4px;
+}
+
+.turnCollapsedSummaryMarker .turnMarkerMeta {
+  flex: 0 1 auto;
+  max-width: min(210px, 42vw);
+}
+
+.turnCollapsedSummaryCounts {
+  color: var(--chv-muted);
+}
+
+.turnMarkerTitle {
+  flex: 0 0 auto;
+  color: var(--chv-fg);
+  font-weight: 600;
+  overflow-wrap: normal;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.turnMarkerMeta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turnMarkerBadge {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 74%, transparent);
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: color-mix(in srgb, var(--chv-tool-bg) 60%, transparent);
+  color: var(--chv-fg);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.turnCollapseStateBadge {
+  border-color: color-mix(in srgb, var(--chv-muted) 52%, var(--chv-border) 48%);
+  background: color-mix(in srgb, var(--chv-tool-bg) 72%, transparent);
+  color: var(--chv-muted);
+}
+
+.turnCollapseStateBadge-search {
+  border-color: color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 48%, var(--chv-border) 52%);
+  color: var(--chv-fg);
+}
+
+.turnMarker-running,
+.turnBlock-running {
+  --chv-turn-rail: color-mix(in srgb, var(--chv-running-accent) 78%, var(--chv-border) 22%);
+}
+
+.turnMarker-completed,
+.turnBlock-completed {
+  --chv-turn-rail: color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 66%, var(--chv-border) 34%);
+}
+
+.turnMarker-interrupted,
+.turnMarker-rolledBack,
+.turnBlock-interrupted,
+.turnBlock-rolledBack {
+  --chv-turn-rail: color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 74%, var(--chv-border) 26%);
+}
+
+.turnMarker-incomplete,
+.turnMarker-unknown,
+.turnBlock-incomplete,
+.turnBlock-unknown {
+  --chv-turn-rail: color-mix(in srgb, var(--chv-muted) 58%, var(--chv-border) 42%);
+}
+
+.turnMarkerBadge-start,
+.turnMarkerBadge-end,
+.turnMarkerBadge-completed {
+  border-color: color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 54%, var(--chv-border) 46%);
+}
+
+.turnMarkerBadge-running {
+  border-color: color-mix(in srgb, var(--chv-running-accent) 66%, var(--chv-border) 34%);
+  background: color-mix(in srgb, var(--chv-running-accent) 15%, transparent);
+  color: color-mix(in srgb, var(--chv-running-accent) 70%, var(--chv-fg) 30%);
+}
+
+.turnMarkerBadge-interrupted,
+.turnMarkerBadge-rolledBack {
+  border-color: color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 62%, var(--chv-border) 38%);
+  background: color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 14%, transparent);
+}
+
+.turnMarkerBadge-incomplete,
+.turnMarkerBadge-unknown {
+  border-color: color-mix(in srgb, var(--chv-muted) 50%, var(--chv-border) 50%);
+}
+
+@media (max-width: 640px) {
+  .turnMarkerLine {
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+    gap: 4px;
+  }
+
+  .turnMarkerCounts {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    max-width: 22vw;
+    padding-left: 6px;
+  }
+
+  .turnMarkerMeta {
+    max-width: min(180px, 30vw);
+  }
+
+  .turnCollapsedSummaryMarker .turnMarkerMeta {
+    max-width: min(120px, 24vw);
+  }
+}
+
+@media (max-width: 520px) {
+  .turnMarkerCounts {
+    display: none;
+  }
+}
+
+@media (max-width: 420px) {
+  .turnMarkerLine {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .turnMarkerMain {
+    padding-right: 0;
+  }
+
+  .turnMarkerCounts {
+    display: none;
+  }
+
+  .turnMarkerMeta,
+  .turnCollapsedSummaryMarker .turnMarkerMeta {
+    display: none;
+  }
 }
 
 .userStickyOverlay {
@@ -936,6 +1264,11 @@ mark.pageSearchMatch-active {
     0 14px 26px -10px color-mix(in srgb, #000 46%, transparent),
     0 1px 0 color-mix(in srgb, #fff 12%, transparent) inset;
   pointer-events: auto;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    outline-color 120ms ease;
 }
 
 .userStickyHeader::before {
@@ -944,6 +1277,10 @@ mark.pageSearchMatch-active {
   inset: 0 auto 0 0;
   width: 4px;
   background: color-mix(in srgb, var(--chv-fg) 68%, var(--chv-border) 32%);
+  opacity: 0.9;
+  transition:
+    background 120ms ease,
+    opacity 120ms ease;
 }
 
 body.vscode-dark .userStickyHeader {
@@ -975,8 +1312,20 @@ body.vscode-dark .userStickyHeader {
   cursor: pointer;
 }
 
-.userStickyHeaderMain:hover .userStickyHeaderText {
-  color: var(--vscode-textLink-foreground, var(--chv-accent));
+.userStickyHeader:hover {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder, var(--chv-accent)) 52%, var(--chv-border) 48%);
+  outline-color: color-mix(in srgb, var(--vscode-focusBorder, var(--chv-accent)) 28%, transparent);
+  background: color-mix(in srgb, var(--vscode-editorWidget-background, var(--chv-bg)) 88%, var(--chv-fg) 12%);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--vscode-focusBorder, var(--chv-accent)) 24%, transparent),
+    0 4px 10px color-mix(in srgb, #000 22%, transparent),
+    0 18px 32px -10px color-mix(in srgb, #000 54%, transparent),
+    0 1px 0 color-mix(in srgb, #fff 18%, transparent) inset;
+}
+
+.userStickyHeader:hover::before {
+  background: color-mix(in srgb, var(--vscode-focusBorder, var(--chv-accent)) 72%, var(--chv-fg) 28%);
+  opacity: 1;
 }
 
 .userStickyHeaderRole,
@@ -1020,6 +1369,368 @@ body.vscode-dark .userStickyHeader {
 
 .userStickyHeaderPreview[hidden] {
   display: none !important;
+}
+
+.runningTurnAnchorRow {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  margin-top: -3px;
+  margin-bottom: 1px;
+  padding-inline: 0;
+  color: var(--chv-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.runningTurnAnchorRow-user,
+.runningTurnAnchorRow-nonUser,
+.runningTurnAnchorRow-anchored,
+.runningTurnAnchorRow-independent {
+  justify-content: flex-start;
+}
+
+.runningTurnAnchorRow::before {
+  content: "";
+  grid-column: 1 / -1;
+  grid-row: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--chv-fg) 14%, var(--chv-border) 86%);
+}
+
+.runningTurnAnchorRow::after {
+  content: "";
+  position: absolute;
+  left: -11px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chv-running-accent) 82%, var(--chv-fg) 18%);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--chv-running-accent) 44%, transparent);
+  opacity: 0.88;
+  transform: translateY(-50%);
+  animation: chv-running-turn-pulse 1.8s ease-in-out infinite;
+}
+
+.runningTurnFallbackChip {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 30;
+  max-width: min(720px, calc(100vw - 24px));
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+}
+
+.runningTurnFallbackChip-visible {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.runningTurnChip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 7px;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: 0;
+  padding: 0 8px 0 0;
+  background: var(--chv-bg);
+  color: var(--chv-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  box-shadow: none;
+}
+
+.runningTurnAnchorRow > .runningTurnChip {
+  grid-column: 1;
+  grid-row: 1;
+  z-index: 1;
+  justify-self: start;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.runningTurnFallbackChip.runningTurnChip {
+  position: fixed;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  width: auto;
+  max-width: min(720px, calc(100vw - 24px));
+  min-height: 34px;
+  border: 1px solid color-mix(in srgb, var(--chv-fg) 18%, var(--chv-border) 82%);
+  outline: 1px solid color-mix(in srgb, var(--chv-fg) 9%, transparent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--vscode-editorWidget-background, var(--chv-bg)) 96%, var(--chv-fg) 4%);
+  box-shadow:
+    0 1px 3px color-mix(in srgb, #000 18%, transparent),
+    0 14px 26px -10px color-mix(in srgb, #000 46%, transparent),
+    0 1px 0 color-mix(in srgb, #fff 12%, transparent) inset;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+body.vscode-dark .runningTurnFallbackChip.runningTurnChip {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, #fff 18%, transparent),
+    0 0 12px color-mix(in srgb, #fff 10%, transparent),
+    0 14px 28px -10px color-mix(in srgb, #000 52%, transparent),
+    0 1px 0 color-mix(in srgb, #fff 14%, transparent) inset;
+}
+
+.runningTurnAnchorRow .runningTurnChipElapsed,
+.runningTurnFallbackChip .runningTurnChipElapsed {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(36ch, 48vw);
+}
+
+.runningTurnAnchorRow .runningTurnChipLastActivity,
+.runningTurnFallbackChip .runningTurnChipLastActivity {
+  flex: 1 3 auto;
+  min-width: 0;
+}
+
+.runningTurnChip::before {
+  content: "";
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chv-running-accent) 82%, var(--chv-fg) 18%);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--chv-running-accent) 44%, transparent);
+  opacity: 0.88;
+  animation: chv-running-turn-pulse 1.8s ease-in-out infinite;
+}
+
+.runningTurnAnchorRow .runningTurnChip::before {
+  display: none;
+}
+
+.runningTurnFallbackChip.runningTurnChip::before {
+  position: static;
+  transform: none;
+}
+
+.runningTurnChip::after {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border: 1px solid transparent;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    linear-gradient(
+      100deg,
+      transparent 0%,
+      transparent 34%,
+      color-mix(in srgb, var(--chv-running-accent) 0%, transparent) 42%,
+      color-mix(in srgb, var(--chv-running-accent) 82%, transparent) 50%,
+      color-mix(in srgb, var(--chv-running-accent) 0%, transparent) 58%,
+      transparent 66%,
+      transparent 100%
+    )
+    border-box;
+  background-position: 140% 0;
+  background-size: 240% 100%;
+  -webkit-mask:
+    linear-gradient(#000 0 0) padding-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#000 0 0) padding-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+}
+
+.runningTurnChip-flash {
+  animation: chv-running-turn-flash 820ms ease-out 1;
+}
+
+.runningTurnChip-flash::after {
+  animation: chv-running-turn-border-glint 820ms ease-out 1;
+}
+
+button.runningTurnChip {
+  appearance: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.35;
+  text-align: left;
+}
+
+button.runningTurnChip:hover {
+  border-color: color-mix(in srgb, var(--chv-running-accent) 78%, var(--chv-border) 22%);
+}
+
+button.runningTurnChip:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, var(--chv-accent));
+  outline-offset: 2px;
+}
+
+.runningTurnChipTime {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runningTurnChipTitle,
+.runningTurnChipBadge {
+  flex: 0 0 auto;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.runningTurnChipTitle {
+  color: var(--chv-fg);
+}
+
+.runningTurnChipBadge {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--chv-running-accent) 66%, var(--chv-border) 34%);
+  border-radius: 999px;
+  padding: 1px 7px;
+  background: color-mix(in srgb, var(--chv-running-accent) 15%, transparent);
+  color: color-mix(in srgb, var(--chv-running-accent) 70%, var(--chv-fg) 30%);
+}
+
+.runningTurnChipTime {
+  color: var(--chv-muted);
+}
+
+.runningTurnChipElapsed {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--chv-muted);
+  font-weight: 400;
+}
+
+.runningTurnChipLastActivity {
+  flex: 1 3 auto;
+  min-width: 0;
+  color: var(--chv-muted);
+}
+
+@keyframes chv-running-turn-pulse {
+  0%,
+  100% {
+    opacity: 0.64;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--chv-running-accent) 34%, transparent);
+  }
+
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--chv-running-accent) 0%, transparent);
+  }
+}
+
+@keyframes chv-running-turn-flash {
+  0% {
+    background: color-mix(in srgb, var(--chv-bg) 82%, var(--chv-running-accent) 18%);
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--chv-running-accent) 46%, transparent),
+      0 8px 18px -12px color-mix(in srgb, var(--chv-running-accent) 64%, transparent);
+  }
+
+  100% {
+    background: var(--chv-bg);
+    box-shadow: none;
+  }
+}
+
+@keyframes chv-running-turn-border-glint {
+  0% {
+    opacity: 0;
+    background-position: 140% 0;
+  }
+
+  18% {
+    opacity: 0.72;
+  }
+
+  72% {
+    opacity: 0.32;
+  }
+
+  100% {
+    opacity: 0;
+    background-position: -40% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .runningTurnChip::before,
+  .runningTurnAnchorRow::after,
+  .runningTurnChip-flash,
+  .runningTurnChip-flash::after {
+    animation: none !important;
+  }
+
+  .runningTurnChip::before,
+  .runningTurnAnchorRow::after {
+    opacity: 1;
+    box-shadow: none;
+  }
+
+  .runningTurnChip::after {
+    opacity: 0;
+  }
+
+  .runningTurnFallbackChip {
+    transition: none !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .runningTurnAnchorRow {
+    padding-inline: 0;
+  }
+
+  .runningTurnFallbackChip {
+    max-width: min(520px, calc(100vw - 20px));
+    left: 10px;
+    bottom: 10px;
+  }
+
+  .runningTurnFallbackChip.runningTurnChip {
+    width: fit-content;
+    max-width: min(520px, calc(100vw - 20px));
+  }
+}
+
+@media (max-width: 420px) {
+  .runningTurnAnchorRow .runningTurnChipLastActivity,
+  .runningTurnFallbackChip .runningTurnChipLastActivity {
+    display: none;
+  }
+
+  .runningTurnFallbackChip.runningTurnChip {
+    gap: 5px;
+    padding: 7px 10px;
+  }
 }
 
 .row {
@@ -1369,6 +2080,112 @@ body.vscode-dark .userStickyHeader {
 
 .patchGroupHeaderActions {
   max-width: 62%;
+}
+
+.patchGroupAllDiffToggle {
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 80%, transparent);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--chv-fg);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  padding: 2px 7px;
+  white-space: nowrap;
+}
+
+.patchGroupAllDiffToggle:hover {
+  border-color: var(--chv-accent);
+  color: var(--vscode-textLink-foreground, var(--chv-accent));
+}
+
+.patchGroupAllDiffToggle:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 2px;
+}
+
+.patchGroupAllDiffToggle[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--chv-accent) 66%, var(--chv-border) 34%);
+  background: color-mix(in srgb, var(--chv-accent) 14%, transparent);
+}
+
+.patchGroupFileToggle {
+  border: 1px solid color-mix(in srgb, var(--chv-border) 84%, transparent);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--chv-fg);
+  cursor: pointer;
+  font: inherit;
+}
+
+.patchGroupFileToggle:hover {
+  border-color: var(--chv-accent);
+  color: var(--vscode-textLink-foreground, var(--chv-accent));
+}
+
+.patchGroupCompactSummary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.patchGroupFileList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.patchGroupFileRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 0;
+  background: transparent;
+  color: var(--chv-fg);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.patchGroupFileRow:hover {
+  background: color-mix(in srgb, var(--chv-tool-bg) 72%, transparent);
+}
+
+.patchGroupFilePath {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--chv-muted);
+  font-family: var(--vscode-editor-font-family);
+  font-size: 12px;
+}
+
+.patchGroupFileCounts {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: max-content;
+}
+
+.patchGroupFileToggle {
+  align-self: flex-start;
+  padding: 3px 0;
+  border-color: transparent;
+  color: var(--chv-muted);
+  font-weight: 600;
+}
+
+.patchGroupDetailsList {
+  margin-top: 2px;
 }
 
 .patchEntryList {
@@ -1926,6 +2743,14 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
   --chv-attachment-accent: var(--vscode-charts-blue, #4f7fba);
 }
 
+.messageAttachmentCard-notification {
+  --chv-attachment-accent: var(--vscode-charts-yellow, #9a7b17);
+}
+
+.messageAttachmentCard-invoke {
+  --chv-attachment-accent: var(--vscode-charts-purple, #7b61c8);
+}
+
 .messageAttachmentBadge {
   display: inline-flex;
   align-items: center;
@@ -2006,6 +2831,63 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.messageAttachmentMeta {
+  margin-top: 3px;
+  overflow: hidden;
+  color: var(--chv-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.messageAttachmentDetails {
+  margin-top: 6px;
+  min-width: 0;
+}
+
+.messageAttachmentDetailsSummary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--chv-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+
+.messageAttachmentDetailsSummary:hover {
+  color: var(--chv-fg);
+}
+
+.messageAttachmentStructuredPreview,
+.messageAttachmentParameterValue {
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 220px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px;
+  border-radius: 6px;
+  background: var(--chv-code-bg);
+  color: var(--chv-fg);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.messageAttachmentParameter + .messageAttachmentParameter {
+  margin-top: 8px;
+}
+
+.messageAttachmentParameterName {
+  color: var(--chv-muted);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .messageAttachmentActions {

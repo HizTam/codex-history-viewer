@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.7.0] - 2026-07-02
+
+### Added
+
+- Added an opt-in Codex session turn timeline for the chat timeline, showing turn starts, turn ends, turn ranges, and running state in live mode.
+- Added the `codexHistoryViewer.chat.turnTimeline.mode` setting to control the turn timeline. It defaults to `off`; `basic` shows turn boundaries, summaries, and manual folding for completed turns, while `live` also enables running-turn indicators, elapsed time, and update activity effects.
+- Added manual collapse and expand support for completed turns.
+- Added compact file summaries for patch group cards.
+- Added an in-place **Open all diffs** / **Close all diffs** action for patch group cards.
+- Added structured cards for Claude Code task notifications and raw `<invoke>` tool invocations while keeping internal IDs, local output paths, preambles, and raw notes out of normal views.
+
+### Changed
+
+- Improved auto-refresh `follow` mode and chat scrolling to the top, bottom, and latest positions.
+- Improved File AI Change History in-page search result badges to show the matching card number and distinguish before/after diff lines.
+
+### Fixed
+
+- Hardened turn timeline edge cases for clock skew, compact duration formatting, narrow running-turn chips, and sticky user prompt switching.
+
 ## [2.6.1] - 2026-06-22
 
 ### Added

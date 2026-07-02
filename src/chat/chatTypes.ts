@@ -35,6 +35,33 @@ export type ChatTimelineItem =
   | ChatPatchGroupItem
   | ChatNoteItem;
 
+export type ChatTurnStatus = "incomplete" | "completed" | "interrupted" | "rolledBack" | "unknown";
+export type ChatTurnDisplayStatus = "running" | ChatTurnStatus;
+
+export interface ChatTurnSummary {
+  id: string;
+  sequenceNumber: number;
+  status: ChatTurnStatus;
+  displayStatus?: ChatTurnDisplayStatus;
+  startedAtIso?: string;
+  completedAtIso?: string;
+  updatedAtIso?: string;
+  firstItemIndex?: number;
+  lastItemIndex?: number;
+  firstMessageIndex?: number;
+  lastMessageIndex?: number;
+  itemCount: number;
+  messageCount: number;
+  toolCount: number;
+  patchGroupCount: number;
+  patchEntryCount: number;
+  usageRecordCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  systemEventCount: number;
+}
+
 export type ChatAttachmentStatus = "available" | "unavailable";
 export type ChatImageAttachmentStatus = ChatAttachmentStatus;
 export type ChatImageAttachmentReason = "unsupported" | "missing" | "tooLarge" | "invalid" | "remote" | "disabled";
@@ -55,7 +82,9 @@ export type ChatAttachment =
   | ChatImageAttachment
   | ChatDocumentAttachment
   | ChatFileReferenceAttachment
-  | ChatSelectionReferenceAttachment;
+  | ChatSelectionReferenceAttachment
+  | ChatNotificationAttachment
+  | ChatInvokeAttachment;
 
 export interface ChatImageAttachment {
   id?: string;
@@ -116,6 +145,51 @@ export interface ChatSelectionReferenceAttachment {
   previewText?: string;
 }
 
+export type ChatNotificationStatus = "completed" | "failed" | "running" | "cancelled" | "unknown";
+
+export interface ChatNotificationUsage {
+  subagentTokens?: number;
+  toolUses?: number;
+  durationMs?: number;
+}
+
+export interface ChatNotificationAttachment {
+  id?: string;
+  type: "notification";
+  source: "claudeTaskNotification";
+  notificationKind: "task";
+  taskId?: string;
+  toolUseId?: string;
+  status: ChatNotificationStatus;
+  rawStatus?: string;
+  summary?: string;
+  note?: string;
+  result?: string;
+  usage?: ChatNotificationUsage;
+  outputFile?: string;
+  systemPreamble?: string;
+  text?: string;
+}
+
+export interface ChatInvokeParameter {
+  name: string;
+  value: string;
+  truncated?: boolean;
+}
+
+export interface ChatInvokeAttachment {
+  id?: string;
+  type: "invoke";
+  source: "claudeInvokeMarkup";
+  toolName: string;
+  parameters: ChatInvokeParameter[];
+  description?: string;
+  primaryParameterName?: string;
+  primaryParameterPreview?: string;
+  harnessPreamble?: string;
+  text?: string;
+}
+
 export interface ChatMemoryCitationEntry {
   path: string;
   lineStart?: number;
@@ -133,6 +207,7 @@ export interface ChatMessageItem {
   role: ChatRole;
   // 1-based display order for user/assistant (used for search jump). developer is undefined.
   messageIndex?: number;
+  turnId?: string;
   timestampIso?: string;
   model?: string;
   effort?: string;
@@ -149,6 +224,7 @@ export interface ChatMessageItem {
 export interface ChatToolItem {
   type: "tool";
   messageIndex?: number;
+  turnId?: string;
   timestampIso?: string;
   name: string;
   callId?: string;
@@ -197,6 +273,7 @@ export interface ChatTokenUsage {
 export interface ChatUsageItem {
   type: "usage";
   messageIndex?: number;
+  turnId?: string;
   timestampIso?: string;
   model?: string;
   effort?: string;
@@ -230,6 +307,7 @@ export interface ChatRateLimits {
 export interface ChatEnvironmentItem {
   type: "environment";
   messageIndex?: number;
+  turnId?: string;
   timestampIso?: string;
   cwd?: string;
   gitBranch?: string;
@@ -297,5 +375,9 @@ export interface ChatSessionModel {
   meta: ChatSessionMeta;
   sessionLocation?: ChatSessionLocation;
   items: ChatTimelineItem[];
+  turns?: ChatTurnSummary[];
+  activeTurnId?: string;
+  liveRunningTurnId?: string;
+  latestTurnId?: string;
   annotation?: ChatSessionAnnotation;
 }

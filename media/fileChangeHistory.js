@@ -51,6 +51,8 @@
   let i18n = {};
   let dateTime = {};
   let model = null;
+  let modelCardIndexById = new Map();
+  let modelCardById = new Map();
   let sourceIcons = {};
   let extensionIcon = "";
   let staleReason = null;
@@ -91,6 +93,7 @@
     : null;
   pageSearchCaseSensitive = webviewState.pageSearchCaseSensitive === true;
   let pendingReloadScrollAnchor = null;
+  let pendingLoadMoreScrollAnchor = null;
 
   window.addEventListener("message", (event) => {
     const msg = event.data || {};
@@ -130,6 +133,8 @@
     if (msg.type === "resetUi") {
       resetPageSearchState();
       dismissedStale = false;
+      pendingReloadScrollAnchor = null;
+      pendingLoadMoreScrollAnchor = null;
       getScrollRoot().scrollTo(0, 0);
       return;
     }
@@ -140,21 +145,35 @@
     if (msg.type === "model") {
       const scrollTop = getScrollRoot().scrollTop;
       const reloadScrollAnchor = pendingReloadScrollAnchor;
+      const loadMoreScrollAnchor = msg.reason === "loadMore" ? pendingLoadMoreScrollAnchor : null;
       pendingReloadScrollAnchor = null;
+      pendingLoadMoreScrollAnchor = null;
       model = msg.model || null;
+      rebuildModelCardIndex();
       bookmarkedKeys = normalizeBookmarkKeys(msg.bookmarks);
       const modelReason = typeof msg.reason === "string" ? msg.reason : "";
       sourceFilter = normalizeSourceFilterForModel(sourceFilter, model);
       staleReason = msg.staleReason || null;
       loadingMore = false;
-      if (typeof msg.addedCount === "number" && msg.addedCount > 0) {
+      const addedCount = normalizePositiveInteger(msg.addedCount);
+      const visibleAddedCount = getVisibleAddedCount(msg);
+      if (visibleAddedCount > 0) {
         requestAnimationFrame(() => {
           const toastKey = model && model.hasMore ? "loadMoreDoneMore" : "loadMoreDone";
           const fallback =
             toastKey === "loadMoreDoneMore"
               ? "Added {0} changes. More history is available."
               : "Added {0} changes";
-          showToast(formatTemplate(text(toastKey, fallback), msg.addedCount), { key: "loadMore" });
+          showToast(formatTemplate(text(toastKey, fallback), visibleAddedCount), { key: "loadMore" });
+        });
+      } else if (addedCount > 0) {
+        requestAnimationFrame(() => {
+          const toastKey = model && model.hasMore ? "loadMoreHiddenSourcesMore" : "loadMoreHiddenSources";
+          const fallback =
+            toastKey === "loadMoreHiddenSourcesMore"
+              ? "Added {0} changes for hidden sources. More history is available."
+              : "Added {0} changes for hidden sources.";
+          showToast(formatTemplate(text(toastKey, fallback), addedCount), { key: "loadMore" });
         });
       } else if (shouldShowMoreHistoryToast(modelReason, model)) {
         requestAnimationFrame(() => {
@@ -164,8 +183,9 @@
         });
       }
       render(modelReason);
-      if (reloadScrollAnchor) restoreReloadScrollAnchor(reloadScrollAnchor, scrollTop, persistRestoreState);
-      else if (msg.scrollAnchor) restoreReloadScrollAnchor(msg.scrollAnchor, scrollTop, persistRestoreState);
+      if (reloadScrollAnchor) restoreScrollAnchor(reloadScrollAnchor, scrollTop, persistRestoreState, "reloadAnchor");
+      else if (msg.scrollAnchor) restoreScrollAnchor(msg.scrollAnchor, scrollTop, persistRestoreState, "reloadAnchor");
+      else if (loadMoreScrollAnchor) restoreScrollAnchor(loadMoreScrollAnchor, scrollTop, persistRestoreState, "loadMoreAnchor");
       else restoreScroll(scrollTop, persistRestoreState);
       return;
     }
@@ -183,6 +203,7 @@
     }
     if (msg.type === "loadMoreStarted") {
       const scrollTop = getScrollRoot().scrollTop;
+      pendingLoadMoreScrollAnchor = captureVisibleCardAnchor();
       loadingMore = true;
       render();
       restoreScroll(scrollTop);
@@ -190,12 +211,17 @@
     }
     if (msg.type === "error") {
       pendingReloadScrollAnchor = null;
+      pendingLoadMoreScrollAnchor = null;
       loadingMore = false;
+      model = null;
+      modelCardIndexById = new Map();
+      modelCardById = new Map();
       renderError(msg.message || "");
       return;
     }
     if (msg.type === "loadMoreFailed") {
       const scrollTop = getScrollRoot().scrollTop;
+      pendingLoadMoreScrollAnchor = null;
       loadingMore = false;
       render();
       restoreScroll(scrollTop);
@@ -204,6 +230,7 @@
     }
     if (msg.type === "loadMoreCancelled") {
       const scrollTop = getScrollRoot().scrollTop;
+      pendingLoadMoreScrollAnchor = null;
       loadingMore = false;
       render();
       restoreScroll(scrollTop);
@@ -216,6 +243,7 @@
     }
     if (msg.type === "cancelled") {
       const scrollTop = getScrollRoot().scrollTop;
+      pendingLoadMoreScrollAnchor = null;
       loadingMore = false;
       showToast(msg.message || "", { key: "cancelled" });
       render();
@@ -355,6 +383,8 @@
   }
 
   function renderShell(renderContent, options) {
+    const preservePageSearchIndex = !(options && options.preservePageSearchIndex === false);
+    const pageSearchAnchor = pageSearchOpen && preservePageSearchIndex ? captureActivePageSearchResultAnchor() : null;
     clearPageSearchHighlights();
     clearApp();
     const toolbar = renderToolbar();
@@ -367,8 +397,7 @@
     scrollRoot.appendChild(wrap);
     app.appendChild(scrollRoot);
     if (pageSearchOpen) {
-      const preserveIndex = options && options.preservePageSearchIndex === false ? false : true;
-      refreshPageSearchResults({ preserveIndex, reveal: false });
+      refreshPageSearchResults({ preserveIndex: preservePageSearchIndex, reveal: false, anchor: pageSearchAnchor });
     } else {
       renderPageSearchResults();
       updatePageSearchStatus();
@@ -644,6 +673,8 @@
     const cards = Array.isArray(visibleCards) ? visibleCards : [];
     const cardEl = el("article", { className: "diffCard", id: card.id });
     cardEl.dataset.localDate = String(card.localDate || "");
+    const cardNumber = getCardNumberOrFallback(card, index);
+    cardEl.dataset.cardNumber = String(cardNumber);
     const bookmarkKey = getCardBookmarkKey(card);
     if (isBookmarkUiEnabled() && bookmarkKey) cardEl.dataset.bookmarkKey = bookmarkKey;
     const cardBookmarked = isBookmarkUiEnabled() && isCardBookmarked(card);
@@ -661,6 +692,7 @@
       source.appendChild(sourceText);
     }
     meta.appendChild(source);
+    meta.appendChild(renderCardNumberBadge(cardNumber));
     appendMeta(meta, card.dateTimeLabel);
     appendMeta(meta, changeTypeLabel(card.changeType));
     left.appendChild(meta);
@@ -799,7 +831,7 @@
   function renderLoadControls() {
     const wrap = el("section", { className: "loadControls" });
     if (model.hasMore) {
-      const btn = el("button", { type: "button", className: "primaryBtn" });
+      const btn = el("button", { type: "button", className: "secondaryBtn loadMoreBtn" });
       btn.textContent = text("loadMore", "Load more");
       btn.disabled = loadingMore;
       btn.addEventListener("click", () => {
@@ -913,6 +945,8 @@
   function refreshPageSearchResults(options) {
     const preserveIndex = !!(options && options.preserveIndex);
     const reveal = !options || options.reveal !== false;
+    const previousAnchor =
+      options && options.anchor ? options.anchor : preserveIndex ? captureActivePageSearchResultAnchor() : null;
     const previousIndex = preserveIndex ? activePageSearchResultIndex : -1;
     const input = document.getElementById("pageSearchInput");
     if (input instanceof HTMLInputElement) pageSearchQuery = input.value.trim();
@@ -944,6 +978,7 @@
       while (walker.nextNode()) textNodes.push(walker.currentNode);
     }
 
+    const occurrenceCountsByCardId = new Map();
     for (const textNode of textNodes) {
       const sourceText = textNode.textContent || "";
       const matches = compiled.findAll(sourceText);
@@ -966,7 +1001,9 @@
       textNode.parentNode.replaceChild(fragment, textNode);
 
       for (const pending of pendingMarks) {
-        pageSearchResults.push(buildPageSearchResult(pending.mark, sourceText, pending.start, pending.length));
+        pageSearchResults.push(
+          buildPageSearchResult(pending.mark, sourceText, pending.start, pending.length, occurrenceCountsByCardId),
+        );
       }
     }
 
@@ -976,8 +1013,7 @@
       return;
     }
 
-    const nextIndex =
-      preserveIndex && previousIndex >= 0 ? Math.min(previousIndex, pageSearchResults.length - 1) : 0;
+    const nextIndex = resolvePageSearchActiveIndex(previousAnchor, previousIndex, preserveIndex);
     activatePageSearchResult(nextIndex, { reveal });
   }
 
@@ -1016,15 +1052,25 @@
     activePageSearchResultIndex = -1;
   }
 
-  function buildPageSearchResult(mark, sourceText, start, length) {
+  function buildPageSearchResult(mark, sourceText, start, length, occurrenceCountsByCardId) {
     const card = mark.closest(".diffCard");
     const title = getElementText(card && card.querySelector(".cardTitleBlock h2")) || text("pageSearchTitle", "Find");
     const meta = getElementText(card && card.querySelector(".diffDetailsPath")) || "";
+    const cardId = card instanceof HTMLElement ? card.id || "" : "";
+    const cardNumber = card instanceof HTMLElement ? normalizePositiveInteger(card.dataset.cardNumber) : 0;
+    const lineBadge = getDiffLineSearchResultBadge(mark);
+    const matchText = mark.textContent || sourceText.slice(start, start + length);
     return {
       mark,
+      cardId,
+      cardNumber,
+      side: lineBadge && lineBadge.side ? lineBadge.side : "",
+      lineNumber: lineBadge && lineBadge.lineNumber ? lineBadge.lineNumber : "",
+      matchText,
+      occurrenceIndex: getNextPageSearchOccurrenceIndex(cardId, occurrenceCountsByCardId),
       title,
       meta,
-      lineNumber: getNearestLineNumber(mark),
+      badges: buildSearchResultBadges(cardNumber, lineBadge),
       snippet: buildSearchSnippet(sourceText, start, length),
     };
   }
@@ -1038,16 +1084,109 @@
     return { prefix, match, suffix };
   }
 
-  function getNearestLineNumber(mark) {
+  function buildSearchResultBadges(cardNumber, lineBadge) {
+    const badges = [];
+    if (cardNumber > 0) badges.push({ text: formatCardNumber(cardNumber), kind: "card" });
+    if (lineBadge) badges.push(lineBadge);
+    return badges;
+  }
+
+  function getDiffLineSearchResultBadge(mark) {
     const patchText = mark.closest(".patchDiffText");
     if (patchText instanceof HTMLElement && patchText.dataset.rowIndex) {
       const block = patchText.closest(".patchDiffBlock");
       const lineNo = block && block.querySelector(`.patchDiffLineNo[data-row-index="${patchText.dataset.rowIndex}"]`);
       const value = getElementText(lineNo);
-      if (value) return value;
+      if (value) {
+        const side = block instanceof HTMLElement && block.classList.contains("patchDiffBlock-left") ? "before" : "after";
+        const sideLabel = side === "before" ? text("patchBefore", "Before") : text("patchAfter", "After");
+        const fullLabel = `${sideLabel} L${value}`;
+        return { text: fullLabel, compactText: `L${value}`, ariaLabel: fullLabel, kind: "line", side, lineNumber: value };
+      }
     }
-    const cardIndex = getRenderedCards().findIndex((card) => card.contains(mark));
-    return cardIndex >= 0 ? String(cardIndex + 1) : "";
+    return null;
+  }
+
+  function getNextPageSearchOccurrenceIndex(cardId, occurrenceCountsByCardId) {
+    if (!cardId || !(occurrenceCountsByCardId instanceof Map)) return 0;
+    const count = normalizeNonNegativeInteger(occurrenceCountsByCardId.get(cardId));
+    occurrenceCountsByCardId.set(cardId, count + 1);
+    return count;
+  }
+
+  function captureActivePageSearchResultAnchor() {
+    const result = pageSearchResults[activePageSearchResultIndex];
+    if (!result) return null;
+    return {
+      cardId: typeof result.cardId === "string" ? result.cardId : "",
+      cardNumber: normalizePositiveInteger(result.cardNumber),
+      side: typeof result.side === "string" ? result.side : "",
+      lineNumber: typeof result.lineNumber === "string" ? result.lineNumber : "",
+      matchText: typeof result.matchText === "string" ? result.matchText : "",
+      occurrenceIndex: normalizeNonNegativeInteger(result.occurrenceIndex),
+    };
+  }
+
+  function resolvePageSearchActiveIndex(anchor, previousIndex, preserveIndex) {
+    if (!Array.isArray(pageSearchResults) || pageSearchResults.length === 0) return -1;
+    if (anchor) {
+      const exact = findExactPageSearchAnchorIndex(anchor);
+      if (exact >= 0) return exact;
+      const near = findNearestPageSearchAnchorIndex(anchor, previousIndex);
+      if (near >= 0) return near;
+    }
+    if (preserveIndex && previousIndex >= 0) return Math.min(previousIndex, pageSearchResults.length - 1);
+    return 0;
+  }
+
+  function findExactPageSearchAnchorIndex(anchor) {
+    for (let index = 0; index < pageSearchResults.length; index += 1) {
+      const result = pageSearchResults[index];
+      if (!isSamePageSearchAnchorResult(result, anchor)) continue;
+      return index;
+    }
+    return -1;
+  }
+
+  function isSamePageSearchAnchorResult(result, anchor) {
+    if (!result || !anchor) return false;
+    const sameCard =
+      (anchor.cardId && result.cardId === anchor.cardId) ||
+      (anchor.cardNumber > 0 && normalizePositiveInteger(result.cardNumber) === anchor.cardNumber);
+    if (!sameCard) return false;
+    if (anchor.side && result.side !== anchor.side) return false;
+    if (anchor.lineNumber && result.lineNumber !== anchor.lineNumber) return false;
+    if (anchor.matchText && result.matchText !== anchor.matchText) return false;
+    return normalizeNonNegativeInteger(result.occurrenceIndex) === anchor.occurrenceIndex;
+  }
+
+  function findNearestPageSearchAnchorIndex(anchor, previousIndex) {
+    let bestIndex = -1;
+    let bestScore = Number.MAX_SAFE_INTEGER;
+    for (let index = 0; index < pageSearchResults.length; index += 1) {
+      const score = scorePageSearchAnchorCandidate(pageSearchResults[index], anchor, index, previousIndex);
+      if (score >= bestScore) continue;
+      bestScore = score;
+      bestIndex = index;
+    }
+    return bestIndex;
+  }
+
+  function scorePageSearchAnchorCandidate(result, anchor, index, previousIndex) {
+    if (!result || !anchor) return Number.MAX_SAFE_INTEGER;
+    let score = 0;
+    const resultCardNumber = normalizePositiveInteger(result.cardNumber);
+    if (anchor.cardId && result.cardId === anchor.cardId) score -= 1000000;
+    else if (anchor.cardNumber > 0 && resultCardNumber === anchor.cardNumber) score -= 500000;
+    else if (anchor.cardNumber > 0 && resultCardNumber > 0) score += Math.abs(resultCardNumber - anchor.cardNumber) * 1000;
+    else if (Number.isInteger(previousIndex) && previousIndex >= 0) score += Math.abs(index - previousIndex) * 1000;
+
+    if (anchor.side) score += result.side === anchor.side ? -5000 : 5000;
+    if (anchor.lineNumber) score += result.lineNumber === anchor.lineNumber ? -3000 : 3000;
+    if (anchor.matchText) score += result.matchText === anchor.matchText ? -2000 : 2000;
+    score += Math.abs(normalizeNonNegativeInteger(result.occurrenceIndex) - anchor.occurrenceIndex) * 10;
+    if (Number.isInteger(previousIndex) && previousIndex >= 0) score += Math.abs(index - previousIndex);
+    return score;
   }
 
   function renderPageSearchResults() {
@@ -1099,9 +1238,22 @@
       });
 
       const header = el("div", { className: "pageSearchResultHeader" });
-      if (result.lineNumber) {
-        const lineBadge = el("span", { className: "pageSearchResultLine" });
-        lineBadge.textContent = result.lineNumber;
+      const badges = Array.isArray(result.badges) ? result.badges : [];
+      for (const badge of badges) {
+        if (!badge || !badge.text) continue;
+        const badgeKind = badge.kind === "card" ? "card" : "line";
+        const sideClass = badgeKind === "line" && badge.side ? ` pageSearchResultLine-${badge.side}` : "";
+        const lineBadge = el("span", { className: `pageSearchResultLine pageSearchResultLine-${badgeKind}${sideClass}` });
+        if (badge.ariaLabel) {
+          lineBadge.title = badge.ariaLabel;
+          lineBadge.setAttribute("aria-label", badge.ariaLabel);
+        }
+        if (badgeKind === "line" && badge.compactText) {
+          lineBadge.appendChild(el("span", { className: "pageSearchResultLineFull", textContent: badge.text }));
+          lineBadge.appendChild(el("span", { className: "pageSearchResultLineCompact", textContent: badge.compactText }));
+        } else {
+          lineBadge.textContent = badge.text;
+        }
         header.appendChild(lineBadge);
       }
 
@@ -1476,14 +1628,14 @@
     };
   }
 
-  function restoreReloadScrollAnchor(anchor, fallbackScrollTop, onRestored) {
+  function restoreScrollAnchor(anchor, fallbackScrollTop, onRestored, debugScope) {
     requestAnimationFrame(() => {
       const method = restoreCardAnchor(anchor);
       if (!method) {
         const fallback = Number.isFinite(Number(anchor && anchor.scrollTop)) ? anchor.scrollTop : fallbackScrollTop;
         getScrollRoot().scrollTo(0, Math.max(0, Number(fallback || 0)));
       }
-      debugWebview("reloadAnchor", "restored", { method: method || "scrollTop" });
+      debugWebview(debugScope || "scrollAnchor", "restored", { method: method || "scrollTop" });
       updateDateGuideCurrent();
       if (typeof onRestored === "function") onRestored();
     });
@@ -1528,6 +1680,39 @@
     return sourceCards.filter((card) => isSourceVisible(card && card.source));
   }
 
+  function getCardNumberOrFallback(card, fallbackIndex) {
+    const mixedNumber = getMixedTimelineCardNumber(card);
+    if (mixedNumber > 0) return mixedNumber;
+    return normalizePositiveInteger(Number(fallbackIndex) + 1);
+  }
+
+  function getMixedTimelineCardNumber(card) {
+    const index = card ? getModelCardIndexById(card.id) : -1;
+    return index >= 0 ? index + 1 : 0;
+  }
+
+  function rebuildModelCardIndex() {
+    const nextIndexById = new Map();
+    const nextCardById = new Map();
+    const cards = model && Array.isArray(model.cards) ? model.cards : [];
+    for (let index = 0; index < cards.length; index += 1) {
+      const card = cards[index];
+      const id = card && typeof card.id === "string" ? card.id : "";
+      if (!id) continue;
+      nextIndexById.set(id, index);
+      nextCardById.set(id, card);
+    }
+    modelCardIndexById = nextIndexById;
+    modelCardById = nextCardById;
+  }
+
+  function getModelCardIndexById(cardId) {
+    const id = typeof cardId === "string" ? cardId : "";
+    if (!id) return -1;
+    const index = modelCardIndexById.get(id);
+    return Number.isInteger(index) && index >= 0 ? index : -1;
+  }
+
   function isSourceVisible(source) {
     if (source === "codex") return sourceFilter.codex !== false;
     if (source === "claude") return sourceFilter.claude !== false;
@@ -1541,11 +1726,75 @@
     next[source] = !next[source];
     const enabledSources = ["codex", "claude"].filter((item) => enabled[item]);
     if (enabledSources.length > 0 && !enabledSources.some((item) => next[item])) return;
+    const anchor = captureVisibleCardAnchor();
+    const anchorCard = findModelCardById(anchor && anchor.cardId);
     sourceFilter = next;
     persistSourceFilter();
-    resetPageSearchState();
+    const visibleCards = getVisibleCards(model && Array.isArray(model.cards) ? model.cards : []);
+    const restoreAnchor = resolveSourceFilterScrollAnchor(anchor, anchorCard, visibleCards);
     render();
-    getScrollRoot().scrollTo(0, 0);
+    restoreScrollAnchor(restoreAnchor, anchor ? anchor.scrollTop : 0, persistRestoreState, "sourceFilterAnchor");
+  }
+
+  function resolveSourceFilterScrollAnchor(anchor, anchorCard, visibleCards) {
+    const base = anchor && typeof anchor === "object" ? anchor : { scrollTop: 0 };
+    const cards = Array.isArray(visibleCards) ? visibleCards : [];
+    if (cards.length === 0) return base;
+    if (anchorCard && isSourceVisible(anchorCard.source)) return base;
+
+    const fallback = findNearestVisibleCard(anchorCard, cards, base.cardIndex);
+    if (!fallback) return base;
+    return {
+      ...base,
+      cardId: fallback.card.id || "",
+      cardIndex: fallback.index,
+    };
+  }
+
+  function findNearestVisibleCard(anchorCard, visibleCards, fallbackIndex) {
+    const cards = Array.isArray(visibleCards) ? visibleCards : [];
+    if (cards.length === 0) return null;
+    const anchorTime = anchorCard ? parseTimestampMs(anchorCard.timestampIso) : NaN;
+    const anchorModelIndex = anchorCard ? getModelCardIndexById(anchorCard.id) : -1;
+    const canUseTimeDistance =
+      Number.isFinite(anchorTime) && cards.some((card) => Number.isFinite(parseTimestampMs(card && card.timestampIso)));
+    const safeFallbackIndex = Number.isInteger(Number(fallbackIndex))
+      ? Math.max(0, Math.min(cards.length - 1, Math.floor(Number(fallbackIndex))))
+      : 0;
+    let best = null;
+
+    for (let index = 0; index < cards.length; index += 1) {
+      const card = cards[index];
+      const cardTime = parseTimestampMs(card && card.timestampIso);
+      const timeDistance = canUseTimeDistance
+        ? Number.isFinite(cardTime)
+          ? Math.abs(cardTime - anchorTime)
+          : Number.MAX_SAFE_INTEGER
+        : 0;
+      const modelIndex = getModelCardIndexById(card && card.id);
+      const modelDistance =
+        anchorModelIndex >= 0 && modelIndex >= 0 ? Math.abs(modelIndex - anchorModelIndex) : Math.abs(index - safeFallbackIndex);
+      const fallbackDistance = Math.abs(index - safeFallbackIndex);
+      const candidate = { card, index, timeDistance, modelDistance, fallbackDistance };
+      if (
+        !best ||
+        candidate.timeDistance < best.timeDistance ||
+        (candidate.timeDistance === best.timeDistance && candidate.modelDistance < best.modelDistance) ||
+        (candidate.timeDistance === best.timeDistance &&
+          candidate.modelDistance === best.modelDistance &&
+          candidate.fallbackDistance < best.fallbackDistance)
+      ) {
+        best = candidate;
+      }
+    }
+
+    return best ? { card: best.card, index: best.index } : null;
+  }
+
+  function findModelCardById(cardId) {
+    const id = typeof cardId === "string" ? cardId : "";
+    if (!id) return null;
+    return modelCardById.get(id) || null;
   }
 
   function normalizeSourceFilter(value) {
@@ -1566,6 +1815,20 @@
       for (const source of enabledSources) next[source] = true;
     }
     return next;
+  }
+
+  function getVisibleAddedCount(message) {
+    const count = Number(message && message.addedCount);
+    if (!Number.isFinite(count) || count <= 0) return 0;
+    const totalCount = Math.floor(count);
+    const sourceCounts = message && message.addedSourceCounts;
+    if (!sourceCounts || typeof sourceCounts !== "object") return totalCount;
+    const codexCount = normalizePositiveInteger(sourceCounts.codex);
+    const claudeCount = normalizePositiveInteger(sourceCounts.claude);
+    let visibleCount = 0;
+    if (isSourceVisible("codex")) visibleCount += codexCount;
+    if (isSourceVisible("claude")) visibleCount += claudeCount;
+    return Math.min(totalCount, visibleCount);
   }
 
   function shouldShowMoreHistoryToast(reason, currentModel) {
@@ -1645,7 +1908,7 @@
     if (dateGuide) return dateGuide;
     if (!window.CodexHistoryTimeGuide || typeof window.CodexHistoryTimeGuide.create !== "function") return null;
     dateGuide = window.CodexHistoryTimeGuide.create({
-      mode: "timeline",
+      mode: "date",
       positionStrategy: "index",
       minItems: 1,
       getHost: () => document.body,
@@ -1717,10 +1980,13 @@
         const actualTimestampMs = parseTimestampMs(card.timestampIso);
         const localDate = isDateKey(card.localDate) ? String(card.localDate) : "";
         const timestampMs = Number.isFinite(actualTimestampMs) ? actualTimestampMs : NaN;
+        const cardNumber = getCardNumberOrFallback(card, index);
         return {
           actualTimestampMs,
           key: card.id,
           itemIndex: index,
+          ordinal: cardNumber,
+          ordinalLabel: formatCardNumber(cardNumber),
           timestampIso: Number.isFinite(actualTimestampMs) ? String(card.timestampIso || "") : "",
           timestampMs,
           dateKey: localDate,
@@ -1732,7 +1998,16 @@
       })
       .filter((item) => item.element instanceof HTMLElement && (Number.isFinite(item.timestampMs) || item.dateKey));
     fillEstimatedDateGuideTimestamps(items);
-    return items.filter((item) => Number.isFinite(item.timestampMs));
+    const resolvedItems = items.filter((item) => Number.isFinite(item.timestampMs));
+    reindexDateGuideItems(resolvedItems);
+    return resolvedItems;
+  }
+
+  function reindexDateGuideItems(items) {
+    if (!Array.isArray(items)) return;
+    for (let index = 0; index < items.length; index += 1) {
+      items[index].itemIndex = index;
+    }
   }
 
   function fillEstimatedDateGuideTimestamps(items) {
@@ -2147,6 +2422,31 @@
     const safeValue = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
     badge.textContent = `${patchKind === "add" ? "+" : "-"}${safeValue}`;
     return badge;
+  }
+
+  function renderCardNumberBadge(cardNumber) {
+    const safeNumber = normalizePositiveInteger(cardNumber);
+    const label = formatTemplate(text("cardNumberLabel", "Card {0}"), safeNumber);
+    const badge = el("span", { className: "cardNumberBadge", textContent: formatCardNumber(safeNumber) });
+    badge.dataset.pageSearchIgnore = "true";
+    badge.title = label;
+    badge.setAttribute("aria-label", label);
+    return badge;
+  }
+
+  function formatCardNumber(cardNumber) {
+    const safeNumber = normalizePositiveInteger(cardNumber);
+    return safeNumber > 0 ? `#${safeNumber}` : "";
+  }
+
+  function normalizePositiveInteger(value) {
+    const numberValue = Number(value);
+    return Number.isFinite(numberValue) ? Math.max(0, Math.floor(numberValue)) : 0;
+  }
+
+  function normalizeNonNegativeInteger(value) {
+    const numberValue = Number(value);
+    return Number.isFinite(numberValue) ? Math.max(0, Math.floor(numberValue)) : 0;
   }
 
   function sourceCountToggle(source, count) {

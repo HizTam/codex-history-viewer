@@ -15,7 +15,11 @@ import {
   buildCodexPatchBookmarkGroupId,
   resolveClaudeToolCallId,
 } from "../services/bookmarkIdentity";
-import { extractClaudeRequestInterruptionContent, isCodexTurnAbortedContent } from "../chat/chatAttachments";
+import {
+  detectClaudeMaterializedMessageRole,
+  extractClaudeRequestInterruptionContent,
+  isCodexTurnAbortedContent,
+} from "../chat/chatAttachments";
 import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/projectPathMapper";
 import type { SearchIndexService } from "../services/searchIndexService";
@@ -1277,13 +1281,7 @@ function getClaudeMessageContent(obj: any): unknown {
 }
 
 function detectClaudeMessageRole(obj: any): "user" | "assistant" | null {
-  const messageRole = typeof obj?.message?.role === "string" ? obj.message.role : "";
-  if (messageRole === "user" || messageRole === "assistant") return messageRole;
-  const envelopeType = typeof obj?.type === "string" ? obj.type : "";
-  if (envelopeType === "user" || envelopeType === "assistant") return envelopeType;
-  const topRole = typeof obj?.role === "string" ? obj.role : "";
-  if (topRole === "user" || topRole === "assistant") return topRole;
-  return null;
+  return detectClaudeMaterializedMessageRole(obj);
 }
 
 function resolveClaudeDiffTimestamp(obj: any, session: SessionSummary): string | undefined {

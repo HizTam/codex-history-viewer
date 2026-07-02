@@ -429,10 +429,11 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
           await this.sendLoading(panel, "render");
           const latest = this.stateByPanel.get(panel);
           if (!latest || latest.generation !== generation) return;
+          const sortedCards = sortFileChangeHistoryCards(loaded.cards);
           this.stateByPanel.set(panel, {
             ...latest,
             candidates,
-            cards: loaded.cards,
+            cards: sortedCards,
             pendingCards: loaded.pendingCards,
             nextCandidateIndex: loaded.nextCandidateIndex,
             hasMore: !loaded.exhausted,
@@ -449,7 +450,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
               scanned: loaded.stats.candidateScanned,
               parsedSessions: loaded.stats.parsedSessions,
               matchedSessions: loaded.stats.matchedSessions,
-              cards: loaded.cards.length,
+              cards: sortedCards.length,
               pending: loaded.pendingCards.length,
               hasMore: !loaded.exhausted,
             }),
@@ -518,7 +519,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
         limit: FILE_CHANGE_HISTORY_PAGE_SIZE,
         token: cancellation.token,
       });
-      const nextCards = state.cards.concat(loaded.cards);
+      const nextCards = sortFileChangeHistoryCards(state.cards.concat(loaded.cards));
       const latest = this.stateByPanel.get(panel);
       if (!latest || latest.generation !== generation) return;
       this.stateByPanel.set(panel, {
@@ -530,7 +531,11 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
         loading: false,
         loadMoreCancellation: undefined,
       });
-      await this.sendModel(panel, { addedCount: loaded.cards.length, reason: "loadMore" });
+      await this.sendModel(panel, {
+        addedCount: loaded.cards.length,
+        addedSourceCounts: countSources(loaded.cards),
+        reason: "loadMore",
+      });
       this.logger?.debug(
         formatDebugFields("fileChangeHistory loadMore done", {
           totalMs: elapsedMs(startedAt),
@@ -782,7 +787,11 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
 
   private async sendModel(
     panel: vscode.WebviewPanel,
-    options: { addedCount?: number; reason?: "initial" | "reload" | "loadMore" } = {},
+    options: {
+      addedCount?: number;
+      addedSourceCounts?: { codex: number; claude: number };
+      reason?: "initial" | "reload" | "loadMore";
+    } = {},
   ): Promise<void> {
     const state = this.stateByPanel.get(panel);
     if (!state) return;
@@ -807,6 +816,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       dateTime: this.buildDateTime(),
       staleReason: state.staleReason,
       addedCount: options.addedCount,
+      addedSourceCounts: options.addedSourceCounts,
       reason: options.reason,
       bookmarks: bookmarkState.bookmarkKeys,
       searchHistoryCandidates: this.getSearchHistoryCandidates(this.resolvePanelSearchHistoryProjectKey(panel)),
@@ -972,6 +982,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       sourceCountsClaudeOnly: t("fileChangeHistory.sourceCounts.claudeOnly"),
       resultCountOne: t("fileChangeHistory.resultCount.one"),
       resultCountMany: t("fileChangeHistory.resultCount.many"),
+      cardNumberLabel: t("fileChangeHistory.cardNumberLabel"),
       added: t("fileChangeHistory.added"),
       removed: t("fileChangeHistory.removed"),
       movedTo: t("fileChangeHistory.movedTo"),
@@ -995,6 +1006,8 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       loadMoreDone: t("fileChangeHistory.loadMoreDone"),
       loadMoreDoneMore: t("fileChangeHistory.loadMoreDoneMore"),
       loadMoreAvailable: t("fileChangeHistory.loadMoreAvailable"),
+      loadMoreHiddenSources: t("fileChangeHistory.loadMoreHiddenSources"),
+      loadMoreHiddenSourcesMore: t("fileChangeHistory.loadMoreHiddenSourcesMore"),
       copied: t("fileChangeHistory.copied"),
     };
   }
@@ -1030,6 +1043,48 @@ function countSources(cards: readonly FileChangeHistoryCard[]): { codex: number;
     else claude += 1;
   }
   return { codex, claude };
+}
+
+function sortFileChangeHistoryCards(cards: readonly FileChangeHistoryCard[]): FileChangeHistoryCard[] {
+  return cards
+    .map((card, index) => ({ card, index }))
+    .sort((a, b) => compareFileChangeHistoryCards(a.card, b.card) || a.index - b.index)
+    .map((entry) => entry.card);
+}
+
+function compareFileChangeHistoryCards(a: FileChangeHistoryCard, b: FileChangeHistoryCard): number {
+  const timeDiff = getCardSortTime(a) - getCardSortTime(b);
+  if (timeDiff !== 0) return timeDiff;
+
+  return (
+    compareSortText(a.timestampIso, b.timestampIso) ||
+    compareSortText(a.sessionCacheKey, b.sessionCacheKey) ||
+    compareSortNumber(a.messageIndex, b.messageIndex) ||
+    compareSortText(a.bookmarkGroupId, b.bookmarkGroupId) ||
+    compareSortText(a.entry?.id, b.entry?.id) ||
+    compareSortText(a.id, b.id)
+  );
+}
+
+function getCardSortTime(card: FileChangeHistoryCard): number {
+  const value = typeof card.timestampIso === "string" ? card.timestampIso.trim() : "";
+  if (!value) return Number.MAX_SAFE_INTEGER;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : Number.MAX_SAFE_INTEGER;
+}
+
+function compareSortNumber(a: number | undefined, b: number | undefined): number {
+  const left = Number.isFinite(Number(a)) ? Number(a) : Number.MAX_SAFE_INTEGER;
+  const right = Number.isFinite(Number(b)) ? Number(b) : Number.MAX_SAFE_INTEGER;
+  return left - right;
+}
+
+function compareSortText(a: string | undefined, b: string | undefined): number {
+  const left = typeof a === "string" ? a.trim() : "";
+  const right = typeof b === "string" ? b.trim() : "";
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function buildFileChangeBookmarkTarget(card: FileChangeHistoryCard): BookmarkTarget | null {

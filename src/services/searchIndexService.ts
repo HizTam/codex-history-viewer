@@ -12,6 +12,7 @@ import {
 } from "../utils/textUtils";
 import {
   buildAttachmentSearchText,
+  detectClaudeMaterializedMessageRole,
   extractClaudeMessageContent,
   extractClaudeRequestInterruptionContent,
   extractCodexMessageContent,
@@ -483,7 +484,7 @@ async function indexClaudeRecord(obj: any, state: BuildState): Promise<boolean> 
   if (role === "user" && extractClaudeRequestInterruptionContent(rawContent)) return true;
 
   const parsed = parseClaudeMessageContent(rawContent);
-  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false });
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role });
   const messageText = normalizeWhitespace([extracted.text, buildAttachmentSearchText(extracted.attachments)].filter(Boolean).join("\n"));
   if (messageText || extracted.attachments.length > 0) {
     state.messageIndex += 1;
@@ -623,16 +624,7 @@ function parseClaudeMessageContent(content: unknown): {
 }
 
 function detectClaudeMessageRole(obj: any): "user" | "assistant" | null {
-  const messageRole = typeof obj?.message?.role === "string" ? obj.message.role : "";
-  if (messageRole === "user" || messageRole === "assistant") return messageRole;
-
-  const envelopeType = typeof obj?.type === "string" ? obj.type : "";
-  if (envelopeType === "user" || envelopeType === "assistant") return envelopeType;
-
-  const topRole = typeof obj?.role === "string" ? obj.role : "";
-  if (topRole === "user" || topRole === "assistant") return topRole;
-
-  return null;
+  return detectClaudeMaterializedMessageRole(obj);
 }
 
 function getClaudeMessageContent(obj: any): unknown {

@@ -10,6 +10,7 @@ export type SearchIndexToolContent = "conversationOnly" | "toolCalls" | "toolCal
 export type LongMessageFoldingMode = "off" | "auto" | "always";
 export type ChatOpenPosition = "top" | "lastMessage" | "latest";
 export type ChatPerformanceMode = "auto" | "normal" | "simplified";
+export type ChatTurnTimelineMode = "off" | "basic" | "live";
 export type ImageThumbnailSize = "small" | "medium" | "large";
 
 export interface AutoRefreshConfig {
@@ -52,6 +53,7 @@ export interface CodexHistoryViewerConfig {
   userLongMessageFolding: LongMessageFoldingMode;
   assistantLongMessageFolding: LongMessageFoldingMode;
   stickyUserPrompt: boolean;
+  chatTurnTimelineMode: ChatTurnTimelineMode;
   timeGuideEnabled: boolean;
 }
 
@@ -96,6 +98,12 @@ function parseChatPerformanceMode(value: unknown): ChatPerformanceMode {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (normalized === "normal" || normalized === "simplified") return normalized;
   return "auto";
+}
+
+function parseChatTurnTimelineMode(value: unknown): ChatTurnTimelineMode {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "basic" || normalized === "live") return normalized;
+  return "off";
 }
 
 function parseImageThumbnailSize(value: unknown): ImageThumbnailSize {
@@ -203,6 +211,7 @@ export function getConfig(): CodexHistoryViewerConfig {
     userLongMessageFolding,
     assistantLongMessageFolding,
     stickyUserPrompt: cfg.get<boolean>("chat.stickyUserPrompt") ?? true,
+    chatTurnTimelineMode: parseChatTurnTimelineMode(cfg.get<string>("chat.turnTimeline.mode") ?? "off"),
     timeGuideEnabled: cfg.get<boolean>("ui.timeGuide.enabled") ?? false,
   };
 }

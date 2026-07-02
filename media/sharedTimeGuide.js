@@ -310,8 +310,9 @@
       let previousMonth = "";
 
       const periods = entries.map((entry, index) => {
-        const position = this.resolvePosition(entry.item, entry.item.itemIndex, dateItems.length);
+        const position = this.resolvePosition(entry.item, index, entries.length);
         const targetElement = entry.item.element;
+        const ordinalSummary = buildDateGuideOrdinalSummary(entry.items);
         const major = isMajorDateGuideEntry(entry.key, scale, index, {
           allSameYear,
           allSameMonth,
@@ -325,10 +326,13 @@
           key: entry.key,
           scale,
           major,
-          label: major ? formatDateGuideLabel(entry.key, scale, { allSameYear, allSameMonth }) : "",
+          label: formatDateGuidePeriodLabel(
+            major ? formatDateGuideLabel(entry.key, scale, { allSameYear, allSameMonth }) : "",
+            major ? ordinalSummary : null,
+          ),
           position,
-          tooltip: formatDateGuideTitle(entry.key, scale),
-          bookmarked: entry.item.bookmarked === true || isGuideTargetBookmarked(targetElement),
+          tooltip: formatDateGuidePeriodTooltip(formatDateGuideTitle(entry.key, scale), ordinalSummary),
+          bookmarked: entry.items.some((item) => item.bookmarked === true || isGuideTargetBookmarked(item.element)),
           role: resolveGuideTargetRole(targetElement, entry.item.role),
           attachmentKind: normalizeAttachmentGuideKind(entry.item.attachmentKind),
           targetElement,
@@ -980,8 +984,19 @@
       tooltip: typeof item.tooltip === "string" ? item.tooltip.trim() : "",
       tooltipOverride: typeof item.tooltipOverride === "string" ? item.tooltipOverride.trim() : "",
       attachmentKind: normalizeAttachmentGuideKind(item.attachmentKind),
+      bookmarked: item.bookmarked === true,
+      role: typeof item.role === "string" ? item.role.trim() : "",
+      ordinal: normalizeGuideOrdinal(item.ordinal),
+      ordinalLabel: typeof item.ordinalLabel === "string" ? item.ordinalLabel.trim() : "",
       itemIndex: Number.isFinite(Number(item.itemIndex)) ? Number(item.itemIndex) : index,
     };
+  }
+
+  function normalizeGuideOrdinal(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return NaN;
+    const ordinal = Math.floor(number);
+    return ordinal > 0 ? ordinal : NaN;
   }
 
   function normalizeAttachmentGuideKind(value) {
@@ -1064,15 +1079,66 @@
   }
 
   function buildDateGuideEntries(items, scale) {
-    const seen = new Set();
+    const byKey = new Map();
     const entries = [];
     for (const item of items) {
       const key = buildDateKeyForScale(item.dateKey, scale);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      entries.push({ key, item });
+      if (!key) continue;
+      const existing = byKey.get(key);
+      if (existing) {
+        existing.items.push(item);
+        continue;
+      }
+      const entry = { key, item, items: [item] };
+      byKey.set(key, entry);
+      entries.push(entry);
     }
     return entries;
+  }
+
+  function buildDateGuideOrdinalSummary(items) {
+    let min = Number.MAX_SAFE_INTEGER;
+    let max = 0;
+    let minLabel = "";
+    let maxLabel = "";
+    for (const item of Array.isArray(items) ? items : []) {
+      if (!Number.isFinite(item.ordinal)) continue;
+      const ordinal = item.ordinal;
+      const label = typeof item.ordinalLabel === "string" && item.ordinalLabel.trim() ? item.ordinalLabel.trim() : "";
+      if (ordinal < min) {
+        min = ordinal;
+        minLabel = label;
+      }
+      if (ordinal > max) {
+        max = ordinal;
+        maxLabel = label;
+      }
+    }
+    if (min === Number.MAX_SAFE_INTEGER || max <= 0) return null;
+    const startLabel = minLabel || formatGuideOrdinal(min);
+    const endLabel = maxLabel || formatGuideOrdinal(max);
+    return {
+      label: min === max ? startLabel : `${startLabel}-${endLabel}`,
+    };
+  }
+
+  function formatDateGuidePeriodLabel(dateLabel, ordinalSummary) {
+    const ordinalLabel = ordinalSummary && ordinalSummary.label ? ordinalSummary.label : "";
+    const label = typeof dateLabel === "string" ? dateLabel.trim() : "";
+    if (ordinalLabel && label) return `${ordinalLabel} ${label}`;
+    return ordinalLabel || label;
+  }
+
+  function formatDateGuidePeriodTooltip(dateTitle, ordinalSummary) {
+    const ordinalLabel = ordinalSummary && ordinalSummary.label ? ordinalSummary.label : "";
+    const title = typeof dateTitle === "string" ? dateTitle.trim() : "";
+    if (ordinalLabel && title) return `${ordinalLabel} ${title}`;
+    return ordinalLabel || title;
+  }
+
+  function formatGuideOrdinal(value) {
+    const number = Number(value);
+    return Number.isFinite(number) && number > 0 ? `#${Math.floor(number)}` : "";
   }
 
   function buildDateKeyForScale(dateKey, scale) {

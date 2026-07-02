@@ -209,6 +209,7 @@
   let userLongMessageFolding = "off";
   let assistantLongMessageFolding = "off";
   let stickyUserPromptEnabled = true;
+  let turnTimelineMode = "off";
   let imageSettings = { thumbnailSize: "medium" };
   let panelKind = "session";
   let chatOpenPosition = "top";
@@ -235,15 +236,31 @@
   let pendingDetailScrollAnchor = null;
   let messageNavMap = new Map();
   let patchGroupNavMap = new Map();
+  let currentTurnSummaryById = new Map();
   let expandedMessageIndexes = new Set();
   let expandedStickyUserKeys = new Set();
+  let collapsedTurnIds = new Set();
+  let pageSearchTemporaryTurnExpansionActive = false;
+  let pageSearchTemporaryPatchGroupExpansionActive = false;
+  let pageSearchTemporaryAttachmentExpansionActive = false;
   let stickyUserOverlayEl = null;
   let stickyUserRows = [];
   let stickyUserUpdateFrame = 0;
   let activeStickyUserKey = null;
   let stickyUserSuppressedUntilUserScroll = false;
   let stickyUserPointerScrollIntent = false;
+  let runningTurnAnchorEl = null;
+  let runningTurnFallbackEl = null;
+  let runningTurnFallbackFrame = 0;
+  let runningTurnElapsedTimer = 0;
+  let runningTurnElapsedTimerIntervalMs = 0;
+  let runningTurnActivitySignatures = new Map();
   let expandedPatchEntries = new Set();
+  let expandedPatchGroupFileLists = new Set();
+  let allDiffPatchGroupKeys = new Set();
+  let allDiffPatchGroupPreviouslyWideKeys = new Set();
+  let expandedAttachmentDetails = new Set();
+  let pageSearchTemporaryAttachmentDetailKeys = new Set();
   let expandedUsageCardKeys = new Set();
   let wideTimelineCardKeys = new Set();
   let wrappedPatchHunkKeys = new Set();
@@ -254,16 +271,22 @@
   let activePageSearchResultIndex = -1;
   let pageSearchHistoryCandidates = [];
   let pendingPageSearchSeed = null;
+  let pendingPageSearchRefreshOptions = null;
   let pageSearchShowingSuggestions = false;
   let activePageSearchSuggestionIndex = -1;
   let suppressNextPageSearchFocusSuggestions = false;
   let pageSearchCaseSensitive = false;
   let pageSearchErrorText = "";
   let pageSearchRefreshTimer = 0;
+  let pageSearchContentRevision = 0;
   let lastCommittedPageSearchHistory = null;
   let pageSearchSelectedRoles = new Set();
+  let pageSearchSuppressedTemporaryAttachmentDetailKeys = new Set();
   let pageSearchPanelWidth = null;
   let pageSearchResizeState = null;
+  let renderDepth = 0;
+  let renderAfterCurrentFrame = 0;
+  let renderAfterCurrentCallbacks = [];
   let openPositionSaveTimer = 0;
   let restorePositionSaveTimer = 0;
   let toolbarCompactFrame = 0;
@@ -343,14 +366,20 @@
     scheduleRestoreCoverRelease();
     if (!isRestoreCoverBlockingTimeGuide()) resumeDeferredRenderWork();
   });
+  window.addEventListener("resize", () => {
+    scheduleStickyUserOverlayUpdate();
+    scheduleRunningTurnFallbackUpdate();
+  });
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
+      stopRunningTurnElapsedTimer();
       showRestoreCover();
       persistCurrentChatOpenPosition({ immediate: true });
       persistRestorePosition({ immediate: true });
     } else if (document.visibilityState === "visible") {
       scheduleRestoreCoverRelease();
       if (!isRestoreCoverBlockingTimeGuide()) resumeDeferredRenderWork();
+      syncRunningTurnElapsedTimer();
     }
   });
 
@@ -445,7 +474,10 @@
         }
       : null;
 
-    showDetails = nextShowDetails;
+    withPageSearchContentMutation(() => {
+      showDetails = nextShowDetails;
+      return true;
+    });
     syncPageSearchRoleFilters({ reset: false });
     updateToolbar();
     persistRestoreState();
@@ -457,7 +489,10 @@
   if (btnPathMode instanceof HTMLElement) {
     btnPathMode.addEventListener("click", () => {
       if (!pathModeEnabled) return;
-      pathMode = getEffectivePathMode() === "relocated" ? "recorded" : "relocated";
+      withPageSearchContentMutation(() => {
+        pathMode = getEffectivePathMode() === "relocated" ? "recorded" : "relocated";
+        return true;
+      });
       updateToolbar();
       render();
       persistRestoreState({ preserveReveal: true });
@@ -474,6 +509,7 @@
     closePageSearch();
   });
   pageSearchInputEl.addEventListener("input", () => {
+    pageSearchSuppressedTemporaryAttachmentDetailKeys = new Set();
     if (pageSearchShowingSuggestions) {
       updatePageSearchSuggestionsAfterInput();
     }
@@ -502,7 +538,7 @@
     if (event.key === "Enter") {
       event.preventDefault();
       if (pageSearchShowingSuggestions && activatePageSearchSuggestion(activePageSearchSuggestionIndex)) return;
-      if (!pageSearchInputEl.value.trim()) {
+      if (!getCurrentPageSearchQuery()) {
         clearPageSearchForEmptyInput();
         return;
       }
@@ -634,6 +670,7 @@
       return;
     }
     if (msg.type === "sessionData") {
+      cancelRenderAfterCurrent();
       const restoreScrollY = typeof msg.restoreScrollY === "number" ? msg.restoreScrollY : undefined;
       const restoreSelectedMessageIndex =
         typeof msg.restoreSelectedMessageIndex === "number" ? msg.restoreSelectedMessageIndex : undefined;
@@ -655,7 +692,12 @@
       const prevSelectedMessageIndex = selectedMessageIndex;
       const prevExpandedMessageIndexes = new Set(expandedMessageIndexes);
       const prevExpandedStickyUserKeys = new Set(expandedStickyUserKeys);
+      const prevCollapsedTurnIds = new Set(collapsedTurnIds);
       const prevExpandedPatchEntries = new Set(expandedPatchEntries);
+      const prevExpandedPatchGroupFileLists = new Set(expandedPatchGroupFileLists);
+      const prevAllDiffPatchGroupKeys = new Set(allDiffPatchGroupKeys);
+      const prevAllDiffPatchGroupPreviouslyWideKeys = new Set(allDiffPatchGroupPreviouslyWideKeys);
+      const prevExpandedAttachmentDetails = new Set(expandedAttachmentDetails);
       const prevExpandedUsageCardKeys = new Set(expandedUsageCardKeys);
       const prevWideTimelineCardKeys = new Set(wideTimelineCardKeys);
       const prevWrappedPatchHunkKeys = new Set(wrappedPatchHunkKeys);
@@ -671,7 +713,9 @@
         shouldPreserveUiState = false;
       }
       if (!shouldPreserveUiState) resetStickyUserSuppression();
+      const previousPageSearchContentRevision = pageSearchContentRevision;
       model = incomingModel;
+      bumpPageSearchContentRevision();
       i18n = msg.i18n || {};
       dateTime = msg.dateTime || {};
       panelKind = normalizePanelKind(msg.panelKind, msg.isPreview);
@@ -682,6 +726,8 @@
       pathMode = pathModeEnabled ? normalizePathMode(msg.pathMode) : "recorded";
       timeGuideEnabled = msg.timeGuideEnabled === true;
       stickyUserPromptEnabled = msg.stickyUserPrompt !== false;
+      turnTimelineMode = normalizeTurnTimelineMode(msg.turnTimelineMode);
+      syncTurnTimelineModeClass();
       configuredPerformanceMode = normalizePerformanceMode(msg.chatPerformanceMode);
       performanceStats = normalizePerformanceStats(msg.performanceStats);
       toolDisplayMode = msg.toolDisplayMode === "compactCards" ? "compactCards" : "detailsOnly";
@@ -722,7 +768,17 @@
           : null;
       expandedMessageIndexes = shouldPreserveUiState ? prevExpandedMessageIndexes : new Set();
       expandedStickyUserKeys = shouldPreserveUiState ? prevExpandedStickyUserKeys : new Set();
+      collapsedTurnIds = shouldPreserveUiState && isTurnTimelineEnabled() ? prevCollapsedTurnIds : new Set();
+      clearAllPageSearchTemporaryExpansions();
+      pendingPageSearchRefreshOptions = null;
+      queuePageSearchContentMutationRefresh(previousPageSearchContentRevision);
       expandedPatchEntries = shouldPreserveUiState ? prevExpandedPatchEntries : new Set();
+      expandedPatchGroupFileLists = shouldPreserveUiState ? prevExpandedPatchGroupFileLists : new Set();
+      allDiffPatchGroupKeys = shouldPreserveUiState ? prevAllDiffPatchGroupKeys : new Set();
+      allDiffPatchGroupPreviouslyWideKeys = shouldPreserveUiState
+        ? prevAllDiffPatchGroupPreviouslyWideKeys
+        : new Set();
+      expandedAttachmentDetails = shouldPreserveUiState ? prevExpandedAttachmentDetails : new Set();
       expandedUsageCardKeys = shouldPreserveUiState ? prevExpandedUsageCardKeys : new Set();
       wideTimelineCardKeys = shouldPreserveUiState ? prevWideTimelineCardKeys : new Set();
       wrappedPatchHunkKeys = shouldPreserveUiState ? prevWrappedPatchHunkKeys : new Set();
@@ -734,6 +790,10 @@
         if (typeof revealTarget.entryId === "string" && revealTarget.entryId) {
           expandedPatchEntries.add(revealTarget.entryId);
         }
+      }
+      if (!isTurnTimelineEnabled()) {
+        collapsedTurnIds = new Set();
+        clearAllPageSearchTemporaryExpansions();
       }
 
       // Preserve details visibility only for reload-like updates; fresh opens start with details hidden.
@@ -830,8 +890,14 @@
       autoRefreshAvailable = msg.autoRefreshAvailable === true;
       timeGuideEnabled = msg.timeGuideEnabled === true;
       stickyUserPromptEnabled = msg.stickyUserPrompt !== false;
+      turnTimelineMode = normalizeTurnTimelineMode(msg.turnTimelineMode);
+      syncTurnTimelineModeClass();
       configuredPerformanceMode = normalizePerformanceMode(msg.chatPerformanceMode);
+      if (!isTurnTimelineEnabled()) clearTurnTimelineInteractiveState();
       updateEffectivePerformanceMode({ showAutoToast: true });
+      const previousToolDisplayMode = toolDisplayMode;
+      const previousUserLongMessageFolding = userLongMessageFolding;
+      const previousAssistantLongMessageFolding = assistantLongMessageFolding;
       if (msg.toolDisplayMode === "compactCards" || msg.toolDisplayMode === "detailsOnly") {
         toolDisplayMode = msg.toolDisplayMode;
       }
@@ -843,6 +909,13 @@
           ? msg.assistantLongMessageFolding
           : msg.longMessageFolding,
       );
+      if (
+        previousToolDisplayMode !== toolDisplayMode ||
+        previousUserLongMessageFolding !== userLongMessageFolding ||
+        previousAssistantLongMessageFolding !== assistantLongMessageFolding
+      ) {
+        bumpPageSearchContentRevisionAndQueueRefresh();
+      }
       imageSettings = normalizeImageSettings(msg.imageSettings);
       updateToolbar();
       render();
@@ -917,6 +990,39 @@
     const text = typeof value === "string" ? value.trim() : "";
     if (text && !looksLikeMojibake(text)) return text;
     return fallback;
+  }
+
+  function normalizeTurnTimelineMode(value) {
+    const normalized = String(value || "").trim().toLowerCase();
+    return normalized === "basic" || normalized === "live" ? normalized : "off";
+  }
+
+  function isTurnTimelineEnabled() {
+    return turnTimelineMode === "basic" || turnTimelineMode === "live";
+  }
+
+  function isTurnTimelineLive() {
+    return turnTimelineMode === "live";
+  }
+
+  function syncTurnTimelineModeClass() {
+    if (!(document.body instanceof HTMLElement)) return;
+    document.body.classList.toggle("turnTimelineEnabled", isTurnTimelineEnabled());
+  }
+
+  function prefersReducedMotion() {
+    return !!(
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    );
+  }
+
+  function clearTurnTimelineInteractiveState() {
+    collapsedTurnIds = new Set();
+    clearAllPageSearchTemporaryExpansions();
+    pendingPageSearchRefreshOptions = null;
+    runningTurnActivitySignatures = new Map();
+    resetRunningTurnIndicators({ keepFallback: false });
   }
 
   function isArchivedCodexSession() {
@@ -1223,9 +1329,24 @@
   }
 
   function scrollToBoundary(direction) {
+    if (direction === "bottom") {
+      const target = getTimelineBoundaryCard("bottom");
+      if (target) {
+        scrollElementIntoRootView(target, { behavior: "smooth", block: "end", endInset: getTimelineEndScrollInset(target) });
+        return;
+      }
+      const scrollingEl = getScrollRoot();
+      scrollingEl.scrollTo({ top: scrollingEl.scrollHeight, behavior: "smooth" });
+      return;
+    }
+
     const target = getTimelineBoundaryCard(direction);
     if (target) {
-      scrollElementIntoRootView(target, { behavior: "smooth", block: "start" });
+      scrollElementIntoRootView(target, {
+        behavior: "smooth",
+        block: "start",
+        startInset: direction === "top" ? getTimelineStartScrollInset(target) : 0,
+      });
       return;
     }
 
@@ -1291,6 +1412,7 @@
     if (isSimplifiedPerformanceMode()) restoreHibernatedPatchBodies();
     if (timeGuideEnabled && timeGuide) timeGuide.handleScroll();
     scheduleStickyUserOverlayUpdate();
+    scheduleRunningTurnFallbackUpdate();
   }
 
   function isEventInsideScrollRoot(event) {
@@ -1442,8 +1564,8 @@
   }
 
   function captureTimelineScrollAnchor() {
-    const rows = getRenderedTimelineRows();
-    if (rows.length === 0) return null;
+    const targets = getRenderedTimelineVisualTargets();
+    if (targets.length === 0) return null;
 
     const root = getScrollRoot();
     const rootRect = root.getBoundingClientRect();
@@ -1452,30 +1574,125 @@
     let best = null;
     let bestScore = Number.POSITIVE_INFINITY;
 
-    for (const row of rows) {
-      const rect = row.getBoundingClientRect();
+    for (const target of targets) {
+      const rect = target.getBoundingClientRect();
       if (rect.bottom < viewportTop || rect.top > viewportBottom) continue;
       const score = rect.top <= viewportTop && rect.bottom >= viewportTop ? 0 : Math.abs(rect.top - viewportTop) + 1;
       if (score < bestScore) {
         bestScore = score;
-        best = row;
+        best = target;
       }
     }
 
-    if (!best) best = rows[0];
-    const itemIndex = Number(best.dataset.itemIndex);
-    return {
+    if (!best) best = targets[0];
+    const anchor = buildTimelineScrollAnchorFromVisualTarget(best);
+    if (anchor) return anchor;
+    for (const target of targets) {
+      const fallbackAnchor = buildTimelineScrollAnchorFromVisualTarget(target);
+      if (fallbackAnchor) return fallbackAnchor;
+    }
+    return null;
+  }
+
+  function capturePageSearchCloseScrollAnchor() {
+    if (timelineEl instanceof HTMLElement) {
+      const activeMatch = timelineEl.querySelector("mark.pageSearchMatch-active");
+      if (activeMatch instanceof HTMLElement && isElementVisibleInScrollViewport(activeMatch)) {
+        const activeAnchor = captureTimelineScrollAnchorFromElement(activeMatch);
+        if (activeAnchor) return activeAnchor;
+      }
+    }
+    return captureTimelineScrollAnchor();
+  }
+
+  function captureTimelineScrollAnchorFromElement(element) {
+    if (!(element instanceof HTMLElement)) return null;
+    const target = element.closest(
+      ".row[data-item-index], .turnMarker[data-turn-boundary], .runningTurnAnchorRow[data-running-turn-anchor='true']",
+    );
+    return target instanceof HTMLElement ? buildTimelineScrollAnchorFromVisualTarget(target, element) : null;
+  }
+
+  function buildTimelineScrollAnchorFromVisualTarget(target, offsetSource) {
+    if (!(target instanceof HTMLElement)) return null;
+    if (target.matches(".row[data-item-index]")) return buildTimelineScrollAnchorFromRow(target, offsetSource);
+    if (target.classList.contains("turnMarker") && target.dataset.turnBoundary) {
+      return buildTimelineScrollAnchorFromMarker(target, "turnMarker", offsetSource);
+    }
+    if (target.classList.contains("runningTurnAnchorRow") && target.dataset.runningTurnAnchor === "true") {
+      return buildTimelineScrollAnchorFromMarker(target, "runningTurnAnchor", offsetSource);
+    }
+    return null;
+  }
+
+  function buildTimelineScrollAnchorFromRow(row, offsetSource) {
+    if (!(row instanceof HTMLElement)) return null;
+    const itemIndex = Number(row.dataset.itemIndex);
+    const anchor = {
       fsPath: model && typeof model.fsPath === "string" ? model.fsPath : "",
-      cardKey: typeof best.dataset.cardKey === "string" ? best.dataset.cardKey : "",
+      anchorKind: "row",
+      cardKey: typeof row.dataset.cardKey === "string" ? row.dataset.cardKey : "",
       itemIndex: Number.isFinite(itemIndex) ? Math.max(0, Math.floor(itemIndex)) : 0,
+      turnId: typeof row.dataset.turnId === "string" ? normalizeTurnId(row.dataset.turnId) : "",
     };
+    captureTimelineScrollAnchorOffsets(anchor, row, offsetSource);
+    return anchor;
+  }
+
+  function buildTimelineScrollAnchorFromMarker(marker, anchorKind, offsetSource) {
+    if (!(marker instanceof HTMLElement)) return null;
+    const turnId = normalizeTurnId(marker.dataset.turnId);
+    if (!turnId) return null;
+    const safeKind = anchorKind === "runningTurnAnchor" ? "runningTurnAnchor" : "turnMarker";
+    const anchor = {
+      fsPath: model && typeof model.fsPath === "string" ? model.fsPath : "",
+      anchorKind: safeKind,
+      turnId,
+    };
+    if (safeKind === "turnMarker") {
+      const turnBoundary = normalizeTimelineTurnBoundary(marker.dataset.turnBoundary);
+      if (turnBoundary) anchor.turnBoundary = turnBoundary;
+    }
+    const runKey = normalizeTurnRunKey(marker.dataset.turnRunKey);
+    if (runKey) anchor.runKey = runKey;
+    captureTimelineScrollAnchorOffsets(anchor, marker, offsetSource);
+    return anchor;
+  }
+
+  function captureTimelineScrollAnchorOffsets(anchor, target, offsetSource) {
+    if (!anchor || !(target instanceof HTMLElement)) return;
+    const root = getScrollRoot();
+    if (root instanceof HTMLElement) {
+      const rootRect = root.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      const targetOffsetTop = targetRect.top - rootRect.top;
+      if (Number.isFinite(targetOffsetTop)) {
+        anchor.targetOffsetTop = targetOffsetTop;
+        if (anchor.anchorKind === "row") anchor.rowOffsetTop = targetOffsetTop;
+        else anchor.sourceOffsetTop = targetOffsetTop;
+      }
+      if (offsetSource instanceof HTMLElement) {
+        const sourceRect = offsetSource.getBoundingClientRect();
+        const sourceOffsetTop = sourceRect.top - rootRect.top;
+        if (Number.isFinite(sourceOffsetTop)) anchor.sourceOffsetTop = sourceOffsetTop;
+        const sourceWithinRowTop = sourceRect.top - targetRect.top;
+        if (Number.isFinite(sourceWithinRowTop)) anchor.sourceWithinRowTop = sourceWithinRowTop;
+      }
+    }
   }
 
   function getRenderedTimelineRows() {
     if (!(timelineEl instanceof HTMLElement)) return [];
-    return Array.from(timelineEl.querySelectorAll(".row[data-item-index]")).filter(
-      (element) => element instanceof HTMLElement && element.offsetParent !== null,
-    );
+    return Array.from(timelineEl.querySelectorAll(".row[data-item-index]")).filter(isRenderedTimelineVisualTarget);
+  }
+
+  function getRenderedTimelineVisualTargets() {
+    if (!(timelineEl instanceof HTMLElement)) return [];
+    return Array.from(
+      timelineEl.querySelectorAll(
+        ".row[data-item-index], .turnMarker[data-turn-boundary], .runningTurnAnchorRow[data-running-turn-anchor='true']",
+      ),
+    ).filter(isRenderedTimelineVisualTarget);
   }
 
   function restorePendingDetailScrollAnchorAfterRender(options = {}) {
@@ -1513,16 +1730,213 @@
       return false;
     }
 
+    if (isTimelineMarkerScrollAnchor(anchor)) {
+      const markerTarget = findTimelineMarkerForAnchor(anchor);
+      if (markerTarget) {
+        scrollElementToCapturedOffset(markerTarget, getTimelineCapturedTargetOffset(anchor));
+        finish();
+        return true;
+      }
+
+      const markerFallback = findTimelineRowFallbackForMarkerAnchor(anchor);
+      if (markerFallback) {
+        restoreTimelineElementToOffset(markerFallback, getTimelineCapturedTargetOffset(anchor));
+        finish();
+        return true;
+      }
+
+      finish();
+      return false;
+    } else {
+      const anchorTurnId = resolveTurnIdForAnchor(anchor);
+      if (ensureTurnExpandedForReveal(anchorTurnId, { render: true })) {
+        restoreTimelineScrollAnchorAfterLayout(anchor, onRestored);
+        return true;
+      }
+    }
+
     const target = findTimelineRowForAnchor(anchor);
     if (target) {
-      if (isUserTimelineElement(target)) suppressStickyUserUntilUserScroll();
-      scrollElementIntoRootView(target, { behavior: "auto", block: "start" });
+      restoreTimelineElementToOffset(target, getTimelineCapturedTargetOffset(anchor));
       finish();
       return true;
     }
 
     restoreScroll(0, finish);
     return false;
+  }
+
+  function restorePageSearchCloseScrollAnchorAfterLayout(anchor) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        restorePageSearchCloseScrollAnchor(anchor);
+      });
+    });
+  }
+
+  function restorePageSearchCloseScrollAnchor(anchor) {
+    if (!anchor || typeof anchor !== "object") return false;
+    const currentPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
+    if (anchor.fsPath && currentPath && anchor.fsPath !== currentPath) return false;
+
+    const resolved = findPageSearchCloseScrollTarget(anchor);
+    if (!resolved || !(resolved.target instanceof HTMLElement)) return false;
+    return restoreTimelineElementToOffset(resolved.target, resolved.offsetTop);
+  }
+
+  function findPageSearchCloseScrollTarget(anchor) {
+    if (isTimelineMarkerScrollAnchor(anchor)) {
+      const markerTarget = findTimelineMarkerForAnchor(anchor);
+      if (markerTarget) {
+        return { target: markerTarget, offsetTop: getTimelineCapturedTargetOffset(anchor) };
+      }
+
+      const markerFallback = findTimelineRowFallbackForMarkerAnchor(anchor);
+      if (markerFallback) {
+        return { target: markerFallback, offsetTop: getTimelineCapturedTargetOffset(anchor) };
+      }
+
+      return null;
+    }
+
+    const cardKey = typeof anchor.cardKey === "string" ? anchor.cardKey : "";
+    if (cardKey) {
+      const exact = getRenderedTimelineRows().find((row) => row.dataset.cardKey === cardKey);
+      if (exact) {
+        return { target: exact, offsetTop: getPageSearchExactRowRestoreOffset(anchor, exact) };
+      }
+    }
+
+    const turnId = normalizeTurnId(anchor.turnId || resolveTurnIdForAnchor(anchor));
+    if (turnId && timelineEl instanceof HTMLElement) {
+      const runKey = normalizeTurnRunKey(anchor.runKey);
+      const runSelector = runKey ? `[data-turn-run-key="${cssEscape(runKey)}"]` : "";
+      let collapsedMarker = timelineEl.querySelector(
+        `.turnCollapsedSummaryMarker[data-turn-id="${cssEscape(turnId)}"]${runSelector}`,
+      );
+      if (!(collapsedMarker instanceof HTMLElement) && runKey) {
+        collapsedMarker = timelineEl.querySelector(`.turnCollapsedSummaryMarker[data-turn-id="${cssEscape(turnId)}"]`);
+      }
+      if (collapsedMarker instanceof HTMLElement) {
+        const sourceOffsetTop = Number(anchor.sourceOffsetTop);
+        return {
+          target: collapsedMarker,
+          offsetTop: Number.isFinite(sourceOffsetTop) ? sourceOffsetTop : getTimelineCapturedTargetOffset(anchor),
+        };
+      }
+    }
+
+    const fallback = findTimelineRowForAnchor(anchor);
+    return fallback ? { target: fallback, offsetTop: anchor.rowOffsetTop } : null;
+  }
+
+  function getPageSearchExactRowRestoreOffset(anchor, row) {
+    const rowOffsetTop = Number(anchor && anchor.rowOffsetTop);
+    const sourceOffsetTop = Number(anchor && anchor.sourceOffsetTop);
+    const sourceWithinRowTop = Number(anchor && anchor.sourceWithinRowTop);
+    if (
+      row instanceof HTMLElement &&
+      Number.isFinite(sourceOffsetTop) &&
+      Number.isFinite(sourceWithinRowTop) &&
+      sourceWithinRowTop > row.getBoundingClientRect().height
+    ) {
+      return sourceOffsetTop;
+    }
+    return Number.isFinite(rowOffsetTop) ? rowOffsetTop : sourceOffsetTop;
+  }
+
+  function scrollElementToCapturedOffset(element, offsetTop) {
+    if (!(element instanceof HTMLElement)) return false;
+    const root = getScrollRoot();
+    if (!(root instanceof HTMLElement)) {
+      element.scrollIntoView({ behavior: "auto", block: "nearest", inline: "nearest" });
+      return true;
+    }
+
+    const rootRect = root.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    const desiredOffset = Number(offsetTop);
+    if (!Number.isFinite(desiredOffset)) {
+      scrollElementIntoRootView(element, { behavior: "auto", block: "start" });
+      return true;
+    }
+    const nextTop = root.scrollTop + elementRect.top - rootRect.top - desiredOffset;
+    root.scrollTo({ top: Math.max(0, Math.floor(nextTop)), behavior: "auto" });
+    return true;
+  }
+
+  function restoreTimelineElementToOffset(element, offsetTop) {
+    if (!(element instanceof HTMLElement)) return false;
+    if (isUserTimelineElement(element)) suppressStickyUserUntilUserScroll();
+    return scrollElementToCapturedOffset(element, offsetTop);
+  }
+
+  function getTimelineCapturedTargetOffset(anchor) {
+    if (!anchor || typeof anchor !== "object") return undefined;
+    const targetOffsetTop = Number(anchor.targetOffsetTop);
+    if (Number.isFinite(targetOffsetTop)) return targetOffsetTop;
+    const rowOffsetTop = Number(anchor.rowOffsetTop);
+    if (Number.isFinite(rowOffsetTop)) return rowOffsetTop;
+    const sourceOffsetTop = Number(anchor.sourceOffsetTop);
+    return Number.isFinite(sourceOffsetTop) ? sourceOffsetTop : undefined;
+  }
+
+  function normalizeTimelineScrollAnchorKind(value) {
+    if (value === "turnMarker" || value === "runningTurnAnchor" || value === "row") return value;
+    return "";
+  }
+
+  function normalizeTimelineTurnBoundary(value) {
+    return value === "start" || value === "end" ? value : "";
+  }
+
+  function isTimelineMarkerScrollAnchor(anchor) {
+    const kind = normalizeTimelineScrollAnchorKind(anchor && anchor.anchorKind);
+    return kind === "turnMarker" || kind === "runningTurnAnchor";
+  }
+
+  function isRenderedTimelineVisualTarget(element) {
+    return element instanceof HTMLElement && element.offsetParent !== null;
+  }
+
+  function findTimelineMarkerForAnchor(anchor) {
+    if (!isTimelineMarkerScrollAnchor(anchor) || !(timelineEl instanceof HTMLElement)) return null;
+    const turnId = normalizeTurnId(anchor && anchor.turnId);
+    if (!turnId) return null;
+    const kind = normalizeTimelineScrollAnchorKind(anchor.anchorKind);
+    const runKey = normalizeTurnRunKey(anchor.runKey);
+    const runSelector = runKey ? `[data-turn-run-key="${cssEscape(runKey)}"]` : "";
+    if (kind === "runningTurnAnchor") {
+      const runningAnchor = timelineEl.querySelector(
+        `.runningTurnAnchorRow[data-running-turn-anchor="true"][data-turn-id="${cssEscape(turnId)}"]${runSelector}`,
+      );
+      return isRenderedTimelineVisualTarget(runningAnchor) ? runningAnchor : null;
+    }
+
+    const boundary = normalizeTimelineTurnBoundary(anchor.turnBoundary);
+    if (boundary) {
+      if (runKey) {
+        const exactRunMarker = timelineEl.querySelector(
+          `.turnMarker[data-turn-id="${cssEscape(turnId)}"][data-turn-boundary="${cssEscape(boundary)}"]${runSelector}`,
+        );
+        if (isRenderedTimelineVisualTarget(exactRunMarker)) return exactRunMarker;
+      }
+      const exactBoundaryMarker = timelineEl.querySelector(
+        `.turnMarker[data-turn-id="${cssEscape(turnId)}"][data-turn-boundary="${cssEscape(boundary)}"]`,
+      );
+      if (isRenderedTimelineVisualTarget(exactBoundaryMarker)) return exactBoundaryMarker;
+    }
+
+    const marker = timelineEl.querySelector(`.turnMarker[data-turn-id="${cssEscape(turnId)}"]`);
+    return isRenderedTimelineVisualTarget(marker) ? marker : null;
+  }
+
+  function findTimelineRowFallbackForMarkerAnchor(anchor) {
+    const turnId = normalizeTurnId(anchor && anchor.turnId);
+    if (!turnId) return null;
+    const turnRows = getRenderedTimelineRows().filter((row) => row instanceof HTMLElement && row.dataset.turnId === turnId);
+    if (turnRows.length === 0) return null;
+    return getLatestMeaningfulTimelineCard(turnRows) || turnRows[0];
   }
 
   function findTimelineRowForAnchor(anchor) {
@@ -1753,7 +2167,22 @@
     openPageSearch();
   }
 
+  function clearAllPageSearchTemporaryExpansions() {
+    const changed =
+      pageSearchTemporaryTurnExpansionActive ||
+      pageSearchTemporaryPatchGroupExpansionActive ||
+      pageSearchTemporaryAttachmentExpansionActive ||
+      pageSearchTemporaryAttachmentDetailKeys.size > 0;
+    pageSearchTemporaryTurnExpansionActive = false;
+    pageSearchTemporaryPatchGroupExpansionActive = false;
+    pageSearchTemporaryAttachmentExpansionActive = false;
+    pageSearchTemporaryAttachmentDetailKeys = new Set();
+    pageSearchSuppressedTemporaryAttachmentDetailKeys = new Set();
+    return changed;
+  }
+
   function resetSessionScopedUiState() {
+    cancelRenderAfterCurrent();
     resetPageSearchState();
     if (imagePreview || isImagePreviewOpen()) closeImagePreview();
     resetImageDataCache();
@@ -1762,6 +2191,10 @@
     temporaryPerformanceMode = null;
     pendingDetailScrollAnchor = null;
     expandedStickyUserKeys = new Set();
+    collapsedTurnIds = new Set();
+    clearAllPageSearchTemporaryExpansions();
+    expandedPatchGroupFileLists = new Set();
+    expandedAttachmentDetails = new Set();
   }
 
   function resetPatchEntryDetailsCache() {
@@ -1772,6 +2205,7 @@
   }
 
   function resetPageSearchState() {
+    cancelRenderAfterCurrent();
     cancelPageSearchRefresh();
     cancelPageSearchResize();
     if (pageSearchBarEl instanceof HTMLElement) pageSearchBarEl.hidden = true;
@@ -1779,17 +2213,20 @@
     if (pageSearchInputEl instanceof HTMLInputElement) pageSearchInputEl.value = "";
     pageSearchShowingSuggestions = false;
     pendingPageSearchSeed = null;
+    pendingPageSearchRefreshOptions = null;
     activePageSearchSuggestionIndex = -1;
     suppressNextPageSearchFocusSuggestions = false;
     pageSearchCaseSensitive = false;
     pageSearchErrorText = "";
     lastCommittedPageSearchHistory = null;
     pageSearchSelectedRoles = new Set();
+    clearAllPageSearchTemporaryExpansions();
     clearPageSearchHighlights();
     renderPageSearchResults();
     renderPageSearchSuggestions();
     renderPageSearchRoleFilters([]);
     updatePageSearchStatus();
+    scheduleRunningTurnFallbackUpdate();
   }
 
   function cancelPageSearchResize() {
@@ -1826,31 +2263,41 @@
     suppressNextPageSearchFocusSuggestions = true;
     pageSearchInputEl.focus();
     pageSearchInputEl.select();
+    scheduleRunningTurnFallbackUpdate();
   }
 
   function closePageSearch() {
     if (!(pageSearchBarEl instanceof HTMLElement)) return;
+    const closeScrollAnchor = capturePageSearchCloseScrollAnchor();
     pageSearchBarEl.hidden = true;
     document.body.classList.remove("pageSearchOpen");
     cancelPageSearchRefresh();
     cancelPageSearchResize();
     hidePageSearchSuggestions();
     suppressNextPageSearchFocusSuggestions = false;
+    pendingPageSearchRefreshOptions = null;
     pageSearchCaseSensitive = false;
     pageSearchSelectedRoles = new Set();
     pageSearchErrorText = "";
     lastCommittedPageSearchHistory = null;
+    const hadTemporaryExpansion = setPageSearchTemporaryExpansions(false, { render: false });
     clearPageSearchHighlights();
     renderPageSearchResults();
     renderPageSearchRoleFilters();
     updatePageSearchStatus();
+    scheduleRunningTurnFallbackUpdate();
+    if (hadTemporaryExpansion) render();
+    restorePageSearchCloseScrollAnchorAfterLayout(closeScrollAnchor);
   }
 
   function schedulePageSearchRefresh(options = {}) {
-    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    const query = getCurrentPageSearchQuery();
     if (!query) {
       cancelPageSearchRefresh();
       pageSearchErrorText = "";
+      pendingPageSearchRefreshOptions = null;
+      const resetScrollAnchor = capturePageSearchCloseScrollAnchor();
+      if (resetPageSearchTemporaryExpansionsWithScrollAnchor(resetScrollAnchor)) return;
       renderPageSearchResults();
       updatePageSearchStatus();
       return;
@@ -1870,10 +2317,306 @@
     return true;
   }
 
+  function normalizePageSearchRefreshOptions(options = {}) {
+    const source = options && typeof options === "object" ? options : {};
+    const preferredMessageIndex =
+      typeof source.preferredMessageIndex === "number" && Number.isFinite(source.preferredMessageIndex)
+        ? Math.max(0, Math.floor(source.preferredMessageIndex))
+        : undefined;
+    const preferredResultIndex =
+      typeof source.preferredResultIndex === "number" && Number.isFinite(source.preferredResultIndex)
+        ? Math.max(0, Math.floor(source.preferredResultIndex))
+        : undefined;
+    const navigationDelta =
+      typeof source.navigationDelta === "number" && Number.isFinite(source.navigationDelta)
+        ? Math.trunc(source.navigationDelta)
+        : 0;
+    const contentRevision =
+      typeof source.contentRevision === "number" && Number.isFinite(source.contentRevision)
+        ? Math.max(0, Math.floor(source.contentRevision))
+        : undefined;
+    const anchor = normalizePageSearchResultAnchor(source.anchor || source.preferredAnchor);
+    return {
+      preserveIndex: source.preserveIndex === true,
+      reveal: source.reveal !== false,
+      keepSuggestions: source.keepSuggestions === true,
+      fallbackToNearest: source.fallbackToNearest === true,
+      focusResult: source.focusResult === true,
+      ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
+      ...(typeof preferredResultIndex === "number" ? { preferredResultIndex } : {}),
+      ...(navigationDelta !== 0 ? { navigationDelta } : {}),
+      ...(typeof source.queryInput === "string" ? { queryInput: source.queryInput } : {}),
+      ...(typeof source.caseSensitive === "boolean" ? { caseSensitive: source.caseSensitive } : {}),
+      ...(typeof source.roleFilterKey === "string" ? { roleFilterKey: source.roleFilterKey } : {}),
+      ...(typeof contentRevision === "number" ? { contentRevision } : {}),
+      ...(anchor ? { anchor } : {}),
+    };
+  }
+
+  function normalizePageSearchResultAnchor(value) {
+    if (!value || typeof value !== "object") return null;
+    const messageIndex =
+      typeof value.messageIndex === "number" && Number.isFinite(value.messageIndex)
+        ? Math.max(0, Math.floor(value.messageIndex))
+        : undefined;
+    const ordinalWithinAnchor =
+      typeof value.ordinalWithinAnchor === "number" && Number.isFinite(value.ordinalWithinAnchor)
+        ? Math.max(0, Math.floor(value.ordinalWithinAnchor))
+        : undefined;
+    const anchor = {
+      ...(typeof messageIndex === "number" ? { messageIndex } : {}),
+      ...(typeof ordinalWithinAnchor === "number" ? { ordinalWithinAnchor } : {}),
+    };
+    for (const key of ["role", "turnId", "turnBoundary", "runKey", "textDigest"]) {
+      if (typeof value[key] === "string" && value[key].trim()) anchor[key] = value[key].trim().slice(0, 256);
+    }
+    return Object.keys(anchor).length > 0 ? anchor : null;
+  }
+
+  function withPageSearchRefreshSnapshot(options, query) {
+    const refreshOptions = normalizePageSearchRefreshOptions(options);
+    return {
+      ...refreshOptions,
+      queryInput: String(query || ""),
+      caseSensitive: pageSearchCaseSensitive === true,
+      roleFilterKey: getPageSearchRoleFilterKey(),
+      contentRevision: pageSearchContentRevision,
+    };
+  }
+
+  function bumpPageSearchContentRevision() {
+    pageSearchContentRevision += 1;
+    return pageSearchContentRevision;
+  }
+
+  function bumpPageSearchContentRevisionAndQueueRefresh(options = {}) {
+    const previousRevision = pageSearchContentRevision;
+    const currentRevision = bumpPageSearchContentRevision();
+    queuePageSearchContentMutationRefresh(previousRevision, options);
+    return currentRevision;
+  }
+
+  function withPageSearchContentMutation(mutate, options = {}) {
+    const previousRevision = beginPageSearchContentMutation();
+    let changed = false;
+    try {
+      changed = mutate();
+    } catch (error) {
+      cancelPageSearchContentMutation(previousRevision);
+      throw error;
+    }
+    if (!changed) {
+      cancelPageSearchContentMutation(previousRevision);
+      return changed;
+    }
+    dispatchPageSearchContentMutationRefresh(previousRevision, options);
+    return changed;
+  }
+
+  function beginPageSearchContentMutation() {
+    const previousRevision = pageSearchContentRevision;
+    bumpPageSearchContentRevision();
+    return previousRevision;
+  }
+
+  function cancelPageSearchContentMutation(previousRevision) {
+    pageSearchContentRevision = previousRevision;
+  }
+
+  function dispatchPageSearchContentMutationRefresh(previousRevision, options = {}) {
+    const refreshOptions = options.refreshOptions || buildActivePageSearchRefreshOptions({ preserveIndex: true, reveal: false });
+    if (typeof options.refreshDelayMs === "number" && Number.isFinite(options.refreshDelayMs)) {
+      queueDelayedPageSearchContentMutationRefresh(previousRevision, refreshOptions, options.refreshDelayMs);
+      return;
+    }
+    if (options.refreshImmediately === true) {
+      pendingPageSearchRefreshOptions = null;
+      refreshPageSearchAfterContentMutation(previousRevision, refreshOptions);
+    } else {
+      queuePageSearchContentMutationRefresh(previousRevision, refreshOptions);
+    }
+  }
+
+  function queueDelayedPageSearchContentMutationRefresh(previousRevision, options = {}, delayMs = 0) {
+    if (!isPageSearchOpen()) return;
+    const refreshOptions = buildPageSearchContentMutationRefreshOptions(previousRevision, options);
+    if (deferredPageSearchRefreshTimer) window.clearTimeout(deferredPageSearchRefreshTimer);
+    deferredPageSearchRefreshTimer = window.setTimeout(() => {
+      deferredPageSearchRefreshTimer = 0;
+      if (!isPageSearchOpen()) return;
+      refreshPageSearchResults(refreshOptions);
+    }, Math.max(0, Math.floor(delayMs)));
+  }
+
+  function buildActivePageSearchRefreshOptions(base = {}) {
+    const activeResult = Array.isArray(pageSearchResults) ? pageSearchResults[activePageSearchResultIndex] : null;
+    const anchor = activeResult && activeResult.anchor ? activeResult.anchor : null;
+    return {
+      ...base,
+      ...(anchor ? { anchor } : {}),
+      ...(activeResult && typeof activeResult.messageIndex === "number"
+        ? { preferredMessageIndex: activeResult.messageIndex }
+        : {}),
+    };
+  }
+
+  function getCurrentPageSearchQuery() {
+    return pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+  }
+
+  function buildPageSearchContentMutationRefreshOptions(previousRevision, options = {}) {
+    const refreshOptions = normalizePageSearchRefreshOptions({
+      preserveIndex: true,
+      reveal: false,
+      fallbackToNearest: true,
+      ...buildActivePageSearchRefreshOptions(),
+      ...options,
+    });
+    return {
+      ...withPageSearchRefreshSnapshot(refreshOptions, getCurrentPageSearchQuery()),
+      contentRevision: previousRevision,
+    };
+  }
+
+  function queuePageSearchContentMutationRefresh(previousRevision, options = {}) {
+    if (!isPageSearchOpen()) return;
+    pendingPageSearchRefreshOptions = buildPageSearchContentMutationRefreshOptions(previousRevision, options);
+  }
+
+  function refreshPageSearchAfterContentMutation(previousRevision, options = {}) {
+    if (!isPageSearchOpen()) return;
+    refreshPageSearchResults(buildPageSearchContentMutationRefreshOptions(previousRevision, options));
+  }
+
+  function getPageSearchRoleFilterKey() {
+    return Array.from(pageSearchSelectedRoles).sort().join("|");
+  }
+
+  function consumePendingPageSearchRefreshOptions() {
+    const options = pendingPageSearchRefreshOptions || { preserveIndex: true, reveal: false };
+    pendingPageSearchRefreshOptions = null;
+    return options;
+  }
+
   function cancelPageSearchRefresh() {
-    if (!pageSearchRefreshTimer) return;
-    window.clearTimeout(pageSearchRefreshTimer);
-    pageSearchRefreshTimer = 0;
+    if (pageSearchRefreshTimer) {
+      window.clearTimeout(pageSearchRefreshTimer);
+      pageSearchRefreshTimer = 0;
+    }
+    // Keep teardown symmetric with resetDeferredRenderWork(), which also clears this timer,
+    // so a pending deferred-render refresh never fires against a closed/reset page search.
+    if (deferredPageSearchRefreshTimer) {
+      window.clearTimeout(deferredPageSearchRefreshTimer);
+      deferredPageSearchRefreshTimer = 0;
+    }
+  }
+
+  function setPageSearchTemporaryTurnExpansion(active, options = {}) {
+    if (!isTurnTimelineEnabled()) {
+      if (!pageSearchTemporaryTurnExpansionActive) return false;
+      pageSearchTemporaryTurnExpansionActive = false;
+      if (options.render === true) render();
+      return true;
+    }
+    const nextActive = !!active && collapsedTurnIds.size > 0;
+    if (pageSearchTemporaryTurnExpansionActive === nextActive) return false;
+    pageSearchTemporaryTurnExpansionActive = nextActive;
+    if (options.render === true) render();
+    return true;
+  }
+
+  function setPageSearchTemporaryPatchGroupExpansion(active, options = {}) {
+    const nextActive = !!active && hasPatchGroupsForPageSearchExpansion();
+    if (pageSearchTemporaryPatchGroupExpansionActive === nextActive) return false;
+    pageSearchTemporaryPatchGroupExpansionActive = nextActive;
+    if (options.render === true) render();
+    return true;
+  }
+
+  function setPageSearchTemporaryAttachmentExpansion(active, options = {}) {
+    const nextKeys = active ? collectAttachmentDetailKeysForPageSearchExpansion() : new Set();
+    const nextActive = !!active && nextKeys.size > 0;
+    const keysChanged = !areStringSetsEqual(pageSearchTemporaryAttachmentDetailKeys, nextKeys);
+    if (pageSearchTemporaryAttachmentExpansionActive === nextActive && !keysChanged) return false;
+    pageSearchTemporaryAttachmentExpansionActive = nextActive;
+    pageSearchTemporaryAttachmentDetailKeys = nextActive ? nextKeys : new Set();
+    if (options.render === true) render();
+    return true;
+  }
+
+  function setPageSearchTemporaryExpansions(active, options = {}) {
+    if (!active) {
+      const changed = clearAllPageSearchTemporaryExpansions();
+      if (changed && options.render === true) render();
+      return changed;
+    }
+    const changedTurn = setPageSearchTemporaryTurnExpansion(active, { render: false });
+    const changedPatch = setPageSearchTemporaryPatchGroupExpansion(active, { render: false });
+    const changedAttachment = setPageSearchTemporaryAttachmentExpansion(active, { render: false });
+    const changed = changedTurn || changedPatch || changedAttachment;
+    if (changed && options.render === true) render();
+    return changed;
+  }
+
+  function setPageSearchTemporaryExpansionsWithScrollAnchor(active, scrollAnchor, options = {}) {
+    const changed = withPageSearchContentMutation(
+      () => setPageSearchTemporaryExpansions(active, { render: false }),
+      { refreshOptions: normalizePageSearchRefreshOptions(options.refreshOptions) },
+    );
+    if (!changed) return false;
+    const restore = () => {
+      if (options.restoreScroll !== false && scrollAnchor) {
+        restorePageSearchCloseScrollAnchorAfterLayout(scrollAnchor);
+      }
+    };
+    renderOrRequestAfterCurrent(restore);
+    return true;
+  }
+
+  function resetPageSearchTemporaryExpansionsWithScrollAnchor(scrollAnchor) {
+    return setPageSearchTemporaryExpansionsWithScrollAnchor(false, scrollAnchor, {
+      refreshOptions: { preserveIndex: true, reveal: false },
+      restoreScroll: true,
+    });
+  }
+
+  function hasPatchGroupsForPageSearchExpansion() {
+    const items = model && Array.isArray(model.items) ? model.items : [];
+    return items.some(
+      (item) => item && item.type === "patchGroup" && Array.isArray(item.entries) && item.entries.length > 0,
+    );
+  }
+
+  function collectAttachmentDetailKeysForPageSearchExpansion() {
+    const keys = new Set();
+    const items = model && Array.isArray(model.items) ? model.items : [];
+    for (const item of items) {
+      if (!item || item.type !== "message" || !Array.isArray(item.attachments)) continue;
+      if (!canRenderMessage(item)) continue;
+      const attachments = getMessageAttachments(item);
+      for (let attachmentIndex = 0; attachmentIndex < attachments.length; attachmentIndex += 1) {
+        const attachment = attachments[attachmentIndex];
+        if (!attachment || typeof attachment !== "object") continue;
+        if (attachment.type === "notification" && typeof attachment.result === "string" && attachment.result.trim()) {
+          const key = buildAttachmentDetailKey(attachment, "result", item, attachmentIndex);
+          if (key && !pageSearchSuppressedTemporaryAttachmentDetailKeys.has(key)) keys.add(key);
+        }
+        if (attachment.type === "invoke" && Array.isArray(attachment.parameters) && attachment.parameters.length > 0) {
+          const key = buildAttachmentDetailKey(attachment, "parameters", item, attachmentIndex);
+          if (key && !pageSearchSuppressedTemporaryAttachmentDetailKeys.has(key)) keys.add(key);
+        }
+      }
+    }
+    return keys;
+  }
+
+  function areStringSetsEqual(left, right) {
+    if (!(left instanceof Set) || !(right instanceof Set)) return false;
+    if (left.size !== right.size) return false;
+    for (const value of left) {
+      if (!right.has(value)) return false;
+    }
+    return true;
   }
 
   function syncPageSearchRoleFilters(options = {}) {
@@ -1982,8 +2725,19 @@
     if (!availableRoles.includes(role)) return;
     if (pageSearchSelectedRoles.has(role)) pageSearchSelectedRoles.delete(role);
     else pageSearchSelectedRoles.add(role);
+    pageSearchSuppressedTemporaryAttachmentDetailKeys = new Set();
     renderPageSearchRoleFilters(availableRoles);
-    if (isPageSearchOpen()) refreshPageSearchResults({ preserveIndex: false, reveal: false });
+    if (isPageSearchOpen()) {
+      const activeResult = pageSearchResults[activePageSearchResultIndex];
+      refreshPageSearchResults({
+        preserveIndex: false,
+        reveal: false,
+        fallbackToNearest: true,
+        ...(activeResult && typeof activeResult.messageIndex === "number"
+          ? { preferredMessageIndex: activeResult.messageIndex }
+          : {}),
+      });
+    }
   }
 
   function prunePageSearchSelectedRoles(availableRoles = getAvailablePageSearchRoles()) {
@@ -1994,14 +2748,19 @@
   }
 
   function refreshPageSearchResults(options = {}) {
-    const preserveIndex = !!options.preserveIndex;
-    const reveal = options.reveal !== false;
-    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    const refreshOptions = normalizePageSearchRefreshOptions(options);
+    const preserveIndex = refreshOptions.preserveIndex;
+    const reveal = refreshOptions.reveal;
+    const query = getCurrentPageSearchQuery();
     const previousIndex = preserveIndex ? activePageSearchResultIndex : -1;
-    if (!options.keepSuggestions) hidePageSearchSuggestions();
+    if (!refreshOptions.keepSuggestions) hidePageSearchSuggestions();
     pageSearchErrorText = "";
+    const expansionScrollAnchor = reveal ? null : captureTimelineScrollAnchor();
+    const resetScrollAnchor = capturePageSearchCloseScrollAnchor();
     clearPageSearchHighlights();
     if (!query) {
+      pendingPageSearchRefreshOptions = null;
+      if (resetPageSearchTemporaryExpansionsWithScrollAnchor(resetScrollAnchor)) return;
       renderPageSearchResults();
       updatePageSearchStatus();
       return;
@@ -2010,10 +2769,22 @@
     const compiled = compilePageSearchQuery(query, pageSearchCaseSensitive);
     if (!compiled) {
       pageSearchErrorText = getPageSearchInvalidMessage(query);
+      pendingPageSearchRefreshOptions = null;
+      if (resetPageSearchTemporaryExpansionsWithScrollAnchor(resetScrollAnchor)) return;
       renderPageSearchResults();
       updatePageSearchStatus();
       return;
     }
+
+    if (
+      setPageSearchTemporaryExpansionsWithScrollAnchor(true, expansionScrollAnchor, {
+        refreshOptions: withPageSearchRefreshSnapshot(refreshOptions, query),
+        restoreScroll: !reveal,
+      })
+    ) {
+      return;
+    }
+
     const roots = [annotationEl, metaEl, timelineEl].filter((node) => node instanceof HTMLElement);
     const textNodes = [];
 
@@ -2068,9 +2839,115 @@
       return;
     }
 
-    const nextIndex =
-      preserveIndex && previousIndex >= 0 ? Math.min(previousIndex, pageSearchResults.length - 1) : 0;
-    activatePageSearchResult(nextIndex, { reveal });
+    const nextIndex = resolvePageSearchActivationIndex(refreshOptions, previousIndex, query);
+    activatePageSearchResult(nextIndex, { reveal, focusResult: refreshOptions.focusResult });
+  }
+
+  function resolvePageSearchActivationIndex(refreshOptions, previousIndex, query) {
+    if (!Array.isArray(pageSearchResults) || pageSearchResults.length === 0) return -1;
+    const inputStale = isPageSearchRefreshInputStale(refreshOptions, query);
+    const contentStale = isPageSearchRefreshContentStale(refreshOptions);
+    if (inputStale) {
+      const nearestIndex = findNearestPageSearchResultToScrollPosition();
+      if (nearestIndex >= 0) return nearestIndex;
+      if (previousIndex >= 0) return Math.min(previousIndex, pageSearchResults.length - 1);
+      return 0;
+    }
+
+    const anchorIndex = findPageSearchResultIndexForAnchor(refreshOptions.anchor);
+    if (anchorIndex >= 0) return anchorIndex;
+
+    if (contentStale && typeof refreshOptions.preferredMessageIndex === "number") {
+      const preferredIndex = findPageSearchResultIndexForMessageIndex(refreshOptions.preferredMessageIndex);
+      if (preferredIndex >= 0) return preferredIndex;
+      const nearestIndex = findNearestPageSearchResultToScrollPosition();
+      if (nearestIndex >= 0) return nearestIndex;
+      if (previousIndex >= 0) return Math.min(previousIndex, pageSearchResults.length - 1);
+      return 0;
+    }
+    if (contentStale) {
+      const nearestIndex = findNearestPageSearchResultToScrollPosition();
+      if (nearestIndex >= 0) return nearestIndex;
+      if (previousIndex >= 0) return Math.min(previousIndex, pageSearchResults.length - 1);
+      return 0;
+    }
+
+    if (typeof refreshOptions.preferredMessageIndex === "number") {
+      const preferredIndex = findPageSearchResultIndexForMessageIndex(refreshOptions.preferredMessageIndex);
+      if (preferredIndex >= 0) return preferredIndex;
+      const nearestIndex = findNearestPageSearchResultToScrollPosition();
+      return nearestIndex >= 0 ? nearestIndex : 0;
+    }
+    if (typeof refreshOptions.preferredResultIndex === "number") {
+      return Math.max(0, Math.min(pageSearchResults.length - 1, refreshOptions.preferredResultIndex));
+    }
+    if (refreshOptions.fallbackToNearest === true) {
+      const nearestIndex = findNearestPageSearchResultToScrollPosition();
+      if (nearestIndex >= 0) return nearestIndex;
+    }
+    if (typeof refreshOptions.navigationDelta === "number") {
+      const currentIndex =
+        previousIndex >= 0 ? previousIndex : activePageSearchResultIndex >= 0 ? activePageSearchResultIndex : 0;
+      return Math.max(0, Math.min(pageSearchResults.length - 1, currentIndex + refreshOptions.navigationDelta));
+    }
+    if (refreshOptions.preserveIndex === true && previousIndex >= 0) {
+      return Math.min(previousIndex, pageSearchResults.length - 1);
+    }
+    return 0;
+  }
+
+  function isPageSearchRefreshInputStale(refreshOptions, query) {
+    if (!refreshOptions || typeof refreshOptions !== "object") return false;
+    if (typeof refreshOptions.queryInput === "string" && refreshOptions.queryInput !== String(query || "")) return true;
+    if (typeof refreshOptions.caseSensitive === "boolean" && refreshOptions.caseSensitive !== (pageSearchCaseSensitive === true)) {
+      return true;
+    }
+    if (typeof refreshOptions.roleFilterKey === "string" && refreshOptions.roleFilterKey !== getPageSearchRoleFilterKey()) {
+      return true;
+    }
+    return false;
+  }
+
+  function isPageSearchRefreshContentStale(refreshOptions) {
+    if (!refreshOptions || typeof refreshOptions !== "object") return false;
+    if (
+      typeof refreshOptions.contentRevision === "number" &&
+      refreshOptions.contentRevision !== pageSearchContentRevision
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function isPageSearchRefreshIntentStale(refreshOptions, query) {
+    return isPageSearchRefreshInputStale(refreshOptions, query) || isPageSearchRefreshContentStale(refreshOptions);
+  }
+
+  function findPageSearchResultIndexForMessageIndex(messageIndex) {
+    if (!Number.isFinite(messageIndex) || !Array.isArray(pageSearchResults)) return -1;
+    const target = Math.max(0, Math.floor(messageIndex));
+    return pageSearchResults.findIndex((result) => result && result.messageIndex === target);
+  }
+
+  function findPageSearchResultIndexForAnchor(anchor) {
+    const normalized = normalizePageSearchResultAnchor(anchor);
+    if (!normalized || !Array.isArray(pageSearchResults)) return -1;
+    return pageSearchResults.findIndex((result) => pageSearchResultMatchesAnchor(result, normalized));
+  }
+
+  function pageSearchResultMatchesAnchor(result, anchor) {
+    if (!result || !result.anchor || !anchor) return false;
+    const candidate = normalizePageSearchResultAnchor(result.anchor);
+    if (!candidate) return false;
+    if (typeof anchor.messageIndex === "number" && candidate.messageIndex !== anchor.messageIndex) return false;
+    for (const key of ["role", "turnId", "turnBoundary", "runKey"]) {
+      if (anchor[key] && candidate[key] !== anchor[key]) return false;
+    }
+    if (typeof anchor.ordinalWithinAnchor === "number" && candidate.ordinalWithinAnchor !== anchor.ordinalWithinAnchor) {
+      return false;
+    }
+    if (anchor.textDigest && candidate.textDigest && candidate.textDigest !== anchor.textDigest) return false;
+    return true;
   }
 
   function isPageSearchRoleFilterActive() {
@@ -2087,7 +2964,9 @@
     if (!(parent instanceof HTMLElement)) return false;
     if (parent.closest("#pageSearchBar, .dateGuide")) return false;
     if (parent.closest("[data-page-search-ignore='true']")) return false;
-    if (parent.closest("script, style, textarea, input, select, button")) return false;
+    if (parent.closest(".turnMarker, .runningTurnAnchorRow, .runningTurnFallbackChip")) return false;
+    if (parent.closest("script, style, textarea, input, select")) return false;
+    if (parent.closest("button") && !parent.closest(".patchGroupFilePath")) return false;
     if (parent.closest("mark.pageSearchMatch")) return false;
     if (parent.closest("[hidden]")) return false;
     if (!showDetails && parent.closest(".row.developer, .row.usage, .row.environment")) return false;
@@ -2133,7 +3012,10 @@
   function clearPageSearchForEmptyInput() {
     cancelPageSearchRefresh();
     pageSearchErrorText = "";
+    pendingPageSearchRefreshOptions = null;
+    const resetScrollAnchor = capturePageSearchCloseScrollAnchor();
     clearPageSearchHighlights();
+    if (resetPageSearchTemporaryExpansionsWithScrollAnchor(resetScrollAnchor)) return;
     renderPageSearchResults();
     updatePageSearchStatus();
   }
@@ -2144,10 +3026,12 @@
       return;
     }
     commitCurrentPageSearchQuery();
-    const flushed = flushPageSearchRefresh({ preserveIndex: true, reveal: false });
+    const refreshOptions = { preserveIndex: true, reveal: true, navigationDelta: delta };
+    const flushed = flushPageSearchRefresh(refreshOptions);
+    if (flushed) return;
     if (!flushed && pageSearchResults.length === 0) {
-      refreshPageSearchResults({ reveal: false });
-      if (pageSearchResults.length === 0) return;
+      refreshPageSearchResults(refreshOptions);
+      return;
     }
     if (pageSearchResults.length === 0) return;
     const total = pageSearchResults.length;
@@ -2155,6 +3039,26 @@
     const nextIndex = Math.max(0, Math.min(total - 1, currentIndex + delta));
     if (nextIndex === currentIndex) return;
     activatePageSearchResult(nextIndex, { reveal: true });
+  }
+
+  function requestPageSearchRevealRender(activeResult, safeIndex, options = {}) {
+    if (!activeResult || !(activeResult.mark instanceof HTMLElement)) return false;
+    const turnId = normalizeTurnId(getTurnIdForElement(activeResult.mark));
+    if (!turnId || !collapsedTurnIds.has(turnId)) return false;
+    const refreshOptions = {
+      preserveIndex: false,
+      reveal: true,
+      focusResult: options.focusResult === true,
+      fallbackToNearest: true,
+      preferredResultIndex: safeIndex,
+      ...(activeResult.anchor ? { anchor: activeResult.anchor } : {}),
+      ...(typeof activeResult.messageIndex === "number" ? { preferredMessageIndex: activeResult.messageIndex } : {}),
+    };
+    const query = getCurrentPageSearchQuery();
+    pendingPageSearchRefreshOptions = withPageSearchRefreshSnapshot(refreshOptions, query);
+    if (ensureTurnExpandedForReveal(turnId, { render: true })) return true;
+    pendingPageSearchRefreshOptions = null;
+    return false;
   }
 
   function activatePageSearchResult(index, options = {}) {
@@ -2177,6 +3081,7 @@
     if (activeResult && activeResult.mark instanceof HTMLElement) {
       activeResult.mark.classList.add("pageSearchMatch-active");
       if (reveal) {
+        if (requestPageSearchRevealRender(activeResult, safeIndex, options)) return;
         activeResult.mark.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
       }
     }
@@ -2221,6 +3126,7 @@
   function buildPageSearchResult(mark, sourceText, startIndex, queryLength) {
     const snippet = buildPageSearchSnippet(sourceText, startIndex, queryLength);
     const context = describePageSearchContext(mark);
+    const anchor = buildPageSearchResultAnchor(mark, context, sourceText, startIndex, queryLength);
     return {
       mark,
       title: context.title,
@@ -2228,7 +3134,65 @@
       lineNumber: context.lineNumber,
       snippet,
       messageIndex: context.messageIndex,
+      anchor,
     };
+  }
+
+  function buildPageSearchResultAnchor(mark, context, sourceText, startIndex, queryLength) {
+    const element = mark instanceof HTMLElement ? mark : null;
+    const bubble = element ? element.closest(".bubble") : null;
+    const role = bubble instanceof HTMLElement
+      ? bubble.classList.contains("user")
+        ? "user"
+        : bubble.classList.contains("assistant")
+          ? "assistant"
+          : bubble.classList.contains("developer")
+            ? "developer"
+            : ""
+      : "";
+    const turnCarrier = element ? element.closest("[data-turn-id]") : null;
+    const runCarrier = element ? element.closest("[data-turn-run-key]") : null;
+    const boundaryCarrier = element ? element.closest("[data-turn-boundary]") : null;
+    const base = {
+      ...(typeof context.messageIndex === "number" ? { messageIndex: context.messageIndex } : {}),
+      ...(role ? { role } : {}),
+      ...(turnCarrier instanceof HTMLElement && turnCarrier.dataset.turnId ? { turnId: turnCarrier.dataset.turnId } : {}),
+      ...(runCarrier instanceof HTMLElement && runCarrier.dataset.turnRunKey ? { runKey: runCarrier.dataset.turnRunKey } : {}),
+      ...(boundaryCarrier instanceof HTMLElement && boundaryCarrier.dataset.turnBoundary
+        ? { turnBoundary: boundaryCarrier.dataset.turnBoundary }
+        : {}),
+      textDigest: hashPageSearchAnchorText(sourceText, startIndex, queryLength),
+    };
+    const key = buildPageSearchAnchorScopeKey(base);
+    const ordinalWithinAnchor = pageSearchResults.filter((result) => {
+      const resultKey = buildPageSearchAnchorScopeKey(result && result.anchor);
+      return resultKey && resultKey === key;
+    }).length;
+    return { ...base, ordinalWithinAnchor };
+  }
+
+  function buildPageSearchAnchorScopeKey(anchor) {
+    if (!anchor || typeof anchor !== "object") return "";
+    return [
+      typeof anchor.messageIndex === "number" ? `m:${anchor.messageIndex}` : "",
+      anchor.role ? `r:${anchor.role}` : "",
+      anchor.turnId ? `t:${anchor.turnId}` : "",
+      anchor.turnBoundary ? `b:${anchor.turnBoundary}` : "",
+      anchor.runKey ? `k:${anchor.runKey}` : "",
+    ].join("|");
+  }
+
+  function hashPageSearchAnchorText(sourceText, startIndex, queryLength) {
+    const text = String(sourceText || "");
+    const start = Math.max(0, Math.floor(Number(startIndex) || 0) - 24);
+    const end = Math.min(text.length, Math.floor(Number(startIndex) || 0) + Math.max(0, Math.floor(Number(queryLength) || 0)) + 24);
+    let hash = 2166136261;
+    const slice = text.slice(start, end);
+    for (let index = 0; index < slice.length; index += 1) {
+      hash ^= slice.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
   }
 
   function buildPageSearchSnippet(text, startIndex, queryLength) {
@@ -2367,7 +3331,7 @@
     if (!(pageSearchResultsEl instanceof HTMLElement)) return;
     pageSearchResultsEl.textContent = "";
 
-    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    const query = getCurrentPageSearchQuery();
     if (!query && pageSearchResults.length === 0) {
       const empty = el("div", { className: "pageSearchEmpty" });
       empty.textContent = getSafeUiText(i18n.pageSearchTypeToSearch, "Type to search");
@@ -2491,7 +3455,7 @@
 
   function updatePageSearchSuggestionsAfterInput() {
     const suggestions = getVisiblePageSearchSuggestions();
-    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    const query = getCurrentPageSearchQuery();
     if (query && suggestions.length === 0) {
       hidePageSearchSuggestions();
       return;
@@ -2501,7 +3465,7 @@
   }
 
   function getVisiblePageSearchSuggestions() {
-    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim().toLowerCase() : "";
+    const query = getCurrentPageSearchQuery().toLowerCase();
     const entries = Array.isArray(pageSearchHistoryCandidates) ? pageSearchHistoryCandidates : [];
     const filtered = query
       ? entries.filter((entry) => String(entry.queryInput || "").toLowerCase().includes(query))
@@ -2512,7 +3476,7 @@
   function showPageSearchSuggestions() {
     if (!isPageSearchOpen()) return;
     const suggestions = getVisiblePageSearchSuggestions();
-    const query = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    const query = getCurrentPageSearchQuery();
     pageSearchShowingSuggestions = suggestions.length > 0 || !query;
     activePageSearchSuggestionIndex = pageSearchShowingSuggestions ? 0 : -1;
     renderPageSearchSuggestions();
@@ -2572,7 +3536,7 @@
   }
 
   function commitCurrentPageSearchQuery() {
-    const queryInput = pageSearchInputEl instanceof HTMLInputElement ? pageSearchInputEl.value.trim() : "";
+    const queryInput = getCurrentPageSearchQuery();
     if (!queryInput) return;
     if (!compilePageSearchQuery(queryInput, pageSearchCaseSensitive)) return;
     if (
@@ -2640,7 +3604,52 @@
     if (cwd) metaLines.push(`CWD: ${cwd}`);
   }
 
+  function requestRenderAfterCurrent(callback) {
+    if (typeof callback === "function") renderAfterCurrentCallbacks.push(callback);
+    if (renderAfterCurrentFrame) return;
+    renderAfterCurrentFrame = requestAnimationFrame(() => {
+      renderAfterCurrentFrame = 0;
+      render();
+      flushRenderAfterCurrentCallbacks();
+    });
+  }
+
+  function renderOrRequestAfterCurrent(callback) {
+    if (renderDepth > 0) {
+      requestRenderAfterCurrent(callback);
+      return;
+    }
+    render();
+    if (typeof callback === "function") callback();
+  }
+
+  function cancelRenderAfterCurrent() {
+    if (renderAfterCurrentFrame) {
+      cancelAnimationFrame(renderAfterCurrentFrame);
+      renderAfterCurrentFrame = 0;
+    }
+    renderAfterCurrentCallbacks = [];
+  }
+
+  function flushRenderAfterCurrentCallbacks() {
+    const callbacks = renderAfterCurrentCallbacks;
+    renderAfterCurrentCallbacks = [];
+    for (const callback of callbacks) {
+      try {
+        callback();
+      } catch (_error) {
+        // Ignore post-render restoration failures so a stale anchor cannot break the view.
+      }
+    }
+  }
+
   function render() {
+    if (renderDepth > 0) {
+      requestRenderAfterCurrent();
+      return;
+    }
+    renderDepth += 1;
+    try {
     if (lazyImageObserver) lazyImageObserver.disconnect();
     resetDeferredRenderWork({ nextGeneration: true });
     prepareTimeGuideForTimelineRender();
@@ -2656,6 +3665,8 @@
     patchEntrySummaryById.clear();
     document.body.classList.toggle("chatTimeGuideEnabled", timeGuideEnabled === true);
     if (!model) {
+      currentTurnSummaryById = new Map();
+      resetRunningTurnIndicators();
       scheduleStickyUserOverlayUpdate();
       return;
     }
@@ -2679,40 +3690,1210 @@
     // Build navigation metadata between messages before rendering.
     messageNavMap = buildMessageNavMap(items);
     patchGroupNavMap = buildPatchGroupNavMap(items);
+    const turnTimelineEnabled = isTurnTimelineEnabled();
+    const turnTimelineLive = isTurnTimelineLive();
+    const turnSummaryById = turnTimelineEnabled ? buildTurnSummaryMap(model.turns) : new Map();
+    const turnRunKeyByItemIndex = turnTimelineEnabled ? buildTurnRunKeyByItemIndex(items, turnSummaryById) : new Map();
+    currentTurnSummaryById = turnSummaryById;
+    resetRunningTurnIndicators({ keepFallback: turnTimelineLive });
     const useStickyUserPrompt = stickyUserPromptEnabled === true;
-    let currentTurnSection = null;
+    const renderedEntries = [];
     for (const [itemIndex, item] of items.entries()) {
       if (!item || typeof item !== "object") continue;
       const rendered = renderItem(item, itemIndex);
       if (!rendered) continue;
-      if (!useStickyUserPrompt) {
+      const rawTurnId = getTimelineItemTurnId(item);
+      const turn = rawTurnId ? turnSummaryById.get(rawTurnId) : null;
+      const emptyActiveCandidate = isBasicModeEmptyActiveTurnCandidate(turn, rawTurnId);
+      const turnId = turn && !emptyActiveCandidate ? rawTurnId : "";
+      if (!turnId && rendered instanceof HTMLElement) delete rendered.dataset.turnId;
+      const turnRunKey = turnId ? turnRunKeyByItemIndex.get(itemIndex) || `run-${itemIndex}` : "";
+      renderedEntries.push({ item, itemIndex, rendered, turnId, turn, turnRunKey });
+    }
+    const liveRunningTurnId = turnTimelineLive ? normalizeTurnId(model && model.liveRunningTurnId) : "";
+    const liveRunningTurn = liveRunningTurnId ? turnSummaryById.get(liveRunningTurnId) : null;
+    const runningActivityState = buildRunningTurnActivityState(liveRunningTurn, liveRunningTurnId);
+    const runningAnchorEntry = findRunningTurnAnchorEntry(renderedEntries, liveRunningTurnId);
+    let runningAnchorInserted = false;
+    let currentTurnBlock = null;
+    let currentTurnBlockKey = "";
+    let currentTurnSection = null;
+    for (const [entryIndex, entry] of renderedEntries.entries()) {
+      const { item, rendered, turnId, turn, turnRunKey } = entry;
+      const turnBlockKey = turnId ? `${turnId}:${turnRunKey || "run"}` : "";
+      const nextTurnId = getNextRenderedTurnId(renderedEntries, entryIndex);
+      const isTurnStart = !!turnId && currentTurnBlockKey !== turnBlockKey;
+      if (!turnId) {
+        currentTurnBlock = null;
+        currentTurnBlockKey = "";
+        currentTurnSection = null;
         timelineEl.appendChild(rendered);
+        continue;
+      }
+
+      if (isTurnStart) {
+        currentTurnBlock = createTurnBlock(turn, turnId, turnRunKey);
+        currentTurnBlock.appendChild(renderTurnStartMarker(turn, turnId, turnRunKey));
+        timelineEl.appendChild(currentTurnBlock);
+        currentTurnBlockKey = turnBlockKey;
+        currentTurnSection = null;
+      }
+
+      const turnContainer = currentTurnBlock || timelineEl;
+      if (!useStickyUserPrompt) {
+        turnContainer.appendChild(rendered);
+        runningAnchorInserted = appendRunningTurnAnchorAfterEntry(
+          turnContainer,
+          entry,
+          runningAnchorEntry,
+          runningAnchorInserted,
+          runningActivityState,
+        );
+        runningAnchorInserted = appendIndependentRunningTurnAnchorIfNeeded(
+          turnContainer,
+          entry,
+          liveRunningTurnId,
+          runningAnchorEntry,
+          runningAnchorInserted,
+          nextTurnId,
+          runningActivityState,
+        );
+        if (appendTurnEndMarkerIfNeeded(turnContainer, turn, turnId, nextTurnId, turnRunKey)) {
+          currentTurnBlock = null;
+          currentTurnBlockKey = "";
+        }
         continue;
       }
 
       if (isStickyUserTurnStart(item)) {
         currentTurnSection = createChatTurnSection("user");
         currentTurnSection.appendChild(rendered);
-        timelineEl.appendChild(currentTurnSection);
+        turnContainer.appendChild(currentTurnSection);
+        const wasRunningAnchorInserted = runningAnchorInserted;
+        runningAnchorInserted = appendRunningTurnAnchorAfterEntry(
+          turnContainer,
+          entry,
+          runningAnchorEntry,
+          runningAnchorInserted,
+          runningActivityState,
+        );
+        if (!wasRunningAnchorInserted && runningAnchorInserted) currentTurnSection = null;
+        const wasIndependentAnchorInserted = runningAnchorInserted;
+        runningAnchorInserted = appendIndependentRunningTurnAnchorIfNeeded(
+          turnContainer,
+          entry,
+          liveRunningTurnId,
+          runningAnchorEntry,
+          runningAnchorInserted,
+          nextTurnId,
+          runningActivityState,
+        );
+        if (!wasIndependentAnchorInserted && runningAnchorInserted) currentTurnSection = null;
+        if (appendTurnEndMarkerIfNeeded(turnContainer, turn, turnId, nextTurnId, turnRunKey)) {
+          currentTurnSection = null;
+          currentTurnBlock = null;
+          currentTurnBlockKey = "";
+        }
         continue;
       }
 
       if (!currentTurnSection) {
         currentTurnSection = createChatTurnSection("prelude");
-        timelineEl.appendChild(currentTurnSection);
+        turnContainer.appendChild(currentTurnSection);
       }
       currentTurnSection.appendChild(rendered);
+      const wasRunningAnchorInserted = runningAnchorInserted;
+      runningAnchorInserted = appendRunningTurnAnchorAfterEntry(
+        turnContainer,
+        entry,
+        runningAnchorEntry,
+        runningAnchorInserted,
+        runningActivityState,
+      );
+      if (!wasRunningAnchorInserted && runningAnchorInserted) currentTurnSection = null;
+      const wasIndependentAnchorInserted = runningAnchorInserted;
+      runningAnchorInserted = appendIndependentRunningTurnAnchorIfNeeded(
+        turnContainer,
+        entry,
+        liveRunningTurnId,
+        runningAnchorEntry,
+        runningAnchorInserted,
+        nextTurnId,
+        runningActivityState,
+      );
+      if (!wasIndependentAnchorInserted && runningAnchorInserted) currentTurnSection = null;
+      if (appendTurnEndMarkerIfNeeded(turnContainer, turn, turnId, nextTurnId, turnRunKey)) {
+        currentTurnSection = null;
+        currentTurnBlock = null;
+        currentTurnBlockKey = "";
+      }
+    }
+    if (!runningAnchorInserted && turnTimelineLive && liveRunningTurnId && liveRunningTurn) {
+      runningAnchorInserted = appendMinimalRunningTurnBlock(liveRunningTurn, liveRunningTurnId, runningActivityState);
+    }
+    if (turnTimelineLive) {
+      syncRunningTurnFallbackChip(liveRunningTurn, liveRunningTurnId, runningActivityState);
+      syncRunningTurnElapsedTimer();
+    } else {
+      resetRunningTurnIndicators({ keepFallback: false });
     }
     refreshStickyUserRows();
     schedulePatchLayoutSync();
     updateTimeGuide({ afterPaint: true, rebuildItems: true });
     scheduleStickyUserOverlayUpdate();
     syncPageSearchRoleFilters({ reset: false });
-    if (isPageSearchOpen()) refreshPageSearchResults({ preserveIndex: true, reveal: false });
+    if (isPageSearchOpen()) refreshPageSearchResults(consumePendingPageSearchRefreshOptions());
     else {
       renderPageSearchResults();
       updatePageSearchStatus();
     }
+    } finally {
+      renderDepth = Math.max(0, renderDepth - 1);
+    }
+  }
+
+  function buildTurnSummaryMap(turns) {
+    const out = new Map();
+    if (!Array.isArray(turns)) return out;
+    for (const turn of turns) {
+      const id = normalizeTurnId(turn && turn.id);
+      if (!id) continue;
+      out.set(id, turn);
+    }
+    return out;
+  }
+
+  function isBasicModeEmptyActiveTurnCandidate(turn, fallbackTurnId) {
+    if (isTurnTimelineLive()) return false;
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    if (!turnId || !turn || typeof turn !== "object") return false;
+    const itemCount = typeof turn.itemCount === "number" && Number.isFinite(turn.itemCount) ? Math.max(0, Math.floor(turn.itemCount)) : 0;
+    return itemCount === 0;
+  }
+
+  function buildTurnRunKeyByItemIndex(items, turnSummaryById) {
+    const out = new Map();
+    if (!Array.isArray(items) || !(turnSummaryById instanceof Map)) return out;
+    let currentTurnId = "";
+    let currentRunKey = "";
+    for (const [itemIndex, item] of items.entries()) {
+      const rawTurnId = normalizeTurnId(item && item.turnId);
+      const turnId = rawTurnId && turnSummaryById.has(rawTurnId) ? rawTurnId : "";
+      if (!turnId) {
+        currentTurnId = "";
+        currentRunKey = "";
+        continue;
+      }
+      if (turnId !== currentTurnId) {
+        currentTurnId = turnId;
+        currentRunKey = buildStableTurnRunKey(turnId, item, itemIndex);
+      }
+      out.set(itemIndex, currentRunKey);
+    }
+    return out;
+  }
+
+  function buildStableTurnRunKey(turnId, item, itemIndex) {
+    const cardKey = buildTimelineCardKey(item, itemIndex);
+    const signature = `${normalizeTurnId(turnId)}\n${cardKey || `item:${itemIndex}`}`;
+    return `run-${stableStringHash(signature)}`;
+  }
+
+  function getTimelineItemTurnId(item) {
+    if (!isTurnTimelineEnabled()) return "";
+    return normalizeTurnId(item && item.turnId);
+  }
+
+  function normalizeTurnId(value) {
+    if (typeof value !== "string") return "";
+    return value.trim().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 256);
+  }
+
+  function normalizeTurnRunKey(value) {
+    if (typeof value !== "string") return "";
+    return value.trim().replace(/[\u0000-\u001f\u007f]/g, "").slice(0, 80);
+  }
+
+  function getTurnSummaryById(turnId) {
+    const normalizedTurnId = normalizeTurnId(turnId);
+    return normalizedTurnId ? currentTurnSummaryById.get(normalizedTurnId) || null : null;
+  }
+
+  function canCollapseTurn(turn, fallbackTurnId) {
+    if (!isTurnTimelineEnabled()) return false;
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    if (!turnId || isLiveRunningTurn(turn, turnId)) return false;
+    const status = normalizeTurnDisplayStatus((turn && turn.displayStatus) || (turn && turn.status));
+    return status === "completed";
+  }
+
+  function isTurnManuallyCollapsed(turnId) {
+    const normalizedTurnId = normalizeTurnId(turnId);
+    return !!(normalizedTurnId && collapsedTurnIds.has(normalizedTurnId));
+  }
+
+  function isTurnTemporarilyExpandedForSearch(turnId) {
+    return isTurnTimelineEnabled() && pageSearchTemporaryTurnExpansionActive && isTurnManuallyCollapsed(turnId);
+  }
+
+  function isTurnCollapsed(turn, fallbackTurnId) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    if (!canCollapseTurn(turn, turnId)) return false;
+    if (isTurnTemporarilyExpandedForSearch(turnId)) return false;
+    return isTurnManuallyCollapsed(turnId);
+  }
+
+  function setTurnCollapsed(turnId, collapsed, options = {}) {
+    if (!isTurnTimelineEnabled()) return false;
+    const normalizedTurnId = normalizeTurnId(turnId);
+    if (!normalizedTurnId) return false;
+    const turn = getTurnSummaryById(normalizedTurnId);
+    if (!canCollapseTurn(turn, normalizedTurnId)) return false;
+    const anchor = captureTurnToggleScrollAnchor(normalizedTurnId, options.runKey);
+    const changed = withPageSearchContentMutation(
+      () => {
+        const before = collapsedTurnIds.has(normalizedTurnId);
+        if (collapsed) collapsedTurnIds.add(normalizedTurnId);
+        else collapsedTurnIds.delete(normalizedTurnId);
+        return before !== collapsedTurnIds.has(normalizedTurnId);
+      },
+      { refreshOptions: buildActivePageSearchRefreshOptions({ preserveIndex: true, reveal: false }) },
+    );
+    if (!changed) return false;
+    const restore = () => restoreCapturedTurnToggleScrollAnchor(anchor);
+    renderOrRequestAfterCurrent(restore);
+    return true;
+  }
+
+  function captureTurnToggleScrollAnchor(turnId, runKey) {
+    const root = getScrollRoot();
+    if (!(root instanceof HTMLElement)) return null;
+    const normalizedTurnId = normalizeTurnId(turnId);
+    if (!normalizedTurnId || !(timelineEl instanceof HTMLElement)) return null;
+    const normalizedRunKey = normalizeTurnRunKey(runKey);
+    const runSelector = normalizedRunKey ? `[data-turn-run-key="${cssEscape(normalizedRunKey)}"]` : "";
+    const marker = timelineEl.querySelector(
+      `.turnStartMarker[data-turn-id="${cssEscape(normalizedTurnId)}"]${runSelector}, .turnCollapsedSummaryMarker[data-turn-id="${cssEscape(normalizedTurnId)}"]${runSelector}`,
+    );
+    if (!(marker instanceof HTMLElement)) return null;
+    const rootRect = root.getBoundingClientRect();
+    const markerRect = marker.getBoundingClientRect();
+    return {
+      turnId: normalizedTurnId,
+      runKey: normalizedRunKey,
+      offsetTop: markerRect.top - rootRect.top,
+    };
+  }
+
+  function restoreCapturedTurnToggleScrollAnchor(anchor) {
+    if (!anchor || !anchor.turnId) return;
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const root = getScrollRoot();
+        if (!(root instanceof HTMLElement) || !(timelineEl instanceof HTMLElement)) return;
+        const normalizedRunKey = normalizeTurnRunKey(anchor.runKey);
+        const runSelector = normalizedRunKey ? `[data-turn-run-key="${cssEscape(normalizedRunKey)}"]` : "";
+        const marker = timelineEl.querySelector(
+          `.turnStartMarker[data-turn-id="${cssEscape(anchor.turnId)}"]${runSelector}, .turnCollapsedSummaryMarker[data-turn-id="${cssEscape(anchor.turnId)}"]${runSelector}`,
+        );
+        if (!(marker instanceof HTMLElement)) return;
+        const rootRect = root.getBoundingClientRect();
+        const markerRect = marker.getBoundingClientRect();
+        const nextOffsetTop = markerRect.top - rootRect.top;
+        const delta = nextOffsetTop - anchor.offsetTop;
+        if (Number.isFinite(delta) && Math.abs(delta) > 0.5) {
+          root.scrollTop += delta;
+        }
+      });
+    });
+  }
+
+  function ensureTurnExpandedForReveal(turnId, options = {}) {
+    if (!isTurnTimelineEnabled()) return false;
+    const normalizedTurnId = normalizeTurnId(turnId);
+    if (!normalizedTurnId || !collapsedTurnIds.has(normalizedTurnId)) return false;
+    const turn = getTurnSummaryById(normalizedTurnId);
+    if (!canCollapseTurn(turn, normalizedTurnId)) {
+      collapsedTurnIds.delete(normalizedTurnId);
+      return false;
+    }
+    collapsedTurnIds.delete(normalizedTurnId);
+    if (options.render !== false) render();
+    return true;
+  }
+
+  function getTurnIdForItemIndex(itemIndex) {
+    const safeIndex = Number.isFinite(Number(itemIndex)) ? Math.max(0, Math.floor(Number(itemIndex))) : -1;
+    const items = model && Array.isArray(model.items) ? model.items : [];
+    return safeIndex >= 0 ? getTimelineItemTurnId(items[safeIndex]) : "";
+  }
+
+  function getTurnIdForMessageIndex(messageIndex) {
+    const safeMessageIndex = Number.isFinite(Number(messageIndex)) ? Math.max(0, Math.floor(Number(messageIndex))) : -1;
+    if (safeMessageIndex < 0 || !model || !Array.isArray(model.items)) return "";
+    for (const item of model.items) {
+      if (!item || typeof item !== "object") continue;
+      if (item.type === "message" && item.messageIndex === safeMessageIndex) return getTimelineItemTurnId(item);
+    }
+    return "";
+  }
+
+  function getTurnIdForPatchEntryId(entryId) {
+    const normalizedEntryId = typeof entryId === "string" ? entryId.trim() : "";
+    if (!normalizedEntryId || !model || !Array.isArray(model.items)) return "";
+    for (const item of model.items) {
+      if (!item || item.type !== "patchGroup" || !Array.isArray(item.entries)) continue;
+      const hasEntry = item.entries.some((entry) => entry && entry.id === normalizedEntryId);
+      if (hasEntry) return getTimelineItemTurnId(item);
+    }
+    return "";
+  }
+
+  function getTurnIdForPatchRevealTarget(target) {
+    if (!target || !model || !Array.isArray(model.items)) return "";
+    const entryTurnId = getTurnIdForPatchEntryId(typeof target.entryId === "string" ? target.entryId : "");
+    if (entryTurnId) return entryTurnId;
+    if (typeof target.messageIndex === "number") {
+      const turnId = getTurnIdForMessageIndex(target.messageIndex);
+      if (turnId) return turnId;
+    }
+    const wantedPaths = [target.filePath, target.movePath].filter((value) => typeof value === "string" && value.trim());
+    if (wantedPaths.length === 0) return "";
+    for (const item of model.items) {
+      if (!item || item.type !== "patchGroup" || !Array.isArray(item.entries)) continue;
+      const hasPath = item.entries.some((entry) => {
+        const paths = [entry && entry.path, entry && entry.movePath, entry && entry.displayPath, entry && entry.moveDisplayPath];
+        return paths.some((pathValue) =>
+          wantedPaths.some((wantedPath) => pathMatchesRevealTarget(pathValue || "", wantedPath)),
+        );
+      });
+      if (hasPath) return getTimelineItemTurnId(item);
+    }
+    return "";
+  }
+
+  function getTurnIdForElement(element) {
+    if (!(element instanceof Element)) return "";
+    const carrier = element.closest("[data-turn-id]");
+    return carrier instanceof HTMLElement ? normalizeTurnId(carrier.dataset.turnId) : "";
+  }
+
+  function resolveTurnIdForAnchor(anchor) {
+    if (!anchor || typeof anchor !== "object" || !model || !Array.isArray(model.items)) return "";
+    const directTurnId = normalizeTurnId(anchor.turnId);
+    if (isTimelineMarkerScrollAnchor(anchor) && directTurnId) return directTurnId;
+    const cardKey = typeof anchor.cardKey === "string" ? anchor.cardKey : "";
+    if (cardKey) {
+      for (const [itemIndex, item] of model.items.entries()) {
+        if (buildTimelineCardKey(item, itemIndex) === cardKey) return getTimelineItemTurnId(item);
+      }
+    }
+    return getTurnIdForItemIndex(anchor.itemIndex) || directTurnId;
+  }
+
+  function getNextRenderedTurnId(entries, entryIndex) {
+    if (!Array.isArray(entries)) return "";
+    for (let i = entryIndex + 1; i < entries.length; i += 1) {
+      const next = entries[i];
+      if (!next) continue;
+      return normalizeTurnId(next.turnId);
+    }
+    return "";
+  }
+
+  function appendTurnEndMarkerIfNeeded(container, turn, fallbackTurnId, nextTurnId, runKey) {
+    if (!(container instanceof HTMLElement)) return false;
+    const turnEndMarker = renderTurnEndMarkerIfNeeded(turn, fallbackTurnId, nextTurnId, runKey);
+    if (!(turnEndMarker instanceof HTMLElement)) return false;
+    container.appendChild(turnEndMarker);
+    return true;
+  }
+
+  function appendMinimalRunningTurnBlock(turn, fallbackTurnId, activityState) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    if (!turnId || !(timelineEl instanceof HTMLElement)) return false;
+    const minimalRunKey = "run-live";
+    const minimalBlock = createTurnBlock(turn, turnId, minimalRunKey);
+    minimalBlock.appendChild(renderTurnStartMarker(turn, turnId, minimalRunKey));
+    const anchorRow = renderRunningTurnAnchorRow(turn, turnId, "independent", activityState, minimalRunKey);
+    if (anchorRow instanceof HTMLElement) minimalBlock.appendChild(anchorRow);
+    timelineEl.appendChild(minimalBlock);
+    return true;
+  }
+
+  function createTurnBlock(turn, fallbackTurnId, runKey) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    const normalizedRunKey = normalizeTurnRunKey(runKey);
+    const status = normalizeTurnDisplayStatus(turn && (turn.displayStatus || turn.status));
+    const collapsible = canCollapseTurn(turn, turnId);
+    const collapsed = isTurnCollapsed(turn, turnId);
+    const block = el("div", {
+      className: `turnBlock turnBlock-${status}${collapsed ? " turnBlock-collapsed" : ""}`,
+    });
+    if (turnId) block.dataset.turnId = turnId;
+    if (normalizedRunKey) block.dataset.turnRunKey = normalizedRunKey;
+    if (turnId) block.id = buildTurnBodyRegionId(turnId, normalizedRunKey);
+    block.dataset.turnStatus = status;
+    if (collapsible) block.dataset.turnCollapsible = "true";
+    if (collapsed) block.dataset.turnCollapsed = "true";
+    return block;
+  }
+
+  function renderTurnStartMarker(turn, fallbackTurnId, runKey) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    const normalizedRunKey = normalizeTurnRunKey(runKey);
+    const status = normalizeTurnDisplayStatus(turn && (turn.displayStatus || turn.status));
+    const collapsed = isTurnCollapsed(turn, turnId);
+    const row = el("div", {
+      className: `turnMarker turnStartMarker turnMarker-${status}${collapsed ? " turnCollapsedSummaryMarker" : ""}`,
+    });
+    if (turnId) row.dataset.turnId = turnId;
+    if (normalizedRunKey) row.dataset.turnRunKey = normalizedRunKey;
+    row.dataset.turnBoundary = "start";
+
+    const line = el("div", { className: "turnMarkerLine" });
+    const main = el("div", { className: `turnMarkerMain${collapsed ? " turnCollapsedSummaryMain" : ""}` });
+    let collapsedCountsEl = null;
+    main.appendChild(renderTurnControlSlot(turn, turnId, "start"));
+    const title = el("span", { className: "turnMarkerTitle" });
+    title.textContent = buildTurnNumberLabel(turn, turnId);
+    main.appendChild(title);
+
+    const badge = el("span", { className: "turnMarkerBadge turnMarkerBadge-start" });
+    badge.textContent = getSafeUiText(i18n.turnStart, "Start");
+    main.appendChild(badge);
+
+    const startText = buildTurnStartTimestampText(turn);
+    if (startText) main.appendChild(el("span", { className: "turnMarkerMeta", textContent: startText }));
+    if (collapsed) {
+      const endBadge = el("span", { className: "turnMarkerBadge turnMarkerBadge-end" });
+      endBadge.textContent = getSafeUiText(i18n.turnEnd, "End");
+      main.appendChild(endBadge);
+
+      const endText = buildTurnEndTimestampText(turn);
+      if (endText) main.appendChild(el("span", { className: "turnMarkerMeta", textContent: endText }));
+
+      const durationText = buildTurnCompletedDurationText(turn);
+      if (durationText) main.appendChild(el("span", { className: "turnMarkerMeta", textContent: durationText }));
+
+      const counts = buildTurnEndCounts(turn);
+      if (counts.text) {
+        collapsedCountsEl = el("div", { className: "turnMarkerCounts turnCollapsedSummaryCounts", textContent: counts.text });
+      }
+    } else {
+      appendTurnCollapseStateBadge(main, turn, turnId);
+    }
+    line.appendChild(main);
+    if (collapsedCountsEl) line.appendChild(collapsedCountsEl);
+    row.appendChild(line);
+    configureTurnMarkerToggle(row, turn, turnId, normalizedRunKey);
+    return row;
+  }
+
+  function renderTurnEndMarkerIfNeeded(turn, fallbackTurnId, nextTurnId, runKey) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    if (!turnId || nextTurnId === turnId) return null;
+    return renderTurnEndMarker(turn, turnId, runKey);
+  }
+
+  function renderTurnEndMarker(turn, fallbackTurnId, runKey) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    const normalizedRunKey = normalizeTurnRunKey(runKey);
+    const status = getTurnEndStatus(turn);
+    if (!turnId || !status) return null;
+    const row = el("div", { className: `turnMarker turnEndMarker turnMarker-${status}` });
+    row.dataset.turnId = turnId;
+    if (normalizedRunKey) row.dataset.turnRunKey = normalizedRunKey;
+    row.dataset.turnBoundary = "end";
+
+    const line = el("div", { className: "turnMarkerLine" });
+    const main = el("div", { className: "turnMarkerMain" });
+    main.appendChild(renderTurnControlSlot(turn, turnId, "end"));
+    const title = el("span", { className: "turnMarkerTitle" });
+    title.textContent = buildTurnNumberLabel(turn, turnId);
+    main.appendChild(title);
+
+    const badge = el("span", { className: `turnMarkerBadge turnMarkerBadge-${status}` });
+    badge.textContent = getTurnStatusLabel(status);
+    main.appendChild(badge);
+
+    const meta = buildTurnEndText(turn);
+    if (meta) main.appendChild(el("span", { className: "turnMarkerMeta", textContent: meta }));
+    appendTurnCollapseStateBadge(main, turn, turnId);
+    line.appendChild(main);
+
+    const counts = buildTurnEndCounts(turn);
+    if (counts.text) {
+      const countsEl = el("div", { className: "turnMarkerCounts", textContent: counts.text });
+      line.appendChild(countsEl);
+    }
+    row.appendChild(line);
+    return row;
+  }
+
+  function renderTurnControlSlot(turn, fallbackTurnId, boundary) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    const slot = el("span", { className: "turnMarkerControlSlot" });
+    slot.setAttribute("aria-hidden", "true");
+    if (boundary === "start" && canCollapseTurn(turn, turnId)) {
+      slot.appendChild(renderTurnCollapseIcon(turn, turnId));
+      return slot;
+    }
+    slot.appendChild(el("span", { className: "turnMarkerControlSpacer" }));
+    return slot;
+  }
+
+  function renderTurnCollapseIcon(turn, fallbackTurnId) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    const visualCollapsed = isTurnCollapsed(turn, turnId);
+    const icon = el("span", { className: "turnCollapseIcon" });
+    icon.innerHTML = visualCollapsed ? NAV_RIGHT_ICON_SVG : NAV_DOWN_ICON_SVG;
+    icon.setAttribute("aria-hidden", "true");
+    return icon;
+  }
+
+  function configureTurnMarkerToggle(row, turn, fallbackTurnId, runKey) {
+    if (!(row instanceof HTMLElement)) return;
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    const normalizedRunKey = normalizeTurnRunKey(runKey);
+    if (!canCollapseTurn(turn, turnId)) return;
+    const label = buildTurnCollapseActionLabel(turn, turnId);
+    row.classList.add("turnMarker-toggle");
+    row.dataset.turnToggle = "true";
+    row.setAttribute("role", "button");
+    row.tabIndex = 0;
+    row.setAttribute("aria-label", label);
+    row.setAttribute("aria-expanded", isTurnCollapsed(turn, turnId) ? "false" : "true");
+    row.setAttribute("aria-controls", buildTurnBodyRegionId(turnId, normalizedRunKey));
+    row.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setTurnCollapsed(turnId, !isTurnManuallyCollapsed(turnId), { runKey: normalizedRunKey });
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") return;
+      event.preventDefault();
+      event.stopPropagation();
+      setTurnCollapsed(turnId, !isTurnManuallyCollapsed(turnId), { runKey: normalizedRunKey });
+    });
+  }
+
+  function buildTurnCollapseActionLabel(turn, fallbackTurnId) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    const manualCollapsed = isTurnManuallyCollapsed(turnId);
+    const sequenceNumber = getTurnSequenceNumber(turn);
+    const turnLabel = sequenceNumber > 0 ? String(sequenceNumber) : buildTurnNumberLabel(turn, turnId);
+    return manualCollapsed
+      ? formatTemplate(getSafeUiText(i18n.turnExpand, "Expand turn {0}"), turnLabel)
+      : formatTemplate(getSafeUiText(i18n.turnCollapse, "Collapse turn {0}"), turnLabel);
+  }
+
+  function buildTurnBodyRegionId(turnId, runKey) {
+    const normalizedTurnId = normalizeTurnId(turnId);
+    const normalizedRunKey = normalizeTurnRunKey(runKey);
+    const safeTurnId = normalizedTurnId.replace(/[^A-Za-z0-9_-]/g, "-") || "unknown";
+    const safeRunKey = normalizedRunKey.replace(/[^A-Za-z0-9_-]/g, "-");
+    return `turn-body-${safeTurnId}${safeRunKey ? `-${safeRunKey}` : ""}`;
+  }
+
+  function appendTurnCollapseStateBadge(container, turn, fallbackTurnId) {
+    if (!(container instanceof Element)) return;
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    if (!canCollapseTurn(turn, turnId) || !isTurnManuallyCollapsed(turnId)) return;
+    const temporary = isTurnTemporarilyExpandedForSearch(turnId);
+    const text = temporary
+      ? getSafeUiText(i18n.turnExpandedForSearch, "Expanded for search")
+      : getSafeUiText(i18n.turnCollapsed, "Collapsed");
+    container.appendChild(
+      el("span", {
+        className: `turnMarkerBadge turnCollapseStateBadge${temporary ? " turnCollapseStateBadge-search" : ""}`,
+        textContent: text,
+      }),
+    );
+  }
+
+  function getTurnEndStatus(turn) {
+    const displayStatus = normalizeTurnDisplayStatus(turn && turn.displayStatus);
+    if (displayStatus === "running") return "";
+    const status = normalizeTurnDisplayStatus((turn && turn.status) || displayStatus);
+    return isTerminalTurnEndStatus(status) ? status : "";
+  }
+
+  function isTerminalTurnEndStatus(status) {
+    return status === "completed" || status === "interrupted" || status === "rolledBack";
+  }
+
+  function normalizeTurnDisplayStatus(value) {
+    if (value === "running" || value === "completed" || value === "interrupted" || value === "rolledBack") return value;
+    if (value === "incomplete" || value === "unknown") return value;
+    return "unknown";
+  }
+
+  function getTurnStatusLabel(status) {
+    if (status === "running") return getSafeUiText(i18n.turnRunning, "Running");
+    if (status === "completed") return getSafeUiText(i18n.turnCompleted, "Completed");
+    if (status === "interrupted") return getSafeUiText(i18n.turnInterrupted, "Interrupted");
+    if (status === "rolledBack") return getSafeUiText(i18n.turnRolledBack, "Rolled back");
+    if (status === "incomplete") return getSafeUiText(i18n.turnIncomplete, "Incomplete");
+    return getSafeUiText(i18n.turnUnknown, "Unknown");
+  }
+
+  function getTurnSequenceNumber(turn) {
+    const value = turn && typeof turn.sequenceNumber === "number" && Number.isFinite(turn.sequenceNumber)
+      ? Math.floor(turn.sequenceNumber)
+      : 0;
+    return value > 0 ? value : 0;
+  }
+
+  function buildTurnNumberLabel(turn, fallbackTurnId) {
+    const sequenceNumber = getTurnSequenceNumber(turn);
+    if (sequenceNumber > 0) {
+      return formatTemplate(getSafeUiText(i18n.turnNumberLabel, "Turn {0}"), sequenceNumber);
+    }
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    return turnId
+      ? formatTemplate(getSafeUiText(i18n.turnNumberLabel || i18n.turnRangeLabel, "Turn {0}"), "?")
+      : getSafeUiText(i18n.turnLabel, "Turn");
+  }
+
+  function buildTurnStartTimestampText(turn) {
+    const startedAt = typeof (turn && turn.startedAtIso) === "string" ? turn.startedAtIso : "";
+    return startedAt ? formatIsoYmdHms(startedAt) : "";
+  }
+
+  function buildTurnEndText(turn) {
+    const timestamp = buildTurnEndTimestampText(turn);
+    const parts = [];
+    if (timestamp) parts.push(timestamp);
+    const durationText = buildTurnCompletedDurationText(turn);
+    if (durationText) parts.push(durationText);
+    return parts.join("  ");
+  }
+
+  function buildTurnEndTimestampText(turn) {
+    const completedAt = typeof (turn && turn.completedAtIso) === "string" ? turn.completedAtIso : "";
+    const updatedAt = typeof (turn && turn.updatedAtIso) === "string" ? turn.updatedAtIso : "";
+    const timestamp = completedAt || updatedAt;
+    return timestamp ? formatIsoYmdHms(timestamp) : "";
+  }
+
+  function buildTurnRunningLastActivityText(turn) {
+    const updatedAt = typeof (turn && turn.updatedAtIso) === "string" ? turn.updatedAtIso : "";
+    const startedAt = typeof (turn && turn.startedAtIso) === "string" ? turn.startedAtIso : "";
+    const timestamp = updatedAt || startedAt;
+    return timestamp
+      ? formatTemplate(getSafeUiText(i18n.turnLastActivity, "Last activity {0}"), formatIsoYmdHms(timestamp))
+      : "";
+  }
+
+  function buildTurnCompletedDurationText(turn) {
+    const status = normalizeTurnDisplayStatus(turn && turn.status);
+    if (status !== "completed") return "";
+    const durationText = buildDurationTextBetweenIso(turn && turn.startedAtIso, turn && turn.completedAtIso);
+    return durationText ? formatTemplate(getSafeUiText(i18n.turnDuration, "Duration {0}"), durationText) : "";
+  }
+
+  function buildTurnElapsedText(turn, nowMs = Date.now()) {
+    const durationText = buildDurationTextSinceIso(turn && turn.startedAtIso, nowMs);
+    return durationText ? formatTemplate(getSafeUiText(i18n.turnElapsed, "Elapsed {0}"), durationText) : "";
+  }
+
+  function buildDurationTextBetweenIso(startIso, endIso) {
+    const startMs = parseTurnTimestampMs(startIso);
+    const endMs = parseTurnTimestampMs(endIso);
+    if (startMs === null || endMs === null || endMs < startMs) return "";
+    return formatTurnDuration(endMs - startMs);
+  }
+
+  function buildDurationTextSinceIso(startIso, nowMs = Date.now()) {
+    const startMs = parseTurnTimestampMs(startIso);
+    const endMs = Number(nowMs);
+    if (startMs === null || !Number.isFinite(endMs)) return "";
+    if (endMs < startMs) return "";
+    return formatTurnDuration(endMs - startMs);
+  }
+
+  function parseTurnTimestampMs(value) {
+    if (typeof value !== "string" || !value.trim()) return null;
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) ? ms : null;
+  }
+
+  function formatTurnDuration(durationMs) {
+    if (!Number.isFinite(durationMs) || durationMs < 0) return "";
+    const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+    if (totalSeconds < 60) {
+      return formatTemplate(getSafeUiText(i18n.turnDurationSeconds, "{0}s"), totalSeconds);
+    }
+    const totalMinutes = Math.floor(totalSeconds / 60);
+    if (totalMinutes < 60) {
+      return formatTemplate(
+        getSafeUiText(i18n.turnDurationMinutesSeconds, "{0}m {1}s"),
+        totalMinutes,
+        totalSeconds % 60,
+      );
+    }
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = String(totalMinutes % 60).padStart(2, "0");
+    return formatTemplate(getSafeUiText(i18n.turnDurationHoursMinutes, "{0}h {1}m"), hours, minutes);
+  }
+
+  function isLiveRunningTurn(turn, fallbackTurnId) {
+    if (!isTurnTimelineLive()) return false;
+    const liveTurnId = normalizeTurnId(model && model.liveRunningTurnId);
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    return !!(
+      liveTurnId &&
+      turnId &&
+      liveTurnId === turnId &&
+      normalizeTurnDisplayStatus(turn && (turn.displayStatus || turn.status)) === "running"
+    );
+  }
+
+  function findRunningTurnAnchorEntry(entries, liveRunningTurnId) {
+    if (!isTurnTimelineLive()) return null;
+    const turnId = normalizeTurnId(liveRunningTurnId);
+    if (!turnId || !Array.isArray(entries)) return null;
+    let meaningfulCandidate = null;
+    let patchGroupCandidate = null;
+    for (const entry of entries) {
+      if (!entry || entry.turnId !== turnId) continue;
+      if (!isRunningTurnAnchorCandidate(entry)) continue;
+      if (isPatchGroupRunningTurnAnchorCandidate(entry)) {
+        patchGroupCandidate = entry;
+        continue;
+      }
+      meaningfulCandidate = entry;
+    }
+    return meaningfulCandidate || patchGroupCandidate;
+  }
+
+  function isRunningTurnAnchorCandidate(entry) {
+    const item = entry && entry.item;
+    if (!item || typeof item !== "object") return false;
+    if (item.type === "environment") return false;
+    return entry.rendered instanceof HTMLElement && entry.rendered.classList.contains("row");
+  }
+
+  function isPatchGroupRunningTurnAnchorCandidate(entry) {
+    const item = entry && entry.item;
+    if (item && item.type === "patchGroup") return true;
+    const rendered = entry && entry.rendered;
+    return rendered instanceof HTMLElement && rendered.dataset.itemType === "patchGroup";
+  }
+
+  function buildRunningTurnActivityState(turn, fallbackTurnId) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    if (!isTurnTimelineLive() || prefersReducedMotion() || !turnId || !isLiveRunningTurn(turn, turnId)) {
+      return { flash: false, signature: "", key: "" };
+    }
+    const key = buildRunningTurnActivityKey(turnId);
+    const signature = buildRunningTurnActivitySignature(turn, turnId);
+    const previous = runningTurnActivitySignatures.get(key) || "";
+    return {
+      flash: !!(previous && signature && previous !== signature),
+      signature,
+      key,
+    };
+  }
+
+  function buildRunningTurnActivityKey(turnId) {
+    const fsPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
+    return `${fsPath}\n${normalizeTurnId(turnId)}`;
+  }
+
+  function buildRunningTurnActivitySignature(turn, fallbackTurnId) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    const updatedAt = typeof (turn && turn.updatedAtIso) === "string" ? turn.updatedAtIso.trim() : "";
+    const lastItemIndex = normalizeActivityNumber(turn && turn.lastItemIndex);
+    const itemCount = normalizeActivityNumber(turn && turn.itemCount);
+    return [turnId, updatedAt, lastItemIndex, itemCount].join("|");
+  }
+
+  function normalizeActivityNumber(value) {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? String(Math.max(0, Math.floor(numeric))) : "";
+  }
+
+  function trimRunningTurnActivitySignatures() {
+    const maxEntries = 64;
+    while (runningTurnActivitySignatures.size > maxEntries) {
+      const firstKey = runningTurnActivitySignatures.keys().next().value;
+      if (!firstKey) break;
+      runningTurnActivitySignatures.delete(firstKey);
+    }
+  }
+
+  function renderRunningTurnChip(turn, fallbackTurnId, placement, activityState) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    if (!isTurnTimelineLive() || !isLiveRunningTurn(turn, turnId)) return null;
+    const chip = el("span", { className: `runningTurnChip runningTurnChip-${placement || "anchored"}` });
+    chip.dataset.turnId = turnId;
+    appendRunningTurnChipContent(chip, turn, turnId);
+    applyRunningTurnActivityState(chip, activityState);
+    applyRunningTurnChipTooltip(chip, turn, turnId, { includeJumpLabel: false });
+    return chip;
+  }
+
+  function appendRunningTurnChipContent(container, turn, fallbackTurnId) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    container.appendChild(el("span", { className: "runningTurnChipTitle", textContent: buildTurnNumberLabel(turn, turnId) }));
+    container.appendChild(
+      el("span", {
+        className: "runningTurnChipBadge",
+        textContent: getSafeUiText(i18n.turnRunning, "Running"),
+      }),
+    );
+    const elapsedText = buildTurnElapsedText(turn);
+    const startedAt = typeof (turn && turn.startedAtIso) === "string" ? turn.startedAtIso : "";
+    if (startedAt) {
+      const elapsed = el("span", {
+        className: "runningTurnChipElapsed runningTurnChipTime",
+        textContent: elapsedText,
+      });
+      elapsed.dataset.turnStartedAt = startedAt;
+      elapsed.dataset.pageSearchIgnore = "true";
+      elapsed.dataset.turnElapsedText = elapsedText || "";
+      elapsed.dataset.turnElapsedHidden = elapsedText ? "false" : "true";
+      if (!elapsedText) {
+        elapsed.hidden = true;
+        elapsed.setAttribute("aria-hidden", "true");
+      }
+      container.appendChild(elapsed);
+    }
+    const activityText = buildTurnRunningLastActivityText(turn);
+    if (activityText) {
+      container.appendChild(el("span", { className: "runningTurnChipLastActivity runningTurnChipTime", textContent: activityText }));
+    }
+  }
+
+  function buildRunningTurnChipTooltip(turn, fallbackTurnId, options = {}) {
+    return options.includeJumpLabel ? getSafeUiText(i18n.turnJumpToRunning, "Jump to running turn") : "";
+  }
+
+  function applyRunningTurnChipTooltip(element, turn, fallbackTurnId, options = {}) {
+    if (!(element instanceof HTMLElement)) return;
+    element.removeAttribute("title");
+    const tooltip = buildRunningTurnChipTooltip(turn, fallbackTurnId, options);
+    if (tooltip) element.setAttribute("aria-label", tooltip);
+    else element.removeAttribute("aria-label");
+  }
+
+  function applyRunningTurnActivityState(element, activityState) {
+    if (!(element instanceof HTMLElement)) return;
+    if (activityState && activityState.signature) element.dataset.activitySignature = activityState.signature;
+    else delete element.dataset.activitySignature;
+    restartRunningTurnActivityFlash(element, !!(activityState && activityState.flash));
+    if (activityState && activityState.key && activityState.signature) {
+      runningTurnActivitySignatures.set(activityState.key, activityState.signature);
+      trimRunningTurnActivitySignatures();
+    }
+  }
+
+  function restartRunningTurnActivityFlash(element, shouldFlash) {
+    if (!(element instanceof HTMLElement)) return;
+    const hadFlashClass = element.classList.contains("runningTurnChip-flash");
+    element.classList.remove("runningTurnChip-flash");
+    if (!shouldFlash) return;
+    if (hadFlashClass) void element.offsetWidth;
+    element.classList.add("runningTurnChip-flash");
+  }
+
+  function renderRunningTurnAnchorRow(turn, fallbackTurnId, placement, activityState, runKey) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    const normalizedRunKey = normalizeTurnRunKey(runKey);
+    const safePlacement = placement === "independent" ? "independent" : "anchored";
+    const chip = renderRunningTurnChip(turn, turnId, safePlacement, activityState);
+    if (!(chip instanceof HTMLElement)) return;
+    const row = el("div", { className: `runningTurnAnchorRow runningTurnAnchorRow-${safePlacement}` });
+    if (turnId) {
+      row.dataset.turnId = turnId;
+      row.dataset.runningTurnAnchor = "true";
+    }
+    if (normalizedRunKey) row.dataset.turnRunKey = normalizedRunKey;
+    row.appendChild(chip);
+    runningTurnAnchorEl = row;
+    return row;
+  }
+
+  function appendRunningTurnAnchorAfterEntry(parent, entry, runningAnchorEntry, inserted, activityState) {
+    if (!isTurnTimelineLive() || inserted || !runningAnchorEntry || entry !== runningAnchorEntry) return inserted;
+    if (!(parent instanceof HTMLElement)) return inserted;
+    const anchorRow = renderRunningTurnAnchorRow(entry.turn, entry.turnId, "anchored", activityState, entry.turnRunKey);
+    if (!(anchorRow instanceof HTMLElement)) return inserted;
+    parent.appendChild(anchorRow);
+    return true;
+  }
+
+  function appendIndependentRunningTurnAnchorIfNeeded(
+    parent,
+    entry,
+    liveRunningTurnId,
+    runningAnchorEntry,
+    inserted,
+    nextTurnId,
+    activityState,
+  ) {
+    if (!isTurnTimelineLive() || inserted || runningAnchorEntry || !(parent instanceof HTMLElement)) return inserted;
+    const turnId = normalizeTurnId(entry && entry.turnId);
+    if (!turnId || turnId !== normalizeTurnId(liveRunningTurnId) || nextTurnId === turnId) return inserted;
+    const anchorRow = renderRunningTurnAnchorRow(entry.turn, turnId, "independent", activityState, entry.turnRunKey);
+    if (!(anchorRow instanceof HTMLElement)) return inserted;
+    parent.appendChild(anchorRow);
+    return true;
+  }
+
+  function ensureRunningTurnFallbackChip() {
+    if (runningTurnFallbackEl instanceof HTMLButtonElement) return runningTurnFallbackEl;
+    const button = el("button", { type: "button", className: "runningTurnFallbackChip runningTurnChip" });
+    button.dataset.pageSearchIgnore = "true";
+    button.tabIndex = -1;
+    button.setAttribute("aria-hidden", "true");
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      scrollToRunningTurnAnchor();
+    });
+    document.body.appendChild(button);
+    runningTurnFallbackEl = button;
+    return button;
+  }
+
+  function syncRunningTurnFallbackChip(turn, fallbackTurnId, activityState) {
+    const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    if (!isTurnTimelineLive() || !turnId || !isLiveRunningTurn(turn, turnId) || !(runningTurnAnchorEl instanceof HTMLElement)) {
+      hideRunningTurnFallbackChip();
+      return;
+    }
+    const button = ensureRunningTurnFallbackChip();
+    button.textContent = "";
+    appendRunningTurnChipContent(button, turn, turnId);
+    applyRunningTurnActivityState(button, activityState);
+    button.dataset.turnId = turnId;
+    applyRunningTurnChipTooltip(button, turn, turnId, { includeJumpLabel: true });
+    scheduleRunningTurnFallbackUpdate();
+  }
+
+  function hideRunningTurnFallbackChip() {
+    if (!(runningTurnFallbackEl instanceof HTMLElement)) return;
+    runningTurnFallbackEl.classList.remove("runningTurnFallbackChip-visible");
+    runningTurnFallbackEl.tabIndex = -1;
+    runningTurnFallbackEl.setAttribute("aria-hidden", "true");
+  }
+
+  function resetRunningTurnIndicators(options = {}) {
+    runningTurnAnchorEl = null;
+    if (runningTurnFallbackFrame) {
+      cancelAnimationFrame(runningTurnFallbackFrame);
+      runningTurnFallbackFrame = 0;
+    }
+    if (options.keepFallback === true) {
+      hideRunningTurnFallbackChip();
+    } else if (runningTurnFallbackEl instanceof HTMLElement) {
+      runningTurnFallbackEl.remove();
+      runningTurnFallbackEl = null;
+    }
+    stopRunningTurnElapsedTimer();
+  }
+
+  function scheduleRunningTurnFallbackUpdate() {
+    if (!isTurnTimelineLive()) {
+      hideRunningTurnFallbackChip();
+      return;
+    }
+    if (runningTurnFallbackFrame) cancelAnimationFrame(runningTurnFallbackFrame);
+    runningTurnFallbackFrame = requestAnimationFrame(() => {
+      runningTurnFallbackFrame = 0;
+      updateRunningTurnFallbackVisibility();
+    });
+  }
+
+  function updateRunningTurnFallbackVisibility() {
+    if (!isTurnTimelineLive()) {
+      hideRunningTurnFallbackChip();
+      return;
+    }
+    const button = runningTurnFallbackEl;
+    const anchor = runningTurnAnchorEl;
+    if (!(button instanceof HTMLElement) || !(anchor instanceof HTMLElement) || !document.body.contains(anchor)) {
+      hideRunningTurnFallbackChip();
+      return;
+    }
+    const shouldShow =
+      !isElementVisibleInScrollViewport(anchor) &&
+      !isRunningTurnFallbackBlockedByPageSearch() &&
+      !isRunningTurnFallbackBlockedByModal();
+    button.classList.toggle("runningTurnFallbackChip-visible", shouldShow);
+    button.tabIndex = shouldShow ? 0 : -1;
+    button.setAttribute("aria-hidden", shouldShow ? "false" : "true");
+    if (shouldShow) updateRunningTurnElapsedTexts();
+  }
+
+  function isElementVisibleInScrollViewport(element) {
+    if (!(element instanceof HTMLElement) || element.offsetParent === null) return false;
+    const root = getScrollRoot();
+    const rootRect = root.getBoundingClientRect();
+    const rect = element.getBoundingClientRect();
+    return rect.bottom > rootRect.top && rect.top < rootRect.bottom && rect.right > rootRect.left && rect.left < rootRect.right;
+  }
+
+  function isRunningTurnFallbackBlockedByPageSearch() {
+    if (!isPageSearchOpen() || !(pageSearchBarEl instanceof HTMLElement)) return false;
+    const rect = pageSearchBarEl.getBoundingClientRect();
+    return rect.left <= 180 && rect.bottom >= window.innerHeight - 88;
+  }
+
+  function isRunningTurnFallbackBlockedByModal() {
+    return !!(imagePreview || isImagePreviewOpen());
+  }
+
+  function syncRunningTurnElapsedTimer() {
+    if (!isTurnTimelineLive()) {
+      stopRunningTurnElapsedTimer();
+      return;
+    }
+    updateRunningTurnElapsedTexts();
+    if (document.visibilityState === "hidden" || !hasRunningTurnElapsedSource()) {
+      stopRunningTurnElapsedTimer();
+      return;
+    }
+    const intervalMs = 1000;
+    if (runningTurnElapsedTimer && runningTurnElapsedTimerIntervalMs === intervalMs) return;
+    stopRunningTurnElapsedTimer();
+    runningTurnElapsedTimer = window.setInterval(() => {
+      updateRunningTurnElapsedTexts();
+      if (document.visibilityState === "hidden" || !hasRunningTurnElapsedSource()) {
+        stopRunningTurnElapsedTimer();
+      }
+    }, intervalMs);
+    runningTurnElapsedTimerIntervalMs = intervalMs;
+  }
+
+  function stopRunningTurnElapsedTimer() {
+    if (!runningTurnElapsedTimer) return;
+    window.clearInterval(runningTurnElapsedTimer);
+    runningTurnElapsedTimer = 0;
+    runningTurnElapsedTimerIntervalMs = 0;
+  }
+
+  function hasRunningTurnElapsedSource() {
+    if (!isTurnTimelineLive()) return false;
+    const liveTurnId = normalizeTurnId(model && model.liveRunningTurnId);
+    const turn = getTurnSummaryById(liveTurnId);
+    return !!(turn && typeof turn.startedAtIso === "string" && turn.startedAtIso.trim());
+  }
+
+  function updateRunningTurnElapsedTexts() {
+    if (document.visibilityState === "hidden") return;
+    const nowMs = Date.now();
+    for (const target of getRunningTurnElapsedTargets()) {
+      const startedAt = target.dataset.turnStartedAt || "";
+      const durationText = buildDurationTextSinceIso(startedAt, nowMs);
+      const nextText = durationText ? formatTemplate(getSafeUiText(i18n.turnElapsed, "Elapsed {0}"), durationText) : "";
+      if (!durationText) {
+        if (target.textContent !== "") target.textContent = "";
+        if (!target.hidden) target.hidden = true;
+        target.setAttribute("aria-hidden", "true");
+        target.dataset.turnElapsedText = "";
+        target.dataset.turnElapsedHidden = "true";
+        continue;
+      }
+      if (target.hidden) target.hidden = false;
+      target.removeAttribute("aria-hidden");
+      if (target.textContent !== nextText) target.textContent = nextText;
+      target.dataset.turnElapsedText = nextText;
+      target.dataset.turnElapsedHidden = "false";
+    }
+  }
+
+  function getRunningTurnElapsedTargets() {
+    if (!isTurnTimelineLive()) return [];
+    const liveTurnId = normalizeTurnId(model && model.liveRunningTurnId);
+    if (!liveTurnId || !(document.body instanceof HTMLElement)) return [];
+    const roots = [];
+    if (timelineEl instanceof HTMLElement) roots.push(timelineEl);
+    if (
+      runningTurnFallbackEl instanceof HTMLElement &&
+      runningTurnFallbackEl.classList.contains("runningTurnFallbackChip-visible")
+    ) {
+      roots.push(runningTurnFallbackEl);
+    }
+    const seen = new Set();
+    const targets = [];
+    for (const root of roots) {
+      for (const element of Array.from(root.querySelectorAll(".runningTurnChipElapsed[data-turn-started-at]"))) {
+        if (!(element instanceof HTMLElement) || seen.has(element) || !document.body.contains(element)) continue;
+        const chip = element.closest(".runningTurnChip[data-turn-id]");
+        if (!(chip instanceof HTMLElement) || normalizeTurnId(chip.dataset.turnId) !== liveTurnId) continue;
+        if (chip.classList.contains("runningTurnFallbackChip") && !chip.classList.contains("runningTurnFallbackChip-visible")) {
+          continue;
+        }
+        seen.add(element);
+        targets.push(element);
+      }
+    }
+    return targets;
+  }
+
+  function scrollToRunningTurnAnchor() {
+    const anchor = runningTurnAnchorEl instanceof HTMLElement && document.body.contains(runningTurnAnchorEl)
+      ? runningTurnAnchorEl
+      : findRunningTurnFallbackScrollTarget();
+    if (!(anchor instanceof HTMLElement)) return;
+    scrollElementIntoRootView(anchor, { behavior: "smooth", block: "center" });
+  }
+
+  function findRunningTurnFallbackScrollTarget() {
+    const turnId = normalizeTurnId(model && model.liveRunningTurnId);
+    if (!turnId || !(timelineEl instanceof HTMLElement)) return null;
+    const directAnchor = timelineEl.querySelector(`[data-running-turn-anchor="true"][data-turn-id="${cssEscape(turnId)}"]`);
+    if (directAnchor instanceof HTMLElement) return directAnchor;
+    const userCard = timelineEl.querySelector(`.row.user[data-turn-id="${cssEscape(turnId)}"]`);
+    if (userCard instanceof HTMLElement) return userCard;
+    const turnCards = getRenderedTimelineRows().filter((card) => card instanceof HTMLElement && card.dataset.turnId === turnId);
+    return getLatestMeaningfulTimelineCard(turnCards);
+  }
+
+  function buildTurnEndCounts(turn) {
+    if (!turn || typeof turn !== "object") return { text: "", tooltip: "" };
+    const itemCount = normalizeCount(turn.itemCount);
+    const toolCount = normalizeCount(turn.toolCount);
+    const patchEntryCount = normalizeCount(turn.patchEntryCount);
+    const usageRecordCount = normalizeCount(turn.usageRecordCount);
+    const inputTokens = normalizeCount(turn.inputTokens);
+    const outputTokens = normalizeCount(turn.outputTokens);
+    const totalTokens = normalizeCount(turn.totalTokens);
+    const parts = [];
+    let hasTokenParts = false;
+    if (itemCount > 0) parts.push(formatTemplate(getSafeUiText(i18n.turnItemCount, "{0} items"), itemCount));
+    if (toolCount > 0) parts.push(formatTemplate(getSafeUiText(i18n.turnToolCount, "{0} tools"), toolCount));
+    if (patchEntryCount > 0) {
+      parts.push(formatTemplate(getSafeUiText(i18n.turnPatchCount, "{0} changes"), patchEntryCount));
+    }
+    if (inputTokens > 0) {
+      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenInput, "Input {0}"), getUsageNumber(inputTokens)));
+      hasTokenParts = true;
+    }
+    if (outputTokens > 0) {
+      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenOutput, "Output {0}"), getUsageNumber(outputTokens)));
+      hasTokenParts = true;
+    }
+    const totalAddsInformation = totalTokens > 0 && inputTokens + outputTokens !== totalTokens;
+    if (totalAddsInformation) {
+      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenTotal, "Total {0}"), getUsageNumber(totalTokens)));
+      hasTokenParts = true;
+    }
+    if (!hasTokenParts && usageRecordCount > 0) {
+      parts.push(formatTemplate(getSafeUiText(i18n.turnUsageRecords, "Usage records {0}"), usageRecordCount));
+    }
+    return {
+      text: parts.join(" / "),
+      tooltip: "",
+    };
+  }
+
+  function normalizeCount(value) {
+    return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
   }
 
   function renderAnnotationHeader(annotation) {
@@ -2905,8 +5086,8 @@
   }
 
   function getStickyUserThreshold() {
-    if (toolbarEl instanceof HTMLElement) return toolbarEl.getBoundingClientRect().bottom;
-    return 0;
+    const toolbarBottom = toolbarEl instanceof HTMLElement ? toolbarEl.getBoundingClientRect().bottom : 0;
+    return toolbarBottom;
   }
 
   function updateStickyUserOverlay() {
@@ -2921,25 +5102,20 @@
 
     const threshold = getStickyUserThreshold();
     let active = null;
-    let crossingVisibleUser = false;
     for (const row of stickyUserRows) {
       if (!row || !(row.element instanceof HTMLElement) || row.element.offsetParent === null) continue;
       const rect = row.element.getBoundingClientRect();
-      if (rect.bottom <= threshold) {
+      if (rect.top <= threshold + 1) {
         active = row;
         continue;
-      }
-      if (rect.top <= threshold && rect.bottom > threshold) {
-        crossingVisibleUser = true;
       }
       break;
     }
 
-    if (!active || crossingVisibleUser) {
+    if (!active) {
       hideStickyUserOverlay();
       return;
     }
-
     const overlay = ensureStickyUserOverlay();
     if (activeStickyUserKey !== active.stickyKey || overlay.childElementCount === 0) {
       overlay.textContent = "";
@@ -3075,6 +5251,9 @@
       rendered.dataset.cardKey = cardKey;
       rendered.dataset.itemIndex = String(itemIndex);
       rendered.dataset.itemType = itemType;
+      const turnId = getTimelineItemTurnId(item);
+      if (turnId) rendered.dataset.turnId = turnId;
+      else delete rendered.dataset.turnId;
     }
     return rendered;
   }
@@ -3499,7 +5678,7 @@
     }
 
     if (attachments.length > 0) {
-      body.appendChild(renderMessageAttachments(attachments));
+      body.appendChild(renderMessageAttachments(attachments, item));
     }
 
     const content = el("div", { className: role === "assistant" ? "messageBodyContent markdown" : "messageBodyContent" });
@@ -3687,9 +5866,13 @@
       e.preventDefault();
       e.stopPropagation();
       if (!key) return;
-      if (expandedUsageCardKeys.has(key)) expandedUsageCardKeys.delete(key);
-      else expandedUsageCardKeys.add(key);
-      render();
+      const changed = withPageSearchContentMutation(() => {
+        const before = expandedUsageCardKeys.has(key);
+        if (before) expandedUsageCardKeys.delete(key);
+        else expandedUsageCardKeys.add(key);
+        return before !== expandedUsageCardKeys.has(key);
+      });
+      if (changed) render();
     });
 
     const summary = el("div", { className: "usageSummary" });
@@ -3950,7 +6133,7 @@
     return getAttachmentKindLabel(attachment);
   }
 
-  function renderMessageAttachments(attachments) {
+  function renderMessageAttachments(attachments, messageItem) {
     const wrap = el("div", { className: "messageAttachments" });
     const previewImages = attachments.filter((attachment) => attachment.type === "image" && canPreviewImage(attachment));
     let pendingImages = [];
@@ -3959,24 +6142,27 @@
       wrap.appendChild(renderMessageImages(pendingImages, previewImages));
       pendingImages = [];
     };
-    for (const attachment of attachments) {
+    for (let attachmentIndex = 0; attachmentIndex < attachments.length; attachmentIndex += 1) {
+      const attachment = attachments[attachmentIndex];
       if (attachment.type === "image") {
         pendingImages.push(attachment);
         continue;
       }
       flushImages();
-      const card = renderAttachmentCard(attachment);
+      const card = renderAttachmentCard(attachment, messageItem, attachmentIndex);
       if (card) wrap.appendChild(card);
     }
     flushImages();
     return wrap;
   }
 
-  function renderAttachmentCard(attachment) {
+  function renderAttachmentCard(attachment, messageItem, attachmentIndex) {
     if (!attachment || typeof attachment !== "object") return null;
     if (attachment.type === "document") return renderDocumentAttachment(attachment);
     if (attachment.type === "fileReference") return renderFileReferenceAttachment(attachment);
     if (attachment.type === "selectionReference") return renderSelectionReferenceAttachment(attachment);
+    if (attachment.type === "notification") return renderTaskNotificationAttachment(attachment, messageItem, attachmentIndex);
+    if (attachment.type === "invoke") return renderInvokeAttachment(attachment, messageItem, attachmentIndex);
     return null;
   }
 
@@ -4085,6 +6271,253 @@
     return card;
   }
 
+  function renderTaskNotificationAttachment(attachment, messageItem, attachmentIndex) {
+    const statusLabel = getTaskNotificationStatusLabel(attachment && attachment.status);
+    const tooltip = [getSafeUiText(i18n.taskNotificationTitle, "Task notification"), statusLabel, attachment.summary]
+      .filter(Boolean)
+      .join("\n");
+    const card = el("div", { className: "messageAttachmentCard messageAttachmentCard-notification" });
+    card.title = tooltip;
+    appendAttachmentBadge(card, statusLabel || getSafeUiText(i18n.taskNotificationTitle, "Task notification"), tooltip);
+
+    const body = el("div", { className: "messageAttachmentBody" });
+    const title = el("div", { className: "messageAttachmentTitle" });
+    title.textContent = attachment.summary || getSafeUiText(i18n.taskNotificationTitle, "Task notification");
+    title.title = tooltip;
+    body.appendChild(title);
+
+    const usageText = formatTaskNotificationUsage(attachment && attachment.usage);
+    if (usageText) {
+      const meta = el("div", { className: "messageAttachmentMeta" });
+      meta.textContent = `${getSafeUiText(i18n.taskNotificationUsage, "Usage")}: ${usageText}`;
+      body.appendChild(meta);
+    }
+
+    if (attachment.result) {
+      body.appendChild(
+        renderAttachmentDetails(
+          getSafeUiText(i18n.taskNotificationResult, "Result"),
+          attachment.result,
+          "messageAttachmentStructuredPreview",
+          buildAttachmentDetailKey(attachment, "result", messageItem, attachmentIndex),
+        ),
+      );
+    }
+    card.appendChild(body);
+    return card;
+  }
+
+  function renderInvokeAttachment(attachment, messageItem, attachmentIndex) {
+    const titleText = attachment.toolName || getSafeUiText(i18n.invokeTitle, "Tool invocation");
+    const tooltip = [getSafeUiText(i18n.invokeTitle, "Tool invocation"), titleText, attachment.description]
+      .filter(Boolean)
+      .join("\n");
+    const card = el("div", { className: "messageAttachmentCard messageAttachmentCard-invoke" });
+    card.title = tooltip;
+    appendAttachmentBadge(card, getSafeUiText(i18n.invokeTitle, "Tool invocation"), tooltip);
+
+    const body = el("div", { className: "messageAttachmentBody" });
+    const title = el("div", { className: "messageAttachmentTitle mono" });
+    title.textContent = titleText;
+    title.title = tooltip;
+    body.appendChild(title);
+
+    if (attachment.description) {
+      const description = el("div", { className: "messageAttachmentMeta" });
+      description.textContent = `${getSafeUiText(i18n.invokeDescription, "Description")}: ${attachment.description}`;
+      body.appendChild(description);
+    }
+
+    if (Array.isArray(attachment.parameters) && attachment.parameters.length > 0) {
+      const details = renderAttachmentDetails(
+        getSafeUiText(i18n.invokeParameter, "Parameter"),
+        "",
+        "messageAttachmentStructuredPreview",
+        buildAttachmentDetailKey(attachment, "parameters", messageItem, attachmentIndex),
+      );
+      const content = details.querySelector(".messageAttachmentStructuredPreview");
+      if (content instanceof HTMLElement) {
+        content.textContent = "";
+        for (const parameter of attachment.parameters) {
+          if (!parameter || typeof parameter !== "object") continue;
+          const item = el("div", { className: "messageAttachmentParameter" });
+          const name = typeof parameter.name === "string" ? parameter.name.trim() : "";
+          const value = typeof parameter.value === "string" ? parameter.value : "";
+          item.appendChild(el("div", { className: "messageAttachmentParameterName mono", textContent: name || "-" }));
+          const valueEl = el("pre", { className: "messageAttachmentParameterValue" });
+          valueEl.textContent = value;
+          item.appendChild(valueEl);
+          content.appendChild(item);
+        }
+      }
+      body.appendChild(details);
+    }
+
+    card.appendChild(body);
+    return card;
+  }
+
+  function buildAttachmentDetailKey(attachment, detailKind, messageItem, attachmentIndex) {
+    if (!attachment || typeof attachment !== "object") return "";
+    const kind = typeof detailKind === "string" ? detailKind.trim() : "";
+    if (!kind) return "";
+    const messageKey =
+      messageItem && typeof messageItem.messageIndex === "number" && Number.isFinite(messageItem.messageIndex)
+        ? `m:${Math.max(0, Math.floor(messageItem.messageIndex))}`
+        : `item:${buildAttachmentDetailMessageFallbackKey(messageItem)}`;
+    const identity = buildAttachmentDetailIdentity(attachment, kind);
+    const ordinal = normalizeAttachmentDetailOrdinal(attachmentIndex);
+    const ordinalKey = ordinal >= 0 ? `:${ordinal}` : "";
+    return identity ? `attachment:${messageKey}:${kind}${ordinalKey}:${identity}` : "";
+  }
+
+  function normalizeAttachmentDetailOrdinal(value) {
+    const ordinal = Number(value);
+    return Number.isFinite(ordinal) ? Math.max(0, Math.floor(ordinal)) : -1;
+  }
+
+  function buildAttachmentDetailMessageFallbackKey(messageItem) {
+    if (!messageItem || typeof messageItem !== "object") return "unknown";
+    return stableStringHash(
+      [
+        messageItem.role || "",
+        messageItem.timestampIso || "",
+        messageItem.bookmarkKey || "",
+        stableStringHash(messageItem.text || ""),
+      ].join("\n"),
+    );
+  }
+
+  function buildAttachmentDetailIdentity(attachment, detailKind) {
+    if (attachment.type === "notification") {
+      const signature = [
+        "notification",
+        attachment.source || "",
+        attachment.status || "",
+        attachment.summary || "",
+        stableStringHash(attachment.result || ""),
+        stableStringHash(JSON.stringify(attachment.usage || {})),
+      ].join("\n");
+      return stableStringHash(signature);
+    }
+    if (attachment.type === "invoke") {
+      const parameterSignature = Array.isArray(attachment.parameters)
+        ? attachment.parameters
+            .map((parameter) => `${parameter && parameter.name ? parameter.name : ""}\u0000${parameter && parameter.value ? parameter.value : ""}`)
+            .join("\u0001")
+        : "";
+      const signature = [
+        "invoke",
+        attachment.source || "",
+        attachment.toolName || "",
+        attachment.description || "",
+        detailKind,
+        stableStringHash(parameterSignature),
+      ].join("\n");
+      return stableStringHash(signature);
+    }
+    return "";
+  }
+
+  function normalizeAttachmentDetailKey(value) {
+    return typeof value === "string" ? value.trim().slice(0, 512) : "";
+  }
+
+  function isAttachmentDetailOpen(detailKey) {
+    const key = normalizeAttachmentDetailKey(detailKey);
+    if (!key) return false;
+    return expandedAttachmentDetails.has(key) || pageSearchTemporaryAttachmentDetailKeys.has(key);
+  }
+
+  function renderAttachmentDetails(summaryText, contentText, contentClassName, detailKey) {
+    const details = el("details", { className: "messageAttachmentDetails" });
+    const normalizedKey = normalizeAttachmentDetailKey(detailKey);
+    if (normalizedKey) details.dataset.attachmentDetailKey = normalizedKey;
+    details.open = isAttachmentDetailOpen(normalizedKey);
+    const summary = el("summary", { className: "messageAttachmentDetailsSummary" });
+    const label = el("span", { className: "messageAttachmentDetailsLabel" });
+    label.textContent = summaryText;
+    summary.appendChild(label);
+    details.appendChild(summary);
+    const content = el("pre", { className: contentClassName || "messageAttachmentStructuredPreview" });
+    content.textContent = contentText;
+    details.appendChild(content);
+    attachControlledDetailsToggle(details, summary, normalizedKey);
+    return details;
+  }
+
+  function attachControlledDetailsToggle(details, summary, detailKey) {
+    if (!(details instanceof HTMLDetailsElement) || !(summary instanceof HTMLElement)) return;
+    const normalizedKey = normalizeAttachmentDetailKey(detailKey);
+    const toggle = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const applyToggle = () => {
+        const nextOpen = !details.open;
+        details.open = nextOpen;
+        if (!normalizedKey) return true;
+        const beforePersistent = expandedAttachmentDetails.has(normalizedKey);
+        const beforeTemporary = pageSearchTemporaryAttachmentDetailKeys.has(normalizedKey);
+        const suppressTemporary = isPageSearchOpen();
+        if (nextOpen) {
+          pageSearchSuppressedTemporaryAttachmentDetailKeys.delete(normalizedKey);
+          expandedAttachmentDetails.add(normalizedKey);
+        } else {
+          expandedAttachmentDetails.delete(normalizedKey);
+          pageSearchTemporaryAttachmentDetailKeys.delete(normalizedKey);
+          if (suppressTemporary) pageSearchSuppressedTemporaryAttachmentDetailKeys.add(normalizedKey);
+          if (pageSearchTemporaryAttachmentDetailKeys.size === 0) {
+            pageSearchTemporaryAttachmentExpansionActive = false;
+          }
+        }
+        return beforePersistent !== expandedAttachmentDetails.has(normalizedKey)
+          || beforeTemporary !== pageSearchTemporaryAttachmentDetailKeys.has(normalizedKey);
+      };
+      if (isPageSearchOpen()) {
+        withPageSearchContentMutation(applyToggle, {
+          refreshImmediately: true,
+          refreshOptions: buildActivePageSearchRefreshOptions({ preserveIndex: true, reveal: false }),
+        });
+      } else {
+        applyToggle();
+      }
+    };
+    summary.addEventListener("click", toggle);
+  }
+
+  function getTaskNotificationStatusLabel(status) {
+    if (status === "completed") return getSafeUiText(i18n.taskNotificationStatusCompleted, "completed");
+    if (status === "failed") return getSafeUiText(i18n.taskNotificationStatusFailed, "failed");
+    if (status === "running") return getSafeUiText(i18n.taskNotificationStatusRunning, "running");
+    if (status === "cancelled") return getSafeUiText(i18n.taskNotificationStatusCancelled, "cancelled");
+    return getSafeUiText(i18n.taskNotificationStatusUnknown, "unknown");
+  }
+
+  function formatTaskNotificationUsage(usage) {
+    if (!usage || typeof usage !== "object") return "";
+    const parts = [];
+    if (typeof usage.subagentTokens === "number" && Number.isFinite(usage.subagentTokens)) {
+      parts.push(
+        formatTemplate(
+          getSafeUiText(i18n.taskNotificationUsageTokens, "{0} tokens"),
+          getUsageNumber(usage.subagentTokens),
+        ),
+      );
+    }
+    if (typeof usage.toolUses === "number" && Number.isFinite(usage.toolUses)) {
+      parts.push(
+        formatTemplate(
+          getSafeUiText(i18n.taskNotificationUsageToolUses, "{0} tool uses"),
+          getUsageNumber(usage.toolUses),
+        ),
+      );
+    }
+    if (typeof usage.durationMs === "number" && Number.isFinite(usage.durationMs)) {
+      parts.push(formatDurationMs(usage.durationMs));
+    }
+    return parts.filter(Boolean).join(" / ");
+  }
+
   function appendAttachmentBadge(card, label, tooltip) {
     const badge = el("div", { className: "messageAttachmentBadge" });
     if (tooltip) badge.title = tooltip;
@@ -4123,6 +6556,8 @@
     if (label) return label;
     if (attachment?.type === "document") return i18n.attachmentDocument || "Document";
     if (attachment?.type === "selectionReference") return i18n.attachmentSelection || "Selection";
+    if (attachment?.type === "notification") return i18n.taskNotificationTitle || "Task notification";
+    if (attachment?.type === "invoke") return attachment.toolName || i18n.invokeTitle || "Tool invocation";
     return i18n.attachmentFileReference || "File reference";
   }
 
@@ -4146,6 +6581,8 @@
       return i18n.attachmentDocument || "Document";
     }
     if (attachment?.type === "selectionReference") return i18n.attachmentSelection || "Selection";
+    if (attachment?.type === "notification") return getTaskNotificationStatusLabel(attachment.status);
+    if (attachment?.type === "invoke") return i18n.invokeTitle || "Tool invocation";
     if (attachment?.source === "claudeIdeOpenedFile") return i18n.attachmentOpenedFile || "Opened file";
     const kind = getFileKind(attachment);
     if (kind === "pdf") return i18n.attachmentPdf || "PDF";
@@ -4394,14 +6831,22 @@
     const entry = msg.entry && typeof msg.entry === "object" ? msg.entry : null;
     if (!entryId || !entry) return;
 
-    patchEntryDetailsLoading.delete(entryId);
-    patchEntryDetailsFailed.delete(entryId);
-    patchEntryDetailsById.set(entryId, {
-      ...entry,
-      id: typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : entryId,
-      detailsOmitted: false,
-    });
-    refreshPatchEntryDetails(entryId);
+    withPageSearchContentMutation(
+      () => {
+        const wasPending = patchEntryDetailsLoading.has(entryId) || patchEntryDetailsFailed.has(entryId);
+        const hadLoaded = patchEntryDetailsById.has(entryId);
+        patchEntryDetailsLoading.delete(entryId);
+        patchEntryDetailsFailed.delete(entryId);
+        patchEntryDetailsById.set(entryId, {
+          ...entry,
+          id: typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : entryId,
+          detailsOmitted: false,
+        });
+        refreshPatchEntryDetails(entryId);
+        return wasPending || !hadLoaded;
+      },
+      { refreshImmediately: true },
+    );
   }
 
   function handlePatchEntryDetailsFailedMessage(msg) {
@@ -4409,9 +6854,21 @@
     const entryId = getPatchEntryId({ id: msg.entryId });
     if (!entryId) return;
 
-    patchEntryDetailsLoading.delete(entryId);
-    patchEntryDetailsFailed.set(entryId, getSafeUiText(msg.message, i18n.patchDetailsLoadFailed || "Failed to load diff details."));
-    refreshPatchEntryDetails(entryId);
+    withPageSearchContentMutation(
+      () => {
+        const failedMessage = getSafeUiText(msg.message, i18n.patchDetailsLoadFailed || "Failed to load diff details.");
+        const wasLoading = patchEntryDetailsLoading.has(entryId);
+        const hadSameFailure = patchEntryDetailsFailed.get(entryId) === failedMessage;
+        // True no-op re-delivery of an identical failure: don't re-render the error body
+        // (which would destroy existing page-search marks) and don't advance the revision.
+        if (!wasLoading && hadSameFailure) return false;
+        patchEntryDetailsLoading.delete(entryId);
+        patchEntryDetailsFailed.set(entryId, failedMessage);
+        refreshPatchEntryDetails(entryId);
+        return true;
+      },
+      { refreshImmediately: true },
+    );
   }
 
   function isCurrentModelMessage(msg) {
@@ -4515,6 +6972,7 @@
     document.body.classList.add("imagePreviewOpen");
     renderImagePreviewThumbnails(preview);
     applyImagePreviewCurrentImage();
+    scheduleRunningTurnFallbackUpdate();
     preview.closeButton.focus();
   }
 
@@ -4525,6 +6983,7 @@
     preview.thumbnailStrip.replaceChildren();
     document.body.classList.remove("imagePreviewOpen");
     imagePreview = null;
+    scheduleRunningTurnFallbackUpdate();
   }
 
   function isImagePreviewOpen() {
@@ -4805,8 +7264,13 @@
 
   function toggleMessageExpansion(messageIndex, expand) {
     if (typeof messageIndex !== "number") return;
-    if (expand) expandedMessageIndexes.add(messageIndex);
-    else expandedMessageIndexes.delete(messageIndex);
+    const changed = withPageSearchContentMutation(() => {
+      const before = expandedMessageIndexes.has(messageIndex);
+      if (expand) expandedMessageIndexes.add(messageIndex);
+      else expandedMessageIndexes.delete(messageIndex);
+      return before !== expandedMessageIndexes.has(messageIndex);
+    });
+    if (!changed) return;
     render();
     if (typeof selectedMessageIndex === "number") restoreHighlight(selectedMessageIndex);
     const target = document.getElementById(`msg-${messageIndex}`);
@@ -4815,8 +7279,11 @@
 
   function renderPatchGroup(item, itemIndex, cardKey) {
     const row = el("div", { className: "row tool" });
+    const entries = Array.isArray(item.entries) ? item.entries : [];
+    const allDiffActive = entries.length > 0 && isPatchGroupAllDiffActive(cardKey);
     const bubble = el("div", { className: "bubble tool toolCard patchGroupCard toolCard-kind-edit" });
     applyTimelineCardWidthState(bubble, cardKey);
+    bubble.classList.toggle("patchGroupCard-allDiff", allDiffActive);
     applyBookmarkMetadata(bubble, item);
     bubble.id = `patch-group-${itemIndex}`;
     bubble.dataset.patchGroupIndex = String(itemIndex);
@@ -4828,7 +7295,10 @@
     titleWrap.appendChild(icon);
 
     const title = el("div", { className: "toolCardTitle" });
-    title.textContent = formatTemplate(i18n.patchGroupCount || "{0} changes", item.entryCount || 0);
+    title.textContent = formatTemplate(
+      getSafeUiText(i18n.patchFilesEdited || i18n.patchGroupCount, "Edited {0} files"),
+      item.entryCount || (Array.isArray(item.entries) ? item.entries.length : 0),
+    );
     titleWrap.appendChild(title);
     header.appendChild(titleWrap);
 
@@ -4838,13 +7308,17 @@
     badge.appendChild(renderSignedCountBadge(item.totalRemoved, "remove"));
     headerActions.appendChild(badge);
 
+    if (entries.length > 0 && normalizePatchGroupCardKey(cardKey)) {
+      headerActions.appendChild(createPatchGroupAllDiffButton(cardKey, entries, allDiffActive));
+    }
+
     const nav = patchGroupNavMap.get(itemIndex) || { prevIndex: null, nextIndex: null };
     const navActions = el("div", { className: "messageNav patchGroupNav" });
     navActions.appendChild(createPatchGroupNavButton("prev", nav.prevIndex));
     navActions.appendChild(createPatchGroupNavButton("next", nav.nextIndex));
     headerActions.appendChild(navActions);
     appendBookmarkButton(headerActions, item);
-    headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
+    if (!allDiffActive) headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
     header.appendChild(headerActions);
     bubble.appendChild(header);
 
@@ -4863,26 +7337,239 @@
       }
     }
 
-    const entriesWrap = el("div", { className: "patchEntryList" });
-    const entries = Array.isArray(item.entries) ? item.entries : [];
     if (entries.length === 0) {
       const empty = el("div", { className: "toolCardSecondary" });
       empty.textContent = i18n.patchNoDiff || "No diff available";
-      entriesWrap.appendChild(empty);
+      bubble.appendChild(empty);
     } else {
-      for (const entry of entries) {
-        entriesWrap.appendChild(renderPatchEntry(entry));
-      }
+      bubble.appendChild(renderPatchGroupCompactSummary(cardKey, item, entries, { allDiffActive }));
     }
-    bubble.appendChild(entriesWrap);
 
     row.appendChild(bubble);
     return row;
   }
 
-  function renderPatchEntry(entry) {
+  function renderPatchGroupCompactSummary(cardKey, item, entries, options = {}) {
+    const wrap = el("div", { className: "patchGroupCompactSummary" });
+    if (!Array.isArray(entries) || entries.length === 0) return wrap;
+
+    const searchExpanded = pageSearchTemporaryPatchGroupExpansionActive;
+    const allDiffActive = options.allDiffActive === true;
+    const fileListExpanded = allDiffActive || searchExpanded || expandedPatchGroupFileLists.has(cardKey);
+    const visibleEntries = selectVisiblePatchGroupEntries(entries, fileListExpanded);
+    const list = el("div", { className: "patchGroupFileList" });
+    for (const entry of visibleEntries) {
+      list.appendChild(renderPatchGroupVisibleEntry(cardKey, item, entry, { allDiffActive }));
+    }
+    wrap.appendChild(list);
+
+    if (entries.length > 3 && !searchExpanded && !allDiffActive) {
+      const remaining = countHiddenPatchGroupEntries(entries, visibleEntries);
+      const toggle = el("button", { type: "button", className: "patchGroupFileToggle" });
+      toggle.textContent = fileListExpanded
+        ? getSafeUiText(i18n.patchShowFewerFiles, "Show fewer files")
+        : formatTemplate(getSafeUiText(i18n.patchShowMoreFiles, "Show {0} more files"), remaining);
+      toggle.title = toggle.textContent;
+      toggle.setAttribute("aria-expanded", fileListExpanded ? "true" : "false");
+      toggle.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const changed = withPageSearchContentMutation(() => {
+          const before = expandedPatchGroupFileLists.has(cardKey);
+          if (fileListExpanded) expandedPatchGroupFileLists.delete(cardKey);
+          else expandedPatchGroupFileLists.add(cardKey);
+          return before !== expandedPatchGroupFileLists.has(cardKey);
+        });
+        if (changed) render();
+      });
+      if (fileListExpanded || remaining > 0) wrap.appendChild(toggle);
+    }
+    return wrap;
+  }
+
+  function selectVisiblePatchGroupEntries(entries, fileListExpanded) {
+    if (!Array.isArray(entries)) return [];
+    if (fileListExpanded) return entries;
+    return entries.filter((entry, index) => index < 3 || isPatchGroupEntryExpanded(entry));
+  }
+
+  function countHiddenPatchGroupEntries(entries, visibleEntries) {
+    const visibleIds = new Set(
+      (Array.isArray(visibleEntries) ? visibleEntries : [])
+        .map((entry) => getPatchEntryId(entry))
+        .filter(Boolean),
+    );
+    let count = 0;
+    for (const [index, entry] of entries.entries()) {
+      const entryId = getPatchEntryId(entry);
+      const visible = index < 3 || (entryId && visibleIds.has(entryId));
+      if (!visible) count += 1;
+    }
+    return count;
+  }
+
+  function normalizePatchGroupCardKey(cardKey) {
+    return typeof cardKey === "string" ? cardKey : "";
+  }
+
+  function collectPatchGroupEntryIds(entries) {
+    return Array.from(
+      new Set(
+        (Array.isArray(entries) ? entries : [])
+          .map((entry) => getPatchEntryId(entry))
+          .filter(Boolean),
+      ),
+    );
+  }
+
+  function isPatchGroupAllDiffActive(cardKey) {
+    const key = normalizePatchGroupCardKey(cardKey);
+    return !!(key && allDiffPatchGroupKeys.has(key));
+  }
+
+  function createPatchGroupAllDiffButton(cardKey, entries, allDiffActive) {
+    const button = el("button", { type: "button", className: "patchGroupAllDiffToggle" });
+    syncPatchGroupAllDiffButton(button, allDiffActive);
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      togglePatchGroupAllDiff(cardKey, entries);
+    });
+    return button;
+  }
+
+  function syncPatchGroupAllDiffButton(button, allDiffActive) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    const label = allDiffActive
+      ? getSafeUiText(i18n.patchCloseAllDiffs, "Close all diffs")
+      : getSafeUiText(i18n.patchOpenAllDiffs, "Open all diffs");
+    const tooltip = allDiffActive
+      ? getSafeUiText(i18n.patchCloseAllDiffsTooltip, "Close all file diffs and return to the compact summary")
+      : getSafeUiText(i18n.patchOpenAllDiffsTooltip, "Expand this card to full width and open diffs for all files");
+    button.textContent = label;
+    button.title = tooltip;
+    button.setAttribute("aria-label", tooltip);
+    button.setAttribute("aria-pressed", allDiffActive ? "true" : "false");
+  }
+
+  function togglePatchGroupAllDiff(cardKey, entries) {
+    setPatchGroupAllDiff(cardKey, entries, !isPatchGroupAllDiffActive(cardKey));
+  }
+
+  function setPatchGroupAllDiff(cardKey, entries, active) {
+    const key = normalizePatchGroupCardKey(cardKey);
+    const entryIds = collectPatchGroupEntryIds(entries);
+    if (!key || entryIds.length === 0) return;
+
+    const scrollAnchor = captureTimelineScrollAnchor();
+    const changed = withPageSearchContentMutation(() => {
+      let didChange = false;
+      if (active) {
+        const wasWide = wideTimelineCardKeys.has(key);
+        didChange = setStringSetPresence(allDiffPatchGroupKeys, key, true) || didChange;
+        didChange = setStringSetPresence(allDiffPatchGroupPreviouslyWideKeys, key, wasWide) || didChange;
+        didChange = setStringSetPresence(wideTimelineCardKeys, key, true) || didChange;
+        didChange = setStringSetPresence(expandedPatchGroupFileLists, key, true) || didChange;
+        for (const entryId of entryIds) {
+          didChange = setStringSetPresence(expandedPatchEntries, entryId, true) || didChange;
+        }
+        return didChange;
+      }
+
+      const wasPreviouslyWide = allDiffPatchGroupPreviouslyWideKeys.has(key);
+      didChange = setStringSetPresence(allDiffPatchGroupKeys, key, false) || didChange;
+      didChange = setStringSetPresence(expandedPatchGroupFileLists, key, false) || didChange;
+      for (const entryId of entryIds) {
+        didChange = setStringSetPresence(expandedPatchEntries, entryId, false) || didChange;
+      }
+      didChange = setStringSetPresence(wideTimelineCardKeys, key, wasPreviouslyWide) || didChange;
+      didChange = setStringSetPresence(allDiffPatchGroupPreviouslyWideKeys, key, false) || didChange;
+      return didChange;
+    });
+    if (!changed) return;
+
+    render();
+    restoreTimelineScrollAnchorAfterLayout(scrollAnchor, schedulePatchLayoutSync);
+  }
+
+  function setStringSetPresence(targetSet, value, present) {
+    if (!(targetSet instanceof Set) || !value) return false;
+    const hadValue = targetSet.has(value);
+    if (present) targetSet.add(value);
+    else targetSet.delete(value);
+    return hadValue !== present;
+  }
+
+  function renderPatchGroupVisibleEntry(cardKey, item, entry, options = {}) {
+    return isPatchGroupEntryExpanded(entry)
+      ? renderPatchEntry(entry, { deferOmittedDetails: options.allDiffActive === true })
+      : renderPatchGroupFileRow(cardKey, item, entry);
+  }
+
+  function isPatchGroupEntryExpanded(entry) {
+    const entryId = getPatchEntryId(entry);
+    return !!(entryId && expandedPatchEntries.has(entryId));
+  }
+
+  function renderPatchGroupFileRow(cardKey, item, entry) {
+    const button = el("button", { type: "button", className: "patchGroupFileRow" });
+    const title = buildPatchEntryTitle(entry);
+    button.title = title;
+    button.setAttribute("aria-label", title);
+    button.appendChild(el("span", { className: "patchGroupFilePath", textContent: title }));
+    const counts = el("span", { className: "patchGroupFileCounts" });
+    counts.appendChild(renderSignedCountBadge(entry.added, "add"));
+    counts.appendChild(renderSignedCountBadge(entry.removed, "remove"));
+    button.appendChild(counts);
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openPatchGroupEntry(cardKey, entry);
+    });
+    return button;
+  }
+
+  function openPatchGroupEntry(cardKey, entry) {
+    openPatchGroupEntryTarget(cardKey, entry);
+  }
+
+  function openPatchGroupEntryTarget(cardKey, entry, options = {}) {
+    const entryId = getPatchEntryId(entry);
+    const changed = withPageSearchContentMutation(() => {
+      const beforeFileList = expandedPatchGroupFileLists.has(cardKey);
+      const beforeEntry = entryId ? expandedPatchEntries.has(entryId) : false;
+      if (options.expandFileList === true) expandedPatchGroupFileLists.add(cardKey);
+      if (entryId) expandedPatchEntries.add(entryId);
+      return beforeFileList !== expandedPatchGroupFileLists.has(cardKey)
+        || beforeEntry !== (entryId ? expandedPatchEntries.has(entryId) : false);
+    });
+    if (!changed) {
+      if (entryId) revealPatchEntryDetails(entryId);
+      return;
+    }
+    render();
+    if (entryId) revealPatchEntryDetails(entryId);
+  }
+
+  function revealPatchEntryDetails(entryId) {
+    if (!entryId) return;
+    if (ensureTurnExpandedForReveal(getTurnIdForPatchEntryId(entryId), { render: true })) {
+      requestAnimationFrame(() => revealPatchEntryDetails(entryId));
+      return;
+    }
+    requestAnimationFrame(() => {
+      const target = document.querySelector(`.patchEntry[data-patch-entry-id="${cssEscape(entryId)}"]`);
+      if (target instanceof HTMLElement) {
+        target.scrollIntoView({ block: "nearest" });
+        target.focus?.();
+      }
+    });
+  }
+
+  function renderPatchEntry(entry, options = {}) {
     const details = el("details", { className: "patchEntry" });
     const entryId = getPatchEntryId(entry);
+    const deferOmittedDetails = options.deferOmittedDetails === true;
     if (entryId) {
       details.dataset.patchEntryId = entryId;
       patchEntrySummaryById.set(entryId, entry);
@@ -4892,7 +7579,7 @@
     const ensurePatchBody = () => {
       if (!(body instanceof HTMLElement)) return;
       const renderEntry = resolvePatchEntryForDisplay(entry);
-      if (entry && entry.detailsOmitted && !hasLoadedPatchEntryDetails(entry)) {
+      if (!deferOmittedDetails && entry && entry.detailsOmitted && !hasLoadedPatchEntryDetails(entry)) {
         if (patchEntryDetailsFailed.has(entryId)) {
           renderPatchEntryDetailsError(body, entry);
           return;
@@ -4930,13 +7617,28 @@
       summary.setAttribute("aria-label", label);
     };
     details.addEventListener("toggle", () => {
-      if (entryId) {
-        if (details.open) expandedPatchEntries.add(entryId);
-        else expandedPatchEntries.delete(entryId);
+      const opened = details.open;
+      const shouldRebuildCompactRow = !!(entryId && !opened);
+      const scrollAnchor = shouldRebuildCompactRow ? captureTimelineScrollAnchor() : null;
+      const changed = withPageSearchContentMutation(
+        () => {
+          if (entryId) {
+            if (opened) expandedPatchEntries.add(entryId);
+            else expandedPatchEntries.delete(entryId);
+          }
+          if (opened) ensurePatchBody();
+          else clearPatchBody();
+          applyPatchToggleLabel();
+          return true;
+        },
+        { refreshImmediately: !shouldRebuildCompactRow },
+      );
+      if (!changed) return;
+      if (shouldRebuildCompactRow) {
+        render();
+        restoreTimelineScrollAnchorAfterLayout(scrollAnchor);
+        return;
       }
-      if (details.open) ensurePatchBody();
-      else clearPatchBody();
-      applyPatchToggleLabel();
     });
 
     summary = el("summary", { className: "patchEntrySummary" });
@@ -5202,7 +7904,9 @@
     body.removeAttribute("aria-busy");
     body.style.removeProperty("min-height");
     rememberPatchBodyHeight(body, entry);
-    schedulePageSearchRefreshAfterDeferredRender();
+    // Page-search re-indexing after the diff paints is handled by runDeferredRenderItem,
+    // which wraps every deferred hunk render in beginPageSearchContentMutation +
+    // dispatchPageSearchContentMutationRefresh; no separate refresh is scheduled here.
   }
 
   function isPatchBodyRenderable(body, details) {
@@ -5328,7 +8032,7 @@
 
       const measurement = measureDeferredRenderHeight(item.element);
       try {
-        item.render();
+        runDeferredRenderItem(item);
       } catch (error) {
         console.error("Deferred render failed.", error);
       }
@@ -5376,13 +8080,19 @@
     if (delta !== 0) measurement.root.scrollTop += delta;
   }
 
-  function schedulePageSearchRefreshAfterDeferredRender() {
-    if (!isPageSearchOpen()) return;
-    if (deferredPageSearchRefreshTimer) window.clearTimeout(deferredPageSearchRefreshTimer);
-    deferredPageSearchRefreshTimer = window.setTimeout(() => {
-      deferredPageSearchRefreshTimer = 0;
-      if (isPageSearchOpen()) refreshPageSearchResults({ preserveIndex: true, reveal: false });
-    }, DEFERRED_SEARCH_REFRESH_DELAY_MS);
+  function runDeferredRenderItem(item) {
+    if (!isPageSearchOpen()) {
+      item.render();
+      return;
+    }
+    const previousRevision = beginPageSearchContentMutation();
+    try {
+      item.render();
+    } catch (error) {
+      cancelPageSearchContentMutation(previousRevision);
+      throw error;
+    }
+    dispatchPageSearchContentMutationRefresh(previousRevision, { refreshDelayMs: DEFERRED_SEARCH_REFRESH_DELAY_MS });
   }
 
   function populatePatchEntryBody(body, entry, entryLanguage) {
@@ -5781,13 +8491,19 @@
   }
 
   function formatDurationMs(value) {
-    if (typeof value !== "number" || !Number.isFinite(value)) return "";
-    const ms = Math.max(0, Math.round(value));
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "";
+    const ms = Math.round(value);
     if (ms < 1000) return `${ms}ms`;
     const seconds = ms / 1000;
     if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/\.?0+$/u, "")}s`;
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = Math.round(seconds - minutes * 60);
+    const totalSeconds = Math.round(seconds);
+    if (totalSeconds >= 3600) {
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+    }
+    const minutes = Math.floor(totalSeconds / 60);
+    const remainingSeconds = totalSeconds % 60;
     return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
   }
 
@@ -6213,7 +8929,7 @@
     if (!(bubble instanceof HTMLElement)) return;
     const key = typeof cardKey === "string" ? cardKey : "";
     if (key) bubble.dataset.cardKey = key;
-    bubble.classList.toggle("bubble-wide", key.length > 0 && wideTimelineCardKeys.has(key));
+    bubble.classList.toggle("bubble-wide", key.length > 0 && (wideTimelineCardKeys.has(key) || allDiffPatchGroupKeys.has(key)));
   }
 
   function createTimelineCardWidthButton(cardKey, bubble) {
@@ -6437,6 +9153,7 @@
   function jumpToMessage(messageIndex) {
     selectedMessageIndex = messageIndex;
     expandedMessageIndexes.add(messageIndex);
+    ensureTurnExpandedForReveal(getTurnIdForMessageIndex(messageIndex), { render: false });
     render();
     const elTarget = document.getElementById(`msg-${messageIndex}`);
     if (!elTarget) return;
@@ -6447,6 +9164,10 @@
 
   function jumpToPatchGroup(itemIndex) {
     clearHighlights();
+    if (ensureTurnExpandedForReveal(getTurnIdForItemIndex(itemIndex), { render: true })) {
+      requestAnimationFrame(() => jumpToPatchGroup(itemIndex));
+      return;
+    }
     const elTarget = document.getElementById(`patch-group-${itemIndex}`);
     if (!elTarget) return;
     elTarget.classList.add("highlight");
@@ -6464,6 +9185,8 @@
       finish();
       return;
     }
+    ensureTurnExpandedForReveal(getTurnIdForPatchRevealTarget(target), { render: false });
+    if (typeof target.entryId === "string" && target.entryId.trim()) expandedPatchEntries.add(target.entryId.trim());
     const patch = findPatchTargetElement(target);
     if (patch && patch.entry) {
       const details = patch.entry.closest("details.patchEntry");
@@ -6570,6 +9293,7 @@
     const finish = () => {
       if (typeof onRestored === "function") onRestored();
     };
+    ensureTurnExpandedForReveal(getTurnIdForMessageIndex(messageIndex), { render: false });
     expandedMessageIndexes.add(messageIndex);
     render();
     const elTarget = document.getElementById(`msg-${messageIndex}`);
@@ -6618,29 +9342,18 @@
   function applyPageSearchSeedCore(seed, options = {}) {
     pageSearchInputEl.value = seed.queryInput;
     pageSearchCaseSensitive = seed.caseSensitive === true;
+    pageSearchSuppressedTemporaryAttachmentDetailKeys = new Set();
     hidePageSearchSuggestions();
-    refreshPageSearchResults({ preserveIndex: false, reveal: false });
+    refreshPageSearchResults({
+      preserveIndex: false,
+      reveal: false,
+      fallbackToNearest: options.fallbackToNearest === true,
+      ...(typeof seed.preferredMessageIndex === "number"
+        ? { preferredMessageIndex: seed.preferredMessageIndex }
+        : {}),
+    });
     commitCurrentPageSearchQuery();
-    if (typeof seed.preferredMessageIndex === "number") {
-      activatePageSearchResultForMessageIndex(seed.preferredMessageIndex);
-    } else if (pageSearchResults.length > 0) {
-      const fallbackIndex = options.fallbackToNearest ? findNearestPageSearchResultToScrollPosition() : 0;
-      activatePageSearchResult(fallbackIndex >= 0 ? fallbackIndex : 0, { reveal: false });
-    }
     return true;
-  }
-
-  function activatePageSearchResultForMessageIndex(messageIndex) {
-    if (!Number.isFinite(messageIndex) || pageSearchResults.length === 0) return false;
-    const target = Math.max(0, Math.floor(messageIndex));
-    const index = pageSearchResults.findIndex((result) => result && result.messageIndex === target);
-    if (index >= 0) {
-      activatePageSearchResult(index, { reveal: false });
-      return true;
-    }
-    const fallbackIndex = findNearestPageSearchResultToScrollPosition();
-    activatePageSearchResult(fallbackIndex >= 0 ? fallbackIndex : 0, { reveal: false });
-    return false;
   }
 
   function findNearestPageSearchResultToScrollPosition() {
@@ -6693,7 +9406,7 @@
       requestAnimationFrame(() => {
         const target = getTimelineBoundaryCard("bottom");
         if (target) {
-          scrollElementIntoRootView(target, { behavior: "auto", block: "start" });
+          scrollElementIntoRootView(target, { behavior: "auto", block: "end", endInset: getTimelineEndScrollInset(target) });
         } else {
           const root = getScrollRoot();
           root.scrollTo(0, root.scrollHeight);
@@ -6707,12 +9420,13 @@
   }
 
   function scrollToLatestFollowTarget(options = {}) {
+    const behavior = options.behavior === "smooth" ? "smooth" : "auto";
     const target = getTimelineFollowLatestCard();
     if (target) {
-      scrollElementIntoRootView(target, { behavior: "auto", block: "start" });
+      scrollElementIntoRootView(target, { behavior, block: "end", endInset: getTimelineEndScrollInset(target) });
     } else {
       const root = getScrollRoot();
-      root.scrollTo(0, root.scrollHeight);
+      root.scrollTo({ top: root.scrollHeight, behavior });
     }
     if (options.persist === true) {
       requestAnimationFrame(() => persistCurrentChatOpenPosition({ immediate: true }));
@@ -6720,24 +9434,122 @@
   }
 
   function getTimelineBoundaryCard(direction) {
-    const cards = getRenderedTimelineRows();
+    const cards = getRenderedTimelineVisualTargets();
     if (cards.length === 0) return null;
     return direction === "bottom" ? cards[cards.length - 1] : cards[0];
   }
 
   function getTimelineFollowLatestCard() {
-    const cards = getRenderedTimelineRows();
-    if (cards.length === 0) return null;
+    const targets = getRenderedTimelineVisualTargets();
+    if (targets.length === 0) return null;
 
+    const preferredTurnId = normalizeTurnId(model && (model.liveRunningTurnId || model.latestTurnId));
+    if (preferredTurnId) {
+      const turnTargets = targets.filter((target) => target instanceof HTMLElement && target.dataset.turnId === preferredTurnId);
+      const runningTurnTarget = getRunningTurnVisualTarget(turnTargets);
+      if (runningTurnTarget) return runningTurnTarget;
+      const completedTurnTarget = getCompletedTurnEndVisualTarget(turnTargets);
+      if (completedTurnTarget) return completedTurnTarget;
+      const turnTarget = getLatestTurnVisualTarget(turnTargets);
+      if (turnTarget) return turnTarget;
+    }
+
+    return getLatestTurnVisualTarget(targets);
+  }
+
+  function getRunningTurnVisualTarget(targets) {
+    const liveTurnId = normalizeTurnId(model && model.liveRunningTurnId);
+    if (!liveTurnId || !Array.isArray(targets)) return null;
+    for (let i = targets.length - 1; i >= 0; i -= 1) {
+      const target = targets[i];
+      if (
+        target instanceof HTMLElement &&
+        target.dataset.turnId === liveTurnId &&
+        target.classList.contains("runningTurnAnchorRow")
+      ) {
+        return target;
+      }
+    }
+    return null;
+  }
+
+  function getCompletedTurnEndVisualTarget(targets) {
+    if (!isTurnTimelineEnabled() || !Array.isArray(targets)) return null;
+    for (let i = targets.length - 1; i >= 0; i -= 1) {
+      const target = targets[i];
+      if (
+        target instanceof HTMLElement &&
+        target.dataset.turnBoundary === "end" &&
+        target.classList.contains("turnEndMarker") &&
+        target.classList.contains("turnMarker-completed")
+      ) {
+        return target;
+      }
+    }
+    return null;
+  }
+
+  function getLatestTurnVisualTarget(targets) {
+    if (!Array.isArray(targets) || targets.length === 0) return null;
+    const rows = targets.filter((target) => target instanceof HTMLElement && target.classList.contains("row"));
+    const latestRow = getLatestMeaningfulTimelineCard(rows);
+    if (latestRow) return latestRow;
+
+    for (let i = targets.length - 1; i >= 0; i -= 1) {
+      const target = targets[i];
+      if (target instanceof HTMLElement && target.classList.contains("runningTurnAnchorRow")) return target;
+    }
+    for (let i = targets.length - 1; i >= 0; i -= 1) {
+      const target = targets[i];
+      if (
+        target instanceof HTMLElement &&
+        (target.classList.contains("turnEndMarker") || target.classList.contains("turnCollapsedSummaryMarker"))
+      ) {
+        return target;
+      }
+    }
+    return targets[targets.length - 1];
+  }
+
+  function getLatestMeaningfulTimelineCard(cards) {
+    if (!Array.isArray(cards) || cards.length === 0) return null;
     const last = cards[cards.length - 1];
     if (!(last instanceof HTMLElement)) return null;
-    if (last.dataset.itemType !== "patchGroup") return last;
+    if (last.dataset.itemType !== "patchGroup" && last.dataset.itemType !== "environment") return last;
 
     for (let i = cards.length - 2; i >= 0; i -= 1) {
       const candidate = cards[i];
-      if (candidate instanceof HTMLElement && candidate.dataset.itemType !== "patchGroup") return candidate;
+      if (
+        candidate instanceof HTMLElement &&
+        candidate.dataset.itemType !== "patchGroup" &&
+        candidate.dataset.itemType !== "environment"
+      ) {
+        return candidate;
+      }
     }
-    return last;
+    for (let i = cards.length - 1; i >= 0; i -= 1) {
+      const candidate = cards[i];
+      if (candidate instanceof HTMLElement && candidate.dataset.itemType !== "environment") return candidate;
+    }
+    return null;
+  }
+
+  function getTimelineEndScrollInset(target) {
+    if (!(target instanceof HTMLElement)) return 0;
+    return target.classList.contains("runningTurnAnchorRow") ||
+      target.classList.contains("turnEndMarker") ||
+      target.classList.contains("turnCollapsedSummaryMarker")
+      ? 12
+      : 10;
+  }
+
+  function getTimelineStartScrollInset(target) {
+    return target instanceof HTMLElement ? 10 : 0;
+  }
+
+  function normalizeScrollInset(value) {
+    const numberValue = Number(value);
+    return Number.isFinite(numberValue) ? Math.max(0, Math.floor(numberValue)) : 0;
   }
 
   function scrollElementIntoRootView(element, options = {}) {
@@ -6745,6 +9557,8 @@
     const root = getScrollRoot();
     const behavior = options.behavior === "smooth" ? "smooth" : "auto";
     const block = options.block === "end" ? "end" : "start";
+    const endInset = block === "end" ? normalizeScrollInset(options.endInset) : 0;
+    const startInset = block === "start" ? normalizeScrollInset(options.startInset) : 0;
 
     if (!(root instanceof HTMLElement)) {
       element.scrollIntoView({ behavior, block, inline: "nearest" });
@@ -6755,8 +9569,8 @@
     const elementRect = element.getBoundingClientRect();
     const nextTop =
       block === "end"
-        ? root.scrollTop + elementRect.bottom - rootRect.bottom
-        : root.scrollTop + elementRect.top - rootRect.top;
+        ? root.scrollTop + elementRect.bottom - rootRect.bottom + endInset
+        : root.scrollTop + elementRect.top - rootRect.top - startInset;
     root.scrollTo({ top: Math.max(0, Math.floor(nextTop)), behavior });
   }
 

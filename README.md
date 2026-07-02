@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **2.6.1** (2026-06-22).
+Latest release: **2.7.0** (2026-07-02).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -20,6 +20,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Show valid cached History and Pinned data immediately at startup while local session files refresh in the background.
 - Search across prompts, responses, tool output, tags, notes, and attachment metadata, with shared search history.
 - View sessions in a chat-like UI with Markdown, code highlighting, math rendering, tool cards, and file-change diffs.
+- Enable an opt-in Codex turn timeline to see turn boundaries, turn summaries, completed-turn folding, and running state in live mode.
 - Show Codex / Claude Code request interruptions as dedicated timeline cards.
 - Open **File AI Change History** for a workspace file to review Codex / Claude diffs that touched that file.
 - Bookmark important history cards and use date-guide markers to revisit them quickly.
@@ -59,6 +60,10 @@ Pinned has its own project scope, source, archive visibility, date, tag filters,
 The chat viewer renders local session files as readable conversation timelines. It supports Markdown, syntax-highlighted fenced code blocks, KaTeX-compatible math, assistant usage metadata, environment snapshots, tool execution metadata, and grouped file-change cards from patch activity.
 
 Large histories can use the `auto`, `normal`, or `simplified` performance mode. Heavy tool details and large diff rows can be deferred until **Show details** is enabled or an individual entry is expanded.
+
+Codex sessions can use an opt-in turn timeline. `basic` mode shows turn start/end markers, range rails, summaries, token counts, duration, and manual folding for completed turns. `live` mode adds running-turn indicators, elapsed time, and update activity effects.
+
+Patch group cards can show compact file summaries and an in-place **Open all diffs** / **Close all diffs** action.
 
 Request interruptions from Codex and Claude Code render as dedicated timeline cards. When available, details include reason, duration, turn ID, rollback state, and rolled-back turn count.
 
@@ -147,6 +152,7 @@ Most settings are available from VS Code Settings under **Codex History Viewer**
 - `codexHistoryViewer.chat.openPosition`: open chat at top, last viewed message, or latest rendered card.
 - `codexHistoryViewer.chat.stickyUserPrompt`: keep the current user prompt visible while scrolling chat history.
 - `codexHistoryViewer.chat.performanceMode`: choose default chat rendering performance mode.
+- `codexHistoryViewer.chat.turnTimeline.mode`: enable the opt-in Codex turn timeline with `off`, `basic`, or `live`.
 - `codexHistoryViewer.webview.restoreAfterReload`: experimental opt-in to restoring chat and file-change history Webview tabs after Reload Window or VS Code restart.
 - `codexHistoryViewer.images.enabled`: show supported image attachments.
 - `codexHistoryViewer.ui.timeGuide.enabled`: enable compact date guides and bookmark controls.
@@ -159,6 +165,8 @@ The defaults are designed for regular use. These settings are useful starting po
 | Situation | Suggested settings |
 | --- | --- |
 | Large sessions or many diffs | Keep `codexHistoryViewer.chat.performanceMode` set to `auto`, or use `simplified` if chat views feel heavy. |
+| Codex turn boundaries without live effects | Set `codexHistoryViewer.chat.turnTimeline.mode` to `basic`. |
+| Live Codex turn tracking | Set `codexHistoryViewer.chat.turnTimeline.mode` to `live`. |
 | Faster, narrower search | Use `codexHistoryViewer.search.indexToolContent: toolCalls` instead of `toolCallsAndOutputs`, and lower `codexHistoryViewer.search.maxResults` if needed. |
 | Long sessions, bookmarks, or frequent timeline jumps | Enable `codexHistoryViewer.ui.timeGuide.enabled`. |
 | Frequent image-heavy sessions | Lower `codexHistoryViewer.images.thumbnailSize` or `codexHistoryViewer.images.maxSizeMB`. |
@@ -181,10 +189,13 @@ For the full command list with per-command descriptions, see:
 - If the official Codex extension stops reopening a conversation, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.6.1
+## What's New in 2.7.0
 
-- Added dedicated request-interruption cards for Codex and Claude Code history.
-- Added interruption details when available, including reason, duration, turn ID, rollback state, and rolled-back turn count.
+- Added an opt-in Codex session turn timeline with turn boundaries, summaries, completed-turn folding, and running state in live mode.
+- Added the `codexHistoryViewer.chat.turnTimeline.mode` setting with `off`, `basic`, and `live` modes.
+- Added compact file summaries for patch group cards.
+- Added an in-place **Open all diffs** / **Close all diffs** action for patch group cards.
+- Improved auto-refresh `follow` mode and chat scrolling to the top, bottom, and latest positions.
 
 ## Changelog
 

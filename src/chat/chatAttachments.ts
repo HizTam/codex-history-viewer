@@ -7,6 +7,11 @@ import type {
   ChatFileReferenceAttachment,
   ChatImageAttachment,
   ChatImageAttachmentReason,
+  ChatInvokeAttachment,
+  ChatInvokeParameter,
+  ChatNotificationAttachment,
+  ChatNotificationStatus,
+  ChatRole,
   ChatSelectionReferenceAttachment,
   ChatSystemEventScope,
 } from "./chatTypes";
@@ -26,9 +31,22 @@ export const CHAT_EMBEDDED_BASE64_DOCUMENT_BYTES = 32 * 1024 * 1024;
 export const CHAT_SELECTION_PREVIEW_CHARS = 4_000;
 export const CHAT_ATTACHMENT_LABEL_SEARCH_CHARS = 512;
 export const CHAT_ATTACHMENT_PATH_SEARCH_CHARS = 4_096;
+export const CHAT_TASK_NOTIFICATION_RESULT_PREVIEW_CHARS = 12_000;
+export const CHAT_TASK_NOTIFICATION_RESULT_MARKDOWN_CHARS = 120_000;
+export const CHAT_TASK_NOTIFICATION_RESULT_SEARCH_CHARS = 64_000;
+export const CHAT_INVOKE_PARAMETER_PREVIEW_CHARS = 4_000;
+export const CHAT_INVOKE_PARAMETER_MARKDOWN_CHARS = 120_000;
+export const CHAT_INVOKE_PARAMETER_SEARCH_CHARS = 32_000;
 
 const DEFAULT_DOCUMENT_LABEL = "document-attachment";
 const DEFAULT_FILE_REFERENCE_LABEL = "file-reference";
+const TASK_NOTIFICATION_PREAMBLE =
+  "[SYSTEM NOTIFICATION - NOT USER INPUT]\n" +
+  "This is an automated background-task event, NOT a message from the user.\n" +
+  "Do NOT interpret this as user acknowledgement, confirmation, or response to any pending question.";
+const TASK_NOTIFICATION_OPEN_TAG = "<task-notification";
+const TASK_NOTIFICATION_CLOSE_TAG = "</task-notification>";
+const TASK_NOTIFICATION_OPEN_TAG_MAX_CHARS = 512;
 const CODE_EXTENSIONS = new Set([
   ".bash",
   ".bat",
@@ -92,6 +110,88 @@ export interface ExtractedCodexTextContent {
 
 export interface ClaudeRequestInterruptionContent {
   scope: ChatSystemEventScope;
+}
+
+export interface ClaudeMessageExtractionOptions {
+  role?: Extract<ChatRole, "user" | "assistant">;
+}
+
+export type AttachmentOutputChannel = "webview" | "markdown" | "search" | "resume" | "handoff";
+
+export interface AttachmentSummaryOptions {
+  mode?: "markdown" | "resume" | "handoff";
+}
+
+interface TextAttachmentSpan {
+  start: number;
+  end: number;
+  attachment: ChatAttachment;
+  replacementText?: string;
+}
+
+interface MarkdownSafeContextMap {
+  ranges: Array<{ start: number; end: number }>;
+  ambiguous: boolean;
+}
+
+interface ParsedXmlLikeFields {
+  fields: Map<string, string>;
+}
+
+interface ParsedParameterField {
+  name: string;
+  value: string;
+}
+
+interface StructuredBlockSpec<T extends ChatAttachment, TOpen> {
+  searchText: string;
+  closeTag: string;
+  matchOpen(text: string, index: number): { openEnd: number; data: TOpen } | null;
+  parseBody(body: string, data: TOpen): T | null;
+  findPreamble?: (text: string, cursor: number, openIndex: number) => { start: number; end: number; text: string } | null;
+}
+
+interface StructuredOpenCandidate<TOpen> {
+  index: number;
+  openEnd: number;
+  data: TOpen;
+}
+
+interface StructuredCloseResolution {
+  closeIndex: number;
+  nextSearchIndex: number;
+}
+
+export function detectClaudeMaterializedMessageRole(obj: any): "user" | "assistant" | null {
+  if (isClaudeQueuedPromptRecord(obj)) return null;
+
+  const messageRole = typeof obj?.message?.role === "string" ? obj.message.role : "";
+  if (messageRole === "user" || messageRole === "assistant") return messageRole;
+
+  const envelopeType = typeof obj?.type === "string" ? obj.type : "";
+  if (envelopeType === "user" || envelopeType === "assistant") return envelopeType;
+
+  const topRole = typeof obj?.role === "string" ? obj.role : "";
+  if (topRole === "user" || topRole === "assistant") return topRole;
+
+  return null;
+}
+
+function isClaudeQueuedPromptRecord(obj: any): boolean {
+  const type = typeof obj?.type === "string" ? obj.type : "";
+  const attachmentType = typeof obj?.attachment?.type === "string" ? obj.attachment.type : "";
+  if (type === "attachment" && attachmentType === "queued_command") return true;
+  if (type !== "queue-operation") return false;
+  const operation = typeof obj?.operation === "string" ? obj.operation : "";
+  return (operation === "enqueue" || operation === "dequeue") && hasClaudeQueuedPromptContent(obj);
+}
+
+function hasClaudeQueuedPromptContent(obj: any): boolean {
+  if (!obj || typeof obj !== "object") return false;
+  if (!Object.prototype.hasOwnProperty.call(obj, "content")) return false;
+  const content = obj.content;
+  if (typeof content === "string") return content.length > 0;
+  return Array.isArray(content) || (content !== null && typeof content === "object");
 }
 
 export function extractCodexTextContent(content: unknown): ExtractedCodexTextContent {
@@ -221,10 +321,659 @@ export async function extractCodexMessageContent(
   };
 }
 
+function extractClaudeTextAttachmentsFromText(
+  text: string,
+  role: ClaudeMessageExtractionOptions["role"] | undefined,
+): ExtractedMessageContent {
+  const normalized = normalizeNewlines(text);
+  const spans: TextAttachmentSpan[] = [
+    ...collectClaudeIdeReferenceSpans(normalized),
+    ...collectClaudeStructuredAttachmentSpans(normalized, role),
+  ].sort((a, b) => a.start - b.start || b.end - a.end);
+
+  if (spans.length === 0) return { text: normalized, attachments: [] };
+
+  const attachments: ChatAttachment[] = [];
+  const parts: string[] = [];
+  const seenNotifications = new Set<string>();
+  let cursor = 0;
+
+  for (const span of spans) {
+    if (span.start < cursor || span.end <= span.start) continue;
+    parts.push(normalized.slice(cursor, span.start));
+    if (span.attachment.type === "notification") {
+      const key = buildTaskNotificationDedupKey(span.attachment);
+      if (!seenNotifications.has(key)) {
+        seenNotifications.add(key);
+        attachments.push(span.attachment);
+      }
+    } else {
+      attachments.push(span.attachment);
+    }
+    parts.push(span.replacementText ?? buildRemovedAttachmentSeparator(normalized, span.start, span.end));
+    cursor = span.end;
+  }
+
+  parts.push(normalized.slice(cursor));
+  return { text: parts.join(""), attachments };
+}
+
+function buildRemovedAttachmentSeparator(text: string, start: number, end: number): string {
+  const before = start > 0 ? text.charAt(start - 1) : "";
+  const after = end < text.length ? text.charAt(end) : "";
+  if (!before || !after) return "";
+  return /\s/u.test(before) || /\s/u.test(after) ? "" : "\n";
+}
+
+function collectClaudeStructuredAttachmentSpans(
+  text: string,
+  role: ClaudeMessageExtractionOptions["role"] | undefined,
+): TextAttachmentSpan[] {
+  if (role === "user" && !text.includes(TASK_NOTIFICATION_OPEN_TAG)) return [];
+  if (role === "assistant" && !text.includes("<invoke")) return [];
+  if (role !== "user" && role !== "assistant") return [];
+  const safeContext = buildMarkdownCodeAndQuoteSpanMap(text);
+  if (safeContext.ambiguous) return [];
+  if (role === "user") return collectClaudeTaskNotificationSpans(text, safeContext);
+  return collectClaudeInvokeSpans(text, safeContext);
+}
+
+function collectClaudeTaskNotificationSpans(text: string, safeContext: MarkdownSafeContextMap): TextAttachmentSpan[] {
+  if (!text.includes(TASK_NOTIFICATION_OPEN_TAG)) return [];
+  return collectBoundedStructuredBlocks<ChatNotificationAttachment, undefined>(text, safeContext, {
+    searchText: TASK_NOTIFICATION_OPEN_TAG,
+    closeTag: TASK_NOTIFICATION_CLOSE_TAG,
+    matchOpen: matchTaskNotificationOpenTag,
+    parseBody: (body) => parseTaskNotificationBody(body),
+    findPreamble: findAdjacentTaskNotificationPreamble,
+  });
+}
+
+function matchTaskNotificationOpenTag(text: string, index: number): { openEnd: number; data: undefined } | null {
+  if (!text.startsWith(TASK_NOTIFICATION_OPEN_TAG, index)) return null;
+  const afterName = text.charAt(index + TASK_NOTIFICATION_OPEN_TAG.length);
+  if (afterName === ">") return { openEnd: index + TASK_NOTIFICATION_OPEN_TAG.length + 1, data: undefined };
+  if (!/[\t\n\f\r ]/u.test(afterName)) return null;
+
+  let quote: "'" | '"' | "" = "";
+  const maxEnd = Math.min(text.length, index + TASK_NOTIFICATION_OPEN_TAG_MAX_CHARS);
+  for (let cursor = index + TASK_NOTIFICATION_OPEN_TAG.length + 1; cursor < maxEnd; cursor += 1) {
+    const char = text.charAt(cursor);
+    if (quote) {
+      if (char === ">") return null;
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (char === "<") return null;
+    if (char === ">") return { openEnd: cursor + 1, data: undefined };
+  }
+  return null;
+}
+
+function parseTaskNotificationBody(body: string): ChatNotificationAttachment | null {
+  const parsed = parseTopLevelXmlLikeFields(body, [
+    "task-id",
+    "tool-use-id",
+    "output-file",
+    "status",
+    "summary",
+    "note",
+    "result",
+    "usage",
+  ]);
+  if (!parsed) return null;
+  const taskId = readParsedXmlField(parsed, "task-id");
+  const toolUseId = readParsedXmlField(parsed, "tool-use-id");
+  const outputFile = readParsedXmlField(parsed, "output-file");
+  const rawStatus = readParsedXmlField(parsed, "status");
+  const summary = readParsedXmlField(parsed, "summary");
+  const note = readParsedXmlField(parsed, "note");
+  const result = readParsedXmlField(parsed, "result");
+  const usageBody = readParsedXmlField(parsed, "usage");
+  if (!taskId && !toolUseId && !outputFile && !rawStatus && !summary && !note && !result && !usageBody) return null;
+
+  const usage = usageBody ? parseTaskNotificationUsage(usageBody) : undefined;
+  const cleanUsage =
+    usage && Object.keys(usage).length > 0
+      ? (usage as NonNullable<ChatNotificationAttachment["usage"]>)
+      : undefined;
+
+  const textParts = [
+    summary,
+    result ? clampText(result, CHAT_TASK_NOTIFICATION_RESULT_PREVIEW_CHARS) : "",
+    formatTaskNotificationUsageText(cleanUsage),
+  ].filter(Boolean);
+  return {
+    type: "notification",
+    source: "claudeTaskNotification",
+    notificationKind: "task",
+    status: normalizeTaskNotificationStatus(rawStatus),
+    ...(rawStatus ? { rawStatus } : {}),
+    ...(taskId ? { taskId } : {}),
+    ...(toolUseId ? { toolUseId } : {}),
+    ...(summary ? { summary } : {}),
+    ...(note ? { note } : {}),
+    ...(result ? { result } : {}),
+    ...(cleanUsage ? { usage: cleanUsage } : {}),
+    ...(outputFile ? { outputFile } : {}),
+    ...(textParts.length > 0 ? { text: textParts.join("\n") } : {}),
+  };
+}
+
+function findAdjacentTaskNotificationPreamble(
+  text: string,
+  cursor: number,
+  openIndex: number,
+): { start: number; end: number; text: string } | null {
+  const before = text.slice(cursor, openIndex);
+  const preambleIndex = before.lastIndexOf(TASK_NOTIFICATION_PREAMBLE);
+  if (preambleIndex < 0) return null;
+  const afterPreamble = before.slice(preambleIndex + TASK_NOTIFICATION_PREAMBLE.length);
+  if (afterPreamble.trim().length > 0) return null;
+  return {
+    start: cursor + preambleIndex,
+    end: openIndex,
+    text: TASK_NOTIFICATION_PREAMBLE,
+  };
+}
+
+function normalizeTaskNotificationStatus(status: string | undefined): ChatNotificationStatus {
+  const normalized = (status ?? "").trim().toLowerCase().replace(/[_\s-]+/gu, "");
+  if (normalized === "completed" || normalized === "failed" || normalized === "running") return normalized;
+  if (normalized === "cancelled" || normalized === "canceled") return "cancelled";
+  return "unknown";
+}
+
+function buildTaskNotificationDedupKey(attachment: ChatNotificationAttachment): string {
+  return [
+    attachment.taskId ?? "",
+    attachment.toolUseId ?? "",
+    attachment.rawStatus ?? attachment.status,
+    hashText(attachment.result ?? ""),
+  ].join("\u001f");
+}
+
+function formatTaskNotificationUsageText(usage: ChatNotificationAttachment["usage"] | undefined): string {
+  if (!usage) return "";
+  const parts: string[] = [];
+  if (typeof usage.subagentTokens === "number") parts.push(`${formatTaskNotificationUsageNumber(usage.subagentTokens)} tokens`);
+  if (typeof usage.toolUses === "number") parts.push(`${formatTaskNotificationUsageNumber(usage.toolUses)} tool uses`);
+  if (typeof usage.durationMs === "number") {
+    const durationText = formatTaskNotificationDurationMs(usage.durationMs);
+    if (durationText) parts.push(durationText);
+  }
+  return parts.join(" / ");
+}
+
+function formatTaskNotificationUsageNumber(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  return Math.max(0, Math.floor(value)).toLocaleString("en-US");
+}
+
+function formatTaskNotificationDurationMs(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "";
+  const ms = Math.round(value);
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 1 : 2).replace(/\.?0+$/u, "")}s`;
+  const totalSeconds = Math.round(seconds);
+  if (totalSeconds >= 3600) {
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
+}
+
+function collectClaudeInvokeSpans(text: string, safeContext: MarkdownSafeContextMap): TextAttachmentSpan[] {
+  if (!text.includes("<invoke")) return [];
+  return collectBoundedStructuredBlocks<ChatInvokeAttachment, string>(text, safeContext, {
+    searchText: "<invoke",
+    closeTag: "</invoke>",
+    matchOpen: (source, index) => {
+      const openMatch = /^<invoke\s+name=(["'])([\s\S]{1,160}?)\1\s*>/iu.exec(source.slice(index));
+      if (!openMatch) return null;
+      return {
+        openEnd: index + openMatch[0].length,
+        data: decodeBasicXmlEntities(openMatch[2] ?? "").trim(),
+      };
+    },
+    parseBody: (body, toolName) => {
+      if (!toolName) return null;
+      const parameters = parseInvokeParameters(body);
+      return parameters ? buildInvokeAttachment(toolName, parameters, undefined) : null;
+    },
+    findPreamble: findAdjacentInvokeHarnessPreamble,
+  });
+}
+
+function parseInvokeParameters(body: string): ChatInvokeAttachment["parameters"] | null {
+  const parsed = parseTopLevelParameterFields(body);
+  if (!parsed || parsed.length === 0) return null;
+  return parsed;
+}
+
+function buildInvokeAttachment(
+  toolName: string,
+  parameters: ChatInvokeAttachment["parameters"],
+  harnessPreamble: string | undefined,
+): ChatInvokeAttachment {
+  const description = findInvokeParameterValue(parameters, "description");
+  const primaryParameterName = choosePrimaryInvokeParameterName(parameters);
+  const primaryValue = primaryParameterName ? findInvokeParameterValue(parameters, primaryParameterName) : "";
+  const textParts = [
+    toolName,
+    description,
+    ...parameters.map((parameter) => `${parameter.name}: ${parameter.value}`),
+  ].filter(Boolean);
+  return {
+    type: "invoke",
+    source: "claudeInvokeMarkup",
+    toolName,
+    parameters,
+    ...(description ? { description } : {}),
+    ...(primaryParameterName ? { primaryParameterName } : {}),
+    ...(primaryValue ? { primaryParameterPreview: clampText(primaryValue, CHAT_INVOKE_PARAMETER_PREVIEW_CHARS) } : {}),
+    ...(harnessPreamble ? { harnessPreamble } : {}),
+    ...(textParts.length > 0 ? { text: textParts.join("\n") } : {}),
+  };
+}
+
+function findAdjacentInvokeHarnessPreamble(
+  text: string,
+  cursor: number,
+  openIndex: number,
+): { start: number; end: number; text: string } | null {
+  const before = text.slice(cursor, openIndex);
+  const match = /(?:^|\n)[ \t]*court[ \t]*(?:\n[ \t]*)*$/u.exec(before);
+  if (!match) return null;
+  const matched = match[0] ?? "";
+  const start = cursor + before.length - matched.length + (matched.startsWith("\n") ? 1 : 0);
+  return {
+    start,
+    end: openIndex,
+    text: "court",
+  };
+}
+
+function choosePrimaryInvokeParameterName(parameters: readonly { name: string; value: string }[]): string | undefined {
+  const priority = ["command", "content", "pattern", "file_path", "path", "input"];
+  for (const wanted of priority) {
+    const found = parameters.find((parameter) => parameter.name.trim().toLowerCase() === wanted && parameter.value.trim());
+    if (found) return found.name;
+  }
+  return parameters.find((parameter) => parameter.value.trim())?.name;
+}
+
+function findInvokeParameterValue(parameters: readonly { name: string; value: string }[], name: string): string {
+  const wanted = name.trim().toLowerCase();
+  return parameters.find((parameter) => parameter.name.trim().toLowerCase() === wanted)?.value.trim() ?? "";
+}
+
+function collectBoundedStructuredBlocks<T extends ChatAttachment, TOpen>(
+  text: string,
+  safeContext: MarkdownSafeContextMap,
+  spec: StructuredBlockSpec<T, TOpen>,
+): TextAttachmentSpan[] {
+  const spans: TextAttachmentSpan[] = [];
+  const openCandidates = collectStructuredOpenCandidates(text, safeContext, spec);
+  if (openCandidates.length === 0) return spans;
+  const closeCandidates = collectAllowedCloseTagCandidates(text, spec.closeTag, safeContext);
+  let cursor = 0;
+  let searchIndex = 0;
+  let candidateIndex = 0;
+
+  while (candidateIndex < openCandidates.length) {
+    const open = openCandidates[candidateIndex]!;
+    if (open.index < searchIndex) {
+      candidateIndex += 1;
+      continue;
+    }
+
+    const close = resolveStructuredBlockClose(openCandidates, closeCandidates, candidateIndex, spec.closeTag.length, text.length);
+    if (close.closeIndex < 0) {
+      searchIndex = Math.max(open.index + 1, close.nextSearchIndex);
+      candidateIndex += 1;
+      continue;
+    }
+    const closeEnd = close.closeIndex + spec.closeTag.length;
+    const attachment = spec.parseBody(text.slice(open.openEnd, close.closeIndex), open.data);
+    if (!attachment) {
+      searchIndex = open.index + 1;
+      candidateIndex += 1;
+      continue;
+    }
+
+    const preamble = spec.findPreamble?.(text, cursor, open.index);
+    const removeStart = preamble?.start ?? open.index;
+    if (preamble?.text) attachStructuredPreamble(attachment, preamble.text);
+    spans.push({ start: removeStart, end: closeEnd, attachment });
+    cursor = closeEnd;
+    searchIndex = closeEnd;
+    candidateIndex += 1;
+  }
+
+  return spans;
+}
+
+function collectStructuredOpenCandidates<T extends ChatAttachment, TOpen>(
+  text: string,
+  safeContext: MarkdownSafeContextMap,
+  spec: StructuredBlockSpec<T, TOpen>,
+): StructuredOpenCandidate<TOpen>[] {
+  const candidates: StructuredOpenCandidate<TOpen>[] = [];
+  let searchIndex = 0;
+  while (searchIndex < text.length) {
+    const openIndex = text.indexOf(spec.searchText, searchIndex);
+    if (openIndex < 0) break;
+    if (!isOffsetInRanges(openIndex, safeContext.ranges)) {
+      const open = spec.matchOpen(text, openIndex);
+      if (open && !isOffsetInRanges(open.openEnd - 1, safeContext.ranges)) {
+        candidates.push({ index: openIndex, openEnd: open.openEnd, data: open.data });
+      }
+    }
+    searchIndex = openIndex + 1;
+  }
+  return candidates;
+}
+
+function collectAllowedCloseTagCandidates(
+  text: string,
+  closeTag: string,
+  safeContext: MarkdownSafeContextMap,
+): number[] {
+  const candidates: number[] = [];
+  let searchIndex = 0;
+  while (searchIndex < text.length) {
+    const closeIndex = text.indexOf(closeTag, searchIndex);
+    if (closeIndex < 0) break;
+    const closeEnd = closeIndex + closeTag.length;
+    if (!isOffsetInRanges(closeIndex, safeContext.ranges) && !isOffsetInRanges(closeEnd - 1, safeContext.ranges)) {
+      candidates.push(closeIndex);
+    }
+    searchIndex = closeEnd;
+  }
+  return candidates;
+}
+
+function resolveStructuredBlockClose<TOpen>(
+  openCandidates: readonly StructuredOpenCandidate<TOpen>[],
+  closeCandidates: readonly number[],
+  openCandidateIndex: number,
+  closeTagLength: number,
+  textLength: number,
+): StructuredCloseResolution {
+  const open = openCandidates[openCandidateIndex];
+  if (!open) return { closeIndex: -1, nextSearchIndex: textLength };
+  const nextOpen = openCandidates[openCandidateIndex + 1]?.index ?? textLength;
+  const firstCloseCandidate = lowerBoundNumber(closeCandidates, open.openEnd);
+  const firstCloseAfterWindow = lowerBoundNumber(closeCandidates, nextOpen);
+  const inWindowCount = firstCloseAfterWindow - firstCloseCandidate;
+  if (inWindowCount === 1) {
+    return { closeIndex: closeCandidates[firstCloseCandidate]!, nextSearchIndex: closeCandidates[firstCloseCandidate]! + closeTagLength };
+  }
+  const fallbackClose = inWindowCount > 1 ? closeCandidates[firstCloseCandidate] : undefined;
+  const nextSearchIndex = fallbackClose !== undefined ? fallbackClose + closeTagLength : nextOpen;
+  return { closeIndex: -1, nextSearchIndex: Math.max(open.index + 1, nextSearchIndex) };
+}
+
+function lowerBoundNumber(values: readonly number[], target: number): number {
+  let low = 0;
+  let high = values.length;
+  while (low < high) {
+    const mid = Math.floor((low + high) / 2);
+    if ((values[mid] ?? 0) < target) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
+function attachStructuredPreamble(attachment: ChatAttachment, text: string): void {
+  if (attachment.type === "notification") {
+    attachment.systemPreamble = text;
+    return;
+  }
+  if (attachment.type === "invoke") {
+    attachment.harnessPreamble = text;
+  }
+}
+
+function collectClaudeIdeReferenceSpans(text: string): TextAttachmentSpan[] {
+  const spans: TextAttachmentSpan[] = [];
+  const regex = /<ide_(opened_file|selection)>([\s\S]*?)<\/ide_\1>/giu;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(text))) {
+    const tag = match[1] ?? "";
+    const body = match[2] ?? "";
+    const attachment = tag === "opened_file" ? buildClaudeOpenedFileAttachment(body) : buildClaudeSelectionAttachment(body);
+    spans.push({ start: match.index, end: match.index + match[0].length, attachment, replacementText: "\n" });
+  }
+  return spans;
+}
+
+function parseTopLevelXmlLikeFields(body: string, allowedTags: readonly string[]): ParsedXmlLikeFields | null {
+  const allowed = new Set(allowedTags);
+  const fields = new Map<string, string>();
+  let cursor = 0;
+
+  while (cursor < body.length) {
+    const leading = body.slice(cursor).match(/^\s*/u)?.[0] ?? "";
+    cursor += leading.length;
+    if (cursor >= body.length) break;
+
+    const openMatch = /^<([A-Za-z][A-Za-z0-9_-]*)>/u.exec(body.slice(cursor));
+    const tag = openMatch?.[1];
+    if (!openMatch || !tag) return null;
+
+    const valueStart = cursor + openMatch[0].length;
+    const closeTag = `</${tag}>`;
+    const closeIndex = body.indexOf(closeTag, valueStart);
+    if (closeIndex < 0) return null;
+
+    if (allowed.has(tag)) {
+      if (fields.has(tag)) return null;
+      const rawValue = body.slice(valueStart, closeIndex);
+      fields.set(tag, decodeBasicXmlEntities(rawValue).trim());
+    }
+    cursor = closeIndex + closeTag.length;
+  }
+
+  return { fields };
+}
+
+function readParsedXmlField(parsed: ParsedXmlLikeFields, tag: string): string | undefined {
+  const value = parsed.fields.get(tag)?.trim() ?? "";
+  return value || undefined;
+}
+
+function parseTopLevelParameterFields(body: string): ChatInvokeAttachment["parameters"] | null {
+  const params: ParsedParameterField[] = [];
+  let cursor = 0;
+  while (cursor < body.length) {
+    const leading = body.slice(cursor).match(/^\s*/u)?.[0] ?? "";
+    cursor += leading.length;
+    if (cursor >= body.length) break;
+
+    const openMatch = /^<parameter\s+name=(["'])([\s\S]{1,160}?)\1\s*>/iu.exec(body.slice(cursor));
+    if (!openMatch) return null;
+    const name = decodeBasicXmlEntities(openMatch[2] ?? "").trim();
+    if (!name) return null;
+
+    const valueStart = cursor + openMatch[0].length;
+    const nextParameterIndex = findNextParameterOpenIndex(body, valueStart);
+    const closeCandidates = findLiteralCandidates(body, "</parameter>", valueStart, nextParameterIndex);
+    if (closeCandidates.length !== 1) return null;
+    const closeIndex = closeCandidates[0]!;
+    if (closeIndex < 0) return null;
+    const rawValue = body.slice(valueStart, closeIndex);
+    params.push({ name, value: decodeBasicXmlEntities(rawValue) });
+    cursor = closeIndex + "</parameter>".length;
+  }
+  return params;
+}
+
+function findNextParameterOpenIndex(body: string, fromIndex: number): number | undefined {
+  const match = /<parameter\s+name=(["'])[\s\S]{1,160}?\1\s*>/iu.exec(body.slice(fromIndex));
+  return match ? fromIndex + match.index : undefined;
+}
+
+function findLiteralCandidates(body: string, token: string, fromIndex: number, stopBefore?: number): number[] {
+  const candidates: number[] = [];
+  let searchIndex = fromIndex;
+  while (searchIndex < body.length && (stopBefore === undefined || searchIndex < stopBefore)) {
+    const index = body.indexOf(token, searchIndex);
+    if (index < 0 || (stopBefore !== undefined && index >= stopBefore)) break;
+    candidates.push(index);
+    searchIndex = index + token.length;
+  }
+  return candidates;
+}
+
+function buildMarkdownCodeAndQuoteSpanMap(text: string): MarkdownSafeContextMap {
+  const ranges: Array<{ start: number; end: number }> = [];
+  const lines = splitLinesWithOffsets(text);
+  let fencedStart: { offset: number; markerChar: string; markerLength: number } | null = null;
+  let ambiguous = false;
+
+  for (const line of lines) {
+    const fence = /^ {0,3}(`{3,}|~{3,})/u.exec(line.text);
+    if (fence?.[1]) {
+      const marker = fence[1];
+      const markerChar = marker[0] ?? "";
+      if (!fencedStart) {
+        fencedStart = { offset: line.start, markerChar, markerLength: marker.length };
+      } else if (markerChar === fencedStart.markerChar && marker.length >= fencedStart.markerLength) {
+        ranges.push({ start: fencedStart.offset, end: line.end });
+        fencedStart = null;
+      }
+      continue;
+    }
+    if (!fencedStart && /^ {0,3}>/u.test(line.text)) {
+      ranges.push({ start: line.start, end: line.end });
+    }
+  }
+
+  if (fencedStart) ranges.push({ start: fencedStart.offset, end: text.length });
+
+  for (const line of lines) {
+    if (rangeOverlapsRanges(line.start, line.end, ranges)) continue;
+    const inline = findInlineCodeRanges(line.text, line.start);
+    ranges.push(...inline.ranges);
+    ambiguous = ambiguous || inline.ambiguous;
+  }
+
+  return { ranges: mergeRanges(ranges), ambiguous };
+}
+
+function splitLinesWithOffsets(text: string): Array<{ text: string; start: number; end: number }> {
+  const lines: Array<{ text: string; start: number; end: number }> = [];
+  let start = 0;
+  while (start <= text.length) {
+    const next = text.indexOf("\n", start);
+    const end = next < 0 ? text.length : next + 1;
+    lines.push({ text: text.slice(start, end), start, end });
+    if (next < 0) break;
+    start = end;
+  }
+  return lines;
+}
+
+function findInlineCodeRanges(text: string, baseOffset: number): { ranges: Array<{ start: number; end: number }>; ambiguous: boolean } {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const open = text.indexOf("`", cursor);
+    if (open < 0) break;
+    const run = /^`+/u.exec(text.slice(open))?.[0] ?? "";
+    if (!run) break;
+    const close = text.indexOf(run, open + run.length);
+    if (close < 0) {
+      ranges.push({ start: baseOffset + open, end: baseOffset + text.length });
+      break;
+    }
+    ranges.push({ start: baseOffset + open, end: baseOffset + close + run.length });
+    cursor = close + run.length;
+  }
+  return { ranges, ambiguous: false };
+}
+
+function mergeRanges(ranges: Array<{ start: number; end: number }>): Array<{ start: number; end: number }> {
+  const sorted = ranges
+    .filter((range) => Number.isFinite(range.start) && Number.isFinite(range.end) && range.end > range.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  const merged: Array<{ start: number; end: number }> = [];
+  for (const range of sorted) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end) {
+      last.end = Math.max(last.end, range.end);
+      continue;
+    }
+    merged.push({ ...range });
+  }
+  return merged;
+}
+
+function isOffsetInRanges(offset: number, ranges: readonly { start: number; end: number }[]): boolean {
+  return ranges.some((range) => offset >= range.start && offset < range.end);
+}
+
+function rangeOverlapsRanges(start: number, end: number, ranges: readonly { start: number; end: number }[]): boolean {
+  return ranges.some((range) => start < range.end && end > range.start);
+}
+
+function parseTaskNotificationUsage(body: string): Partial<NonNullable<ChatNotificationAttachment["usage"]>> | undefined {
+  const parsed = parseTopLevelXmlLikeFields(body, ["subagent_tokens", "tool_uses", "duration_ms"]);
+  if (!parsed) return undefined;
+  return {
+    ...readOptionalNonNegativeIntegerField(parsed, "subagent_tokens", "subagentTokens"),
+    ...readOptionalNonNegativeIntegerField(parsed, "tool_uses", "toolUses"),
+    ...readOptionalNonNegativeIntegerField(parsed, "duration_ms", "durationMs"),
+  };
+}
+
+function readOptionalNonNegativeIntegerField<T extends string>(
+  parsed: ParsedXmlLikeFields,
+  tag: string,
+  key: T,
+): { [K in T]?: number } {
+  const raw = readParsedXmlField(parsed, tag);
+  if (!raw) return {};
+  const normalized = raw.replace(/,/gu, "").trim();
+  if (!/^\d+$/u.test(normalized)) return {};
+  const value = Number(normalized);
+  if (!Number.isSafeInteger(value)) return {};
+  return { [key]: value } as { [K in T]?: number };
+}
+
+function decodeBasicXmlEntities(value: string): string {
+  return String(value ?? "")
+    .replace(/&lt;/gu, "<")
+    .replace(/&gt;/gu, ">")
+    .replace(/&quot;/gu, '"')
+    .replace(/&apos;/gu, "'")
+    .replace(/&amp;/gu, "&");
+}
+
+function hashText(value: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 export async function extractClaudeMessageContent(
   content: unknown,
   sessionCwd?: string,
   options?: ChatImageExtractionOptions,
+  claudeOptions?: ClaudeMessageExtractionOptions,
 ): Promise<ExtractedMessageContent> {
   const imageOptions = normalizeImageOptions(options);
   const items = normalizeContentItems(content);
@@ -239,9 +988,9 @@ export async function extractClaudeMessageContent(
       placeholderInsertIndex = attachments.length;
     }
     placeholderCount += stripped.placeholderCount;
-    const ide = extractClaudeIdeReferencesFromText(stripped.text);
-    texts.push(ide.text);
-    attachments.push(...ide.attachments);
+    const extracted = extractClaudeTextAttachmentsFromText(stripped.text, claudeOptions?.role);
+    texts.push(extracted.text);
+    attachments.push(...extracted.attachments);
   } else {
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
@@ -258,9 +1007,9 @@ export async function extractClaudeMessageContent(
           placeholderInsertIndex = attachments.length;
         }
         placeholderCount += stripped.placeholderCount;
-        const ide = extractClaudeIdeReferencesFromText(stripped.text);
-        texts.push(ide.text);
-        attachments.push(...ide.attachments);
+        const extracted = extractClaudeTextAttachmentsFromText(stripped.text, claudeOptions?.role);
+        texts.push(extracted.text);
+        attachments.push(...extracted.attachments);
       }
 
       const image = await extractImageAttachmentFromItem(obj, sessionCwd, imageOptions);
@@ -281,6 +1030,8 @@ export function assignAttachmentIds(attachments: ChatAttachment[], scope: string
   let documentIndex = 0;
   let fileIndex = 0;
   let selectionIndex = 0;
+  let notificationIndex = 0;
+  let invokeIndex = 0;
   for (const attachment of attachments) {
     if (!attachment || attachment.id) continue;
     if (attachment.type === "image") {
@@ -298,9 +1049,148 @@ export function assignAttachmentIds(attachments: ChatAttachment[], scope: string
       attachment.id = `${scope}-file-${fileIndex}`;
       continue;
     }
-    selectionIndex += 1;
-    attachment.id = `${scope}-selection-${selectionIndex}`;
+    if (attachment.type === "selectionReference") {
+      selectionIndex += 1;
+      attachment.id = `${scope}-selection-${selectionIndex}`;
+      continue;
+    }
+    if (attachment.type === "notification") {
+      notificationIndex += 1;
+      attachment.id = `${scope}-notification-${notificationIndex}`;
+      continue;
+    }
+    if (attachment.type === "invoke") {
+      invokeIndex += 1;
+      attachment.id = `${scope}-invoke-${invokeIndex}`;
+      continue;
+    }
   }
+}
+
+export function sanitizeAttachmentForChannel(
+  attachment: ChatAttachment,
+  channel: AttachmentOutputChannel,
+): ChatAttachment {
+  if (attachment.type === "image") return sanitizeImageAttachmentForChannel(attachment, channel);
+  if (attachment.type === "document") return sanitizeDocumentAttachmentForChannel(attachment, channel);
+  if (attachment.type === "fileReference") return { ...attachment };
+  if (attachment.type === "selectionReference") return { ...attachment };
+  if (attachment.type === "notification") return sanitizeNotificationAttachmentForChannel(attachment, channel);
+  if (attachment.type === "invoke") return sanitizeInvokeAttachmentForChannel(attachment, channel);
+  return assertNeverChatAttachment(attachment);
+}
+
+function assertNeverChatAttachment(attachment: never): never {
+  const unknownType = (attachment as { type?: unknown } | undefined)?.type;
+  throw new Error(`Unsupported chat attachment type: ${String(unknownType ?? "unknown")}`);
+}
+
+function sanitizeImageAttachmentForChannel(
+  attachment: ChatImageAttachment,
+  channel: AttachmentOutputChannel,
+): ChatImageAttachment {
+  if (channel !== "webview") return { ...attachment };
+  const dataOmitted = attachment.dataOmitted === true || typeof attachment.src === "string";
+  return {
+    ...(attachment.id ? { id: attachment.id } : {}),
+    type: "image",
+    status: attachment.status,
+    source: attachment.source,
+    ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+    ...(attachment.label ? { label: attachment.label } : {}),
+    ...(attachment.reason ? { reason: attachment.reason } : {}),
+    ...(dataOmitted ? { dataOmitted: true } : {}),
+  };
+}
+
+function sanitizeDocumentAttachmentForChannel(
+  attachment: ChatDocumentAttachment,
+  channel: AttachmentOutputChannel,
+): ChatDocumentAttachment {
+  if (channel !== "webview") return { ...attachment };
+  const dataOmitted = attachment.dataOmitted === true || !!attachment.payload;
+  return {
+    ...(attachment.id ? { id: attachment.id } : {}),
+    type: "document",
+    status: attachment.status,
+    documentKind: attachment.documentKind,
+    source: attachment.source,
+    ...(attachment.label ? { label: attachment.label } : {}),
+    ...(attachment.mimeType ? { mimeType: attachment.mimeType } : {}),
+    ...(typeof attachment.byteLength === "number" ? { byteLength: attachment.byteLength } : {}),
+    ...(attachment.previewText ? { previewText: attachment.previewText } : {}),
+    ...(attachment.reason ? { reason: attachment.reason } : {}),
+    ...(dataOmitted ? { dataOmitted: true } : {}),
+  };
+}
+
+function sanitizeNotificationAttachmentForChannel(
+  attachment: ChatNotificationAttachment,
+  channel: AttachmentOutputChannel,
+): ChatNotificationAttachment {
+  const result = projectTaskNotificationResultForChannel(attachment.result, channel);
+  const usage = attachment.usage ? { ...attachment.usage } : undefined;
+  return {
+    ...(attachment.id ? { id: attachment.id } : {}),
+    type: "notification",
+    source: "claudeTaskNotification",
+    notificationKind: "task",
+    status: attachment.status,
+    ...(attachment.summary ? { summary: attachment.summary } : {}),
+    ...(result ? { result } : {}),
+    ...(usage ? { usage } : {}),
+  };
+}
+
+function projectTaskNotificationResultForChannel(
+  result: string | undefined,
+  channel: AttachmentOutputChannel,
+): string | undefined {
+  if (!result) return undefined;
+  if (channel === "webview") return clampText(result, CHAT_TASK_NOTIFICATION_RESULT_PREVIEW_CHARS);
+  if (channel === "search") return clampText(result, CHAT_TASK_NOTIFICATION_RESULT_SEARCH_CHARS);
+  if (channel === "resume" || channel === "handoff") return clampText(result, 1_000);
+  return result;
+}
+
+function sanitizeInvokeAttachmentForChannel(
+  attachment: ChatInvokeAttachment,
+  channel: AttachmentOutputChannel,
+): ChatInvokeAttachment {
+  const parameterLimit =
+    channel === "webview"
+      ? CHAT_INVOKE_PARAMETER_PREVIEW_CHARS
+      : channel === "search"
+        ? CHAT_INVOKE_PARAMETER_SEARCH_CHARS
+        : channel === "markdown"
+          ? CHAT_INVOKE_PARAMETER_MARKDOWN_CHARS
+          : 0;
+  const parameters =
+    parameterLimit > 0
+      ? attachment.parameters.map((parameter) => clampInvokeParameterForChannel(parameter, parameterLimit))
+      : [];
+  return {
+    ...(attachment.id ? { id: attachment.id } : {}),
+    type: "invoke",
+    source: "claudeInvokeMarkup",
+    toolName: attachment.toolName,
+    parameters,
+    ...(attachment.description ? { description: attachment.description } : {}),
+    ...(attachment.primaryParameterName && parameterLimit > 0 ? { primaryParameterName: attachment.primaryParameterName } : {}),
+    ...(attachment.primaryParameterPreview && parameterLimit > 0 ? { primaryParameterPreview: attachment.primaryParameterPreview } : {}),
+  };
+}
+
+function clampInvokeParameterForChannel(
+  parameter: ChatInvokeParameter,
+  maxChars: number,
+): ChatInvokeParameter {
+  const clamped = clampTextWithMetadata(parameter.value, maxChars);
+  return {
+    name: parameter.name,
+    value: clamped.text,
+    ...(clamped.truncated ? { truncated: true } : {}),
+  };
 }
 
 function addPlaceholderImageIfNeeded(
@@ -323,21 +1213,30 @@ function addPlaceholderImageIfNeeded(
 
 export function hasClaudeAttachmentLikeContent(content: unknown): boolean {
   const items = normalizeContentItems(content);
-  if (typeof content === "string") return hasClaudeIdeTag(content) || stripImagePlaceholders(content).placeholderCount > 0;
+  if (typeof content === "string") {
+    return hasClaudeStructuredAttachmentTag(content) || hasClaudeIdeTag(content) || stripImagePlaceholders(content).placeholderCount > 0;
+  }
   for (const item of items) {
     if (!item || typeof item !== "object") continue;
     const obj = item as Record<string, unknown>;
     const type = normalizeType(readStringField(obj, "type"));
     if (type === "document" || isPotentialImageAttachmentItem(obj)) return true;
     const text = readStringField(obj, "text");
-    if (text && (hasClaudeIdeTag(text) || stripImagePlaceholders(text).placeholderCount > 0)) return true;
+    if (text && (hasClaudeStructuredAttachmentTag(text) || hasClaudeIdeTag(text) || stripImagePlaceholders(text).placeholderCount > 0)) {
+      return true;
+    }
   }
   return false;
 }
 
-export function buildAttachmentSummaryLines(attachments: readonly ChatAttachment[]): string[] {
+export function buildAttachmentSummaryLines(
+  attachments: readonly ChatAttachment[],
+  options: AttachmentSummaryOptions = {},
+): string[] {
+  const mode = options.mode ?? "markdown";
   const lines: string[] = [];
-  for (const attachment of attachments) {
+  for (const rawAttachment of attachments) {
+    const attachment = sanitizeAttachmentForChannel(rawAttachment, mode);
     if (!attachment) continue;
     if (attachment.type === "image") {
       lines.push(formatImageSummary(attachment));
@@ -351,14 +1250,25 @@ export function buildAttachmentSummaryLines(attachments: readonly ChatAttachment
       lines.push(formatFileReferenceSummary(attachment));
       continue;
     }
-    lines.push(formatSelectionSummary(attachment));
+    if (attachment.type === "selectionReference") {
+      lines.push(formatSelectionSummary(attachment));
+      continue;
+    }
+    if (attachment.type === "notification") {
+      lines.push(...formatTaskNotificationSummary(attachment, mode));
+      continue;
+    }
+    if (attachment.type === "invoke") {
+      lines.push(...formatInvokeSummary(attachment, mode));
+    }
   }
   return lines;
 }
 
 export function buildAttachmentSearchText(attachments: readonly ChatAttachment[]): string {
   const parts: string[] = [];
-  for (const attachment of attachments) {
+  for (const rawAttachment of attachments) {
+    const attachment = sanitizeAttachmentForChannel(rawAttachment, "search");
     if (!attachment) continue;
     addSearchPart(parts, attachment.type);
     if (attachment.type === "image") {
@@ -382,9 +1292,28 @@ export function buildAttachmentSearchText(attachments: readonly ChatAttachment[]
       addSearchPart(parts, attachment.fileKind);
       continue;
     }
-    addSearchPart(parts, attachment.label);
-    addSearchPart(parts, attachment.path, CHAT_ATTACHMENT_PATH_SEARCH_CHARS);
-    addSearchPart(parts, "selection");
+    if (attachment.type === "selectionReference") {
+      addSearchPart(parts, attachment.label);
+      addSearchPart(parts, attachment.path, CHAT_ATTACHMENT_PATH_SEARCH_CHARS);
+      addSearchPart(parts, "selection");
+      continue;
+    }
+    if (attachment.type === "notification") {
+      addSearchPart(parts, "task notification");
+      addSearchPart(parts, attachment.status);
+      addSearchPart(parts, attachment.summary);
+      addSearchPart(parts, attachment.result, CHAT_TASK_NOTIFICATION_RESULT_SEARCH_CHARS);
+      continue;
+    }
+    if (attachment.type === "invoke") {
+      addSearchPart(parts, "tool invocation");
+      addSearchPart(parts, attachment.toolName);
+      addSearchPart(parts, attachment.description);
+      for (const parameter of attachment.parameters) {
+        addSearchPart(parts, parameter.name);
+        addSearchPart(parts, parameter.value, CHAT_INVOKE_PARAMETER_SEARCH_CHARS);
+      }
+    }
   }
   return parts.join("\n");
 }
@@ -509,22 +1438,6 @@ function parseCodexFileReferenceLine(line: string): ChatFileReferenceAttachment 
     ...(lineInfo.line ? { line: lineInfo.line } : {}),
     ...(lineInfo.endLine ? { endLine: lineInfo.endLine } : {}),
     fileKind: inferFileKind(fsPath, label),
-  };
-}
-
-function extractClaudeIdeReferencesFromText(text: string): ExtractedMessageContent {
-  const attachments: ChatAttachment[] = [];
-  const clean = normalizeNewlines(text).replace(
-    /<ide_(opened_file|selection)>([\s\S]*?)<\/ide_\1>/giu,
-    (_full, tag: string, body: string) => {
-      if (tag === "opened_file") attachments.push(buildClaudeOpenedFileAttachment(body));
-      else attachments.push(buildClaudeSelectionAttachment(body));
-      return "\n";
-    },
-  );
-  return {
-    text: clean,
-    attachments,
   };
 }
 
@@ -713,6 +1626,31 @@ function formatSelectionSummary(selection: ChatSelectionReferenceAttachment): st
   return `- Selection reference: ${formatMarkdownCodeSpan(target)}${location ? ` (${location})` : ""}`;
 }
 
+function formatTaskNotificationSummary(notification: ChatNotificationAttachment, mode: AttachmentSummaryOptions["mode"]): string[] {
+  const lines: string[] = [];
+  const headerParts = ["Task notification", notification.status];
+  if (notification.summary) headerParts.push(notification.summary);
+  lines.push(`- ${headerParts.filter(Boolean).join(": ")}`);
+  const usageText = formatTaskNotificationUsageText(notification.usage);
+  if (usageText && mode === "markdown") lines.push(`  - Usage: ${usageText}`);
+  if (notification.result) {
+    const limit = mode === "markdown" ? CHAT_TASK_NOTIFICATION_RESULT_MARKDOWN_CHARS : 1_000;
+    lines.push(`  - Result: ${formatClampedTextForSummary(notification.result, limit)}`);
+  }
+  return lines;
+}
+
+function formatInvokeSummary(invoke: ChatInvokeAttachment, mode: AttachmentSummaryOptions["mode"]): string[] {
+  const lines: string[] = [`- Tool invocation: ${formatMarkdownCodeSpan(invoke.toolName)}`];
+  if (invoke.description) lines.push(`  - Description: ${invoke.description}`);
+  if (mode === "resume" || mode === "handoff") return lines;
+  for (const parameter of invoke.parameters) {
+    const value = formatClampedTextForSummary(parameter.value, CHAT_INVOKE_PARAMETER_MARKDOWN_CHARS);
+    lines.push(`  - ${parameter.name}: ${value}`);
+  }
+  return lines;
+}
+
 function formatMarkdownCodeSpan(value: string): string {
   const text = normalizeNewlines(value).replace(/\s+/g, " ").trim();
   if (!text) return "``";
@@ -835,6 +1773,23 @@ function hasClaudeIdeTag(value: string): boolean {
   return /<ide_(?:opened_file|selection)>/iu.test(value);
 }
 
+function hasClaudeStructuredAttachmentTag(value: string): boolean {
+  if (hasTaskNotificationStructuredAttachmentTag(value)) return true;
+  return /<invoke\s+name=(["']).+?\1\s*>[\s\S]*?<\/invoke>/iu.test(value);
+}
+
+function hasTaskNotificationStructuredAttachmentTag(value: string): boolean {
+  let searchIndex = 0;
+  while (searchIndex < value.length) {
+    const openIndex = value.indexOf(TASK_NOTIFICATION_OPEN_TAG, searchIndex);
+    if (openIndex < 0) return false;
+    const open = matchTaskNotificationOpenTag(value, openIndex);
+    if (open && value.indexOf(TASK_NOTIFICATION_CLOSE_TAG, open.openEnd) >= 0) return true;
+    searchIndex = openIndex + 1;
+  }
+  return false;
+}
+
 function hasTextCandidate(content: unknown, needle: string): boolean {
   if (typeof content === "string") return content.includes(needle);
   for (const item of normalizeContentItems(content)) {
@@ -864,6 +1819,22 @@ function clampText(value: string, maxChars: number): string {
   const text = String(value ?? "");
   if (text.length <= maxChars) return text;
   return `${text.slice(0, Math.max(0, maxChars - 3))}...`;
+}
+
+function clampTextWithMetadata(value: string, maxChars: number): { text: string; truncated: boolean; originalLength: number } {
+  const text = String(value ?? "");
+  if (text.length <= maxChars) return { text, truncated: false, originalLength: text.length };
+  return {
+    text: `${text.slice(0, Math.max(0, maxChars - 3))}...`,
+    truncated: true,
+    originalLength: text.length,
+  };
+}
+
+function formatClampedTextForSummary(value: string, maxChars: number): string {
+  const clamped = clampTextWithMetadata(value, maxChars);
+  if (!clamped.truncated) return clamped.text;
+  return `${clamped.text} [truncated from ${clamped.originalLength} chars]`;
 }
 
 function estimateBase64Bytes(payload: string): number {

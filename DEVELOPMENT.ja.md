@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-06-22
-- 対象バージョン: 2.6.1
+- 最終更新: 2026-07-02
+- 対象バージョン: 2.7.0
 
 ## 1. 概要
 
@@ -232,7 +232,7 @@
   - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
-  - 内部 file version: 9
+  - 内部 file version: 10
   - 用途: 繰り返し検索を高速化する増分インデックス
   - `search-index.v2.json` が破損して JSON parse error になった場合は、破損内容を退避せず削除し、次回検索時に再構築する
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
@@ -310,7 +310,7 @@
 - 新規チャットタブ、または再利用タブで別セッションへ切り替わったチャットタブは `off` から開始する
 - 同じセッションの既存チャットタブを再表示する場合は、そのタブの自動更新モードを維持する
 - `preserve` は現在の表示位置と UI 状態を維持して再読み込みする
-- `follow` は UI 状態を維持し、最新の表示カードへスクロールする。ただし末尾が grouped diff カードの場合は、直前の非 diff 表示カードを優先する
+- `follow` は UI 状態を維持し、`liveRunningTurnId` / `latestTurnId` がある場合はその turn 内の live running marker、completed end marker、最後の意味ある表示カードの順にスクロール対象を選ぶ。末尾が patch group の場合は、同じ turn 内の直前の非 patch group 表示カードを優先する
 - 自動更新では Search 結果を消さない
 - 自動更新では検索インデックス再構築を行わない
 
@@ -337,6 +337,10 @@
   - text document は text document card として表示し、プレビュー表示には上限内の抜粋だけを使う
   - unknown document は generic document card として表示する
 - Claude Code の `<ide_opened_file>` / `<ide_selection>` は本文から除去し、file reference / selection reference card として表示する
+- Claude Code の `<task-notification>` は user message の通常本文ではなく task notification attachment として扱う。`summary` / `result` / `usage` はカード、検索、Markdown transcript、Resume / Handoff の用途別 policy に従って使い、`taskId` / `toolUseId` / `outputFile` / system preamble / 定型 `note` は通常表示や Webview model へ出さない
+- Claude Code の assistant message に raw text として残る `<invoke name="...">` は tool invocation attachment として扱う。Markdown の fenced code / inline code / blockquote 内に引用された `<invoke>` は抽出せず、壊れた block や境界が曖昧な block は raw text として残す
+- `<task-notification>` / `<invoke>` の共通 scanner は open / close 候補を tag 種別ごとに一度だけ列挙し、close 欠落や malformed open が大量にある履歴でも open ごとに EOF まで再走査しない
+- Claude Code の `queue-operation` / `attachment.type = "queued_command"` に含まれる task notification / invoke 風 text は、会話として materialize された user / assistant message ではないためカード化しない
 - Codex の `# Files mentioned by the user:` block は、message 先頭または IDE context 後ろの本文途中から file reference card に変換し、raw block と `## My request for Codex:` ヘッダーは除去して前置 context と依頼本文を残す
 - Codex の `## My request for Codex:` がない variant は、安全に file block と本文の境界を判定できる場合だけ分離する
 - Codex file reference は参照先ファイルを自動で読まず、履歴に保存された label / path / line 情報だけを表示する
@@ -351,6 +355,7 @@
 - local file reference の Open は Webview から `openAttachment` message を送り、extension host 側で VS Code API 経由で開く。shell command は使わない
 - 本文が空で添付だけの user message も、詳細非表示時に context / empty message と誤判定せず表示する
 - `attachments` は抽出時点から履歴 content の出現順を保つ。Webview 側でも kind 別に並べ替えず、連続する画像だけを image group としてまとめる
+- structured attachment の抽出は source offset で merge し、Claude IDE reference、task notification、invoke、image placeholder などを種類別に並べ替えない
 - Search / Markdown / Resume / Handoff など画像 payload を読まない経路では、画像実データを読み込まずに MIME type / 推定 label などの軽量 metadata だけを保持する
 - `localimage` / `imageassetpointer` など normalize 後の image-like type も attachment-like 判定に含め、main path と patch detail path の messageIndex を揃える
 - Claude Code の `type: "document"` は document extractor を優先し、image extractor では処理しない。MIME type 欠落時も document と image の二重 attachment にしない
@@ -372,8 +377,30 @@
 - assistant 応答に Codex のメモリー引用情報が含まれる場合は、本文末尾ではなく折りたたみ表示として扱う
 - チャットタブの自動更新ボタンは、履歴の自動更新設定が有効なときだけ表示し、`off` / `preserve` / `follow` をクリックで循環する
 - `preserve` / `follow` はボタンの背景色でオン状態を示し、`follow` はさらに別色で追従中であることを示す
-- チャットの先頭 / 末尾スクロールは、スクロールコンテナの絶対端ではなく、実際に描画されている最初 / 最後のカードを対象にする
-- 自動更新 `follow` は、末尾が grouped diff カードの場合に直前の非 diff カードへ追従する。非 diff カードがない場合は最後の diff カードへフォールバックする
+- チャットの先頭 / 末尾スクロールは、スクロールコンテナの絶対端ではなく、実際に描画されている最初 / 最後の visual target を対象にする。先頭ボタンは target を toolbar 直下へ貼り付けず小さな上端余白を残し、先頭 user card で sticky user header が不要に出ないようにする。末尾ボタンと `chat.openPosition=latest` は reveal 操作ではないため、ユーザーが折りたたんだ turn を勝手に展開しない
+- 自動更新 `follow` は、`liveRunningTurnId` / `latestTurnId` がある場合はその turn 内の live running marker、completed end marker、最後の意味あるカードの順に追従する。末尾が patch group の場合は同じ turn 内の直前の非 patch group カードを優先し、該当 turn の描画カードがない場合は描画済み marker / visual target へフォールバックする。手動で折りたたまれた completed turn は勝手に展開せず、collapsed summary marker を追従対象にできる
+- 末尾スクロールと `follow` の着地点では、最後の card / marker が Webview 下端に貼り付かないよう小さな下端余白を残す。通常 card / diff card は 10px、running / completed / collapsed marker は 12px 程度の余白を目安にする
+- Codex turn は timeline 上で start marker、end marker、turn rail に分けて表示し、`live` mode では running anchored chip / running fallback chip を追加する。`basic` mode では live running 状態を表示せず、turn は JSONL 由来の永続 status のまま表示する
+- turn の主表示は `ターン N` とし、message / card index の `#N` とは混同させない。`ターン N` は狭い viewport でも 2 行に割らず、full `turn_id` は tooltip / aria-label に出す
+- start marker は turn 開始位置だけを示し、`完了` などの終了状態は end marker にだけ出す
+- start marker には activity / status dot を出さず、静的な開始境界として表示する
+- end marker は turn の最後の表示 item の直後に出し、item 数、tool 数、変更数、入力 / 出力 / 合計 token を表示する。token 合計がない場合だけ usage 記録件数へフォールバックする
+- completed turn は start marker 側の toggle で手動折りたたみ / 展開できる。折りたたみ状態は Webview 内の同一セッション UI 状態として保持し、JSONL / globalState / 検索 index には保存しない
+- 折りたたみ中の completed turn は、本文 row と通常 end marker を隠し、start marker を collapsed summary marker に切り替える。summary には `開始` / `終了`、開始時刻、終了時刻、所要時間、item / tool / patch / token summary を集約する。狭い viewport では `ターン N`、toggle、`開始` / `終了` badge を折り返さず、時刻、所要時間、件数、token summary などの補助情報を ellipsis または非表示にして表示崩れを避ける
+- turn marker の toggle は本文側の固定幅 slot ではなく、turn rail 上または rail-control lane に置き、`ターン N` の開始位置を rail のすぐ右で揃える
+- `live` mode の running anchored chip は同じ turn 内の最後の意味ある表示カードの直後に、turn rail 基準の独立 anchored row として左寄せ表示する。user card の後でも右寄せせず、patch group / ファイル変更 card の内部には入れない
+- anchored chip が viewport 外に流れた場合だけ、左下 fixed の running fallback sticky を表示する。fallback sticky は Webview 内の running marker と同じ表示部品を固定表示し、中身の font size / pill / meta text は Webview 内 marker と同一にする。本文上でも読めるよう、外側には user sticky と同系統の座布団 surface / border / shadow を敷く。座布団は内側の running marker より縦方向に余白を持たせ、outer surface 側の最小高さと上下 padding で枠が text / pill に密着して細く見えないようにする。独自の大きな chip や別 typography にはしない。本文カードの下に潜らず、`ターン N` / `実行中` / `経過` / `最終活動` が潰れない幅を確保する。クリック / Enter / Space で running turn へ移動する
+- running chip は user bubble 内や sticky user header 内には入れず、sticky user header の切り替え条件とは独立させる
+- running chip は `実行中` を `開始` / `完了` と同系統の pill として表示し、`経過 N` と `最終活動 ...` は muted meta text として表示する。経過時間は `startedAtIso` から live 更新し、最終活動時刻は `updatedAtIso` が変わるまで進めない。文字サイズ、pill、meta text、余白、teal-green 系の running 色は start / end marker と同系統にし、省略時は ellipsis と tooltip / title で全文を確認できる
+- running chip には小さな dot / ring の activity cue を表示し、実行中であることだけを opacity / box-shadow の控えめな pulse で示す。dot は start marker には出さず、anchored row では turn rail 側の左端、左下 fallback sticky では marker 先頭に同じ見た目で出す
+- running turn の `updatedAtIso` / `lastItemIndex` / `itemCount` が変わったときだけ短い update flash を出し、初回描画、scroll、resize、anchored / fallback の表示切り替えだけでは flash しない
+- running chip の枠は常時回転させない。進捗更新時だけ、update flash と同じ activity signature 変化で薄い border glint を 1 回だけ流す
+- `prefers-reduced-motion: reduce` では running chip の pulse / flash / border glint と running marker dot pulse を止め、静的な accent 表示だけにする
+- sticky user header は、次の user card の上端が sticky 表示領域に到達した時点で次の user に切り替える
+- patch group card は collapsed state で compact file summary を表示し、先頭 3 file rows と `あと N 個のファイルを表示` / `表示を減らす` を持つ。全ファイルの diff をまとめて読む操作は `レビューする` ではなく、`全差分を開く` / `全差分を閉じる` として扱う。`元に戻す` は初期実装に含めない
+- `全差分を開く` は patch group card 内の in-place all-diff mode として動作し、オーバーレイ、別タブ、別パネルは使わない。押下時は対象 card だけを全幅にし、file list を全件表示し、全 file の patch detail を同じ card 内で展開する
+- `全差分を閉じる` は同じ card の全 patch detail を閉じ、compact file summary に戻す。解除時は all-diff mode に入る前の card 幅状態を復元する。file row の個別クリックによる単体 patch detail 展開は従来どおり残す
+- all-diff mode でも diff body は既存の deferred rendering / loading 表示を使い、全 entry の wrapper は描画しつつ、diff body の実体を同期的に一括描画しない
 - `Show details` OFF で描画されないカードは、先頭 / 末尾スクロールおよび `follow` の対象に含めない
 - `Show details` OFF では tool 引数 / tool 出力 / patch diff 行などの重い詳細を省略し、必要時に full detail を再読み込みする
 - `chat.performanceMode` は `auto` / `normal` / `simplified` を持つ
@@ -425,7 +452,8 @@
   - Codex / Claude はヘッダーの source toggle で絞り込める
   - diff card は通常履歴 Webview の diff card と同じ見た目・操作感に寄せる
   - diff は Webview 内の独自レンダリングで表示し、VS Code 標準 Diff Editor / `vscode.diff` は使わない
-  - 初期表示と追加読み込みは日付昇順
+  - 初期表示と追加読み込みは、セッション開始時刻ではなく diff card の変更時刻昇順
+  - Codex / Claude の source toggle 後も、表示中 card の変更時刻順を維持し、card 番号 `#N` は読み込み済み mixed timeline 上の番号を維持する
   - 通常サイズの diff は初期展開し、巨大 diff は折りたたむ
   - 1 card は選択ファイル 1 変更分として扱う。move / rename で before / after の両方が一致しても 1 card にまとめる
 - 操作:
@@ -439,12 +467,15 @@
 - 追加読み込み:
   - 成功 / 失敗 / キャンセルのいずれでも現在のスクロール位置を維持する
   - 追加後は通知相当の短いメッセージだけを表示し、追加分へ自動移動しない
+  - 追加分が既存表示の途中に挿入される場合でも、閲覧中 card の anchor を基準に scroll を復元する
   - 初回読み込み / 再読み込み後にまだ続きがある場合は、`続きを読み込む` で追加できることを toast で案内する
   - `続きを読み込む` 成功後もまだ続きがある場合は、追加件数と続きがある旨を同じ toast にまとめ、同系統の toast は重ねず置き換える
   - 全候補を解析済みの場合は `これ以上の履歴はありません` を表示し、`続きを読み込む` を消す
 - date guide:
   - `codexHistoryViewer.ui.timeGuide.enabled` が `true` のときだけ表示する
   - ファイル履歴では範囲に応じて day / month / year に自動スケールする
+  - ファイル履歴の major tick では、対応する mixed timeline card 番号を `#12 7/1` や `#12-#18 7/1` のように日付と併記する
+  - ファイル履歴の minor tick は dot のみ表示し、card 番号は tooltip / aria-label に保持する
   - マウスオーバー、手動スクロール、キーボードスクロールで表示する
   - 自動更新追従、先頭 / 末尾ボタン、前後カード移動、reveal target への自動ジャンプでは表示しない
   - 日付ガイド外クリックで即座に閉じる。ただしガイド上にマウスがある間は閉じない
@@ -650,6 +681,7 @@
   - Windows では大小文字差と区切り文字差を吸収する
 - `src/fileHistory/fileChangeHistoryPanelManager.ts`
   - ファイル履歴 Webview の作成、再利用、reload、load more、通常履歴 Webview への reveal を担当する
+  - 初回読み込みと追加読み込みで `state.cards` を更新する直前に、読み込み済み card 全体を変更時刻昇順で安定 sort する
   - `codexHistoryViewer.webview.restoreAfterReload = true` のときだけ `codexHistoryViewer.fileChangeHistory` の `WebviewPanelSerializer` を登録し、Reload Window / VS Code 再起動後も対象ファイルと読み込み済みカード件数を元に再読み込みする
   - Webview serializer 復元時は、最後に見ていた card anchor を `scrollAnchor` として保存し、復元後に同じ card 付近へ戻す
   - serializer 復元時は対象ファイルが存在し、保存された workspace root が現在の workspace に含まれる場合だけ復元する
@@ -667,15 +699,27 @@
   - diff card は通常履歴 Webview の diff card と同じ before / after column、行番号、追加 / 削除表示を使う
   - loading 表示の fallback はタイトル文言を流用せず、`l10n/bundle.l10n.*` の loading 文言を使う
   - 検索は読み込み済み card だけを対象にし、追加読み込み後は自動で再検索する
+  - Webview 内検索の検索結果は、所属 card の mixed timeline 番号 `#N` を常時表示し、diff 本文 hit では `変更前 L...` / `変更後 L...` の行番号 badge を併記する
+  - source toggle 後も検索結果 badge の `#N` は mixed timeline 番号として維持し、`続きを読み込む` 後は View 内の `#N` と同じ基準で再計算する
+  - `model` message 受信時に `card.id` から mixed timeline 番号を引く Map を作り直し、card header、date guide、検索結果 badge、source toggle 復元の近傍計算で同じ番号を使う
+  - mixed timeline lookup は `card.id -> index` と `card.id -> card` を O(1) で引ける形にし、`resetUi` で `model` を残す場合は Map だけを空にしない
+  - Webview 内検索の diff 行番号 badge は、通常幅では `変更前 L...` / `変更後 L...` を表示し、検索パネル幅が不足する場合は CSS container query で visible text を `L...` に圧縮する。圧縮時も tooltip / aria-label には変更前 / 変更後を含める
+  - Webview 内検索の compact badge 切り替えは render 後の overflow 測定ではなく検索パネル幅だけを基準にし、`scrollWidth` / `clientWidth` の layout read を行わない
+  - Webview 内検索結果の `occurrenceIndex` は検索 refresh ごとの `cardId -> count` Map で生成し、hit ごとに既存 results 全体を走査しない
   - Webview 内検索の Enter / 前へ / 次へでは pending debounce を flush し、flush 済みの場合は同じ検索 refresh を二重実行しない
-  - 追加読み込み成功後も scroll 位置を維持する
+  - 追加読み込み成功後も、card id と card 内 offset を使って閲覧中 card 付近へ scroll を復元する
+  - source toggle では先頭へ戻さず、表示対象に残る閲覧中 card、または時刻と表示位置が近い card へ scroll を復元する
   - `model` message 受信時は `render()` / scroll 復元前に restore state を保存せず、`restoreReloadScrollAnchor()` / `restoreScroll()` の適用後に `scrollAnchor` を保存する
-  - 初回 / 再読み込み後に `hasMore` が残る場合は `続きを読み込む` の存在を toast で案内し、load more 後も続きがある場合は追加件数と同じ toast にまとめる
+  - 初回 / 再読み込み後に `hasMore` が残る場合は `続きを読み込む` の存在を toast で案内し、load more 後も続きがある場合は現在の source filter で見える追加件数と同じ toast にまとめる
+  - load more で hidden source の card だけが追加された場合は、visible card が増えたように見える文言を避け、非表示中 source 用 toast へ分ける。現行の追加 source 件数は `{ codex, claude }` の閉じた契約として扱い、将来 source を増やす場合は host payload と Webview filter を同じ source model へ拡張する
   - 前 / 次 card ナビゲーションは、source toggle 適用後の表示中 card 配列を基準にする
 - `media/sharedTimeGuide.js` / `media/sharedTimeGuide.css`
   - 通常履歴 Webview とファイル履歴 Webview で共通の date guide を提供する
   - 設定が無効な場合は date guide DOM を生成しない
   - 表示単位はモードと範囲に応じて自動スケールする
+  - date bucket は先頭 item だけでなく bucket 内 item 集合を集計し、File History から opt-in の mixed timeline card ordinal metadata が渡された場合だけ `#N` / `#N-#M` を組み立てる
+  - File History の card ordinal は major tick の visible label にだけ表示し、minor tick では tooltip / aria-label にだけ含める
+  - File History の ordinal summary は visible label 生成に必要な label だけを返し、未使用の start / end 情報は共有 date guide API に残さない
   - tooltip は目盛り近辺だけで表示し、ガイド外クリックでは閉じる
   - Dark / Light / High Contrast で rail / dot が埋もれないよう theme 変数で描画する
 - `src/chat/chatPanelManager.ts` / `media/chatView.js`
@@ -689,6 +733,7 @@
   - `Show File AI Change History` コマンド、Explorer context menu、関連設定説明を定義する
 - `l10n/bundle.l10n.*`
   - ファイル履歴 Webview の表示文字列、エラー、空状態、load more、source 件数、date guide 文字列を管理する
+  - hidden source のみが追加された load more 用の toast 文言を英日両方で管理する
 
 ### 4.6 検索フロー
 
@@ -746,7 +791,7 @@
 - `src/services/chatOpenPositionStore.ts`
   - 最後に見えていた表示位置を `globalState` に最大 100 セッション分保存する
   - 復元には `chat.openPosition = lastMessage` のときだけ使用する
-  - `chat.openPosition = latest` は保存位置を使わず、Webview 側で最新の描画済みカードへ移動する
+  - `chat.openPosition = latest` は保存位置を使わず、Webview 側で最新の描画済み visual target へ移動する。折りたたみ中の turn は勝手に展開しない
   - session path 移動時は `relocateSessionPath()` で保存位置を新 path へ移す
   - path 移動時に移行先 entry が既にある場合は移行先を優先し、source 側で上書きしない
 
@@ -795,7 +840,7 @@
   - 個別 metadata の移行に失敗しても archive / restore 自体は破綻させず、診断ログに留める
 - `src/extension.ts`
   - `codexHistoryViewer.restoreArchivedSession` は確認後に restore を実行し、成功後に履歴を refresh する
-  - Chat WebView 由来の restore は direct 引数の `revealMessageIndex` を検証し、復元先 active path の `ChatOpenPositionStore` に保存する
+  - Chat Webview 由来の restore は direct 引数の `revealMessageIndex` を検証し、復元先 active path の `ChatOpenPositionStore` に保存する
   - restore が例外を投げた場合は `app.restoreArchivedFailed` を表示し、履歴と view を更新して部分移動済み状態にも追従する
   - filesystem restore の場合だけ Undo を出し、公式 provider restore では本家状態との整合を優先して Undo を出さない
   - `codexHistoryViewer.archiveSession` は Codex source と archived sessions が有効な active Codex session だけを対象にする
@@ -822,8 +867,16 @@
   - `patchEntry` reveal target で開く場合は、`revealMessageIndex` があっても `summary` を維持する
   - `ChatPanelManager` は対応画像の data URI をパネル単位で保持し、Webview からの `requestImageData` に応じて必要な画像データだけ返す
   - `ChatPanelManager` は usage 行のラベルを Webview i18n として渡し、表示文字列を `l10n/bundle.l10n.*` で管理する
+  - `ChatPanelManager` は Codex turn の永続状態を変更せず、`chatTurnTimelineMode=live` の場合だけ active Codex root、archive 状態、mtime、auto-refresh 観測状態を使って live 表示の `running` を `displayStatus` として付与する
   - `chatModelBuilder.ts` は Codex の `turn_context.payload.model` / `effort` を assistant メッセージと usage 行へ付与する
   - `chatModelBuilder.ts` は Codex の `event_msg.payload.type = token_count` から `last_token_usage` / `total_token_usage` / `model_context_window` / `rate_limits` を usage 行に変換する
+  - `chatModelBuilder.ts` は Codex の `task_started` を turn 開始の主シグナルとし、`turn_context.payload.turn_id` は active turn と一致する場合だけ補助観測として扱う
+  - `chatModelBuilder.ts` は Codex timeline item に `turnId` を付与し、`ChatTurnSummary` で `sequenceNumber`、`incomplete` / `completed` / `interrupted` / `rolledBack` / `unknown` の永続状態、item / tool / patch / usage / token 合計を構築する
+  - `chatModelBuilder.ts` は `sequenceNumber` を turn 観測順から決め、item を持たない turn を表示から除外しても後続 turn を再採番しない。表示番号の安定を優先し、歯抜けは許容する
+  - `chatModelBuilder.ts` は raw `<turn_aborted>` を active turn にフォールバックして紐づけ、structured `turn_aborted` / `thread_rolled_back` と同じ turn summary に反映する
+  - `chatModelBuilder.ts` は `token_count` usage の turn を active turn、明示 `turn_id`、explicit unknown terminal 由来の scoped block、直近 completed turn の順で解決し、`task_complete` 後に末尾 usage が来る場合も直近 turn に含める。turn token 合計には `last_token_usage` 相当の usage item を使い、累計値になり得る `total_token_usage` は直接合算しない
+  - `chatModelBuilder.ts` は turn_id なしの重複 `task_complete` と explicit unknown `task_complete` を区別する。turn_id なしでは直近 completed turn の latest fallback を維持し、explicit unknown では古い completed turn への trailing usage 誤帰属を止める
+  - `chatModelBuilder.ts` は turn_id なしの `task_started` で古い active turn への帰属を解除し、非 active の environment-only turn は空の turn marker として表示しない。一方、live 観測中の active turn は environment だけを持つ段階でも running 表示用に保持する
   - `chatModelBuilder.ts` は Claude の `message.model` / `message.usage` から usage 行を生成し、連続する同一 usage の重複表示を抑制する
   - `chatModelBuilder.ts` は `session_meta` などから CWD / Git ブランチ / Git コミット / dirty 状態を environment 行に変換し、同一 snapshot の重複表示を抑制する
   - `chatModelBuilder.ts` は Codex の `custom_tool_call` / `custom_tool_call_output` も tool カードとして扱う
@@ -831,12 +884,18 @@
   - `chatModelBuilder.ts` は `extractCodexMessageContent()` / `extractClaudeMessageContent()` の結果から clean text と `attachments` を message item へ設定する
   - `chatTypes.ts` は `ChatImageAttachment` / `ChatDocumentAttachment` / `ChatFileReferenceAttachment` / `ChatSelectionReferenceAttachment` を `ChatAttachment` として定義する
   - `chatAttachments.ts` は画像、Claude document、Claude IDE tag、Codex `Files mentioned by the user` block を統合して抽出する
+  - `chatAttachments.ts` は Claude の materialized message 判定を `detectClaudeMaterializedMessageRole()` に集約し、`queue-operation` と `attachment.type = "queued_command"` を chat / search / transcript / resume / handoff の本文化対象から除外する
+  - `chatAttachments.ts` は Claude task notification / invoke を共通の bounded block scanner と Markdown safe-context map で抽出する。fenced code、inline code、blockquote 内の引用例は抽出せず、外側閉じタグや parameter / result 境界が曖昧な block は raw text として残す
+  - bounded block scanner は open / close 候補を candidate 配列として先に列挙し、各 open は次の同種 open までの window だけを見る。close 欠落や malformed open が大量にある場合でも close 探索を EOF まで反復せず、検索インデックス構築や transcript / resume / handoff 生成を二乗時間にしない
+  - `chatAttachments.ts` は task notification の `summary` / `result` / `usage` を top-level parser で読み、`<result>` 内の `<status>` / `<usage>` 風 text を top-level field として誤抽出しない。`usage` の数値は 10 進整数だけを受理する
+  - `chatAttachments.ts` は `sanitizeAttachmentForChannel()` で Webview / Markdown / Search / Resume / Handoff 用 attachment projection を一元化し、task notification の `taskId` / `toolUseId` / `outputFile` / `systemPreamble` / `note` / `rawStatus` や invoke の `harnessPreamble` を通常 channel に載せない
   - `chatAttachments.ts` は content item を出現順に走査し、image / document attachment の順序を保つ。IDE tag 由来の file / selection reference は clean text 抽出後の attachment として扱う
   - `chatAttachments.ts` は `localimage` / `imageassetpointer` などの image-like type を patch detail 側の attachment-like 判定にも含め、messageIndex のドリフトを防ぐ
   - Codex `Files mentioned by the user` block は message 先頭または IDE context 後ろの本文途中から file reference に変換し、raw block は本文に残さない
   - Claude `<ide_opened_file>` / `<ide_selection>` は file reference / selection reference に変換し、raw tag は本文に残さない
   - Claude text document は表示用抜粋と検索用テキストをそれぞれの上限内で保持し、Save As 用 payload は panel 側 store へ置く
   - PDF / generic base64 document は初期 Webview model へ payload を渡さず、metadata と `dataOmitted` だけを渡す
+  - `ChatPanelManager` は Webview model 生成時に `sanitizeAttachmentForChannel(..., "webview")` を通し、画面に描画していない内部メタデータも Webview payload へ載せない
   - `chatImageAttachments.ts` は Codex / Claude の画像データ、ローカル画像参照、画像プレースホルダーを正規化する
   - `chatImageAttachments.ts` は `enabled: false` の抽出でも payload を読まずに MIME type / label などの metadata を保持し、検索や summary に利用できるようにする
   - `chatImageAttachments.ts` は Claude `type: "document"` を image extraction から除外し、MIME type 欠落 base64 document の二重抽出を防ぐ
@@ -860,16 +919,46 @@
   - Webview 側は `Show details` 切り替え時にカード anchor を保持し、再描画後に同じカードまたは次の表示カードへ復元する
   - Webview 側は performance mode に応じて heavy diff body の遅延描画、タブ復帰時の hibernation、restore cover 後の復元を行う
   - Webview 側は `lastMessage` の保存 / 復元を本文 `msg-*` アンカー単位で行い、対象が表示されていない場合は直前の描画済み本文メッセージ、なければ先頭へフォールバックする
-  - Webview 側は `latest` のとき、保存位置を参照せず、ヘッダーの末尾ボタンと同じ最新の描画済みカードへスクロールする
+  - Webview 側は `latest` のとき、保存位置を参照せず、ヘッダーの末尾ボタンと同じ最新の描画済み visual target へスクロールする。折りたたみ中の completed turn は勝手に展開せず、collapsed summary marker が末尾ならそこへ移動する
   - Webview 側は usage 行を折りたたみ可能カードとして描画し、展開状態を同一セッション reload 中は保持する
+  - Webview 側は Codex turn ごとに start marker、end marker、turn rail を描画し、`live` mode では running anchored chip / running fallback chip を追加する。start marker は開始位置、end marker は最終 item 直後、running chip は `live` mode 専用として扱う
+  - Webview 側の turn 表示は `ターン N` を主表示に使い、short `turn_id` は出さない。full `turn_id` は tooltip / aria-label にだけ出す
+  - Webview 側の end marker は item / tool / patch / input token / output token / total token を表示し、token 合計がない場合だけ usage 記録件数を表示する
+  - Webview 側は completed turn の start marker にだけ collapse toggle を置き、折りたたみ中は start marker を collapsed summary marker に切り替える。本文 row と通常 end marker は隠し、summary に `開始` / `終了`、開始時刻、終了時刻、所要時間、item / tool / patch / token summary を集約する
+  - Webview 側の collapsed summary marker は狭い viewport でも `ターン N`、toggle、`開始` / `終了` badge を 1 行で維持し、時刻、所要時間、件数、token summary などの末尾補助情報を ellipsis または非表示にして横スクロールや隣接 marker との重なりを起こさないようにする
+  - Webview 側の turn collapse 状態は `collapsedTurnIds` で同一セッション reload 中だけ保持し、session 切り替えでは破棄する。reveal / bookmark / patch navigation / page search など中身を見る操作は対象 turn を展開してから scroll / focus する。`follow`、`chat.openPosition=latest`、ヘッダー末尾ボタンは reveal 操作ではないため、手動で折りたたまれた turn を勝手に展開しない
+  - Webview 側の scroll anchor は `.row[data-item-index]` だけでなく、現在描画されている visual target を対象にし、turn marker、collapsed summary marker、running anchored row を捕捉できるようにする。marker anchor の復元は reveal 操作ではないため、折りたたみ turn を展開せず、同じ marker 付近へ戻す
+  - Webview 内検索で query により turn / patch group を一時展開する場合、検索結果への明示 reveal がない再計算では render 前の visual target anchor を保持し、render 後に同じ見かけ位置へ復元する。検索結果クリック、前へ / 次へなど hit へ移動する操作では、位置維持ではなく hit への scroll / focus を優先する
+  - Webview 側は page search の pending refresh intent に query、大文字小文字条件、role filter、描画内容 revision を持たせ、session reload / detail toggle / path mode toggle などで結果集合が変わった intent を stale として扱う
+  - Webview 側は attachment card 内の `<details>` 開閉を page search content mutation として扱い、render を伴わない開閉でも検索件数、highlight、active result を即時更新する
+  - Webview 側は attachment details の page search 一時展開 key を、実際の描画と同じ `getMessageAttachments()` 後の filtered attachment index で作り、malformed attachment が混在しても render 側 key と collect 側 key がずれないようにする
+  - Webview 側は render 中に必要になった追加 render / scroll restore を `requestAnimationFrame` の one-shot に逃がし、sessionData reload、session scoped reset、page search reset の境界では pending frame と callback を破棄して古い DOM anchor を新しい model に適用しないようにする
+  - Webview 側は turn marker の collapse toggle を本文側の固定幅 slot ではなく、turn rail 上または rail-control lane に絶対配置し、`ターン N` の開始位置を余分に右へ押し出さないようにする。start marker には activity / status dot を出さない
+  - Webview 側は同じ `turnId` が非連続に描画される場合、連続表示区間ごとに run key を付け、turn body の DOM id と `aria-controls` が衝突しないようにする
+  - Webview 側の `live` mode running anchored chip は同じ turn 内の最後の意味ある表示カードの直後に、turnBlock 直下の独立 anchored row として描画する。user card 後も右寄せにせず、patch group / ファイル変更 card / sticky header の内部には入れない
+  - Webview 側は anchored chip が viewport 外に流れた場合だけ左下 fixed の fallback sticky を表示し、fallback sticky から running turn へ移動できるようにする。fallback sticky の中身は Webview 内 running marker と同じ表示部品と同一 font size を使い、外側に user sticky と同系統の座布団 surface / border / shadow を敷く。座布団は outer surface 側の min-height と上下 padding で内側 marker より縦に大きく見せ、button baseline や theme 差で枠が潰れないようにする。本文カードより前面に出し、内容が dot だけに潰れないよう nowrap / width / z-index を明示する
+  - Webview 側は running chip を user bubble 内や sticky user header 内へ入れず、sticky user header の切り替えとは独立させる
+  - Webview 側は running chip の `実行中` を `開始` / `完了` と同系統の pill として表示し、`経過 N` と `最終活動 ...` は muted meta text として表示する。anchored row と左下 fallback sticky の中身は同じ marker 表示部品、同じ font size、同じ teal-green 系 running 色を使い、省略時は ellipsis と tooltip / title で全文を確認できる。fallback sticky は button の font shorthand で body size に戻さず、Webview 内 marker と同じ密度を維持する。経過時間 timer は現在描画中の running chip の elapsed text だけを更新し、timeline 全体は再描画しない
+  - Webview 側は running chip の elapsed target 探索を現在の timeline / 表示中 fallback chip に限定し、表示 text / hidden state が変わった場合だけ tooltip / aria-label を更新する
+  - Webview 側は狭幅で turn marker counts を視覚的に省略する場合も、件数 / token 補足を marker 本体の tooltip / aria-label に統合して参照可能にする
+  - Webview 側は running chip に CSS の pulse dot を表示する。dot は start marker には出さず、anchored row では turn rail 側の左端、左下 fallback sticky では marker 先頭に同じ見た目で出す。`turnId` / `updatedAtIso` / `lastItemIndex` / `itemCount` から作る activity signature が変わった場合だけ `runningTurnChip-flash` を付ける
+  - Webview 側は `runningTurnChip-flash::after` で短い border glint を出し、同じ activity signature 変化で update flash と一緒に 1 回だけ発火させる
+  - Webview 側の pulse / flash / border glint / running marker dot pulse は layout shift を起こさない opacity / box-shadow / background / border overlay の変化に限定し、`prefers-reduced-motion: reduce` では無効化する
+  - Webview 側は patch group の collapsed 表示を compact file summary にし、先頭 3 file rows、show more、`全差分を開く` / `全差分を閉じる` 操作を提供する
+  - `全差分を開く` / `全差分を閉じる` は `review` という語を使わず、l10n key も `chat.patch.openAllDiffs` / `chat.patch.closeAllDiffs` 系の all-diff 用語に寄せる。tooltip / aria-label では「カードを全幅にして全ファイルの差分を開く」「全ファイルの差分を閉じて概要に戻す」まで説明する
+  - all-diff mode の状態は patch group の stable `cardKey` 単位で Webview 内 UI state として持ち、JSONL、globalState、検索 index には保存しない。同一セッションの model reload では既存の UI state preserve 規則に従い、別セッションへ切り替わる場合は reset する
+  - all-diff mode に入るときは、現在の `wideTimelineCardKeys` に対象 `cardKey` があるかを記録してから対象 card を全幅表示にする。all-diff mode 中は通常の card width toggle と競合しないよう、幅操作は all-diff toggle 側に集約し、閉じると記録した幅状態へ戻す
+  - all-diff mode は全 entry を可視対象にし、各 entry を expanded として描画する。ただし `expandedPatchEntries` に全 entry id を恒久追加せず、mode 解除時は対象 group の個別 expanded state も閉じて compact summary に戻す
+  - page search による一時的な patch group 展開は all-diff mode と別状態として扱う。検索の一時展開が発生しても `全差分を開く` の pressed state は変えず、all-diff mode 中に検索しても mode を解除しない
+  - all-diff mode の diff body は既存の `renderPatchEntry` / deferred patch detail rendering を再利用し、loading / retry / detailsLoadFailed の表示も file 単位で維持する。オーバーレイ用に同じ diff DOM を二重生成しない
   - Webview 側は environment 行を軽量メタカードとして描画し、CWD など長い値は表示崩れしないよう省略 / 折り返しする
   - Webview 側は tool 実行メタ情報を tool カードの meta tag として表示し、status はローカライズ済みラベルへ正規化する
   - Webview 側は日付ガイド用 item に `attachmentKind` と attachment summary を渡し、添付あり message をガイド上で識別できるようにする
   - Webview 側の日付ガイド attachment summary では、最大 3 種類の要約、hidden unique kind 数の `+N`、必要時の総添付数 suffix を分けて扱う
   - Webview 側は IntersectionObserver で表示範囲付近の画像だけ data URI を要求し、セッション切替時は画像データキャッシュを破棄する
   - Webview 側の `saveImage` / `saveAttachment` message は現在の session `fsPath` を添えて送信し、host 側は stale / missing session request を保存処理から除外する
-  - `follow` モードは、`#timeline` に描画済みの `.row` から追従対象を選ぶ。末尾が `patchGroup` の場合は直前の非 `patchGroup` 行を優先し、非 `patchGroup` 行がなければ最後の `patchGroup` 行へフォールバックする
-  - チャット末尾ボタンは、`#timeline` に描画済みの最後の `.row` へスクロールする
+  - `follow` モードは、`liveRunningTurnId` / `latestTurnId` がある場合はその turn 内の live running marker、completed end marker、最後の意味ある `.row` の順に優先し、末尾が `patchGroup` の場合は直前の非 `patchGroup` 行を優先する。該当 turn の描画行がない場合は描画済み marker / visual target へフォールバックする
+  - チャット末尾ボタンは、`#timeline` に描画済みの最後の visual target へスクロールする。末尾が diff / patch group card、running marker、completed end marker、collapsed summary marker のいずれでも、現在の表示状態を尊重してそこへ移動する
   - patch group のカード幅保持キーは `turnId`、メッセージ index、変更ファイル情報などから安定的に作る
 - Markdown transcript: `src/transcript/*`
   - Codex session の `Location: Active` / `Location: Archived` を transcript metadata として表示する
@@ -1026,7 +1115,93 @@ npm run package
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 
-### 5.4 v2.6.1 リリースメモ（2026-06-22）
+### 5.4 v2.7.0 リリースメモ（2026-07-02）
+
+**追加された機能**
+
+- Codex JSONL の `task_started` / `task_complete` / `turn_aborted` / `thread_rolled_back` / `patch_apply_end` / `token_count` を使い、チャット timeline に Codex turn の start marker、end marker、turn rail を表示するようにした
+- turn は `ターン N` として表示し、full `turn_id` は tooltip / aria-label で確認できるようにした
+- turn end marker に item 数、tool 数、変更数、入力 / 出力 / 合計 token を表示するようにした。token 合計がない場合は usage 記録件数へフォールバックする
+- turn end marker に完了までの所要時間を表示し、`live` mode の running chip には開始からの経過時間と最終活動時刻を表示するようにした
+- completed turn を手動で折りたたみ / 展開できるようにした。折りたたみ中は `開始` / `終了`、開始時刻、終了時刻、所要時間、counts / token summary を collapsed summary marker に集約する
+- `live` mode の実行中 turn は、最後の意味あるカード直後の turn rail 基準 anchored row と、anchored row が viewport 外へ流れたときだけ出る左下 fallback sticky で表示するようにした
+- `live` mode の running chip に控えめな activity cue を追加し、実行中は小さな dot が pulse し、進捗更新時だけ短く flash するようにした。start marker 側の dot は廃止し、anchored row と左下 fallback sticky で同じ running dot を使うようにした
+- running chip の進捗更新時に、枠へ薄い border glint が 1 回だけ流れるようにした
+- patch group card の collapsed 表示を compact file summary にし、先頭 3 file rows と `あと N 個のファイルを表示` / `表示を減らす` を表示するようにした。全ファイルの差分をまとめて開く追加操作は、`レビューする` ではなく `全差分を開く` / `全差分を閉じる` として card 内 in-place all-diff mode で扱うようにした
+- 自動更新 `follow` は、`liveRunningTurnId` / `latestTurnId` がある場合、その turn 内の live running marker、completed end marker、最後の意味あるカードの順に追従するようにした。手動で折りたたまれた completed turn は勝手に展開せず、collapsed summary marker へ fallback する
+- Claude Code の `<task-notification>` を task notification card として表示し、`summary`、`result`、`usage` を raw tag なしで読めるようにした
+- Claude Code の assistant message に raw text として残る `<invoke>` を tool invocation card として表示し、tool 名、description、parameter を展開して確認できるようにした
+
+**変更された機能**
+
+- parser は JSONL だけで決まる永続状態を構築し、live 表示の `running` は `chatTurnTimelineMode=live` の場合だけ `ChatPanelManager` が active Codex root、archive 状態、mtime、auto-refresh 観測状態から付与するようにした
+- Codex turn は `task_started` を主シグナルとして開始し、`turn_context` は model / effort と active turn の補助観測に限定するようにした
+- `token_count` usage は active turn、明示 `turn_id`、explicit unknown terminal 由来の scoped block、直近 completed turn の順で turn を解決し、`task_complete` 後に末尾 usage が来る場合も直近 turn に含めるようにした
+- turn token 合計は `last_token_usage` 相当の usage item を合算し、累計値になり得る `total_token_usage` を直接合算しないようにした
+- item を持たない turn を表示から除外しても `sequenceNumber` を再採番せず、同じ `turnId` の `ターン N` が reload / filter 状態で変わらないようにした
+- turn_id なしの重複 `task_complete` では直近 completed turn の latest fallback を維持し、explicit unknown `task_complete` では古い completed turn への trailing usage 誤帰属を止めるようにした
+- terminal 済み turn は、後続 `task_started` の timestamp が既存 terminal timestamp より明確に新しい場合だけ `incomplete` へ戻すようにした。terminal timestamp 欠落時や同一 timestamp では、重複 event として扱い status を戻さない
+- turn_id なしの `task_started` で古い active turn への帰属を解除し、非 active の environment-only turn が空 marker として表示されないようにした。live 観測中の active turn は environment だけを持つ段階でも running 表示用に保持する
+- sticky user header は、次の user card の上端が sticky 表示領域に到達した時点で次の user に切り替えるようにした
+- running chip の `実行中` は `開始` / `完了` と同系統の pill として表示し、`経過 N` は `最終活動 ...` と同じ muted meta text として表示するようにした
+- running chip の経過時間 timer は、現在描画中の chip の elapsed text だけを更新し、timeline 全体を 1 秒ごとに再描画しないようにした
+- running chip の `startedAtIso` が未来時刻になる clock skew 状態では `経過` を一時的に省略し、timer は live running turn の存在を基準に継続して、時計が追いついた後に reload なしで `経過` が復帰するようにした
+- `task_complete` / `turn_aborted` / `thread_rolled_back` が未知 turn に対して来た場合、item を持たない幽霊 turn や stale `latestTurnId` を作らず、実在する item-backed turn だけを latest / follow / trailing usage の対象にするようにした
+- Webview 内検索の検索シード、role filter 変更、一時展開後の再検索で、意図した hit または viewport 近傍を維持し、常に先頭 hit へ戻らないようにした
+- Webview 内検索の pending refresh intent に描画内容 revision を含め、session reload / detail toggle / path mode toggle 後の古い intent を stale として扱うようにした
+- Webview 内検索の一時展開 state を turn / patch group / attachment details で一元的に reset し、turn timeline off や検索解除後に attachment details だけ stale force-open されないようにした
+- Webview 内検索中の turn collapse、message 展開、patch group file list、patch entry details、usage card、attachment details の開閉を content mutation helper 経由に寄せ、active result anchor を保ったまま再検索するようにした
+- attachment details の開閉 state key は、描画で使う filtered attachment list の ordinal を使い、同一 message 内の同一内容 notification / invoke でも別 details として扱うようにした
+- sessionData reload や reset 境界では、render 中に予約された deferred render / scroll restore を破棄し、古い DOM anchor 由来の scroll restore が reload 後に走らないようにした
+- running chip は user bubble 内や sticky user header 内ではなく、turn rail 基準の anchored row または左下 fallback sticky として表示し、どちらも中身は同じ marker 表示部品、同じ font size、同じ teal-green 系 running 色に揃えるようにした。fallback sticky は外側に user sticky と同系統の座布団 surface を敷き、min-height と上下 padding で細い枠に見えない余白を確保し、本文カードより前面に出して内容が潰れないようにした
+- turn marker の collapse toggle を turn rail 上または rail-control lane に寄せ、start marker には activity / status dot を出さず、`ターン N` の開始位置に余分なインデントが出ないようにした
+- 同じ `turnId` が非連続に描画される場合も、連続表示区間ごとの run key で DOM id / `aria-controls` が衝突しないようにした
+- 狭幅で turn marker counts を非表示にする場合も、件数 / token 補足を marker 本体の tooltip / aria-label で確認できるようにした
+- running chip の elapsed target 探索を現在の timeline / 表示中 fallback chip に限定し、表示 text / hidden state が変わった場合だけ tooltip / aria-label を更新するようにした
+- running chip の update flash は activity signature が変わった場合だけ出し、初回描画、scroll、resize、anchored / fallback の表示切り替えだけでは出さないようにした
+- running chip の border glint は update flash と同じ発火条件に揃え、枠全体が常時回転する表現にはしないようにした
+- ファイル履歴 Webview の検索結果 badge は、所属 card の mixed timeline 番号 `#N` を常時表示し、diff 本文 hit では `変更前 L...` / `変更後 L...` の行番号 badge も表示するようにした
+- ファイル履歴 Webview の検索結果 badge は、検索パネル幅が不足する場合に diff 行番号 badge の visible text を `L...` へ圧縮し、tooltip / aria-label では変更前 / 変更後を保持するようにした
+- ファイル履歴 Webview の mixed timeline 番号は `model` message 受信時に `card.id` Map として作成し、render / date guide / 検索結果 / source toggle 復元で同じ番号を参照するようにした
+- ファイル履歴 Webview の compact badge 切り替えは CSS container query に寄せ、render 後の overflow 測定による強制 reflow を避けるようにした
+- ファイル履歴 Webview の mixed timeline lookup は `card.id -> index` / `card.id -> card` を共有し、`resetUi` 後の一時 render でも `#N` が visible index へ戻らないようにした
+- ファイル履歴 Webview の検索結果 occurrence は `cardId -> count` Map で生成し、大量 hit 時に既存 results 全体を繰り返し走査しないようにした
+- ファイル履歴 Webview の load more で hidden source の card だけが追加された場合、非表示中 source 用の toast を表示し、全候補解析完了時に無反応に見えないようにした
+- Claude structured attachment 抽出は、task notification / invoke で共通の bounded block scanner と Markdown safe-context map を使うようにした。引用された tag は本文として残し、境界が曖昧な block は raw text として残す
+- Claude structured attachment 抽出の close 解決を open / close candidate 配列ベースにし、close が欠落した `<invoke` / `<task-notification>` が大量にある履歴でも二乗時間に伸びないようにした
+- Markdown transcript / Search / Resume / Handoff / Webview の attachment field 選択を用途別 policy に寄せ、raw/debug 用の内部 field を通常経路へ流さないようにした
+- task notification の `duration_ms` 表示を Webview と Markdown transcript / summary で同じ compact duration 表記に揃え、`1500 ms` と `1.5s` のような経路差が出ないようにした
+
+**修正された機能**
+
+- `task_complete` がない古い session や異常終了 session を、履歴ビューで永続的に `running` と誤表示しないようにした
+- raw `<turn_aborted>` を active turn にフォールバックして紐づけ、structured event と同じ turn summary に反映するようにした
+- 遅延 flush される patch group の turn 集計を、item index の連続範囲ではなく `turnId` 帰属で計算するようにした
+- `turn_context` の `turn_id` を未使用状態として保持せず、active turn の補助観測として実処理へ接続した
+- running anchored row が patch group / ファイル変更 card や sticky header の内部に入り込まず、turn rail 基準の独立行として表示されるようにした
+- collapsed summary marker は狭い viewport でも `ターン N`、toggle、`開始` / `終了` badge を 1 行で維持し、token summary などの末尾情報を先に ellipsis または非表示にして、横スクロールや隣接 marker との重なりを起こさないようにした
+- `Show details` ON/OFF や Webview 内検索 close で、collapsed summary marker などの marker を見ているときも隣接する本文 row へ飛ばず、同じ marker 付近へ戻るようにした
+- Webview 内検索で query による turn / patch group の一時展開が発生しても、検索結果への明示移動がない場合は現在見ている card / marker の位置を維持するようにした
+- timeline 末尾の card / marker が Webview 下端に貼り付かないよう、通常時も小さな下部余白を確保し、末尾スクロール / `follow` の着地点にも card / marker 種別に応じた下端余白を残すようにした
+- ファイル履歴 Webview の表示順をセッション開始時刻ではなく diff card の変更時刻で全体 sort し、長時間 Claude session の新しい変更が古い位置へ混入しないようにした
+- ファイル履歴 Webview の `続きを読み込む` と source toggle で、変更時刻 sort 後も閲覧中 card 付近へ scroll を復元するようにした
+- ファイル履歴 date guide の major tick に mixed timeline 番号の `#N` / `#N-#M` を表示し、minor tick は dot のみ表示しつつ tooltip / aria-label に card 番号を保持するようにした
+- `prefers-reduced-motion: reduce` では running chip の pulse / flash / border glint と running marker dot pulse を止め、静的な running 表示だけにするようにした
+- Claude Code の `queue-operation` / `queued_command` に含まれる task notification が、materialized user message と二重にカード化されないようにした
+- task notification / invoke の内部 field、ローカル `outputFile`、system / harness preamble、task id、tool-use id、定型 note が Webview model に流れないようにした
+- `<result>` 内の `<status>` / `<usage>` 風 text や fenced / quoted の `<task-notification>` / `<invoke>` が、top-level field や card として誤抽出されないようにした
+- close が欠落した `<invoke` / `<task-notification>` が大量に含まれる病的な Claude message で、chat 表示、検索インデックス、Markdown transcript、Resume / Handoff 生成が数秒単位で固まる可能性を抑えた
+- attachment details の開閉直後に、Webview 内検索の件数、highlight、active result が古い DOM のまま残らないようにした
+- malformed attachment が notification / invoke の前に混在しても、Webview 内検索の一時展開 key と描画側 details key が同じ ordinal を使い、検索で該当 attachment details を展開できるようにした
+- session reload 直前に render 中 deferred render が予約されていても、reload 後に冗長 render や古い scroll restore callback が走らないようにした
+- basic mode の末尾 incomplete turn では terminal end marker を出さず、`End / 未完了` のような誤解を招く終了表示にならないようにした
+- reduced-motion でも elapsed text は表示単位に合わせて更新し、pulse / flash / transition だけを抑制するようにした
+- turn token summary では `Input + Output` から導ける冗長な `Total` を compact marker から省略し、total が追加情報を持つ場合だけ表示するようにした
+- patch details の lazy-load 成功 / 失敗と deferred patch render を page-search content mutation helper 経由に寄せ、検索中の active result anchor を保ったまま再検索できるようにした
+- page-search temporary expansion の clear、query 取得、render 後 restore dispatch の小さな重複を整理し、状態変化がない場合の余分な render を減らした
+- `package.json` / `package-lock.json` のバージョンを `2.7.0` に更新した
+
+### 5.5 v2.6.1 リリースメモ（2026-06-22）
 
 **追加された機能**
 
@@ -1048,7 +1223,7 @@ npm run package
 - Claude Code の text-only 中断 record と tool result / attachment 混在 record を raw content で区別し、混在 record は通常 message として扱うようにした
 - `package.json` / `package-lock.json` のバージョンを `2.6.1` に更新した
 
-### 5.5 v2.6.0 リリースメモ（2026-06-12）
+### 5.6 v2.6.0 リリースメモ（2026-06-12）
 
 **追加された機能**
 
@@ -1072,7 +1247,7 @@ npm run package
 - sort / 表示状態の切り替え後に、選択中の履歴が見失われやすい問題を軽減した
 - `package.json` / `package-lock.json` のバージョンを `2.6.0` に更新した
 
-### 5.6 v2.5.1 リリースメモ（2026-06-10）
+### 5.7 v2.5.1 リリースメモ（2026-06-10）
 
 **修正された機能**
 
@@ -1082,7 +1257,7 @@ npm run package
 - JSON 書き込みを一時ファイル経由の best-effort atomic write に変更し、rename に失敗する provider では直接書き込みへフォールバックするようにした。古い孤立一時ファイルは `Empty Trash` で内部的に回収できるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.5.1` に更新した
 
-### 5.7 v2.5.0 リリースメモ（2026-06-07）
+### 5.8 v2.5.0 リリースメモ（2026-06-07）
 
 **追加された機能**
 
@@ -1114,7 +1289,7 @@ npm run package
 - ピン留めビューのプロジェクト並び順が、同じ時間に更新された場合に崩れることがある問題を修正した
 - `package.json` / `package-lock.json` のバージョンを `2.5.0` に更新した
 
-### 5.8 v2.4.1 リリースメモ（2026-05-26）
+### 5.9 v2.4.1 リリースメモ（2026-05-26）
 
 - プロジェクト (`cwd`) に、この拡張機能内だけの別名を設定 / 消去できるようにした
 - プロジェクト別名は History / Pinned のプロジェクト見出し、セッション行、tooltip、絞り込み表示、Status、Search の scope / セッション表示に反映する
@@ -1127,7 +1302,7 @@ npm run package
 - Chat Webview で `::code-comment{...}` directive をレビューコメントカードとして表示し、comma 区切りや複数行、未知 segment を含む出力も既知キーから復元できるようにした
 - `package.json` のバージョンを `2.4.1` に更新した
 
-### 5.9 v2.4.0 リリースメモ（2026-05-23）
+### 5.10 v2.4.0 リリースメモ（2026-05-23）
 
 - History に `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位` のプロジェクト表示 mode を追加した
 - プロジェクト判定用 key を全 OS で大文字小文字非区別に統一した
@@ -1145,7 +1320,7 @@ npm run package
 - Codex の `# Files mentioned by the user:` block が IDE context 後ろにある場合も、HTML / log / JSON などの file reference attachment として表示されるように修正した
 - `package.json` / `package-lock.json` のバージョンを `2.4.0` に更新した
 
-### 5.10 v2.3.0 リリースメモ（2026-05-22）
+### 5.11 v2.3.0 リリースメモ（2026-05-22）
 
 - Chat message の添付モデルを `attachments` に統合し、画像も `type: "image"` の attachment として扱うようにした
 - Claude Code の `type: "document"` を document card として表示できるようにした
@@ -1179,7 +1354,7 @@ npm run package
 - Resume / Handoff では clean text と attachment summary を使い、raw tag / `Files mentioned` block の重複やバイナリ再添付を避けるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.3.0` に更新した
 
-### 5.11 v2.2.0 リリースメモ（2026-05-21）
+### 5.12 v2.2.0 リリースメモ（2026-05-21）
 
 - Codex の通常 `sessions` に加えて、任意で `archived_sessions` を読み込めるようにした
 - `codexHistoryViewer.codex.archivedSessions.enabled` と `codexHistoryViewer.codex.archivedSessionsRoot` を追加した
@@ -1201,7 +1376,7 @@ npm run package
 - filesystem restore では作成日の `<YYYY>/<MM>/<DD>` へ戻し、同名衝突時は suffix を付けるようにした
 - filesystem restore の Move には Undo を提供し、公式 provider restore では本家状態との整合を優先して Undo を出さないようにした
 - restore / archive / pin reconcile 時に、annotation / bookmark / chat open position を移動先 path へ寄せるようにした
-- archive / unarchive 時の bookmark key 移行で target hash を維持し、WebView で同じしおりとして認識できるようにした
+- archive / unarchive 時の bookmark key 移行で target hash を維持し、Webview で同じしおりとして認識できるようにした
 - archived Chat の `Move to Codex History` は `chat.openPosition = lastMessage` のとき操作直前の表示位置へ復元後に移動するようにした
 - Export した Markdown transcript にも `Location: Active` / `Location: Archived` を出すようにした
 - metadata relocation の衝突時は、annotation note と chat open position で移行先を優先するようにした
@@ -1213,7 +1388,7 @@ npm run package
 - 検索インデックスの context に archived root / archived 有効状態を含めるようにした
 - `package.json` のバージョンを `2.2.0` に更新した
 
-### 5.12 v2.1.0 リリースメモ（2026-05-19）
+### 5.13 v2.1.0 リリースメモ（2026-05-19）
 
 - Codex / Claude Code 間の Handoff を新規実装した
 - History / Pinned / Search のセッション右クリックに、`他のAIへ引継ぎ` 階層メニューを追加した
@@ -1233,7 +1408,7 @@ npm run package
 - チャット表示内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
 - `package.json` / `package-lock.json` のバージョンを `2.1.0` に更新した
 
-### 5.13 v2.0.1 リリースメモ（2026-05-15）
+### 5.14 v2.0.1 リリースメモ（2026-05-15）
 
 - 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
 - しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
@@ -1257,7 +1432,7 @@ npm run package
 - ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
 - `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
 
-### 5.14 v2.0.0 リリースメモ（2026-05-14）
+### 5.15 v2.0.0 リリースメモ（2026-05-14）
 
 - ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる File AI Change History を追加した
 - カスタムタイトル操作を QuickPick 入口へ統一し、チャット履歴ビューアのヘッダーからも設定 / 消去できるようにした
@@ -1275,18 +1450,18 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.15 v1.5.1 リリースメモ（2026-05-08）
+### 5.16 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
 - `chat.openPosition = lastMessage` で、画面内に本文メッセージがない位置の保存や、復元対象メッセージが描画されない場合に、直前の描画済み本文メッセージまたは先頭へフォールバックするようにした
-- `chat.openPosition = latest` で、移動先指定のないチャット表示を最新の描画済みカードから開けるようにした
-- チャット末尾ボタンは最後に描画されたカードへ移動するため、diff そのものを確認できる
+- `chat.openPosition = latest` で、移動先指定のないチャット表示を最新の描画済み visual target から開けるようにした
+- チャット末尾ボタンは最後に描画された visual target へ移動するため、末尾の diff / patch group card、running marker、completed end marker、collapsed summary marker そのものを確認できる
 - Codex の `custom_tool_call` を、`toolCalls` / `toolCallsAndOutputs` の検索インデックスに軽量メタとして含めるようにした
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.16 v1.5.0 リリースメモ（2026-05-07）
+### 5.17 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -1295,7 +1470,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.17 v1.4.3 リリースメモ（2026-04-30）
+### 5.18 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -1364,9 +1539,11 @@ npm run package
 - ファイル履歴 Webview の検索は読み込み済み diff card を対象にし、正規表現、完全一致、検索履歴候補を扱える
 - 検索中に `続きを読み込む` を実行した場合、追加された card も検索対象に含まれる
 - `続きを読み込む` の成功 / 失敗 / キャンセル後に scroll 位置が維持される
+- `続きを読み込む` で追加された card が既存表示の途中に入る場合でも、表示順は変更時刻昇順のままで、閲覧中 card 付近へ scroll が復元される
 - 全候補解析後は `続きを読み込む` が消え、`これ以上の履歴はありません` が表示される。この表示は Webview 内検索の対象に含めない
 - `履歴で開く` を押すと、通常履歴 Webview が現在のエディタグループに別タブとして開き、該当 diff card へスクロールする
 - ファイル履歴で Codex / Claude source toggle を切り替えた状態でも、前 / 次 card ナビゲーションが表示中 card だけを対象にする
+- ファイル履歴で Codex / Claude source toggle を切り替えても、表示中 card の変更時刻順が崩れず、可能な限り閲覧中 card 付近へ scroll が復元される
 - `履歴で開く` で通常履歴 Webview を開いても full detail mode が強制されず、対象 diff entry の詳細だけが必要時に読み込まれる
 - ファイル履歴 Webview を見ながら通常履歴 Webview を別タブで確認でき、既存のファイル履歴 Webview が置き換わらない
 - `対象ファイルを開く` で VS Code の通常エディタに対象ファイルが開く
@@ -1374,6 +1551,9 @@ npm run package
 - `ui.timeGuide.enabled = false` のとき、通常履歴 Webview / ファイル履歴 Webview の date guide が表示されない
 - `ui.timeGuide.enabled = true` のとき、通常履歴 Webview / ファイル履歴 Webview の date guide が表示される
 - date guide は表示範囲に応じて、通常履歴では時刻 / 日付+時刻 / 日 / 月、ファイル履歴では day / month / year に自動スケールする
+- ファイル履歴の date guide は、major tick の visible label に mixed timeline の card 番号 `#N` または `#N-#M` を表示し、card header の番号と一致する
+- ファイル履歴の date guide は、minor tick の visible label を空にし、tooltip / aria-label に card 番号を含める
+- ファイル履歴の date guide ordinal summary は label 生成に必要な値だけを持ち、未使用の start / end 情報を共有 date guide API に残さない
 - 通常履歴 Webview の date guide で、添付あり message に控えめな ring indicator が表示される
 - date guide の添付 indicator は通常添付、画像のみ、mixed を区別できる
 - date guide の tooltip に `user #N (PDF, テキスト)` のような attachment summary が表示される
@@ -1468,7 +1648,7 @@ npm run package
 - 履歴が 0 件の場合、History に履歴保存先確認・再読み込み・Claude 有効化に関する案内ノードが表示される
 - 履歴絞り込みで一致件数が 0 件になった場合、History に絞り込み変更 / 解除を促す案内ノードが表示される
 - `preserve` ではスクロール位置、選択メッセージ、詳細表示、開いているカード、開いている diff、検索サイドバー状態が維持される
-- `follow` では UI 状態を維持しつつ、最新の表示カードへ移動する。末尾が grouped diff カードの場合は直前の非 diff カードへ移動する
+- `follow` では UI 状態を維持しつつ、`liveRunningTurnId` / `latestTurnId` がある場合はその turn 内の live running marker、completed end marker、最後の意味ある表示カードの順に移動する。末尾が patch group の場合は同じ turn 内の直前の非 patch group カードへ移動する。手動で折りたたまれた completed turn は勝手に展開せず、collapsed summary marker へ fallback する
 - 自動更新で Search 結果が勝手にクリアされない
 - `Show details` を ON/OFF しても、切り替え前に見ていたカードまたは次の表示カードへスクロールが復元される
 - 詳細 OFF の大型セッションで tool 詳細、patch diff 行、画像 data URI が初回描画時にまとめて読み込まれず、詳細表示・diff 展開・画像表示時に必要分が読み込まれる
@@ -1501,7 +1681,7 @@ npm run package
 - `history.dateBasis` を `started` / `lastActivity` で切り替えると履歴ツリーの日付グループが正しく変わる
 - `chat.openPosition = top` のとき、移動先指定のないチャット表示が先頭から開く
 - `chat.openPosition = lastMessage` のとき、同じセッションを開き直すと最後に見ていたメッセージ付近へ戻る
-- `chat.openPosition = latest` のとき、移動先指定のないチャット表示が最新の描画済みカードから開く
+- `chat.openPosition = latest` のとき、移動先指定のないチャット表示が最新の描画済み visual target から開く。折りたたみ中の turn は勝手に展開されない
 - 保存位置がない場合、または保存位置が現在の詳細表示設定で表示される先頭メッセージの場合は、タグ / メモカードが見えるスクロール最上部から開く
 - `chat.openPosition = lastMessage` で tool / usage / diff など本文メッセージが画面内にない位置を最後に見ていた位置として保存した場合、開き直し時は直前の描画済み本文メッセージ付近、直前がなければ先頭へ戻る
 - `chat.openPosition = lastMessage` で保存済みの本文メッセージが現在の表示条件で描画されない場合、直前の描画済み本文メッセージへ戻り、直前がなければ先頭から開く
@@ -1521,6 +1701,48 @@ npm run package
 - Claude の usage 行には取得できる場合、model / in-out token / cache read-write / service tier / speed が表示される
 - `Show details` ON 時は、取得できる場合に environment 行として CWD / Git branch / Git commit / dirty 状態が表示される
 - `Show details` ON 時は、tool カードに取得できる場合の status / exit code / duration / interruption / error が表示される
+- Codex turn があるセッションで、start marker が turn 開始位置、end marker が turn 最終 item の直後に表示される
+- turn 表示は `ターン N` を使い、message / card index の `#N` と混同しない。狭い viewport でも `ターン N` が 2 行に割れない
+- turn marker / `live` mode の running chip の tooltip / aria-label で full `turn_id` を確認できる
+- turn end marker に item 数、tool 数、変更数、入力 / 出力 / 合計 token が表示される
+- completed turn の end marker に所要時間が表示され、`startedAtIso` / `completedAtIso` が欠ける場合や負の差分になる場合は省略される
+- start marker には activity / status dot が出ず、静的な開始境界として読める
+- completed turn の toggle で本文 row と通常 end marker が折りたたまれ、collapsed summary marker に `開始` / `終了`、開始時刻、終了時刻、所要時間、counts / token summary が残る
+- collapsed summary marker は狭い viewport でも `ターン N`、toggle、`開始` / `終了` badge を 1 行で維持し、件数や token summary などの補助情報を先に ellipsis または非表示にする。横スクロール、本文への重なり、隣接 marker との衝突が起きない
+- bookmark / restore / patch navigation / page search など中身を見る jump では、折りたたみ中の対象 turn が展開されてから scroll / focus される。`follow`、`chat.openPosition=latest`、ヘッダー末尾ボタンは手動で折りたたまれた turn を勝手に展開しない
+- collapsed summary marker を viewport 上端付近で見ている状態で `Show details` ON/OFF や Webview 内検索 close を行っても、隣接する本文 row や遠い visible row へジャンプせず、同じ marker 付近へ戻る
+- Webview 内検索で query が残っている状態、入力 debounce、role filter 変更、deferred patch refresh などにより turn / patch group の一時展開が発生しても、検索結果への明示移動がない場合は現在見ている card / marker の位置が維持される
+- Webview 内検索の検索結果クリック、前へ / 次へで一時展開が必要な場合は、位置維持ではなく展開後に再計算した hit への scroll / focus が優先される
+- 検索結果ツリーなどから `preferredMessageIndex` 付きで Webview 内検索を開き、一時展開が必要になった場合でも、展開後の再検索で目的の検索結果が active になり、先頭 hit へ戻らない
+- Webview 内検索の role filter や大文字小文字条件を切り替えた後、検索結果が残る場合は現在 active result または viewport 近傍に留まり、常に 0 番へ戻らない
+- session reload / detail toggle / path mode toggle / message folding / patch detail lazy-load などで描画内容が変わった後、Webview 内検索の古い pending intent が新しい結果集合へ誤適用されない
+- `task_started` なしの `task_complete` / `turn_aborted` / `thread_rolled_back` が来ても、item を持たない幽霊 turn marker が表示されず、`latestTurnId` が実在しない turn に奪われない
+- itemless turn が前に存在しても、後続 item-backed turn の `sequenceNumber` が再採番されず、同じ `turnId` が同じ `ターン N` のまま維持される
+- turn_id なしの重複 `task_complete` 後の trailing `token_count` は直前 completed turn に帰属し、explicit unknown `task_complete` 後の trailing `token_count` は古い completed turn に誤帰属しない
+- terminal 済み turn に古い timestamp、同一 timestamp、または timestamp 欠落の `task_started` が後続しても、completed / interrupted / rolledBack が `incomplete` へ巻き戻らない
+- turn_id なしの `task_started` 後、次の turn_id なし item が前 turn に混ざらず、非 active の environment-only turn が start / end marker だけの空 turn として表示されない。live 観測中の active turn は environment だけを持つ段階でも running 表示から落ちない
+- `A, B, A` のように同じ `turnId` が非連続に描画されても安定した run key により DOM id / `aria-controls` が衝突せず、collapse / expand が例外なく動く
+- live running 中だけ running anchored chip が表示され、完了 / 中断 / rollback / stale 化後には消える
+- running chip の `実行中` は `開始` / `完了` と同系統の pill として表示され、`経過 N` は `最終活動 ...` と同じ muted meta text 系の見た目になる
+- running chip の経過時間は `startedAtIso` からの差分として 1 秒程度で更新され、最終活動時刻は `updatedAtIso` が変わらない限り進まない
+- running chip の `startedAtIso` が未来時刻で一時的に `経過` を表示できない場合でも、timer が停止せず、時計が追いついた後に reload なしで `経過` が表示される
+- running chip の経過時間更新で timeline 全体の再描画、scroll 位置の変化、anchored / fallback 判定のちらつきが起きない
+- `live` mode の running anchored chip は最後の意味ある表示カードの直後に、turn rail 基準の独立 anchored row として左寄せ表示され、card 内部や sticky user header 内に入らない
+- running turn の最後の表示カードが user card / 通常 card / patch group のいずれでも、running chip はそのカード内部ではなく turnBlock 直下の anchored row に表示される
+- anchored chip が viewport 外に流れた場合だけ左下 fallback sticky が表示され、クリック / Enter / Space で running turn へ移動できる
+- fallback sticky 表示中も timeline 末尾の card / end marker、page search、toast、sticky user header の操作を阻害しない
+- fallback sticky が本文カードの下に潜らず、dot だけの表示にならず、`ターン N` / `実行中` / `経過` / `最終活動` の主要情報が確認できる。中身の font size / pill / meta text は Webview 内 marker と同一で、外側の座布団 surface だけが本文上での読みやすさを補っている。座布団は内側 marker より縦方向に余裕があり、border が `ターン N` / `実行中` pill / meta text に密着して細い枠に見えない
+- turn marker の collapse toggle は turn rail 上または rail-control lane に表示され、`ターン N` の開始位置に不要なインデントを作らず、クリック / focus ring も崩れない。running dot は start marker ではなく running anchored / fallback marker 側に表示される
+- running chip の文字が省略される場合は ellipsis が出て、tooltip / title で full `turn_id`、経過時間、最終活動時刻を含む全文を確認できる
+- 狭幅で turn marker counts が視覚的に非表示になっても、marker の tooltip / aria-label で件数と token 補足を確認できる
+- running chip の elapsed 表示値が変わらない tick では、tooltip / aria-label が毎秒更新されない
+- running marker の activity cue dot は live running 中だけ表示され、開始 / 完了 / 中断 / rollback / stale 化後には消える
+- running marker dot の pulse は marker サイズや周辺 layout を変えない
+- anchored row では turn rail 側の左端、左下 fallback sticky では marker 先頭に running marker dot が同じ見た目で表示され、marker 行の高さや `ターン N` の開始位置を変えない
+- `updatedAtIso` / `lastItemIndex` / `itemCount` 変化時だけ update flash が 1 回出て、初回描画、scroll、resize、anchored / fallback の表示切り替えだけでは出ない
+- `updatedAtIso` / `lastItemIndex` / `itemCount` 変化時だけ border glint が 1 回出て、枠全体が常時回転して見えない
+- `prefers-reduced-motion: reduce` では running chip の pulse / flash / border glint と running marker dot pulse が止まり、静的な running 表示として読める
+- 次の user card の上端が sticky 表示領域に到達した時点で、sticky user header が次の user に切り替わる
 - チャットのスクロールバーが固定ヘッダーの横ではなく、ヘッダー下のスクロール領域から始まる
 - Codex / Claude の画像付きセッションで、対応画像がサムネイル表示される
 - Claude の PDF document が document card として表示され、本文に混ざらない
@@ -1535,6 +1757,17 @@ npm run package
 - 本文が空で添付だけの user message が、詳細 OFF でも表示される
 - 画像のみ / document のみ / file reference のみ / mixed attachments の message で表示順とレイアウトが崩れない
 - synthetic mixed content で `document -> image -> file reference` の順に現れる場合、抽出結果と Webview 表示が同じ順序になる
+- Claude の task notification / invoke / IDE reference が同一 text item に混在する場合、抽出結果と Webview 表示が元テキストの出現順を保つ
+- Claude の `<task-notification>` が task notification card になり、`summary`、`result`、`usage` が表示され、raw tag が本文に残らない
+- Claude の assistant `<invoke>` が tool invocation card になり、tool 名、description、parameter を確認できる
+- fenced code、inline code、blockquote 内に引用された `<task-notification>` / `<invoke>` はカード化されず、本文として残る
+- `queue-operation` と `attachment.type = "queued_command"` に含まれる task notification は、chat / search / Markdown / Resume / Handoff でカード化されない
+- task notification の `taskId` / `toolUseId` / `outputFile` / `systemPreamble` / `note` / `rawStatus`、invoke の `harnessPreamble` が Webview model に含まれない
+- `<result>` 内の `<status>` / `<usage>` 風 text や `</task-notification>` literal で、壊れた task notification card や本文欠落が起きない
+- close 欠落 / sparse close の `<invoke` / `<task-notification>` が大量にある synthetic message でも、structured attachment 抽出時間が二乗に伸びない
+- malformed attachment が notification / invoke の前に混在する synthetic message でも、page search の一時展開で該当 attachment details が開く
+- sessionData reload、session scoped reset、page search reset の直前に deferred render が予約されていても、reload 後に古い scroll restore が適用されない
+- `usage.subagent_tokens` は task notification card の meta 表示だけに使われ、turn / session token aggregation には混入しない
 - `<image></image>` だけが残るセッションで、プレースホルダー文字列が本文に残らず、表示不能状態の画像カードが出る
 - `images.enabled = false` のとき、画像は読み込まれず表示不能状態になる
 - `images.enabled = false` または Search / Markdown / Resume / Handoff 用抽出でも、画像 payload を読み込まずに MIME type / 推定 label metadata が残る
@@ -1558,6 +1791,11 @@ npm run package
 - Resume / Handoff の context に raw tag / `Files mentioned` block が重複せず、バイナリ添付が再添付されない
 - プレビューモーダルを開いたまま別セッションを開くと、モーダルが閉じる
 - `patch_apply_end` を含むセッションで差分カードが表示される（`Show details` OFF でも出る）
+- patch group collapsed 表示では先頭 3 file rows と `あと N 個のファイルを表示` が表示され、show more 後も件数と file row が正しい
+- patch group に `レビューする` 文言が表示されず、まとめて開く操作は `全差分を開く` として表示される
+- `全差分を開く` を押すと、対象 patch group card だけが全幅になり、全 file row と全 patch detail が同じ card 内で開く。オーバーレイ、別タブ、別パネルは開かない
+- all-diff mode 中の表示は `全差分を閉じる` に切り替わり、もう一度押すと全 patch detail が閉じ、compact summary と all-diff mode 開始前の card 幅状態に戻る
+- all-diff mode 解除後も、file row のクリックで対象 file の patch detail だけを展開し、focus / scroll できる
 - 差分カードの折りたたみ展開、hunk ごとの折り返し切り替え、行ジャンプが動く
 - diff カードの上下ナビゲーションで前後の diff へ移動できる
 - 各カードの最大幅展開ボタンで対象カードだけが広がり、再クリックで通常幅に戻る
@@ -1567,12 +1805,24 @@ npm run package
 - Webview 内検索の文字入力では連続入力中に検索が連発せず、短い待ち時間の後に最新 query で検索される
 - Webview 内検索で query を空にすると、待ち時間なしで highlight と検索結果 status が消える
 - Webview 内検索で Enter / 前へ / 次へを押すと、待ち時間なしで現在 query の結果へ移動できる
+- attachment card の Result / Parameter details を開閉した直後、Webview 内検索の件数、highlight、active result が古い DOM のまま残らない
 - ファイル履歴 Webview の Webview 内検索で debounce pending 中に Enter / 前へ / 次へを押しても、検索 refresh が二重実行されない
+- ファイル履歴 Webview の検索結果には常に所属 card の mixed timeline 番号 `#N` が表示され、View 内の `#N` と一致する
+- ファイル履歴 Webview の diff 本文 hit では `#N` に加えて `変更前 L...` / `変更後 L...` 相当の行番号 badge が表示され、hit した左右の diff block に応じて変更前 / 変更後を示す
+- ファイル履歴 Webview の検索パネルが狭い場合、diff 行番号 badge は `L...` の compact 表示へ切り替わり、badge の余白が潰れず、tooltip / aria-label では変更前 / 変更後を確認できる
+- ファイル履歴 Webview の検索パネルが 341px 以上でも full label では窮屈な幅の場合、flex wrap 後の overflow 検出に依存せず CSS container query で compact 表示へ切り替わる
+- ファイル履歴 Webview の title / source / file path hit では `#N` だけが表示され、diff 行番号 badge は表示されない
+- ファイル履歴 Webview の source toggle 後も検索結果 badge の `#N` は維持され、検索中の `続きを読み込む` 後は検索結果 badge と件数が同じ mixed timeline 基準で再計算される
+- ファイル履歴 Webview の mixed timeline 番号参照は `model` message 受信時に作る `card.id` Map を使い、render / date guide / source toggle 復元で可視 card ごとの線形探索を繰り返さない
+- ファイル履歴 Webview の `resetUi` 後から次の `model` message までに i18n などの render が挟まっても、既存 `model` の `#N` は mixed timeline Map の番号を維持する
+- ファイル履歴 Webview の検索結果 occurrence は `cardId -> count` Map で生成され、大量 hit でも hit ごとに全 results を走査しない
+- ファイル履歴 Webview の load more で hidden source の card だけが追加された場合、visible card が増えたように誤解させる toast を出さず、非表示中 source 用 toast または続き案内付きの非表示中 source 用 toast を出す
 - Webview 内検索の幅をドラッグで狭めた状態でウィンドウ幅を 860px 以下に縮めても、検索パネルが現在幅より広がらず、リサイズハンドルで幅を変更できる
 - 極端に狭い viewport でも検索パネルが画面外にはみ出さず、検索 input / close button を操作できる
 - 未入力・一致なし時ともにカウントが `0/0` と表示される
-- チャットヘッダーの先頭・末尾ボタンで、実際に表示されている最初 / 最後のカードへスクロールできる
-- 自動更新 `follow` で最後が diff カードのとき、直前の非 diff カードへ追従し、チャット末尾ボタンでは最後の diff カードへ移動できる
+- チャットヘッダーの先頭・末尾ボタンで、実際に表示されている最初 / 最後の visual target へスクロールできる。先頭ボタンは上端余白を残して先頭 user card の sticky user header が不要に表示されない。末尾ボタンは折りたたみ中の turn を勝手に展開しない
+- 自動更新 `follow` で最新 turn の最後が patch group のとき、同じ turn 内の直前の非 patch group カードへ追従し、チャット末尾ボタンでは最後の描画済み diff / patch group card へ移動できる。live running marker / completed end marker が表示されている場合は、`follow` もそれらを優先できる
+- 末尾スクロール / `follow` 後も最後の card / marker が Webview 下端に貼り付かず、通常 card / diff card と running / completed / collapsed marker のそれぞれで小さな下端余白が残る
 - 自動更新 `follow` が pending のカードアンカー復元や reload 後のレイアウト更新に上書きされず、追従後の位置が最後に見ていた位置として保存される
 - `Show details` OFF のとき、描画されていない詳細カードへ先頭 / 末尾スクロールしない
 - assistant message 内の `::code-comment{...}` が raw directive ではなくレビューコメントカードとして表示される

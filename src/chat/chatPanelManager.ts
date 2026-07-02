@@ -24,6 +24,7 @@ import { elapsedMs, formatDebugFields, nowMs, safeDebugBasename, sanitizeDebugEr
 import { normalizeCacheKey, normalizeProjectKey } from "../utils/fsUtils";
 import { collectLocalLinkBaseDirs, openLinkedFileInEditor, resolveLocalFileLinkTarget } from "../utils/localFileLinks";
 import { buildChatPatchEntryDetails, buildChatSessionModel, type ChatPatchEntryDetailTarget } from "./chatModelBuilder";
+import { sanitizeAttachmentForChannel } from "./chatAttachments";
 import { t } from "../i18n";
 import { getConfig } from "../settings";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
@@ -41,6 +42,7 @@ import type {
   ChatSessionModel,
   ChatTimelineItem,
   ChatToolItem,
+  ChatTurnSummary,
   ChatWebviewPathMode,
 } from "./chatTypes";
 import type { SessionPageSearchSeed } from "../tree/treeNodes";
@@ -107,6 +109,7 @@ type ChatPanelRestoreState = {
 };
 const DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE: ChatWebviewAutoRefreshMode = "off";
 const DEFAULT_CHAT_SESSION_DETAIL_MODE: ChatSessionDetailMode = "summary";
+const LIVE_RUNNING_STALE_MS = 30 * 60 * 1000;
 
 // Manages chat-like WebviewPanels opened in the editor area.
 export class ChatPanelManager implements vscode.Disposable {
@@ -194,6 +197,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const chatPerformanceMode = config.chatPerformanceMode;
     const userLongMessageFolding = config.userLongMessageFolding;
     const assistantLongMessageFolding = config.assistantLongMessageFolding;
+    const turnTimelineMode = config.chatTurnTimelineMode;
     const imageSettings = this.buildImageSettings(config);
     const stickyUserPrompt = config.stickyUserPrompt;
     const send = (panel: vscode.WebviewPanel): void => {
@@ -206,6 +210,7 @@ export class ChatPanelManager implements vscode.Disposable {
         chatPerformanceMode,
         userLongMessageFolding,
         assistantLongMessageFolding,
+        turnTimelineMode,
         stickyUserPrompt,
         imageSettings,
         chatOpenPosition: config.chatOpenPosition,
@@ -1007,6 +1012,7 @@ export class ChatPanelManager implements vscode.Disposable {
       model = await buildChatSessionModel(state.fsPath, {
         images: config.images,
         includeDetails: detailMode === "full",
+        turnTimelineMode: config.chatTurnTimelineMode,
       });
       buildMs = elapsedMs(buildStartedAt);
     } catch (error) {
@@ -1040,6 +1046,10 @@ export class ChatPanelManager implements vscode.Disposable {
       pathModeEnabled: pathModeState.enabled,
     };
     this.stateByPanel.set(panel, nextState);
+    const summary = this.historyService.findByFsPath(nextState.fsPath);
+    if (config.chatTurnTimelineMode === "live") {
+      model = await this.withLiveRunningTurnStatus(model, nextState, panel, summary, config);
+    }
     const statsStartedAt = nowMs();
     const performanceStats = await buildChatPerformanceStats(nextState.fsPath, model);
     statsMs = elapsedMs(statsStartedAt);
@@ -1053,7 +1063,6 @@ export class ChatPanelManager implements vscode.Disposable {
       `chatOpenPosition send session=${debugSessionName(nextState.fsPath)} mode=${config.chatOpenPosition} panelKind=${nextState.kind} saved=${savedOpenMessageIndex ?? "none"}`,
     );
     const bookmarkState = this.withBookmarkState(toWebviewChatSessionModel(model, detailMode), nextState.fsPath, panel);
-    const summary = this.historyService.findByFsPath(nextState.fsPath);
     const webviewModel: ChatSessionModel = {
       ...bookmarkState.model,
       meta: {
@@ -1101,6 +1110,7 @@ export class ChatPanelManager implements vscode.Disposable {
       debugLoggingEnabled: this.logger?.isDebugEnabled() ?? false,
       timeGuideEnabled: config.timeGuideEnabled,
       stickyUserPrompt: config.stickyUserPrompt,
+      turnTimelineMode: config.chatTurnTimelineMode,
       chatPerformanceMode: config.chatPerformanceMode,
       performanceStats,
       toolDisplayMode: config.toolDisplayMode,
@@ -1538,6 +1548,44 @@ export class ChatPanelManager implements vscode.Disposable {
       arguments: t("chat.label.arguments"),
       output: t("chat.label.output"),
       sessionInfo: t("chat.label.sessionInfo"),
+      turnStart: t("chat.turn.start"),
+      turnRunning: t("chat.turn.running"),
+      turnCompleted: t("chat.turn.completed"),
+      turnInterrupted: t("chat.turn.interrupted"),
+      turnRolledBack: t("chat.turn.rolledBack"),
+      turnIncomplete: t("chat.turn.incomplete"),
+      turnUnknown: t("chat.turn.unknown"),
+      turnLabel: t("chat.turn.label"),
+      turnNumberLabel: t("chat.turn.numberLabel"),
+      turnCollapse: t("chat.turn.collapse"),
+      turnExpand: t("chat.turn.expand"),
+      turnCollapsed: t("chat.turn.collapsed"),
+      turnExpandedForSearch: t("chat.turn.expandedForSearch"),
+      turnDuration: t("chat.turn.duration"),
+      turnElapsed: t("chat.turn.elapsed"),
+      turnLastActivity: t("chat.turn.lastActivity"),
+      turnObservedAt: t("chat.turn.observedAt"),
+      turnEnd: t("chat.turn.end"),
+      turnDurationSeconds: t("chat.turn.duration.seconds"),
+      turnDurationMinutesSeconds: t("chat.turn.duration.minutesSeconds"),
+      turnDurationHoursMinutes: t("chat.turn.duration.hoursMinutes"),
+      turnRangeLabel: t("chat.turn.rangeLabel"),
+      turnJumpToRunning: t("chat.turn.jumpToRunning"),
+      turnItemCount: t("chat.turn.items"),
+      turnToolCount: t("chat.turn.tools"),
+      turnPatchCount: t("chat.turn.patches"),
+      turnTokenInput: t("chat.turn.tokens.input"),
+      turnTokenOutput: t("chat.turn.tokens.output"),
+      turnTokenTotal: t("chat.turn.tokens.total"),
+      turnUsageRecords: t("chat.turn.usageRecords"),
+      patchFilesEdited: t("chat.patch.filesEdited"),
+      patchShowMoreFiles: t("chat.patch.showMoreFiles"),
+      patchShowFewerFiles: t("chat.patch.showFewerFiles"),
+      patchOpenAllDiffs: t("chat.patch.openAllDiffs"),
+      patchCloseAllDiffs: t("chat.patch.closeAllDiffs"),
+      patchOpenAllDiffsTooltip: t("chat.patch.openAllDiffsTooltip"),
+      patchCloseAllDiffsTooltip: t("chat.patch.closeAllDiffsTooltip"),
+      patchRevert: t("chat.patch.revert"),
       usage: t("chat.usage.title"),
       usageTokensInOut: t("chat.usage.tokensInOut"),
       usageTokensIn: t("chat.usage.tokensIn"),
@@ -1622,6 +1670,21 @@ export class ChatPanelManager implements vscode.Disposable {
       attachmentMissing: t("chat.attachment.missing"),
       attachmentUnavailable: t("chat.attachment.unavailable"),
       attachmentTotalCount: t("chat.attachment.totalCount"),
+      taskNotificationTitle: t("chat.notification.task.title"),
+      taskNotificationResult: t("chat.notification.task.result"),
+      taskNotificationUsage: t("chat.notification.task.usage"),
+      taskNotificationUsageTokens: t("chat.notification.task.usage.tokens"),
+      taskNotificationUsageToolUses: t("chat.notification.task.usage.toolUses"),
+      taskNotificationStatusCompleted: t("chat.notification.task.status.completed"),
+      taskNotificationStatusFailed: t("chat.notification.task.status.failed"),
+      taskNotificationStatusRunning: t("chat.notification.task.status.running"),
+      taskNotificationStatusCancelled: t("chat.notification.task.status.cancelled"),
+      taskNotificationStatusUnknown: t("chat.notification.task.status.unknown"),
+      invokeTitle: t("chat.invoke.title"),
+      invokeParameter: t("chat.invoke.parameter"),
+      invokeDescription: t("chat.invoke.description"),
+      invokeExpand: t("chat.invoke.expand"),
+      invokeCollapse: t("chat.invoke.collapse"),
       copy: t("chat.button.copy"),
       showMore: t("chat.button.showMore"),
       showLess: t("chat.button.showLess"),
@@ -1691,6 +1754,57 @@ export class ChatPanelManager implements vscode.Disposable {
     // Resolve the display time zone from UI language settings (ja=JST, auto/en=system).
     const { timeZone } = resolveDateTimeSettings();
     return { timeZone };
+  }
+
+  private async withLiveRunningTurnStatus(
+    model: ChatSessionModel,
+    state: ChatPanelState,
+    panel: vscode.WebviewPanel,
+    summary: SessionSummary | undefined,
+    config: ReturnType<typeof getConfig>,
+  ): Promise<ChatSessionModel> {
+    const turns = Array.isArray(model.turns) ? model.turns : [];
+    if (turns.length === 0) return model;
+
+    const activeTurnId = normalizeChatTurnId(model.activeTurnId);
+    const activeTurn = activeTurnId ? turns.find((turn) => normalizeChatTurnId(turn.id) === activeTurnId) : undefined;
+    let liveRunningTurnId: string | undefined;
+
+    if (
+      activeTurn &&
+      activeTurn.status === "incomplete" &&
+      isActiveCodexSessionPath(state.fsPath, summary, config) &&
+      isPanelObservingLiveSession(panel, state, this.readyByPanel.get(panel) === true)
+    ) {
+      const mtimeMs = await readSessionMtimeMs(state.fsPath);
+      const now = Date.now();
+      const ageMs = typeof mtimeMs === "number" ? now - mtimeMs : undefined;
+      const mtimeIsTrustworthy = typeof ageMs === "number" && Number.isFinite(ageMs) && ageMs >= 0;
+      const mtimeIsRecent = mtimeIsTrustworthy && ageMs <= LIVE_RUNNING_STALE_MS;
+      if (mtimeIsRecent) {
+        liveRunningTurnId = activeTurn.id;
+      }
+    }
+
+    const activeTurnItemCount = getTurnItemCount(activeTurn);
+    const nextTurns =
+      liveRunningTurnId || !activeTurn || activeTurnItemCount > 0
+        ? turns
+        : turns.filter((turn) => normalizeChatTurnId(turn.id) !== activeTurnId);
+    const modelWithoutLiveTurnState: ChatSessionModel = { ...model };
+    delete modelWithoutLiveTurnState.activeTurnId;
+    delete modelWithoutLiveTurnState.liveRunningTurnId;
+    const keepActiveTurnId = !!(liveRunningTurnId || activeTurnItemCount > 0);
+
+    return {
+      ...modelWithoutLiveTurnState,
+      turns: nextTurns.map((turn) => ({
+        ...turn,
+        displayStatus: liveRunningTurnId && turn.id === liveRunningTurnId ? "running" : turn.status,
+      })),
+      ...(liveRunningTurnId ? { liveRunningTurnId } : {}),
+      ...(keepActiveTurnId && model.activeTurnId ? { activeTurnId: model.activeTurnId } : {}),
+    };
   }
 
   private async refreshPanelTitleFromFile(panel: vscode.WebviewPanel): Promise<void> {
@@ -1849,6 +1963,69 @@ function normalizeChatWebviewPathMode(value: unknown): ChatWebviewPathMode {
 
 function normalizeChatWebviewPathModeOrUndefined(value: unknown): ChatWebviewPathMode | undefined {
   return value === "recorded" || value === "relocated" ? value : undefined;
+}
+
+async function readSessionMtimeMs(fsPath: string): Promise<number | undefined> {
+  const trimmed = typeof fsPath === "string" ? fsPath.trim() : "";
+  if (!trimmed) return undefined;
+  try {
+    const stat = await vscode.workspace.fs.stat(vscode.Uri.file(trimmed));
+    return typeof stat.mtime === "number" && Number.isFinite(stat.mtime) ? stat.mtime : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isActiveCodexSessionPath(
+  fsPath: string,
+  summary: SessionSummary | undefined,
+  config: ReturnType<typeof getConfig>,
+): boolean {
+  if (summary) {
+    return (
+      summary.source === "codex" &&
+      summary.storage.archiveState === "active" &&
+      summary.storage.rootKind === "codexSessions"
+    );
+  }
+  return isPathInsideRoot(fsPath, config.sessionsRoot);
+}
+
+function isPanelObservingLiveSession(
+  panel: vscode.WebviewPanel,
+  state: ChatPanelState,
+  isReady: boolean,
+): boolean {
+  return isReady && panel.visible && state.autoRefreshMode !== "off";
+}
+
+function isPathInsideRoot(fsPath: string, rootPath: string): boolean {
+  const target = normalizeExistingPath(fsPath);
+  const root = normalizeExistingPath(rootPath);
+  if (!target || !root) return false;
+  const relative = path.relative(root, target);
+  return relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function normalizeExistingPath(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  try {
+    return path.resolve(trimmed);
+  } catch {
+    return "";
+  }
+}
+
+function normalizeChatTurnId(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/[\u0000-\u001f\u007f]/gu, "").slice(0, 256);
+}
+
+function getTurnItemCount(turn: ChatTurnSummary | undefined): number {
+  const value = turn && typeof turn.itemCount === "number" && Number.isFinite(turn.itemCount) ? turn.itemCount : 0;
+  return Math.max(0, Math.floor(value));
 }
 
 function sanitizePageSearchSeed(value: unknown): SessionPageSearchSeed | undefined {
@@ -2088,9 +2265,9 @@ function toWebviewMessageItem(item: ChatMessageItem): ChatMessageItem {
 }
 
 function toWebviewAttachment(attachment: ChatAttachment): ChatAttachment {
-  if (attachment.type === "image") return toWebviewImageAttachment(attachment);
-  if (attachment.type === "document") return toWebviewDocumentAttachment(attachment);
-  return { ...attachment };
+  if (attachment.type === "image") return sanitizeAttachmentForChannel(toWebviewImageAttachment(attachment), "webview");
+  if (attachment.type === "document") return sanitizeAttachmentForChannel(toWebviewDocumentAttachment(attachment), "webview");
+  return sanitizeAttachmentForChannel(attachment, "webview");
 }
 
 function toWebviewImageAttachment(image: ChatImageAttachment): ChatImageAttachment {
@@ -2124,6 +2301,7 @@ function toSummaryToolItem(item: ChatToolItem): ChatToolItem {
   return {
     type: "tool",
     messageIndex: item.messageIndex,
+    turnId: item.turnId,
     timestampIso: item.timestampIso,
     name: item.name,
     callId: item.callId,

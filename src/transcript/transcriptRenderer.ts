@@ -7,6 +7,7 @@ import type { SessionSource } from "../sessions/sessionTypes";
 import { formatYmdHmInTimeZone, formatYmdHmsInTimeZone } from "../utils/dateUtils";
 import {
   buildAttachmentSummaryLines,
+  detectClaudeMaterializedMessageRole,
   extractClaudeMessageContent,
   extractCodexMessageContent,
 } from "../chat/chatAttachments";
@@ -203,7 +204,7 @@ async function renderClaudeRecord(
 
   const rawContent = getClaudeMessageContent(obj);
   const parsed = parseClaudeMessageContent(rawContent);
-  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false });
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role });
   const text = normalizeWhitespace(extracted.text);
   const attachmentLines = buildAttachmentSummaryLines(extracted.attachments);
   const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
@@ -338,16 +339,7 @@ function parseClaudeMessageContent(content: unknown): {
 }
 
 function detectClaudeMessageRole(obj: any): "user" | "assistant" | null {
-  const messageRole = typeof obj?.message?.role === "string" ? obj.message.role : "";
-  if (messageRole === "user" || messageRole === "assistant") return messageRole;
-
-  const envelopeType = typeof obj?.type === "string" ? obj.type : "";
-  if (envelopeType === "user" || envelopeType === "assistant") return envelopeType;
-
-  const topRole = typeof obj?.role === "string" ? obj.role : "";
-  if (topRole === "user" || topRole === "assistant") return topRole;
-
-  return null;
+  return detectClaudeMaterializedMessageRole(obj);
 }
 
 function getClaudeMessageContent(obj: any): unknown {

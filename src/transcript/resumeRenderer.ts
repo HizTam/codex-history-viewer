@@ -8,6 +8,7 @@ import { extractCompactUserText, extractTaskSectionText, extractUserRequestText,
 import type { ChatAttachment } from "../chat/chatTypes";
 import {
   buildAttachmentSummaryLines,
+  detectClaudeMaterializedMessageRole,
   extractClaudeMessageContent,
   extractCodexMessageContent,
 } from "../chat/chatAttachments";
@@ -200,7 +201,7 @@ async function collectClaudeResumeMessage(
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
-  const extracted = await extractClaudeMessageContent(getClaudeMessageContent(obj), undefined, { enabled: false });
+  const extracted = await extractClaudeMessageContent(getClaudeMessageContent(obj), undefined, { enabled: false }, { role });
   const textNormalized = normalizeWhitespace(extracted.text);
   const attachmentSummary = buildResumeAttachmentSummary(extracted.attachments);
   const combinedText = combineResumeText(attachmentSummary, textNormalized);
@@ -238,7 +239,7 @@ async function collectClaudeResumeMessage(
 }
 
 function buildResumeAttachmentSummary(attachments: readonly ChatAttachment[]): string {
-  const lines = buildAttachmentSummaryLines(attachments);
+  const lines = buildAttachmentSummaryLines(attachments, { mode: "resume" });
   if (lines.length === 0) return "";
   return ["Attachments and referenced files from previous session:", ...lines].join("\n");
 }
@@ -255,16 +256,7 @@ function pushRecent(arr: ResumeMessage[], item: ResumeMessage, max: number): voi
 }
 
 function detectClaudeMessageRole(obj: any): "user" | "assistant" | null {
-  const messageRole = typeof obj?.message?.role === "string" ? obj.message.role : "";
-  if (messageRole === "user" || messageRole === "assistant") return messageRole;
-
-  const envelopeType = typeof obj?.type === "string" ? obj.type : "";
-  if (envelopeType === "user" || envelopeType === "assistant") return envelopeType;
-
-  const topRole = typeof obj?.role === "string" ? obj.role : "";
-  if (topRole === "user" || topRole === "assistant") return topRole;
-
-  return null;
+  return detectClaudeMaterializedMessageRole(obj);
 }
 
 function getClaudeMessageContent(obj: any): unknown {

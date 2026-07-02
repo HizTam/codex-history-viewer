@@ -9,6 +9,12 @@ import {
   safeDisplayPath,
   singleLineSnippet,
 } from "../utils/textUtils";
+import {
+  buildAttachmentSummaryLines,
+  detectClaudeMaterializedMessageRole,
+  extractClaudeMessageContent,
+} from "../chat/chatAttachments";
+import type { ChatAttachment } from "../chat/chatTypes";
 import type {
   PreviewMessage,
   SessionMetaInfo,
@@ -111,17 +117,12 @@ function buildClaudePreviewText(content: unknown): string {
   return texts.join("");
 }
 
+function buildClaudePreviewAttachmentText(attachments: readonly ChatAttachment[]): string {
+  return buildAttachmentSummaryLines(attachments, { mode: "resume" }).join("\n");
+}
+
 function detectClaudeMessageRole(obj: any): "user" | "assistant" | null {
-  const messageRole = typeof obj?.message?.role === "string" ? obj.message.role : "";
-  if (messageRole === "user" || messageRole === "assistant") return messageRole;
-
-  const envelopeType = typeof obj?.type === "string" ? obj.type : "";
-  if (envelopeType === "user" || envelopeType === "assistant") return envelopeType;
-
-  const topRole = typeof obj?.role === "string" ? obj.role : "";
-  if (topRole === "user" || topRole === "assistant") return topRole;
-
-  return null;
+  return detectClaudeMaterializedMessageRole(obj);
 }
 
 function getClaudeMessageContent(obj: any): unknown {
@@ -290,7 +291,9 @@ export async function readPreviewMessages(fsPath: string, maxMessages: number): 
       const role = detectClaudeMessageRole(obj);
       if (!role) continue;
 
-      const textRaw = buildClaudePreviewText(getClaudeMessageContent(obj));
+      const extracted = await extractClaudeMessageContent(getClaudeMessageContent(obj), undefined, { enabled: false }, { role });
+      const attachmentSummary = buildClaudePreviewAttachmentText(extracted.attachments);
+      const textRaw = [buildClaudePreviewText(extracted.text), attachmentSummary].filter(Boolean).join("\n");
       const textNormalized = normalizeWhitespace(textRaw);
       if (!textNormalized) continue;
       const userText = role === "user" ? extractCompactUserText(textNormalized) : null;

@@ -7,6 +7,7 @@ import { t } from "../i18n";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import {
   buildAttachmentSummaryLines,
+  detectClaudeMaterializedMessageRole,
   extractClaudeMessageContent,
   extractCodexMessageContent,
 } from "../chat/chatAttachments";
@@ -358,7 +359,7 @@ async function collectClaudeMessage(obj: any, messages: HandoffMessage[]): Promi
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
-  const extracted = await extractClaudeMessageContent(getClaudeMessageContent(obj), undefined, { enabled: false });
+  const extracted = await extractClaudeMessageContent(getClaudeMessageContent(obj), undefined, { enabled: false }, { role });
   const text = sanitizeMessageText(combineHandoffText(buildHandoffAttachmentSummary(extracted.attachments), extracted.text));
   if (!text) return true;
 
@@ -560,7 +561,7 @@ function renderMessageBlock(message: HandoffMessage, pathRewrite: HandoffPathRew
 }
 
 function buildHandoffAttachmentSummary(attachments: readonly ChatAttachment[]): string {
-  const lines = buildAttachmentSummaryLines(attachments);
+  const lines = buildAttachmentSummaryLines(attachments, { mode: "handoff" });
   if (lines.length === 0) return "";
   return ["Attachments and referenced files from previous session:", ...lines].join("\n");
 }
@@ -860,16 +861,7 @@ function splitContentLines(value: string): string[] {
 }
 
 function detectClaudeMessageRole(obj: any): "user" | "assistant" | null {
-  const messageRole = typeof obj?.message?.role === "string" ? obj.message.role : "";
-  if (messageRole === "user" || messageRole === "assistant") return messageRole;
-
-  const envelopeType = typeof obj?.type === "string" ? obj.type : "";
-  if (envelopeType === "user" || envelopeType === "assistant") return envelopeType;
-
-  const topRole = typeof obj?.role === "string" ? obj.role : "";
-  if (topRole === "user" || topRole === "assistant") return topRole;
-
-  return null;
+  return detectClaudeMaterializedMessageRole(obj);
 }
 
 function getClaudeMessageContent(obj: any): unknown {
