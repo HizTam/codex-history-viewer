@@ -8,8 +8,10 @@ import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import {
   buildAttachmentSummaryLines,
   detectClaudeMaterializedMessageRole,
+  extractClaudeLocalCommandOutputContent,
   extractClaudeMessageContent,
   extractCodexMessageContent,
+  isCodexProtocolContextContent,
 } from "../chat/chatAttachments";
 import type { ChatAttachment } from "../chat/chatTypes";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "./projectPathMapper";
@@ -344,8 +346,13 @@ async function collectCodexMessage(obj: any, messages: HandoffMessage[]): Promis
   const role = obj?.payload?.role;
   if (role !== "user" && role !== "assistant" && role !== "developer") return true;
 
-  const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false });
-  const text = sanitizeMessageText(combineHandoffText(buildHandoffAttachmentSummary(extracted.attachments), extracted.text));
+  const content = obj?.payload?.content;
+  if (role === "user" && isCodexProtocolContextContent(content)) return true;
+
+  const extracted = await extractCodexMessageContent(content, undefined, { enabled: false });
+  const text = sanitizeMessageText(
+    combineHandoffText(buildHandoffAttachmentSummary(extracted.attachments), extracted.text),
+  );
   if (!text) return true;
 
   messages.push({
@@ -359,7 +366,9 @@ async function collectClaudeMessage(obj: any, messages: HandoffMessage[]): Promi
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
-  const extracted = await extractClaudeMessageContent(getClaudeMessageContent(obj), undefined, { enabled: false }, { role });
+  const rawContent = getClaudeMessageContent(obj);
+  if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) return true;
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role });
   const text = sanitizeMessageText(combineHandoffText(buildHandoffAttachmentSummary(extracted.attachments), extracted.text));
   if (!text) return true;
 

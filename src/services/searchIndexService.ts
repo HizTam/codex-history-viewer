@@ -3,51 +3,55 @@ import * as path from "node:path";
 import * as readline from "node:readline";
 import * as vscode from "vscode";
 import type { SearchIndexToolContent } from "../settings";
-import type { HistoryIndex } from "../sessions/sessionTypes";
+import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
 import { SEARCH_INDEX_FILE_NAME } from "../storage/cacheFiles";
 import { formatJsonReadOrDropCorruptDebug, readJsonOrDropCorrupt, writeJson } from "../storage/jsonStorage";
-import {
-  isCodexUserInstructionsMessageText,
-  normalizeWhitespace,
-} from "../utils/textUtils";
+import { normalizeWhitespace } from "../utils/textUtils";
 import {
   buildAttachmentSearchText,
   detectClaudeMaterializedMessageRole,
+  extractClaudeLocalCommandOutputContent,
   extractClaudeMessageContent,
   extractClaudeRequestInterruptionContent,
   extractCodexMessageContent,
+  isCodexProtocolContextContent,
   isCodexTurnAbortedContent,
 } from "../chat/chatAttachments";
 import { splitTrailingMemoryCitationBlock } from "../chat/memoryCitation";
 import type { DebugLogger } from "./logger";
 
-const SEARCH_INDEX_FILE_VERSION = 10;
+const SEARCH_INDEX_FILE_VERSION = 12;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
 
 export type IndexedSearchRole = "user" | "assistant" | "developer" | "tool";
 
 export interface IndexedSearchMessage {
-  messageIndex: number;
-  role: IndexedSearchRole;
-  source: "message" | "toolArguments" | "toolOutput";
-  text: string;
+  readonly messageIndex: number;
+  readonly role: IndexedSearchRole;
+  readonly source: "message" | "toolArguments" | "toolOutput";
+  readonly text: string;
 }
 
 export interface IndexedFileChangeHint {
-  messageIndex: number;
-  paths: string[];
-  timestampIso?: string;
-  origin: "codexPatch" | "toolArguments" | "toolOutput";
-  hasDiffLikeContent: boolean;
+  readonly messageIndex: number;
+  readonly paths: readonly string[];
+  readonly timestampIso?: string;
+  readonly origin: "codexPatch" | "toolArguments" | "toolOutput";
+  readonly hasDiffLikeContent: boolean;
 }
 
 interface SearchIndexEntryV1 {
-  fsPath: string;
-  mtimeMs: number;
-  size: number;
-  messages: IndexedSearchMessage[];
-  fileChangeHints?: IndexedFileChangeHint[];
+  readonly fsPath: string;
+  readonly mtimeMs: number;
+  readonly size: number;
+  readonly messages: readonly IndexedSearchMessage[];
+  readonly fileChangeHints?: readonly IndexedFileChangeHint[];
+}
+
+export interface SearchIndexReadSnapshot {
+  readonly getMessages: (cacheKey: string) => readonly IndexedSearchMessage[] | null;
+  readonly getFileChangeHints: (cacheKey: string) => readonly IndexedFileChangeHint[] | null;
 }
 
 interface SearchIndexContext {
@@ -76,6 +80,11 @@ interface SearchIndexFileV2 {
   entries: Record<string, SearchIndexEntryV1>;
 }
 
+interface SearchIndexWorkingState {
+  context: SearchIndexContext;
+  entries: Map<string, SearchIndexEntryV1>;
+}
+
 // Maintains an incremental on-disk search index for session files.
 export class SearchIndexService {
   private readonly cacheUri: vscode.Uri;
@@ -91,14 +100,16 @@ export class SearchIndexService {
     indexToolContent: "toolCallsAndOutputs",
   };
   private readonly entries = new Map<string, SearchIndexEntryV1>();
+  private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(globalStorageUri: vscode.Uri, logger?: DebugLogger) {
     this.cacheUri = vscode.Uri.joinPath(globalStorageUri, SEARCH_INDEX_FILE_NAME);
     this.logger = logger;
   }
 
-  public async ensureUpToDate(params: {
+  public ensureUpToDate(params: {
     index: HistoryIndex;
+    sessionInventory?: readonly SessionSummary[];
     codexSessionsRoot: string;
     codexArchivedSessionsRoot: string;
     claudeSessionsRoot: string;
@@ -109,9 +120,35 @@ export class SearchIndexService {
     token?: vscode.CancellationToken;
     progress?: vscode.Progress<{ message?: string; increment?: number }>;
     forceRebuild?: boolean;
-  }): Promise<void> {
+  }): Promise<SearchIndexReadSnapshot> {
+    const operation = this.operationQueue.then(
+      () => this.ensureUpToDateCore(params),
+      () => this.ensureUpToDateCore(params),
+    );
+    this.operationQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }
+
+  private async ensureUpToDateCore(params: {
+    index: HistoryIndex;
+    sessionInventory?: readonly SessionSummary[];
+    codexSessionsRoot: string;
+    codexArchivedSessionsRoot: string;
+    claudeSessionsRoot: string;
+    includeCodex: boolean;
+    includeCodexArchived: boolean;
+    includeClaude: boolean;
+    indexToolContent: SearchIndexToolContent;
+    token?: vscode.CancellationToken;
+    progress?: vscode.Progress<{ message?: string; increment?: number }>;
+    forceRebuild?: boolean;
+  }): Promise<SearchIndexReadSnapshot> {
     const totalStartedAt = nowMs();
     const { index, token, progress, forceRebuild } = params;
+    const sessions = params.sessionInventory ?? index.sessions;
     let orphanRemoved = 0;
     let statMiss = 0;
     let missingRemoved = 0;
@@ -129,18 +166,20 @@ export class SearchIndexService {
       includeClaude: params.includeClaude,
       indexToolContent: params.indexToolContent,
     };
-    await this.loadIfNeeded(context, !!forceRebuild);
+    throwIfCancelled(token);
+    const workingState = await this.loadWorkingState(context, !!forceRebuild);
+    throwIfCancelled(token);
 
-    let dirty = false;
+    let dirty = !!forceRebuild;
 
-    const activeKeys = new Set(index.sessions.map((s) => s.cacheKey));
-    orphanRemoved = this.cleanupOrphanEntries(activeKeys);
+    const activeKeys = new Set(sessions.map((s) => s.cacheKey));
+    orphanRemoved = this.cleanupOrphanEntries(workingState.entries, activeKeys);
     if (orphanRemoved > 0) dirty = true;
 
-    const total = index.sessions.length;
+    const total = sessions.length;
     for (let i = 0; i < total; i += 1) {
       throwIfCancelled(token);
-      const session = index.sessions[i]!;
+      const session = sessions[i]!;
       progress?.report({ message: `index ${i + 1}/${total}` });
 
       const uri = vscode.Uri.file(session.fsPath);
@@ -149,14 +188,14 @@ export class SearchIndexService {
         stat = await vscode.workspace.fs.stat(uri);
       } catch {
         statMiss += 1;
-        if (this.entries.delete(session.cacheKey)) {
+        if (workingState.entries.delete(session.cacheKey)) {
           missingRemoved += 1;
           dirty = true;
         }
         continue;
       }
 
-      const cached = this.entries.get(session.cacheKey);
+      const cached = workingState.entries.get(session.cacheKey);
       const unchanged =
         !!cached &&
         cached.fsPath === session.fsPath &&
@@ -173,22 +212,25 @@ export class SearchIndexService {
         token,
       });
       buildMs += elapsedMs(buildStartedAt);
-      this.entries.set(session.cacheKey, {
+      workingState.entries.set(session.cacheKey, freezeSearchIndexEntry({
         fsPath: session.fsPath,
         mtimeMs: stat.mtime,
         size: stat.size,
         messages: indexed.messages,
         fileChangeHints: indexed.fileChangeHints,
-      });
+      }));
       rebuilt += 1;
       dirty = true;
     }
 
+    throwIfCancelled(token);
     if (dirty) {
       const writeStartedAt = nowMs();
-      await this.save();
+      await this.save(workingState, () => throwIfCancelled(token));
       writeMs = elapsedMs(writeStartedAt);
     }
+    this.publishWorkingState(workingState);
+    const readSnapshot = createSearchIndexReadSnapshot(workingState.entries);
 
     this.logger?.debug(
       [
@@ -205,56 +247,55 @@ export class SearchIndexService {
         `forceRebuild=${forceRebuild ? 1 : 0}`,
       ].join(" "),
     );
+    return readSnapshot;
   }
 
-  public getMessages(cacheKey: string): IndexedSearchMessage[] | null {
+  public getMessages(cacheKey: string): readonly IndexedSearchMessage[] | null {
     return this.entries.get(cacheKey)?.messages ?? null;
   }
 
-  public getFileChangeHints(cacheKey: string): IndexedFileChangeHint[] | null {
+  public getFileChangeHints(cacheKey: string): readonly IndexedFileChangeHint[] | null {
     return this.entries.get(cacheKey)?.fileChangeHints ?? null;
   }
 
-  private cleanupOrphanEntries(activeKeys: ReadonlySet<string>): number {
+  private cleanupOrphanEntries(
+    entries: Map<string, SearchIndexEntryV1>,
+    activeKeys: ReadonlySet<string>,
+  ): number {
     let removed = 0;
-    for (const key of Array.from(this.entries.keys())) {
+    for (const key of Array.from(entries.keys())) {
       if (activeKeys.has(key)) continue;
-      this.entries.delete(key);
+      entries.delete(key);
       removed += 1;
     }
     return removed;
   }
 
-  private async loadIfNeeded(nextContext: SearchIndexContext, forceRebuild: boolean): Promise<void> {
+  private async loadWorkingState(
+    nextContext: SearchIndexContext,
+    forceRebuild: boolean,
+  ): Promise<SearchIndexWorkingState> {
     const normalizedContext = normalizeContext(nextContext);
     if (forceRebuild) {
-      this.context = normalizedContext;
-      this.entries.clear();
-      this.loaded = true;
-      return;
+      return { context: normalizedContext, entries: new Map() };
     }
     if (this.loaded) {
       if (!isSameContext(this.context, normalizedContext)) {
-        this.context = normalizedContext;
-        this.entries.clear();
+        return { context: normalizedContext, entries: new Map() };
       }
-      return;
+      return { context: this.context, entries: new Map(this.entries) };
     }
 
     const raw = await this.readCacheFile();
     if (!isValidCacheFile(raw) || !isSameContext(raw.context, normalizedContext)) {
-      this.context = normalizedContext;
-      this.entries.clear();
-      this.loaded = true;
-      return;
+      return { context: normalizedContext, entries: new Map() };
     }
 
-    this.context = normalizeContext(raw.context);
-    this.entries.clear();
+    const entries = new Map<string, SearchIndexEntryV1>();
     for (const [key, entry] of Object.entries(raw.entries)) {
-      this.entries.set(key, entry);
+      entries.set(key, freezeSearchIndexEntry(entry));
     }
-    this.loaded = true;
+    return { context: normalizeContext(raw.context), entries };
   }
 
   private async readCacheFile(): Promise<SearchIndexFileV2 | null> {
@@ -266,17 +307,70 @@ export class SearchIndexService {
     return null;
   }
 
-  private async save(): Promise<void> {
+  private publishWorkingState(state: SearchIndexWorkingState): void {
+    this.context = state.context;
+    this.entries.clear();
+    for (const [key, entry] of state.entries) this.entries.set(key, entry);
+    this.loaded = true;
+  }
+
+  private async save(state: SearchIndexWorkingState, beforeCommit: () => void): Promise<void> {
     const entries: Record<string, SearchIndexEntryV1> = {};
-    for (const [key, value] of this.entries.entries()) entries[key] = value;
+    for (const [key, value] of state.entries) entries[key] = value;
     const payload: SearchIndexFileV2 = {
       version: SEARCH_INDEX_FILE_VERSION,
-      context: this.context,
+      context: state.context,
       entries,
     };
     // Search index files can grow large, so save without pretty-printing to reduce size.
-    await writeJson(this.cacheUri, payload, { pretty: false });
+    await writeJson(this.cacheUri, payload, { pretty: false, beforeCommit });
   }
+}
+
+function createSearchIndexReadSnapshot(
+  entries: ReadonlyMap<string, SearchIndexEntryV1>,
+): SearchIndexReadSnapshot {
+  // Keep readers isolated from later operation-queue publications.
+  const snapshotEntries = new Map(entries);
+  return Object.freeze({
+    getMessages: (cacheKey: string): readonly IndexedSearchMessage[] | null =>
+      snapshotEntries.get(cacheKey)?.messages ?? null,
+    getFileChangeHints: (cacheKey: string): readonly IndexedFileChangeHint[] | null =>
+      snapshotEntries.get(cacheKey)?.fileChangeHints ?? null,
+  });
+}
+
+function freezeSearchIndexEntry(entry: SearchIndexEntryV1): SearchIndexEntryV1 {
+  const messages = Object.freeze(
+    entry.messages.map((message) =>
+      Object.freeze({
+        messageIndex: message.messageIndex,
+        role: message.role,
+        source: message.source,
+        text: message.text,
+      }),
+    ),
+  );
+  const fileChangeHints = entry.fileChangeHints
+    ? Object.freeze(
+        entry.fileChangeHints.map((hint) =>
+          Object.freeze({
+            messageIndex: hint.messageIndex,
+            paths: Object.freeze(Array.from(hint.paths)),
+            ...(hint.timestampIso ? { timestampIso: hint.timestampIso } : {}),
+            origin: hint.origin,
+            hasDiffLikeContent: hint.hasDiffLikeContent,
+          }),
+        ),
+      )
+    : undefined;
+  return Object.freeze({
+    fsPath: entry.fsPath,
+    mtimeMs: entry.mtimeMs,
+    size: entry.size,
+    messages,
+    ...(fileChangeHints ? { fileChangeHints } : {}),
+  });
 }
 
 function throwIfCancelled(token?: vscode.CancellationToken): void {
@@ -370,15 +464,15 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
 
     if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) return true;
 
+    const suppressMessageText =
+      role === "user" && isCodexProtocolContextContent(obj?.payload?.content);
     const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false });
     const messageText =
       role === "assistant" ? splitTrailingMemoryCitationBlock(extracted.text).text : extracted.text;
-    const suppressMessageText =
-      role === "user" && extracted.attachments.length === 0 && isCodexUserInstructionsMessageText(messageText);
     const text = normalizeWhitespace(
       [messageText, buildAttachmentSearchText(extracted.attachments)].filter(Boolean).join("\n"),
     );
-    if (!text && extracted.attachments.length === 0) return true;
+    if (!text && extracted.attachments.length === 0 && !suppressMessageText) return true;
 
     if (role === "user" || role === "assistant") state.messageIndex += 1;
     const anchor = Math.max(1, state.messageIndex);
@@ -482,6 +576,7 @@ async function indexClaudeRecord(obj: any, state: BuildState): Promise<boolean> 
 
   const rawContent = getClaudeMessageContent(obj);
   if (role === "user" && extractClaudeRequestInterruptionContent(rawContent)) return true;
+  if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) return true;
 
   const parsed = parseClaudeMessageContent(rawContent);
   const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role });

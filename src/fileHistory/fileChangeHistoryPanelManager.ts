@@ -364,7 +364,9 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     const state = this.stateByPanel.get(panel);
     if (!state || state.loading) return;
     const generation = state.generation;
-    const config = getConfig();
+    const config = Object.freeze({ ...getConfig() });
+    const historyIndex = this.historyService.getIndex();
+    const sessionInventory = Object.freeze(Array.from(historyIndex.sessions));
     const limit = Math.max(FILE_CHANGE_HISTORY_PAGE_SIZE, Math.floor(targetCardCount));
     const totalStartedAt = nowMs();
     let indexMs = 0;
@@ -388,8 +390,9 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
         async (progress, token) => {
           await this.sendLoading(panel, "syncIndex");
           const indexStartedAt = nowMs();
-          await this.searchIndexService.ensureUpToDate({
-            index: this.historyService.getIndex(),
+          const searchIndexSnapshot = await this.searchIndexService.ensureUpToDate({
+            index: historyIndex,
+            sessionInventory,
             codexSessionsRoot: config.sessionsRoot,
             codexArchivedSessionsRoot: config.codexArchivedSessionsRoot,
             claudeSessionsRoot: config.claudeSessionsRoot,
@@ -407,8 +410,8 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
           await this.sendLoading(panel, "collectCandidates");
           const candidateStartedAt = nowMs();
           const candidates = this.fileChangeHistoryService.buildCandidates({
-            index: this.historyService.getIndex(),
-            searchIndexService: this.searchIndexService,
+            index: historyIndex,
+            searchIndexSnapshot,
             target: current.target,
             config,
           });

@@ -2,11 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.8.0] - 2026-07-21
+
+### Added
+
+- Added History Insights for sessions matching the current History filters, with overview metrics, an activity heatmap, breakdowns by source, model, project, and tool, the most active sessions, frequently changed files, usage details covering input caching and reasoning, message composition, turn states, and changed file types, plus data quality information.
+- Added Agent Runs, which currently supports Codex sessions only. It omits sub-agent sessions with an available parent from History while keeping them reachable through the parent session's Agent Runs panel, Search, and explicit Pinned entries, and shows parent, sibling, and descendant relationships in a right-side tree within the session view. Sub-agent sessions whose parent cannot be resolved safely remain visible in History. (Experimental; disabled by default.)
+- Added Branch Navigation for switching between locally forked Codex session histories—including histories created with **Fork locally** or **Continue in new task**—and Claude Code histories created with **Fork conversation** within their respective session views. The route tree shows shared history, Fork points, and the start and end of each route. Codex Forks created in a new worktree are not supported. (Experimental; disabled by default.)
+
+### Changed
+
+- Updated the distributed Markdown renderer to `markdown-it@14.3.0` with `linkify-it@5.0.2`, while retaining defense-in-depth protections that disable fuzzy email and `mailto:` auto-detection.
+- Standardized terminology across commands, settings, and documentation: the viewer is now called the Session Viewer, chronological content is called the session timeline, and individual entries are called messages.
+- Session runtime context and local-command output are shown as collapsed cards instead of raw user messages.
+
+### Fixed
+
+- Kept seconds visible in completed and running turn durations after they exceed one hour.
+
 ## [2.7.0] - 2026-07-02
 
 ### Added
 
-- Added an opt-in Codex session turn timeline for the chat timeline, showing turn starts, turn ends, turn ranges, and running state in live mode.
+- Added an opt-in Codex session turn timeline, showing turn starts, turn ends, turn ranges, and running state in live mode.
 - Added the `codexHistoryViewer.chat.turnTimeline.mode` setting to control the turn timeline. It defaults to `off`; `basic` shows turn boundaries, summaries, and manual folding for completed turns, while `live` also enables running-turn indicators, elapsed time, and update activity effects.
 - Added manual collapse and expand support for completed turns.
 - Added compact file summaries for patch group cards.
@@ -15,7 +33,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Improved auto-refresh `follow` mode and chat scrolling to the top, bottom, and latest positions.
+- Improved auto-refresh `follow` mode and session timeline scrolling to the top, bottom, and latest positions.
 - Improved File AI Change History in-page search result badges to show the matching card number and distinguish before/after diff lines.
 
 ### Fixed
@@ -64,7 +82,7 @@ All notable changes to this project will be documented in this file.
 - Added more flexible query expressions, including regular expressions and exact matching, to in-history search and file change history search.
 - Added search history suggestions, selection, and deletion to in-history search and file change history search.
 - Added collapsible display for Codex memory citation information in the history view.
-- Added a sticky current user prompt display at the top of chat history.
+- Added a sticky current user prompt display at the top of the session timeline.
 - Added project-association awareness to handoff generation so handoff content follows the associated project display.
 
 ### Changed
@@ -88,8 +106,8 @@ All notable changes to this project will be documented in this file.
 - Added project aliases for project `cwd` values, stored in extension state without modifying Codex or Claude Code history files.
 - Added project alias display across History and Pinned project headings, session descriptions, tooltips, filter summaries, Status, and Search scope/session display.
 - Added Undo support for setting and clearing project aliases.
-- Added an experimental opt-in **Restore Webview Tabs After Reload** setting to restore chat and file change history Webview tabs after Reload Window or VS Code restart. It is disabled by default because VS Code can defer Webview restoration and may occasionally create duplicate tabs when the same history is opened again.
-- Added rendering for Codex code review comments as readable cards in the chat Webview.
+- Added an experimental opt-in **Restore Webview Tabs After Reload** setting to restore session and file change history Webview tabs after Reload Window or VS Code restart. It is disabled by default because VS Code can defer Webview restoration and may occasionally create duplicate tabs when the same history is opened again.
+- Added rendering for Codex code review comments as readable cards in the session Webview.
 
 ### Changed
 
@@ -131,17 +149,17 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added a unified chat attachment model so images, Claude documents, Claude IDE file and selection references, and Codex mentioned files are represented as `attachments`.
+- Added a unified session attachment model so images, Claude documents, Claude IDE file and selection references, and Codex mentioned files are represented as `attachments`.
 - Added Claude Code document cards for PDF, text, and generic documents, including on-demand preview and Save As support without sending embedded binary payloads to the initial Webview model.
 - Added parsing for Claude Code `<ide_opened_file>` and `<ide_selection>` tags, rendering them as file reference and selection reference cards instead of raw inline tags.
 - Added parsing for Codex `# Files mentioned by the user:` blocks, rendering mentioned Word, Excel, PowerPoint, PDF, archive, text, and other files as file reference cards while keeping only the request body as message text.
 - Added compact attachment cards with file-kind badges, kind-specific icon accents, tooltip metadata for paths / MIME types / sizes, and action icons for preview, save, or open.
-- Added attachment indicators and localized attachment summaries to the chat date guide so messages with images, other attachments, or mixed attachment types are visible from the timeline tooltip.
+- Added attachment indicators and localized attachment summaries to the session date guide so messages with images, other attachments, or mixed attachment types are visible from the timeline tooltip.
 - Added attachment metadata to the search index, including labels, paths, MIME types, file kinds, and bounded text from Claude text documents.
 
 ### Changed
 
-- Changed chat rendering to preserve attachment order while grouping only consecutive images into existing image groups.
+- Changed session timeline rendering to preserve attachment order while grouping only consecutive images into existing image groups.
 - Changed Markdown transcript, Resume, and Handoff generation to use clean text plus attachment summaries instead of repeating raw IDE tags or Codex mentioned-file blocks.
 - Changed search indexing to exclude PDF / Office / binary / base64 document contents and to avoid reading Codex referenced files automatically.
 - Bumped the search-index internal file version so existing indexes are rebuilt with attachment metadata.
@@ -152,12 +170,12 @@ All notable changes to this project will be documented in this file.
 
 - Added optional Codex `archived_sessions` support alongside normal Codex `sessions`, with configurable archive enablement and archive root path under the Codex source.
 - Added archived-session visibility controls for History, Pinned, and Search views with Active Only, All, and Archived Only modes.
-- Added archive-aware History, Search, Markdown transcript, and Chat rendering, including archived location labels and archived visual markers.
+- Added archive-aware History, Search, Markdown transcript, and session timeline rendering, including archived location labels and archived visual markers.
 - Added **Move to Archive** for active Codex sessions and **Move to Codex History** for archived Codex sessions, using the official Codex provider when available.
 - Added filesystem fallback for moving archived sessions back to normal Codex history, including conflict-safe destination handling and Undo support for fallback moves.
 - Added multi-select support for moving Codex sessions to archive or back to Codex history, with sequential bulk execution and partial-result notifications.
 - Added archive-aware pin tracking so pinned Codex sessions can follow official archive/unarchive path changes by session identity.
-- Added metadata relocation for archive/unarchive and pin reconciliation, covering annotations, bookmarks, and saved chat open positions when paths move.
+- Added metadata relocation for archive/unarchive and pin reconciliation, covering annotations, bookmarks, and saved session-view positions when paths move.
 - Added Status rows for Codex archived session count and Codex archived sessions root when both the Codex source and archived sessions are enabled.
 
 ### Changed
@@ -167,7 +185,7 @@ All notable changes to this project will be documented in this file.
 - Improved initial history startup by showing a valid cached history index immediately, then refreshing local session files in the background.
 - Archived Codex sessions no longer expose Resume or Promote actions; their primary action is moving them back to Codex history.
 - Active and archived Codex context menus now show only the relevant move action, separated from custom-title actions and delete actions.
-- Chat Webviews for archived Codex sessions replace **Resume in Codex** with **Move to Codex History**.
+- Session Webviews for archived Codex sessions replace **Resume in Codex** with **Move to Codex History**.
 
 ## [2.1.0] - 2026-05-19
 
@@ -180,7 +198,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Renamed the lightweight chat resume copy action to **Copy Quick Prompt** and kept it separate from full handoff commands.
+- Renamed the lightweight session resume copy action to **Copy Quick Prompt** and kept it separate from full handoff commands.
 
 ## [2.0.1] - 2026-05-15
 
@@ -197,7 +215,7 @@ All notable changes to this project will be documented in this file.
 
 - Added file-level **File AI Change History** for workspace files, available from the opt-in **File Change History > Explorer Context Menu: Enabled** setting, with source toggles, in-page search, paging, source-aware card navigation, and links back to the matching diff card in the original session view.
 - Added history-view performance modes for large histories, including a simplified mode that loads heavy diff/detail sections on demand.
-- Added the `latest` option to `codexHistoryViewer.chat.openPosition` so chat sessions can open at the latest rendered card.
+- Added the `latest` option to `codexHistoryViewer.chat.openPosition` so sessions can open at the latest rendered card.
 - Added optional compact date guides for history and file-change views that can be enabled or disabled from settings.
 - Added settings:
   - `codexHistoryViewer.fileChangeHistory.explorerContextMenu.enabled`
@@ -206,7 +224,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Custom title actions now use a shared QuickPick flow from tree context menus and the chat viewer header.
+- Custom title actions now use a shared QuickPick flow from tree context menus and the session viewer header.
 - Codex `apply_patch` activity is now shown as diff cards when possible, while duplicate cards are avoided when matching `patch_apply_end` events are also present.
 - Codex diff cards now aggregate repeated updates to the same file within a single turn.
 
@@ -214,13 +232,13 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Changed chat auto-refresh `follow latest` scrolling to prefer the latest non-diff content card when trailing grouped diff cards are last. The bottom scroll action targets the latest rendered card.
+- Changed session auto-refresh `follow latest` scrolling to prefer the latest non-diff content card when trailing grouped diff cards are last. The bottom scroll action targets the latest rendered card.
 - Changed search indexing for Codex `custom_tool_call` records so `toolCalls` and `toolCallsAndOutputs` include lightweight tool metadata such as actions, commands, files, and paths.
 
 ### Fixed
 
-- Fixed chat auto-refresh `follow latest` scrolling sometimes being overridden by pending card-anchor restoration or later layout updates.
-- Fixed `lastMessage` chat open-position saving and restoring when no message bubble is visible, falling back to the previous rendered message or the top.
+- Fixed session auto-refresh `follow latest` scrolling sometimes being overridden by pending card-anchor restoration or later layout updates.
+- Fixed `lastMessage` session-view position saving and restoring when no message bubble is visible, falling back to the previous rendered message or the top.
 
 ## [1.5.0] - 2026-05-07
 
@@ -228,7 +246,7 @@ All notable changes to this project will be documented in this file.
 
 - Added extension-local custom titles for Codex and Claude sessions.
 - Added session tree tooltip modes (`full`, `compact`, `titleOnly`) so users can choose between detailed metadata and a one-line title-only tooltip.
-- Added `codexHistoryViewer.search.indexToolContent` to control whether the search index stores conversation text only, tool calls, or tool calls plus tool outputs.
+- Added `codexHistoryViewer.search.indexToolContent` to control whether the search index stores message text only, tool calls, or tool calls plus tool outputs.
 
 ## [1.4.3] - 2026-04-30
 
@@ -241,18 +259,18 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added collapsible assistant usage rows in the chat viewer when **Show details** is enabled.
+- Added collapsible assistant usage rows in the session viewer when **Show details** is enabled.
 - Added helpful History empty-state rows for no-history and no-filter-match states.
 
 ## [1.4.1] - 2026-04-24
 
 ### Added
 
-- Added a chat tab auto-refresh button in the chat header, shown when the History auto-refresh setting is enabled.
+- Added a session-tab auto-refresh button in the session viewer header, shown when the History auto-refresh setting is enabled.
 - Added per-tab auto-refresh modes: off, preserve current view, and follow latest.
-- Added automatic refresh for open chat tabs while VS Code is focused, including background editor tabs. Only affected tabs are refreshed, and new or different sessions start with auto-refresh off.
-- Added on-demand loading for chat image data so large image attachments no longer need to be sent to the Webview during the initial session render.
-- Added card-based scroll restoration when toggling chat details on or off, including fallback to the next visible card when the previous card is hidden in summary mode.
+- Added automatic refresh for open session tabs while VS Code is focused, including background editor tabs. Only affected tabs are refreshed, and new or different sessions start with auto-refresh off.
+- Added on-demand loading for session image data so large image attachments no longer need to be sent to the Webview during the initial session render.
+- Added card-based scroll restoration when toggling session details on or off, including fallback to the next visible card when the previous card is hidden in summary mode.
 
 ### Changed
 
@@ -260,8 +278,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Preserved chat tab UI state across reload and auto-refresh, including expanded cards/diffs, details visibility, diff wrap state, selected message, in-page search state, and scroll behavior.
-- Reset session-scoped Webview UI state when a reusable chat tab switches to a different session, including in-page search state, image preview state, and image data cache.
+- Preserved session-tab UI state across reload and auto-refresh, including expanded cards/diffs, details visibility, diff wrap state, selected message, in-page search state, and scroll behavior.
+- Reset session-scoped Webview UI state when a reusable session tab switches to a different session, including in-page search state, image preview state, and image data cache.
 
 ## [1.4.0] - 2026-04-23
 
@@ -270,13 +288,13 @@ All notable changes to this project will be documented in this file.
 - Added a History view mode switch between date-grouped history and a latest-first flat session list.
 - Added opt-in automatic history refresh for local session file changes, with debounce delay and refresh interval settings.
 - Automatic refresh is deferred while the History view is hidden or the VS Code window is not focused.
-- Added image attachment rendering in the chat viewer for supported Codex / Claude image data and local image references.
-- Added an option to open chat sessions from the top or restore near the last viewed message.
+- Added image attachment rendering in the session viewer for supported Codex / Claude image data and local image references.
+- Added an option to open sessions from the top or restore near the last viewed message.
 
 ### Changed
 
-- Changed chat tab handling so session selection uses a reusable tab, while **Open in New Tab (Chat)** keeps sessions in dedicated tabs and reuses existing matching tabs.
-- Changed the chat viewer scroll area so the fixed toolbar stays outside the scrollable content.
+- Changed session-tab handling so session selection uses a reusable tab, while **Open Session in New Tab** keeps sessions in dedicated tabs and reuses existing matching tabs.
+- Changed the session viewer scroll area so the fixed toolbar stays outside the scrollable content.
 - Changed the settings display order.
 
 ## [1.3.2] - 2026-04-22
@@ -294,7 +312,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Fixed stale chat panels for deleted or missing session files by checking file existence before opening/reloading and closing missing panels on refresh/delete.
+- Fixed stale session panels for deleted or missing session files by checking file existence before opening/reloading and closing missing panels on refresh/delete.
 - Fixed delete Undo cleanup so temporary backup files are removed when Undo actions are discarded, cleared, or completed.
 - Made search-index stale-entry cleanup explicit.
 - Localized Undo notification labels and action names.
@@ -303,7 +321,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added per-card full-width expansion controls in the chat viewer for messages, tool cards, notes, and grouped diffs.
+- Added per-card full-width expansion controls in the session viewer for messages, tool cards, notes, and grouped diffs.
 - Added previous/next navigation controls to grouped diff cards.
 
 ### Changed
@@ -318,21 +336,21 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added KaTeX-based equation rendering in the chat viewer for inline and block math expressions.
+- Added KaTeX-based equation rendering in the session viewer for inline and block math expressions.
 - Added `codexHistoryViewer.history.titleSource` to switch between generated titles and native titles when available.
 - Added native title resolution for Codex sessions from `session_index.jsonl`, plus a lightweight cache to preserve known titles for older sessions.
 
 ### Changed
 
-- Session list labels and chat panel titles can now use native titles when `history.titleSource` is set to `nativeWhenAvailable`.
+- Session list labels and session panel titles can now use native titles when `history.titleSource` is set to `nativeWhenAvailable`.
 
 ## [1.2.1] - 2026-04-17
 
 ### Added
 
-- Added grouped patch-based change cards in the chat viewer by parsing `patch_apply_end` events from session logs.
+- Added grouped patch-based change cards in the session viewer by parsing `patch_apply_end` events from session logs.
 - Added collapsible side-by-side before/after diffs for patch entries, with per-hunk wrap toggles and jump-to-line actions.
-- Added a right-side in-page search sidebar for the chat viewer with keyboard shortcuts, match counts, result snippets, and direct result navigation.
+- Added a right-side in-page search sidebar for the session viewer with keyboard shortcuts, match counts, result snippets, and direct result navigation.
 
 ### Changed
 
@@ -342,24 +360,24 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added tool-specific cards in the chat viewer, with a new `codexHistoryViewer.chat.toolDisplayMode` setting (`detailsOnly` / `compactCards`).
-- Added independent long-message folding settings for chat viewer `user` and `assistant` messages:
+- Added tool-specific cards in the session viewer, with a new `codexHistoryViewer.chat.toolDisplayMode` setting (`detailsOnly` / `compactCards`).
+- Added independent long-message folding settings for session-viewer `user` and `assistant` messages:
   - `codexHistoryViewer.chat.userLongMessageFolding`
   - `codexHistoryViewer.chat.assistantLongMessageFolding`
-- Added chat toolbar quick scroll buttons to jump to the top or bottom of the session.
+- Added session viewer toolbar quick scroll buttons to jump to the top or bottom of the session timeline.
 
 ### Changed
 
-- Chat tool rows are now left-aligned and use card-style presentation with icons, accents, and status emphasis.
-- Chat viewer reload now preserves scroll/selection and refreshes the tab title using the active history date basis.
-- Chat toolbar now automatically switches label buttons to icon-only mode when the header width becomes narrow.
-- Code block copy buttons in the chat viewer now use icon-only actions instead of text labels.
+- Session viewer tool rows are now left-aligned and use card-style presentation with icons, accents, and status emphasis.
+- Session viewer reload now preserves scroll/selection and refreshes the tab title using the active history date basis.
+- The session viewer toolbar now automatically switches label buttons to icon-only mode when the header width becomes narrow.
+- Code block copy buttons in the session viewer now use icon-only actions instead of text labels.
 
 ### Fixed
 
 - Added support for workspace-relative Markdown file links in both Claude and Codex session views.
 - Added transcript-side local link resolution so relative Markdown file links open the source file inside VS Code.
-- Fixed chat tab title refresh when `codexHistoryViewer.history.dateBasis` is set to `lastActivity`.
+- Fixed session-tab title refresh when `codexHistoryViewer.history.dateBasis` is set to `lastActivity`.
 
 ## [1.1.5] - 2026-04-14
 
@@ -372,14 +390,14 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added syntax-highlighted fenced code blocks in the chat-like viewer (powered by Shiki).
+- Added syntax-highlighted fenced code blocks in the session viewer (powered by Shiki).
 
 ## [1.1.3] - 2026-04-07
 
 ### Fixed
 
-- Fixed chat-viewer local file links so `scripts/deploy.sh#L39` style paths open the file instead of failing.
-- Added support for GitHub-style file locations such as `#L39C2` and `#L39-L45` when opening local links from the chat view.
+- Fixed session-viewer local file links so `scripts/deploy.sh#L39` style paths open the file instead of failing.
+- Added support for GitHub-style file locations such as `#L39C2` and `#L39-L45` when opening local links from the session view.
 
 ## [1.1.2] - 2026-03-06
 
@@ -421,7 +439,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Optional Claude history support (in addition to Codex history).
-- Chat Webview tab icons now switch by session source (`Codex` / `Claude`).
+- Session Webview tab icons now switch by session source (`Codex` / `Claude`).
 - New source settings:
   - `codexHistoryViewer.sources.enabled`
   - `codexHistoryViewer.claude.sessionsRoot`
@@ -451,21 +469,21 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- New chat viewer toolbar button to resume directly in OpenAI Codex:
+- New session viewer toolbar button to resume directly in OpenAI Codex:
   - `Open in OpenAI Codex`
 - New `Pin / Unpin` toggle button next to `Open in OpenAI Codex`.
 
 ### Changed
 
-- Reordered chat viewer primary toolbar actions to improve continuation workflow:
+- Reordered session viewer primary toolbar actions to improve continuation workflow:
   - Open in OpenAI Codex
   - Pin / Unpin toggle
 - Moved `Open Markdown transcript` and `Copy prompt excerpt` to the right side (before `Show details`).
-- Updated localization keys for the new chat toolbar actions and tooltips.
+- Updated localization keys for the new session viewer toolbar actions and tooltips.
 
 ### Fixed
 
-- In the chat viewer, local file links in Markdown now open inside VS Code instead of launching an external browser tab.
+- In the session viewer, local file links in Markdown now open inside VS Code instead of launching an external browser tab.
 
 ## [1.0.0] - 2026-03-02
 
@@ -545,7 +563,7 @@ All notable changes to this project will be documented in this file.
 
 - Context menus now show language-specific commands based on the selected UI language.
 - Date/time formatting now follows the resolved time zone.
-- Chat panel titles now refresh based on session data.
+- Session panel titles now refresh based on session data.
 - Session summaries now include time zone-aware date and time.
 - Transcript rendering now displays timestamps in the correct time zone.
 
@@ -566,7 +584,7 @@ All notable changes to this project will be documented in this file.
 
 - Initial release.
 - Views: **Pinned**, **History**, and **Search**.
-- Chat-like viewer (Webview) with Markdown rendering, copy actions, and "Open as Markdown".
+- Session viewer (Webview) with Markdown rendering, copy actions, and **Open Session as Markdown**.
 - Full-text search across sessions (cancellable, configurable max results, optional case sensitivity).
 - Session management: promote (copy to today), pin/unpin, and safe deletion (trash/recycle bin with fallback quarantine).
 - Multi-select support for open/pin/promote/delete and drag & drop pinning.

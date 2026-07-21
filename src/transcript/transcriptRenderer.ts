@@ -12,7 +12,7 @@ import {
   extractCodexMessageContent,
 } from "../chat/chatAttachments";
 
-// Reads session JSONL and renders the conversation as Markdown.
+// Reads session JSONL and renders the session transcript as Markdown.
 export async function renderTranscript(
   fsPath: string,
   options: {

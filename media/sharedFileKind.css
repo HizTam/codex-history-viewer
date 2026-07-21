@@ -1,0 +1,91 @@
+.fileKind {
+  --chv-file-kind-accent: var(--chv-accent, currentColor);
+}
+
+.fileKind-pdf {
+  --chv-file-kind-accent: var(--vscode-charts-red, #d73a49);
+}
+
+.fileKind-word {
+  --chv-file-kind-accent: var(--vscode-charts-blue, #2f6fda);
+}
+
+.fileKind-excel {
+  --chv-file-kind-accent: var(--vscode-charts-green, #2f8a53);
+}
+
+.fileKind-powerpoint {
+  --chv-file-kind-accent: var(--vscode-charts-orange, #c2642d);
+}
+
+.fileKind-text {
+  --chv-file-kind-accent: var(--vscode-charts-blue, #1f8a8a);
+}
+
+.fileKind-code {
+  --chv-file-kind-accent: var(--vscode-charts-purple, #7b61c8);
+}
+
+.fileKind-archive {
+  --chv-file-kind-accent: var(--vscode-charts-yellow, #9a7b17);
+}
+
+.fileKind-image {
+  --chv-file-kind-accent: var(--vscode-charts-purple, #b04f8f);
+}
+
+.fileKindIcon {
+  position: relative;
+  flex: 0 0 auto;
+  width: 9px;
+  height: 11px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  color: inherit;
+  opacity: 0.82;
+}
+
+.fileKind .fileKindIcon {
+  color: var(--chv-file-kind-accent, currentColor);
+}
+
+.fileKindIcon::after {
+  content: "";
+  position: absolute;
+  top: -1px;
+  right: -1px;
+  width: 5px;
+  height: 5px;
+  border-bottom: 1px solid currentColor;
+  border-left: 1px solid currentColor;
+  background: var(--chv-bg, Canvas);
+}
+
+.fileKind-code .fileKindIcon::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 2px;
+  width: 5px;
+  height: 3px;
+  border-top: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+}
+
+.fileKind-archive .fileKindIcon::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 2px;
+  width: 5px;
+  height: 1px;
+  border-top: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+}
+
+@media (forced-colors: active) {
+  .fileKindIcon {
+    color: CanvasText;
+    opacity: 1;
+  }
+}

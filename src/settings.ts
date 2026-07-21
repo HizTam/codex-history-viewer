@@ -32,6 +32,8 @@ export interface CodexHistoryViewerConfig {
   enableCodexSource: boolean;
   enableCodexArchivedSessions: boolean;
   enableClaudeSource: boolean;
+  branchNavigationEnabled: boolean;
+  agentRunsEnabled: boolean;
   handoffEnabled: boolean;
   fileChangeHistoryExplorerContextMenuEnabled: boolean;
   webviewRestoreAfterReload: boolean;
@@ -187,6 +189,8 @@ export function getConfig(): CodexHistoryViewerConfig {
     enableCodexSource: enabledSources.enableCodexSource,
     enableCodexArchivedSessions: enabledSources.enableCodexSource && codexArchivedSessionsEnabledSetting,
     enableClaudeSource: enabledSources.enableClaudeSource,
+    branchNavigationEnabled: cfg.get<boolean>("branchNavigation.enabled") ?? false,
+    agentRunsEnabled: cfg.get<boolean>("agentRuns.enabled") ?? false,
     handoffEnabled: cfg.get<boolean>("handoff.enabled") ?? true,
     fileChangeHistoryExplorerContextMenuEnabled:
       cfg.get<boolean>("fileChangeHistory.explorerContextMenu.enabled") ?? false,

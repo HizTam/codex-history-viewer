@@ -28,6 +28,20 @@ export interface SessionMetaInfo {
   modelProvider?: string;
   source?: string;
   historySource?: SessionSource;
+  codexAgent?: CodexAgentMetadata;
+  codexFork?: CodexForkMetadata;
+}
+
+export interface CodexAgentMetadata {
+  parentThreadId: string;
+  recordedDepth?: number;
+  agentPath?: string;
+  agentNickname?: string;
+  agentRole?: string;
+}
+
+export interface CodexForkMetadata {
+  parentThreadId: string;
 }
 
 export type ChatRole = "user" | "assistant";

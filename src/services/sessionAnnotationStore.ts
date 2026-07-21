@@ -17,11 +17,18 @@ export interface AnnotationTagStat {
 const ANNOTATION_KEY = "codexHistoryViewer.sessionAnnotations.v1";
 
 // Stores per-session tags/notes in Memento.
-export class SessionAnnotationStore {
+export class SessionAnnotationStore implements vscode.Disposable {
   private readonly memento: vscode.Memento;
+  private readonly onDidChangeEmitter = new vscode.EventEmitter<void>();
+
+  public readonly onDidChange = this.onDidChangeEmitter.event;
 
   constructor(memento: vscode.Memento) {
     this.memento = memento;
+  }
+
+  public dispose(): void {
+    this.onDidChangeEmitter.dispose();
   }
 
   public get(fsPath: string): SessionAnnotation | null {
@@ -64,11 +71,14 @@ export class SessionAnnotationStore {
 
   public async set(fsPath: string, params: { tags: readonly string[]; note: string }): Promise<void> {
     const key = normalizeCacheKey(fsPath);
-    const list = this.getAll().filter((x) => x.cacheKey !== key);
+    const current = this.getAll();
     const tags = normalizeTags(params.tags);
     const note = normalizeNote(params.note);
+    const existing = current.find((x) => x.cacheKey === key);
+    if (isSameAnnotation(existing, tags, note)) return;
+    const list = current.filter((x) => x.cacheKey !== key);
     if (tags.length === 0 && note.length === 0) {
-      await this.memento.update(ANNOTATION_KEY, list);
+      await this.persist(list);
       return;
     }
     const next: SessionAnnotation = {
@@ -79,19 +89,23 @@ export class SessionAnnotationStore {
       updatedAt: Date.now(),
     };
     list.push(next);
-    await this.memento.update(ANNOTATION_KEY, list);
+    await this.persist(list);
   }
 
   public async remove(fsPath: string): Promise<void> {
     const key = normalizeCacheKey(fsPath);
-    const list = this.getAll().filter((x) => x.cacheKey !== key);
-    await this.memento.update(ANNOTATION_KEY, list);
+    const current = this.getAll();
+    const list = current.filter((x) => x.cacheKey !== key);
+    if (list.length === current.length) return;
+    await this.persist(list);
   }
 
   public async removeMany(fsPaths: readonly string[]): Promise<void> {
     const removeKeys = new Set(fsPaths.map((p) => normalizeCacheKey(p)));
-    const list = this.getAll().filter((x) => !removeKeys.has(x.cacheKey));
-    await this.memento.update(ANNOTATION_KEY, list);
+    const current = this.getAll();
+    const list = current.filter((x) => !removeKeys.has(x.cacheKey));
+    if (list.length === current.length) return;
+    await this.persist(list);
   }
 
   public async relocate(oldFsPath: string, newFsPath: string): Promise<boolean> {
@@ -117,7 +131,7 @@ export class SessionAnnotationStore {
       });
     }
 
-    await this.memento.update(ANNOTATION_KEY, compactAnnotations(next));
+    await this.persist(next);
     return true;
   }
 
@@ -148,7 +162,7 @@ export class SessionAnnotationStore {
     }
 
     if (changed === 0) return 0;
-    await this.memento.update(ANNOTATION_KEY, compactAnnotations(Array.from(byKey.values())));
+    await this.persist(Array.from(byKey.values()));
     return changed;
   }
 
@@ -179,8 +193,13 @@ export class SessionAnnotationStore {
     }
 
     if (changed === 0) return 0;
-    await this.memento.update(ANNOTATION_KEY, compactAnnotations(Array.from(byKey.values())));
+    await this.persist(Array.from(byKey.values()));
     return changed;
+  }
+
+  private async persist(values: readonly SessionAnnotation[]): Promise<void> {
+    await this.memento.update(ANNOTATION_KEY, compactAnnotations(values));
+    this.onDidChangeEmitter.fire();
   }
 }
 

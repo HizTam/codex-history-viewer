@@ -1,5 +1,28 @@
 // Text helpers for display (normalization, snippets, etc.).
 
+const CODEX_SESSION_START_CONTEXT_TAGS = [
+  "recommended_plugins",
+  "permissions instructions",
+  "collaboration_mode",
+  "skills_instructions",
+  "apps_instructions",
+  "plugins_instructions",
+  "multi_agent_mode",
+  "environment_context",
+  "user_instructions",
+  "instructions",
+] as const;
+
+const CODEX_SESSION_START_MARKER_TAGS = [
+  "recommended_plugins",
+  "permissions instructions",
+  "collaboration_mode",
+  "skills_instructions",
+  "apps_instructions",
+  "plugins_instructions",
+  "multi_agent_mode",
+] as const;
+
 export function normalizeWhitespace(s: string): string {
   return s.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }
@@ -108,15 +131,46 @@ export function extractUserRequestText(text: string): string | null {
 export function isBoilerplateUserMessageText(text: string): boolean {
   const t = String(text ?? "").trimStart();
   if (!t) return false;
-  if (t.startsWith("<environment_context>")) return true;
-  if (t.startsWith("# AGENTS.md instructions")) return true;
-  if (t.startsWith("<INSTRUCTIONS>")) return true;
-  if (isCodexUserInstructionsMessageText(t)) return true;
+  if (isCodexProtocolContextText(t)) return true;
   // Treat meta tags as boilerplate only when the line contains only the tag payload.
   if (t.startsWith("<ide_opened_file>")) return stripTransportMetaTags(t).length === 0;
   if (t.startsWith("<local-command-caveat>")) return stripTransportMetaTags(t).length === 0;
   if (/^<command-(name|message|args)>/i.test(t)) return stripTransportMetaTags(t).length === 0;
   return false;
+}
+
+export function isCodexProtocolContextStartText(value: unknown): boolean {
+  const text = String(value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trimStart();
+  if (!text) return false;
+  const lower = text.toLowerCase();
+  if (CODEX_SESSION_START_CONTEXT_TAGS.some((tagName) => lower.startsWith(`<${tagName}>`))) return true;
+  return /^# AGENTS\.md instructions(?:[^\n]*)?(?:\n|$)/iu.test(text);
+}
+
+export function isCodexProtocolContextText(text: string): boolean {
+  return parseCodexProtocolContextText(text) !== null;
+}
+
+export function isCodexSessionStartContextText(text: string): boolean {
+  return parseCodexProtocolContextText(text)?.hasSessionStartMarker === true;
+}
+
+function parseCodexProtocolContextText(text: string): { blockCount: number; hasSessionStartMarker: boolean } | null {
+  const normalized = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  if (!normalized) return null;
+  const lower = normalized.toLowerCase();
+
+  let blockCount = 0;
+  let hasSessionStartMarker = false;
+  let cursor = 0;
+  while (cursor < normalized.length) {
+    const consumed = consumeCodexSessionStartContextBlock(normalized, lower, cursor);
+    if (!consumed || consumed.end <= cursor) return null;
+    blockCount += 1;
+    hasSessionStartMarker = hasSessionStartMarker || consumed.isSessionStartMarker;
+    cursor = skipWhitespace(normalized, consumed.end);
+  }
+  return blockCount > 0 ? { blockCount, hasSessionStartMarker } : null;
 }
 
 export function isCodexTurnAbortedMessageText(text: string): boolean {
@@ -146,6 +200,57 @@ function isSingleXmlLikeBlock(text: string, tagName: string): boolean {
   if (!normalized.startsWith(openTag) || !normalized.endsWith(closeTag)) return false;
   const body = normalized.slice(openTag.length, normalized.length - closeTag.length);
   return !body.includes(openTag) && !body.includes(closeTag);
+}
+
+function consumeCodexSessionStartContextBlock(
+  text: string,
+  lower: string,
+  cursor: number,
+): { end: number; isSessionStartMarker: boolean } | null {
+  const xmlBlock = consumeKnownCodexContextXmlBlock(lower, cursor);
+  if (xmlBlock) {
+    return {
+      end: xmlBlock.end,
+      isSessionStartMarker: CODEX_SESSION_START_MARKER_TAGS.some((tagName) => tagName === xmlBlock.tagName),
+    };
+  }
+
+  const headingPattern = /# AGENTS\.md instructions(?:[^\n]*)?(?:\n|$)/iuy;
+  headingPattern.lastIndex = cursor;
+  const heading = headingPattern.exec(text);
+  if (!heading) return null;
+
+  const blockStart = skipWhitespace(text, headingPattern.lastIndex);
+  const instructions = consumeKnownCodexContextXmlBlock(lower, blockStart, "instructions");
+  if (!instructions || instructions.end <= blockStart) return null;
+  return { end: instructions.end, isSessionStartMarker: true };
+}
+
+function consumeKnownCodexContextXmlBlock(
+  lower: string,
+  cursor: number,
+  requiredTagName?: string,
+): { end: number; tagName: (typeof CODEX_SESSION_START_CONTEXT_TAGS)[number] } | null {
+  for (const tagName of CODEX_SESSION_START_CONTEXT_TAGS) {
+    if (requiredTagName && tagName !== requiredTagName) continue;
+    const openTag = `<${tagName}>`;
+    if (!lower.startsWith(openTag, cursor)) continue;
+
+    const closeTag = `</${tagName}>`;
+    const contentStart = cursor + openTag.length;
+    const closeIndex = lower.indexOf(closeTag, contentStart);
+    if (closeIndex < 0) return { end: -1, tagName };
+    const nestedOpenIndex = lower.indexOf(openTag, contentStart);
+    if (nestedOpenIndex >= 0 && nestedOpenIndex < closeIndex) return { end: -1, tagName };
+    return { end: closeIndex + closeTag.length, tagName };
+  }
+  return null;
+}
+
+function skipWhitespace(text: string, cursor: number): number {
+  let next = cursor;
+  while (next < text.length && /\s/u.test(text[next]!)) next += 1;
+  return next;
 }
 
 export function stripTransportMetaTags(text: string): string {

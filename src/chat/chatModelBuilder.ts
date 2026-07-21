@@ -10,6 +10,7 @@ import type {
   ChatPatchGroupItem,
   ChatPatchHunk,
   ChatRateLimit,
+  ChatRateLimitInvalidField,
   ChatRateLimits,
   ChatPatchRow,
   ChatRole,
@@ -18,6 +19,7 @@ import type {
   ChatSystemEventItem,
   ChatTimelineItem,
   ChatTokenUsage,
+  ChatTokenUsageField,
   ChatToolExecution,
   ChatToolItem,
   ChatTurnStatus,
@@ -34,9 +36,13 @@ import { buildToolPresentation } from "../tools/toolSemantics";
 import {
   assignAttachmentIds,
   detectClaudeMaterializedMessageRole,
+  extractClaudeLocalCommandOutputContent,
   extractClaudeMessageContent,
   extractClaudeRequestInterruptionContent,
+  extractCodexCompactUserText,
   extractCodexMessageContent,
+  extractCodexProtocolContextText,
+  extractCodexSessionStartContextText,
   hasClaudeAttachmentLikeContent,
   isCodexTurnAbortedContent,
 } from "./chatAttachments";
@@ -71,7 +77,7 @@ interface ChatTimelineBuildResult {
   latestTurnId?: string;
 }
 
-// Parse a session JSONL and build a chat-view model.
+// Parse a session JSONL and build a session-view model.
 export async function buildChatSessionModel(
   fsPath: string,
   options: ChatSessionModelBuildOptions = {},
@@ -295,6 +301,7 @@ async function readPatchEntryDetails(
       if (!role) continue;
       const rawContent = getClaudeMessageContent(obj);
       if (role === "user" && extractClaudeRequestInterruptionContent(rawContent)) continue;
+      if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) continue;
       const parsed = parseClaudeMessageContent(rawContent);
       const stripped = stripImagePlaceholders(parsed.messageText);
       if (normalizeText(stripped.text) || hasClaudeAttachmentLikeContent(rawContent)) messageIndex += 1;
@@ -348,13 +355,16 @@ async function indexCodexTimelineRecord(
       return true;
     }
 
+    const content = obj?.payload?.content;
+    const protocolContextText =
+      role === "user" ? extractCodexProtocolContextText(content) : null;
     const parsed = await extractCodexMessageContent(
-      obj?.payload?.content,
+      content,
       sessionCwd,
       toImageExtractionOptions(options.images),
     );
-    let text = normalizeText(parsed.text);
-    const attachments = parsed.attachments;
+    let text = normalizeText(protocolContextText ?? parsed.text);
+    const attachments = protocolContextText ? [] : parsed.attachments;
     let memoryCitation: ChatMemoryCitation | undefined;
     if (role === "assistant") {
       const split = splitTrailingMemoryCitationBlock(text);
@@ -363,15 +373,39 @@ async function indexCodexTimelineRecord(
     }
     if (!text && attachments.length === 0 && !memoryCitation) return true;
 
-    const compactUserText = role === "user" ? extractCompactUserText(text) : null;
+    const sessionStartContextText =
+      role === "user" &&
+      !hasVisibleConversationMessage(items)
+        ? extractCodexSessionStartContextText(content)
+        : null;
+    const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    const idx = role === "user" || role === "assistant" ? nextMessageIndex() : undefined;
+    if (sessionStartContextText && typeof idx === "number") {
+      items.push({
+        type: "protocolContext",
+        source: "codex",
+        kind: "sessionStart",
+        messageIndex: idx,
+        timestampIso: ts,
+        text: sessionStartContextText,
+      });
+      observeCodexItemTurn(turnState, turnId, ts);
+      closeCodexInterruptionWindow(interruptionState);
+      return true;
+    }
+
+    const compactUserText =
+      role === "user" ? extractCodexCompactUserText(content, text) : null;
     const isBoilerplate = role === "assistant" ? false : isBoilerplateUserMessageText(text);
     const requestText = role === "user" ? compactUserText ?? text : undefined;
     // For user rows, treat only empty compact text as context.
     const isContext =
-      role === "assistant" ? false : role === "user" ? !compactUserText && attachments.length === 0 : isBoilerplate;
+      role === "assistant"
+        ? false
+        : role === "user"
+          ? protocolContextText !== null || (!compactUserText && attachments.length === 0)
+          : isBoilerplate;
 
-    const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
-    const idx = role === "user" || role === "assistant" ? nextMessageIndex() : undefined;
     assignAttachmentIds(attachments, typeof idx === "number" ? `m${idx}` : `item${items.length}`);
 
     const item: ChatMessageItem = {
@@ -659,6 +693,19 @@ async function indexClaudeTimelineRecord(
     return true;
   }
 
+  const localCommandOutput = role === "user" ? extractClaudeLocalCommandOutputContent(rawContent) : null;
+  if (localCommandOutput) {
+    const ts = readTimestampIso(obj);
+    items.push({
+      type: "systemEvent",
+      kind: "localCommandOutput",
+      source: "claude",
+      output: localCommandOutput.output,
+      ...(ts ? { timestampIso: ts } : {}),
+    });
+    return true;
+  }
+
   const parsed = parseClaudeMessageContent(rawContent);
   const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, toImageExtractionOptions(options.images), { role });
   const attachments = extracted.attachments;
@@ -820,6 +867,14 @@ function createTurnBuildState(): TurnBuildState {
     order: [],
     terminalStatusByTurnId: new Map<string, PendingTurnTerminalStatus>(),
   };
+}
+
+function hasVisibleConversationMessage(items: readonly ChatTimelineItem[]): boolean {
+  return items.some(
+    (item) =>
+      item.type === "message" &&
+      (item.role === "assistant" || (item.role === "user" && item.isContext !== true)),
+  );
 }
 
 function readCodexRecordTurnId(obj: any): string | undefined {
@@ -1667,21 +1722,35 @@ function buildClaudeUsageItem(obj: any, messageIndex: number, timestampIso?: str
 function extractTokenUsage(value: unknown): ChatTokenUsage | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
-  const usage: ChatTokenUsage = {
-    ...toOptionalTokenField("inputTokens", raw.input_tokens),
-    ...toOptionalTokenField("cachedInputTokens", raw.cached_input_tokens),
-    ...toOptionalTokenField("cacheReadInputTokens", raw.cache_read_input_tokens),
-    ...toOptionalTokenField("cacheCreationInputTokens", raw.cache_creation_input_tokens),
-    ...toOptionalTokenField("outputTokens", raw.output_tokens),
-    ...toOptionalTokenField("reasoningOutputTokens", raw.reasoning_output_tokens),
-    ...toOptionalTokenField("totalTokens", raw.total_tokens),
-  };
+  const usage: ChatTokenUsage = {};
+  const invalidFields: ChatTokenUsageField[] = [];
+  for (const [key, rawKey] of [
+    ["inputTokens", "input_tokens"],
+    ["cachedInputTokens", "cached_input_tokens"],
+    ["cacheReadInputTokens", "cache_read_input_tokens"],
+    ["cacheCreationInputTokens", "cache_creation_input_tokens"],
+    ["outputTokens", "output_tokens"],
+    ["reasoningOutputTokens", "reasoning_output_tokens"],
+    ["totalTokens", "total_tokens"],
+  ] as const) {
+    if (!(rawKey in raw)) continue;
+    const normalized = normalizeTokenInteger(raw[rawKey]);
+    if (normalized === undefined) {
+      invalidFields.push(key);
+    } else {
+      usage[key] = normalized;
+    }
+  }
+  if (invalidFields.length > 0) usage.invalidFields = invalidFields;
   return Object.keys(usage).length > 0 ? usage : null;
 }
 
-function toOptionalTokenField<K extends keyof ChatTokenUsage>(key: K, value: unknown): Pick<ChatTokenUsage, K> | {} {
-  const n = normalizeOptionalInteger(value);
-  return typeof n === "number" ? { [key]: n } as Pick<ChatTokenUsage, K> : {};
+function normalizeTokenInteger(value: unknown): number | undefined {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0
+    ? value
+    : undefined;
 }
 
 function normalizeOptionalInteger(value: unknown): number | undefined {
@@ -1713,16 +1782,12 @@ function parseIntegerCandidate(value: unknown): number | undefined {
   return Number(trimmed);
 }
 
-function normalizeOptionalNumber(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
-  return value >= 0 ? value : undefined;
-}
-
 function extractRateLimits(value: unknown): ChatRateLimits | undefined {
   if (!value || typeof value !== "object") return undefined;
   const raw = value as Record<string, unknown>;
-  const primary = extractRateLimit(raw.primary);
-  const secondary = extractRateLimit(raw.secondary);
+  const invalidFields: ChatRateLimitInvalidField[] = [];
+  const primary = extractRateLimit(raw.primary, "primary", invalidFields);
+  const secondary = extractRateLimit(raw.secondary, "secondary", invalidFields);
   const limitId = normalizeModelMetaValue(raw.limit_id);
   const limitName = normalizeModelMetaValue(raw.limit_name);
   const planType = normalizeModelMetaValue(raw.plan_type);
@@ -1734,25 +1799,41 @@ function extractRateLimits(value: unknown): ChatRateLimits | undefined {
     ...(limitName ? { limitName } : {}),
     ...(planType ? { planType } : {}),
     ...(reachedType ? { reachedType } : {}),
+    ...(invalidFields.length > 0 ? { invalidFields } : {}),
   };
   return Object.keys(limits).length > 0 ? limits : undefined;
 }
 
-function extractRateLimit(value: unknown): ChatRateLimit | undefined {
+function extractRateLimit(
+  value: unknown,
+  scope: "primary" | "secondary",
+  invalidFields: ChatRateLimitInvalidField[],
+): ChatRateLimit | undefined {
   if (!value || typeof value !== "object") return undefined;
   const raw = value as Record<string, unknown>;
-  const limit: ChatRateLimit = {
-    ...toOptionalNumberField("usedPercent", raw.used_percent),
-    ...toOptionalNumberField("windowMinutes", raw.window_minutes),
-    ...toOptionalNumberField("resetsAt", raw.resets_at),
-    ...toOptionalNumberField("resetsInSeconds", raw.resets_in_seconds),
-  };
+  const limit: ChatRateLimit = {};
+  for (const [key, rawKey] of [
+    ["usedPercent", "used_percent"],
+    ["windowMinutes", "window_minutes"],
+    ["resetsAt", "resets_at"],
+    ["resetsInSeconds", "resets_in_seconds"],
+  ] as const) {
+    if (!(rawKey in raw)) continue;
+    const rawValue = raw[rawKey];
+    const valid =
+      key === "usedPercent"
+        ? typeof rawValue === "number" &&
+          Number.isFinite(rawValue) &&
+          rawValue >= 0 &&
+          rawValue <= Number.MAX_SAFE_INTEGER
+        : typeof rawValue === "number" && Number.isSafeInteger(rawValue) && rawValue >= 0;
+    if (valid) {
+      limit[key] = rawValue as number;
+    } else {
+      invalidFields.push(`${scope}.${key}` as ChatRateLimitInvalidField);
+    }
+  }
   return Object.keys(limit).length > 0 ? limit : undefined;
-}
-
-function toOptionalNumberField<K extends keyof ChatRateLimit>(key: K, value: unknown): Pick<ChatRateLimit, K> | {} {
-  const n = normalizeOptionalNumber(value);
-  return typeof n === "number" ? { [key]: n } as Pick<ChatRateLimit, K> : {};
 }
 
 function getClaudeMessageId(obj: any): string | undefined {

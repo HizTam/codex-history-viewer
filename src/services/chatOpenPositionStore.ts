@@ -11,7 +11,7 @@ export interface ChatOpenPositionEntry {
 const CHAT_OPEN_POSITION_KEY = "codexHistoryViewer.chatOpenPositions.v1";
 const MAX_CHAT_OPEN_POSITIONS = 100;
 
-// Stores the last viewed chat message position in globalState.
+// Stores the last viewed session-message position in globalState.
 export class ChatOpenPositionStore {
   private readonly memento: vscode.Memento;
   private readonly entriesByKey = new Map<string, ChatOpenPositionEntry>();

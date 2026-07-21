@@ -12,7 +12,9 @@ import {
 import {
   buildAttachmentSummaryLines,
   detectClaudeMaterializedMessageRole,
+  extractClaudeLocalCommandOutputContent,
   extractClaudeMessageContent,
+  extractCodexCompactUserText,
 } from "../chat/chatAttachments";
 import type { ChatAttachment } from "../chat/chatTypes";
 import type {
@@ -22,6 +24,10 @@ import type {
   SessionStorageLocation,
   SessionSummary,
 } from "./sessionTypes";
+import { resolvePreviewSessionTitleCandidate } from "./sessionTitleResolver";
+import { extractCodexAgentMetadata } from "../agents/codexAgentMetadata";
+import { extractCodexForkMetadata } from "../branchMap/codexForkMetadata";
+import { boundSessionIdentityKey } from "./sessionIdentity";
 
 const META_SCAN_LINE_LIMIT = 400;
 
@@ -48,6 +54,8 @@ export async function tryReadSessionMeta(fsPath: string): Promise<SessionMetaInf
 
       if (obj?.type === "session_meta" && obj?.payload && typeof obj.payload === "object") {
         const payload = obj.payload as Record<string, unknown>;
+        const codexAgent = extractCodexAgentMetadata(payload.source);
+        const codexFork = extractCodexForkMetadata(payload);
         return {
           id: typeof payload.id === "string" ? payload.id : undefined,
           timestampIso: typeof payload.timestamp === "string" ? payload.timestamp : undefined,
@@ -57,6 +65,8 @@ export async function tryReadSessionMeta(fsPath: string): Promise<SessionMetaInf
           modelProvider: typeof payload.model_provider === "string" ? payload.model_provider : undefined,
           source: typeof payload.source === "string" ? payload.source : undefined,
           historySource: "codex",
+          ...(codexAgent ? { codexAgent } : {}),
+          ...(codexFork ? { codexFork } : {}),
         };
       }
 
@@ -279,7 +289,8 @@ export async function readPreviewMessages(fsPath: string, maxMessages: number): 
         const textRaw = buildCodexPreviewText(obj?.payload?.content);
         const textNormalized = normalizeWhitespace(textRaw);
         if (!textNormalized) continue;
-        const userText = role === "user" ? extractCompactUserText(textNormalized) : null;
+        const userText =
+          role === "user" ? extractCodexCompactUserText(obj?.payload?.content, textNormalized) : null;
         if (role === "user" && !userText) continue;
         const text = role === "user" ? userText! : textNormalized;
 
@@ -291,7 +302,9 @@ export async function readPreviewMessages(fsPath: string, maxMessages: number): 
       const role = detectClaudeMessageRole(obj);
       if (!role) continue;
 
-      const extracted = await extractClaudeMessageContent(getClaudeMessageContent(obj), undefined, { enabled: false }, { role });
+      const rawContent = getClaudeMessageContent(obj);
+      if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) continue;
+      const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role });
       const attachmentSummary = buildClaudePreviewAttachmentText(extracted.attachments);
       const textRaw = [buildClaudePreviewText(extracted.text), attachmentSummary].filter(Boolean).join("\n");
       const textNormalized = normalizeWhitespace(textRaw);
@@ -370,7 +383,7 @@ export async function buildSessionSummary(params: {
       : "--:--";
 
   const previewMessages = await readPreviewMessages(fsPath, previewMaxMessages);
-  const snippetSource = pickSessionSnippetSource(previewMessages);
+  const snippetSource = resolvePreviewSessionTitleCandidate(previewMessages);
   const snippet = snippetSource ? singleLineSnippet(snippetSource, 70) : path.basename(fsPath);
   const cwdShort = meta.cwd ? safeDisplayPath(meta.cwd, 80) : "";
 
@@ -411,14 +424,14 @@ function resolveSessionIdentityKey(
   cacheKey: string,
 ): string {
   const sessionId = normalizeIdentityPart(meta.id);
-  if (sessionId) return `${source}:id:${sessionId}`;
+  if (sessionId) return boundSessionIdentityKey(source, `${source}:id:${sessionId}`);
 
   if (source === "codex") {
     const rolloutId = extractCodexRolloutId(fsPath);
-    if (rolloutId) return `${source}:rollout:${rolloutId}`;
+    if (rolloutId) return boundSessionIdentityKey(source, `${source}:rollout:${rolloutId}`);
   }
 
-  return `${source}:path:${cacheKey}`;
+  return boundSessionIdentityKey(source, `${source}:path:${cacheKey}`);
 }
 
 function extractCodexRolloutId(fsPath: string): string {
@@ -431,24 +444,4 @@ function extractCodexRolloutId(fsPath: string): string {
 function normalizeIdentityPart(value: unknown): string {
   if (typeof value !== "string") return "";
   return value.trim().replace(/[\u0000-\u001f\u007f]/gu, "").toLowerCase();
-}
-
-function pickSessionSnippetSource(messages: PreviewMessage[]): string | null {
-  const firstUserIndex = messages.findIndex((m) => m.role === "user" && m.text.trim().length > 0);
-  if (firstUserIndex < 0) return null;
-
-  const firstUser = messages[firstUserIndex]!.text.trim();
-  if (isUiTitleGenerationPrompt(firstUser)) {
-    const nextAssistant = messages
-      .slice(firstUserIndex + 1)
-      .find((m) => m.role === "assistant" && m.text.trim().length > 0);
-    if (nextAssistant) return nextAssistant.text.trim();
-  }
-
-  return firstUser;
-}
-
-function isUiTitleGenerationPrompt(text: string): boolean {
-  const s = text.trim();
-  return /^Generate a concise UI title \(20-40 characters\) for this task\b/i.test(s);
 }

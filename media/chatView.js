@@ -19,6 +19,8 @@
   const btnPageSearch = document.getElementById("btnPageSearch");
   const btnPerformanceMode = document.getElementById("btnPerformanceMode");
   const btnAutoRefresh = document.getElementById("btnAutoRefresh");
+  const btnBranchMap = document.getElementById("btnBranchMap");
+  const btnAgentRuns = document.getElementById("btnAgentRuns");
   const btnReload = document.getElementById("btnReload");
   const pageSearchBarEl = document.getElementById("pageSearchBar");
   const pageSearchResizeHandleEl = document.getElementById("pageSearchResizeHandle");
@@ -32,6 +34,8 @@
   const btnPageSearchNext = document.getElementById("btnPageSearchNext");
   const btnPageSearchClose = document.getElementById("btnPageSearchClose");
   const restoreCoverEl = document.getElementById("restoreCover");
+  const branchOverlayRootEl = document.getElementById("branchOverlayRoot");
+  const agentRunsOverlayRootEl = document.getElementById("agentRunsOverlayRoot");
 
   const md = createMarkdownRenderer();
   const CODE_COMMENT_DIRECTIVE_PREFIX = "::code-comment{";
@@ -41,6 +45,15 @@
   const MAX_CODE_COMMENT_TITLE_LENGTH = 512;
   const MAX_CODE_COMMENT_BODY_LENGTH = 20000;
   const MAX_PAGE_SEARCH_HISTORY_CANDIDATES = 20;
+  const MAX_BRANCH_OVERLAY_CARDS = 200;
+  const MAX_BRANCH_CONTROL_CHOICES = 20;
+  const MAX_BRANCH_CONTROL_OCCURRENCES = 20;
+  const MAX_AGENT_RUN_NODES = 500;
+  const MAX_AGENT_RUN_DEPTH = 64;
+  const MAX_AGENT_RUN_CHILDREN = 200;
+  const BRANCH_TREE_PAN_THRESHOLD_PX = 5;
+  const BRANCH_CHOICE_PREVIEW_DELAY_MS = 220;
+  const BRANCH_CHOICE_PREVIEW_CLOSE_DELAY_MS = 180;
   const CODE_COMMENT_ATTRIBUTE_KEYS = new Set(["file", "title", "body", "start", "end", "priority"]);
   const COPY_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 1.5H6A1.5 1.5 0 0 0 4.5 3H3.75A1.75 1.75 0 0 0 2 4.75v8.5C2 14.216 2.784 15 3.75 15h8.5c.966 0 1.75-.784 1.75-1.75v-8.5C14 3.784 13.216 3 12.25 3H11.5A1.5 1.5 0 0 0 10 1.5Zm-4 1H10a.5.5 0 0 1 .5.5V3H5.5V3a.5.5 0 0 1 .5-.5ZM3.75 4h8.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-8.5a.75.75 0 0 1-.75-.75v-8.5A.75.75 0 0 1 3.75 4Z"/></svg>';
@@ -68,12 +81,30 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.25 1.5a.75.75 0 0 0-.53 1.28L5.94 4v2.38L3.72 8.6a.75.75 0 0 0 .53 1.28h3v4.37a.75.75 0 0 0 1.5 0V9.88h3a.75.75 0 0 0 .53-1.28L10.06 6.38V4l1.22-1.22a.75.75 0 0 0-.53-1.28h-5.5Z"/></svg>';
   const BOOKMARK_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M4.25 2A1.25 1.25 0 0 1 5.5.75h5A1.25 1.25 0 0 1 11.75 2v11.8a.75.75 0 0 1-1.14.64L8 12.86l-2.61 1.58a.75.75 0 0 1-1.14-.64V2Zm1.5.25v10.22l1.86-1.13a.75.75 0 0 1 .78 0l1.86 1.13V2.25h-4.5Z"/></svg>';
+  const TAG_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 2.75C2 2.34 2.34 2 2.75 2h4.69c.2 0 .39.08.53.22l5.81 5.81a1.75 1.75 0 0 1 0 2.47l-3.28 3.28a1.75 1.75 0 0 1-2.47 0L2.22 7.97A.75.75 0 0 1 2 7.44V2.75Zm1.5.75v3.63l5.59 5.59a.25.25 0 0 0 .35 0l3.28-3.28a.25.25 0 0 0 0-.35L7.13 3.5H3.5Zm2.25 1a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z"/></svg>';
+  const NOTE_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.75 1.5h6.94c.2 0 .39.08.53.22l2.06 2.06c.14.14.22.33.22.53v8.94A1.25 1.25 0 0 1 12.25 14.5h-8.5a1.25 1.25 0 0 1-1.25-1.25V2.75A1.25 1.25 0 0 1 3.75 1.5ZM4 3v10h8V5H9.75A.75.75 0 0 1 9 4.25V3H4Zm1.75 4h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5Zm0 3h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1 0-1.5Z"/></svg>';
   const CUSTOM_TITLE_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M11.56 1.56a1.9 1.9 0 0 1 2.68 2.68l-7.4 7.4a2.25 2.25 0 0 1-1.01.57l-2.24.56a.75.75 0 0 1-.91-.91l.56-2.24c.1-.4.3-.74.57-1.01l7.4-7.4Zm1.62 1.06a.4.4 0 0 0-.56 0l-1.04 1.04 1.62 1.62 1.04-1.04a.4.4 0 0 0 0-.56l-1.06-1.06ZM10.52 4.72 4.31 10.93a.75.75 0 0 0-.19.34l-.3 1.2 1.2-.3a.75.75 0 0 0 .34-.19l6.21-6.21-1.05-1.05Z"/></svg>';
   const MARKDOWN_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 2h9.5A1.75 1.75 0 0 1 14.5 3.75v8.5A1.75 1.75 0 0 1 12.75 14h-9.5A1.75 1.75 0 0 1 1.5 12.25v-8.5A1.75 1.75 0 0 1 3.25 2Zm0 1.5a.25.25 0 0 0-.25.25v8.5c0 .14.11.25.25.25h9.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25h-9.5Zm1.5 1.75h1.5l1.25 1.88 1.25-1.88h1.5v5.5H9V7.55L7.5 9.75 6 7.55v3.2H4.75v-5.5Zm6.5 3h1.25l-1.88 2.5-1.87-2.5h1.25V5.25h1.25v3Z"/></svg>';
   const SEARCH_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a4.75 4.75 0 1 1 0 9.5 4.75 4.75 0 0 1 0-9.5Zm0 1.5a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Zm4.9 6.83 2.13 2.14a.75.75 0 1 1-1.06 1.06l-2.14-2.13a.75.75 0 1 1 1.07-1.07Z"/></svg>';
+  const BRANCH_MAP_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><g fill="none"><circle cx="4" cy="2.75" r="1.5"/><circle cx="12" cy="2.75" r="1.5"/><circle cx="8" cy="13.25" r="1.5"/><path d="M4 4.25V7.5a1.75 1.75 0 0 0 1.75 1.75H8M12 4.25V7.5a1.75 1.75 0 0 1-1.75 1.75H8M8 9.25v2.5"/></g></svg>';
+  const AGENT_RUNS_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><g fill="none"><circle cx="5" cy="3" r="1.5"/><circle cx="11.5" cy="8" r="1.5"/><circle cx="11.5" cy="13" r="1.5"/><path d="M5 4.5v5A3.5 3.5 0 0 0 8.5 13H10M5 7.9h3A3.5 3.5 0 0 1 11.5 8"/></g></svg>';
+  const CODEX_SOURCE_ICON_SVG =
+    '<svg class="agentRunsSourceIcon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle class="agentRunsSourceIconDisc" cx="8" cy="8" r="7"/><path class="agentRunsSourceIconGlyph" d="M10.2 4.9C9.6 4.4 8.9 4.1 8.1 4.1C6.1 4.1 4.5 5.8 4.5 7.8C4.5 9.8 6.1 11.5 8.1 11.5C8.9 11.5 9.6 11.2 10.2 10.7" stroke-width="1.5"/></svg>';
+  const BRANCH_ZOOM_OUT_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 7.25h10.5a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5Z"/></svg>';
+  const BRANCH_ZOOM_IN_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M7.25 2.75a.75.75 0 0 1 1.5 0v4.5h4.5a.75.75 0 0 1 0 1.5h-4.5v4.5a.75.75 0 0 1-1.5 0v-4.5h-4.5a.75.75 0 0 1 0-1.5h4.5v-4.5Z"/></svg>';
+  const BRANCH_FIT_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 1.5h3a.75.75 0 0 1 0 1.5H3.5v2.25a.75.75 0 0 1-1.5 0v-3a.75.75 0 0 1 .75-.75Zm7.5 0h3a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0V3h-2.25a.75.75 0 0 1 0-1.5ZM2 10.75a.75.75 0 0 1 1.5 0V13h2.25a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1-.75-.75v-3Zm11.25-.75a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-.75.75h-3a.75.75 0 0 1 0-1.5h2.25v-2.25a.75.75 0 0 1 .75-.75Z"/></svg>';
+  const BRANCH_CENTER_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 1.5a.75.75 0 0 1 .75.75v1.02a4.75 4.75 0 0 1 3.98 3.98h1.02a.75.75 0 0 1 0 1.5h-1.02a4.75 4.75 0 0 1-3.98 3.98v1.02a.75.75 0 0 1-1.5 0v-1.02a4.75 4.75 0 0 1-3.98-3.98H2.25a.75.75 0 0 1 0-1.5h1.02a4.75 4.75 0 0 1 3.98-3.98V2.25A.75.75 0 0 1 8 1.5Zm0 3.25a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Zm0 1.75a1.5 1.5 0 1 1 0 3 1.5 1.5 0 0 1 0-3Z"/></svg>';
   const AUTO_REFRESH_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><g fill="none"><path d="M5.2 2.6A5.2 5.2 0 0 1 13 7"/><path d="M13 7l1.15-1.55M13 7l-1.55-1.15"/><path d="M10.8 13.4A5.2 5.2 0 0 1 3 9"/><path d="M3 9l-1.15 1.55M3 9l1.55 1.15"/><circle cx="8" cy="8" r="2.25"/><path d="M8 6.75v1.45l1.05.65"/></g></svg>';
   const PERFORMANCE_NORMAL_ICON_SVG =
@@ -176,6 +207,10 @@
   });
   const MIN_PAGE_SEARCH_WIDTH = 280;
   const PAGE_SEARCH_HORIZONTAL_MARGIN = 16;
+  const MIN_BRANCH_OVERLAY_WIDTH = 480;
+  const BRANCH_OVERLAY_HORIZONTAL_MARGIN = 16;
+  const MIN_AGENT_RUNS_OVERLAY_WIDTH = 480;
+  const AGENT_RUNS_OVERLAY_HORIZONTAL_MARGIN = 16;
   const PAGE_SEARCH_REFRESH_DEBOUNCE_MS = 180;
   const RESTORE_POSITION_SAVE_DEBOUNCE_MS = 500;
   const OPEN_POSITION_SAVE_DEBOUNCE_MS = 800;
@@ -197,6 +232,7 @@
   const SIMPLIFIED_IMAGE_COUNT = 80;
   const STICKY_USER_SUMMARY_LIMIT = 180;
   const STICKY_USER_PREVIEW_LIMIT = 6000;
+  const STICKY_USER_BOUNDARY_TOLERANCE_PX = 1;
   const STICKY_USER_SCROLL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Spacebar"]);
 
   /** @type {any} */
@@ -260,12 +296,59 @@
   let allDiffPatchGroupKeys = new Set();
   let allDiffPatchGroupPreviouslyWideKeys = new Set();
   let expandedAttachmentDetails = new Set();
+  let expandedProtocolContextKeys = new Set();
   let pageSearchTemporaryAttachmentDetailKeys = new Set();
   let expandedUsageCardKeys = new Set();
   let wideTimelineCardKeys = new Set();
   let wrappedPatchHunkKeys = new Set();
   let isPinned = false;
   let bookmarkedKeys = new Set();
+  let branchNavigation = null;
+  let branchFeatureEnabled = false;
+  let branchGroupByAnchor = new Map();
+  let branchNavigationGeneration = 0;
+  let branchNavigationPending = false;
+  let branchSwitchPending = false;
+  let branchSwitchRequestId = 0;
+  let branchSwitchPendingRequestId = 0;
+  let branchOverlayOpen = false;
+  let branchOverlayReturnFocus = null;
+  let branchOverlayFocusKey = "";
+  let branchOverlayRestorePageSearch = false;
+  let branchOverlayPagePending = false;
+  let branchOverlayWidth = null;
+  let branchOverlayResizeState = null;
+  let branchTreeScale = 1;
+  let branchTreeScrollLeft = 0;
+  let branchTreeScrollTop = 0;
+  let branchTreeNeedsInitialFit = true;
+  let branchTreeRenderFrame = 0;
+  let branchTreeFocusNodeId = "";
+  let expandedBranchPreviewKeys = new Set();
+  let branchChoiceMenuEl = null;
+  let branchChoiceMenuReturnFocus = null;
+  let branchChoicePreviewEl = null;
+  let branchChoicePreviewAnchor = null;
+  let branchChoicePreviewTimer = 0;
+  let branchChoicePreviewCloseTimer = 0;
+  let agentRunsState = "disabled";
+  let agentRunsGeneration = 0;
+  let agentRunsNavigationRequestId = 0;
+  let agentRunsPinRevision = 0;
+  let agentRunsPinRequestId = 0;
+  let agentRunsPendingPins = new Map();
+  let agentRunsModel = null;
+  let agentRunsOverlayOpen = false;
+  let agentRunsOverlayReturnFocus = null;
+  let agentRunsOverlayFocusKey = "";
+  let agentRunsOverlayWidth = null;
+  let agentRunsOverlayResizeState = null;
+  let agentRunsTreeScrollTop = 0;
+  let agentRunsTreeNeedsInitialReveal = true;
+  let agentRunsTreeRenderFrame = 0;
+  let agentRunsTreeFocusNodeId = "";
+  let sessionOverlayDocumentKeydownAttached = false;
+  let sessionOverlayBackdropFocusFrame = 0;
   let pageSearchMatches = [];
   let pageSearchResults = [];
   let activePageSearchResultIndex = -1;
@@ -318,6 +401,12 @@
   const patchEntryDetailsFailed = new Map();
   const deferredPatchBodyRequests = new WeakMap();
   let webviewState = typeof vscode.getState === "function" ? vscode.getState() || {} : {};
+  branchOverlayOpen = webviewState && webviewState.branchOverlayOpen === true;
+  branchOverlayWidth = normalizeBranchOverlayWidth(webviewState.branchOverlayWidth);
+  branchTreeScale = normalizeBranchTreeScale(webviewState.branchTreeScale);
+  branchTreeScrollLeft = normalizeBranchTreeScroll(webviewState.branchTreeScrollLeft);
+  branchTreeScrollTop = normalizeBranchTreeScroll(webviewState.branchTreeScrollTop);
+  agentRunsOverlayWidth = normalizeAgentRunsOverlayWidth(webviewState.agentRunsOverlayWidth);
   const lazyImageObserver =
     typeof IntersectionObserver === "function"
       ? new IntersectionObserver(
@@ -354,6 +443,8 @@
     scrollRootEl.addEventListener("mousedown", handleStickyUserPointerScrollIntent, { passive: true });
   }
   window.addEventListener("blur", () => {
+    cancelBranchOverlayResize(true);
+    cancelAgentRunsOverlayResize(true);
     persistCurrentChatOpenPosition({ immediate: true });
     persistRestorePosition({ immediate: true });
   });
@@ -369,7 +460,14 @@
   window.addEventListener("resize", () => {
     scheduleStickyUserOverlayUpdate();
     scheduleRunningTurnFallbackUpdate();
+    scheduleBranchTreeRelayout();
+    applyAgentRunsOverlayWidth();
+    scheduleAgentRunsTreeRelayout();
   });
+  if (document.fonts && typeof document.fonts.addEventListener === "function") {
+    document.fonts.addEventListener("loadingdone", scheduleBranchTreeRelayout);
+    document.fonts.addEventListener("loadingdone", scheduleAgentRunsTreeRelayout);
+  }
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       stopRunningTurnElapsedTimer();
@@ -397,6 +495,8 @@
   setToolbarIconButton(btnPageSearch, SEARCH_ICON_SVG, "Find");
   setToolbarIconButton(btnPerformanceMode, PERFORMANCE_NORMAL_ICON_SVG, "Performance");
   setToolbarIconButton(btnAutoRefresh, AUTO_REFRESH_ICON_SVG, "Auto refresh");
+  setToolbarIconButton(btnBranchMap, BRANCH_MAP_ICON_SVG, "");
+  setToolbarIconButton(btnAgentRuns, AGENT_RUNS_ICON_SVG, "");
   // Reload is icon-only (tooltip is set via i18n).
   setToolbarIconButton(btnReload, RELOAD_ICON_SVG, "Reload");
   setToolbarIconButton(btnPageSearchPrev, NAV_UP_ICON_SVG, "Previous match");
@@ -458,6 +558,13 @@
     persistRestoreState();
     showToast(getAutoRefreshToast(autoRefreshMode), { key: "autoRefresh" });
   });
+
+  if (btnBranchMap instanceof HTMLElement) {
+    btnBranchMap.addEventListener("click", () => openBranchOverlay(btnBranchMap));
+  }
+  if (btnAgentRuns instanceof HTMLElement) {
+    btnAgentRuns.addEventListener("click", () => openAgentRunsOverlay(btnAgentRuns));
+  }
 
   btnReload.addEventListener("click", () => {
     requestReload();
@@ -669,6 +776,184 @@
       }
       return;
     }
+    if (msg.type === "setCodexAgentRunsState") {
+      handleCodexAgentRunsStateMessage(msg);
+      return;
+    }
+    if (msg.type === "setCodexAgentRunPinState") {
+      handleCodexAgentRunPinStateMessage(msg);
+      return;
+    }
+    if (msg.type === "codexAgentRunPinResult") {
+      handleCodexAgentRunPinResultMessage(msg);
+      return;
+    }
+    if (msg.type === "pinState") {
+      if (typeof msg.isPinned !== "boolean") return;
+      isPinned = msg.isPinned;
+      updateToolbar();
+      return;
+    }
+    if (msg.type === "branchNavigationDisabled") {
+      const timelineChanged = branchGroupByAnchor.size > 0;
+      const generation = Number(msg.generation);
+      if (Number.isSafeInteger(generation) && generation >= 0) {
+        if (generation < branchNavigationGeneration) return;
+        branchNavigationGeneration = generation;
+      } else {
+        branchNavigationGeneration += 1;
+      }
+      branchFeatureEnabled = false;
+      branchNavigation = null;
+      branchGroupByAnchor = new Map();
+      branchNavigationPending = false;
+      branchSwitchPending = false;
+      branchSwitchPendingRequestId = 0;
+      branchOverlayPagePending = false;
+      closeBranchOverlay({ restoreFocus: false, restorePageSearch: false });
+      updateToolbar();
+      if (timelineChanged) renderBranchTimelinePreservingViewState();
+      else updateBranchControlDisabledState();
+      return;
+    }
+    if (msg.type === "branchNavigationPending") {
+      const generation = Number(msg.generation);
+      if (!Number.isSafeInteger(generation) || generation < branchNavigationGeneration) return;
+      branchNavigationGeneration = generation;
+      branchFeatureEnabled = true;
+      branchNavigationPending = true;
+      closeBranchOccurrenceMenu();
+      updateToolbar();
+      updateBranchControlDisabledState();
+      return;
+    }
+    if (msg.type === "branchNavigation") {
+      const normalized = normalizeBranchNavigation(msg.navigation);
+      if (!normalized || normalized.generation < branchNavigationGeneration) return;
+      const nextBranchGroupByAnchor = new Map(
+        normalized.groups.map((group) => [group.anchorChatMessageIndex, group]),
+      );
+      const timelineChanged = !areSameBranchTimelineGroupMaps(branchGroupByAnchor, nextBranchGroupByAnchor);
+      const previousCurrentRouteId = getBranchCurrentRouteId(branchNavigation);
+      const nextCurrentRouteId = getBranchCurrentRouteId(normalized);
+      branchNavigationGeneration = normalized.generation;
+      if (msg.i18n && typeof msg.i18n === "object") i18n = msg.i18n;
+      if (!branchNavigation || previousCurrentRouteId !== nextCurrentRouteId) {
+        branchTreeNeedsInitialFit = true;
+      }
+      branchNavigation = normalized;
+      branchFeatureEnabled = true;
+      branchGroupByAnchor = nextBranchGroupByAnchor;
+      branchNavigationPending = msg.checkingLatest === true;
+      branchOverlayPagePending = false;
+      if (normalized.groupCount < 1 && branchOverlayOpen) {
+        closeBranchOverlay({ restoreFocus: false });
+        showToast(getSafeUiText(i18n.branchNone, "No branches were found for this session."));
+      }
+      updateToolbar();
+      if (timelineChanged) renderBranchTimelinePreservingViewState();
+      else updateBranchControlDisabledState();
+      if (branchOverlayOpen) renderBranchOverlay();
+      return;
+    }
+    if (msg.type === "branchTreePage") {
+      if (
+        !branchNavigation ||
+        Number(msg.generation) !== branchNavigation.generation ||
+        Number(msg.generation) !== branchNavigationGeneration
+      ) return;
+      const overlay = normalizeBranchOverlayPage(msg.overlay);
+      if (!overlay) return;
+      branchOverlayPagePending = false;
+      if (overlay.currentGroupId !== branchNavigation.overlay.currentGroupId) branchTreeNeedsInitialFit = true;
+      branchNavigation.overlay = mergeBranchTreePage(branchNavigation.overlay, overlay);
+      const focusGroup = branchNavigation.overlay.groups.find((group) => group.id === overlay.currentGroupId);
+      const focusChoice = focusGroup?.choices.find((choice) => choice.choiceIndex === focusGroup.currentChoiceIndex) || focusGroup?.choices[0];
+      if (focusGroup && focusChoice) branchTreeFocusNodeId = "branch-start:" + focusGroup.id + ":" + focusChoice.id;
+      persistBranchOverlayState();
+      if (branchOverlayOpen) renderBranchOverlay();
+      return;
+    }
+    if (msg.type === "branchTreeChoicePage") {
+      if (
+        !branchNavigation ||
+        Number(msg.generation) !== branchNavigation.generation ||
+        Number(msg.generation) !== branchNavigationGeneration
+      ) return;
+      const group = normalizeBranchOverlayGroup(msg.group);
+      if (!group) return;
+      branchNavigation.overlay.groups = branchNavigation.overlay.groups.map((candidate) =>
+        candidate.id === group.id ? mergeBranchTreeChoicePage(candidate, group) : candidate);
+      branchOverlayPagePending = false;
+      if (branchOverlayOpen) renderBranchOverlay();
+      return;
+    }
+    if (msg.type === "branchTreePageError") {
+      if (
+        !branchNavigation ||
+        Number(msg.generation) !== branchNavigation.generation ||
+        Number(msg.generation) !== branchNavigationGeneration
+      ) return;
+      branchOverlayPagePending = false;
+      updateBranchControlDisabledState();
+      showToast(getSafeUiText(i18n.branchLoadFailed, "Branch information could not be loaded. Reload to try again."));
+      return;
+    }
+    if (msg.type === "branchNavigationError") {
+      const timelineChanged = branchGroupByAnchor.size > 0;
+      const generation = Number(msg.generation);
+      if (!Number.isSafeInteger(generation) || generation < branchNavigationGeneration) return;
+      branchNavigationGeneration = generation;
+      branchNavigation = null;
+      branchGroupByAnchor = new Map();
+      branchNavigationPending = false;
+      branchSwitchPending = false;
+      branchSwitchPendingRequestId = 0;
+      branchOverlayPagePending = false;
+      if (branchOverlayOpen) closeBranchOverlay({ restoreFocus: false });
+      updateToolbar();
+      if (timelineChanged) renderBranchTimelinePreservingViewState();
+      else updateBranchControlDisabledState();
+      showToast(
+        getSafeUiText(
+          typeof msg.message === "string" ? msg.message : i18n.branchLoadFailed,
+          "Branch information could not be loaded. Reload to try again.",
+        ),
+      );
+      return;
+    }
+    if (msg.type === "branchSwitchPending") {
+      if (Number(msg.requestId) !== branchSwitchPendingRequestId) return;
+      branchSwitchPending = true;
+      updateBranchControlDisabledState();
+      return;
+    }
+    if (msg.type === "branchSwitchFailed") {
+      const requestId = Number(msg.requestId) || 0;
+      if (requestId !== branchSwitchPendingRequestId) return;
+      branchSwitchPending = false;
+      branchSwitchPendingRequestId = 0;
+      updateBranchControlDisabledState();
+      showToast(getSafeUiText(msg.message, getSafeUiText(i18n.branchSwitchFailed, "Could not switch branches.")));
+      return;
+    }
+    if (msg.type === "branchSwitchCancelled") {
+      if (Number(msg.requestId) !== branchSwitchPendingRequestId) return;
+      branchSwitchPending = false;
+      branchSwitchPendingRequestId = 0;
+      updateBranchControlDisabledState();
+      return;
+    }
+    if (msg.type === "branchSwitchSucceeded") {
+      if (Number(msg.requestId) !== branchSwitchPendingRequestId) return;
+      branchSwitchPending = false;
+      branchSwitchPendingRequestId = 0;
+      const messageIndex = Number(msg.messageIndex);
+      closeBranchOverlay({ restoreFocus: false, restorePageSearch: false });
+      if (Number.isSafeInteger(messageIndex) && messageIndex > 0) revealMessage(messageIndex);
+      updateBranchControlDisabledState();
+      return;
+    }
     if (msg.type === "sessionData") {
       cancelRenderAfterCurrent();
       const restoreScrollY = typeof msg.restoreScrollY === "number" ? msg.restoreScrollY : undefined;
@@ -682,6 +967,7 @@
           : null;
       const revealTarget = normalizeRevealTarget(msg.revealTarget);
       const pageSearchSeed = normalizePageSearchSeed(msg.pageSearchSeed);
+      const transitionDirection = normalizeBranchTransitionDirection(msg.transitionDirection);
       pageSearchHistoryCandidates = normalizeSearchHistoryCandidates(msg.searchHistoryCandidates);
       debugLoggingEnabled = msg.debugLoggingEnabled === true;
       const isRestore = typeof restoreScrollY === "number" || typeof restoreSelectedMessageIndex === "number";
@@ -698,17 +984,49 @@
       const prevAllDiffPatchGroupKeys = new Set(allDiffPatchGroupKeys);
       const prevAllDiffPatchGroupPreviouslyWideKeys = new Set(allDiffPatchGroupPreviouslyWideKeys);
       const prevExpandedAttachmentDetails = new Set(expandedAttachmentDetails);
+      const prevExpandedProtocolContextKeys = new Set(expandedProtocolContextKeys);
       const prevExpandedUsageCardKeys = new Set(expandedUsageCardKeys);
       const prevWideTimelineCardKeys = new Set(wideTimelineCardKeys);
       const prevWrappedPatchHunkKeys = new Set(wrappedPatchHunkKeys);
       const previousModelPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
+      const previousModelIdentity = getChatModelSessionIdentity(model);
       persistCurrentChatOpenPosition({ immediate: true });
 
       const incomingModel = msg.model || null;
       const nextModelPath = incomingModel && typeof incomingModel.fsPath === "string" ? incomingModel.fsPath : "";
-      const sessionChanged = !!(previousModelPath && nextModelPath && previousModelPath !== nextModelPath);
+      const nextModelIdentity = getChatModelSessionIdentity(incomingModel);
+      const sessionChanged = Boolean(
+        (previousModelPath && nextModelPath && previousModelPath !== nextModelPath) ||
+        (previousModelIdentity && nextModelIdentity && previousModelIdentity !== nextModelIdentity)
+      );
       if (sessionChanged) {
+        if (agentRunsOverlayOpen) closeAgentRunsOverlay({ restoreFocus: false });
+        const agentRunsGenerationBoundary = Number(msg.codexAgentRunsGenerationBoundary);
+        if (Number.isSafeInteger(agentRunsGenerationBoundary) && agentRunsGenerationBoundary >= 0) {
+          agentRunsGeneration = Math.max(agentRunsGeneration + 1, agentRunsGenerationBoundary);
+        } else {
+          agentRunsGeneration += 1;
+        }
+        agentRunsState = "disabled";
+        agentRunsModel = null;
+        agentRunsPendingPins = new Map();
+        agentRunsPinRevision = 0;
         resetSessionScopedUiState();
+        expandedBranchPreviewKeys = new Set();
+        branchTreeScale = 1;
+        branchTreeScrollLeft = 0;
+        branchTreeScrollTop = 0;
+        branchTreeNeedsInitialFit = true;
+        branchTreeFocusNodeId = "";
+        branchNavigationGeneration += 1;
+        branchNavigation = null;
+        branchGroupByAnchor = new Map();
+        branchNavigationPending = true;
+        branchSwitchPending = false;
+        branchSwitchPendingRequestId = 0;
+        if (branchOverlayOpen) {
+          closeBranchOverlay({ restoreFocus: false, restorePageSearch: false });
+        }
         pendingDetailScrollAnchor = null;
         shouldPreserveUiState = false;
       }
@@ -779,6 +1097,7 @@
         ? prevAllDiffPatchGroupPreviouslyWideKeys
         : new Set();
       expandedAttachmentDetails = shouldPreserveUiState ? prevExpandedAttachmentDetails : new Set();
+      expandedProtocolContextKeys = shouldPreserveUiState ? prevExpandedProtocolContextKeys : new Set();
       expandedUsageCardKeys = shouldPreserveUiState ? prevExpandedUsageCardKeys : new Set();
       wideTimelineCardKeys = shouldPreserveUiState ? prevWideTimelineCardKeys : new Set();
       wrappedPatchHunkKeys = shouldPreserveUiState ? prevWrappedPatchHunkKeys : new Set();
@@ -801,6 +1120,8 @@
       syncPageSearchRoleFilters({ reset: !shouldPreserveUiState });
       updateToolbar();
       render();
+      runBranchTransition(transitionDirection);
+      if (branchOverlayOpen) renderBranchOverlay();
       let pendingRestoreCompletions = 0;
       let restoreStatePersisted = false;
       let pageSearchSeedApplied = false;
@@ -920,6 +1241,7 @@
       updateToolbar();
       render();
       if (isImagePreviewOpen()) syncImagePreviewControls();
+      if (agentRunsOverlayOpen) renderAgentRunsOverlay();
       return;
     }
     if (msg.type === "bookmarkState") {
@@ -1025,6 +1347,20 @@
     resetRunningTurnIndicators({ keepFallback: false });
   }
 
+  function getChatModelSessionIdentity(value) {
+    if (!value || typeof value !== "object") return "";
+    const fsPath = typeof value.fsPath === "string" ? value.fsPath.slice(0, 4096) : "";
+    const meta = value.meta && typeof value.meta === "object" ? value.meta : null;
+    const historySource = meta && (meta.historySource === "codex" || meta.historySource === "claude")
+      ? meta.historySource
+      : "";
+    const rawId = meta && typeof meta.id === "string" ? meta.id.trim() : "";
+    const id = rawId.slice(0, 512);
+    if (historySource && id) return "id:" + historySource + ":" + id;
+    if (historySource && fsPath) return "path:" + historySource + ":" + fsPath;
+    return fsPath ? "path:" + fsPath : "";
+  }
+
   function isArchivedCodexSession() {
     return !!(
       model &&
@@ -1037,6 +1373,7 @@
 
   function updateToolbar() {
     const isClaudeSession = !!(model && model.meta && model.meta.historySource === "claude");
+    const isCodexSession = !!(model && model.meta && model.meta.historySource === "codex");
     const archivedCodexSession = isArchivedCodexSession();
     const resumeLabel = archivedCodexSession
       ? i18n.restoreArchived || "Move to Codex History"
@@ -1075,6 +1412,53 @@
       setToolbarIconButton(btnAutoRefresh, AUTO_REFRESH_ICON_SVG, autoRefreshTooltip);
       btnAutoRefresh.dataset.mode = autoRefreshMode;
       btnAutoRefresh.setAttribute("aria-pressed", autoRefreshMode === "off" ? "false" : "true");
+    }
+    if (btnBranchMap instanceof HTMLButtonElement) {
+      const groupCount = branchNavigation && Number.isFinite(branchNavigation.groupCount)
+        ? branchNavigation.groupCount
+        : 0;
+      const noBranches = Boolean(branchNavigation) && !branchNavigationPending && groupCount < 1;
+      const branchMapTooltip = noBranches
+        ? getSafeUiText(i18n.branchNone, "No branches were found for this session.")
+        : formatTemplate(
+            getSafeUiText(i18n.branchMapTooltip, "Show branches ({0})"),
+            groupCount,
+          );
+      setToolbarIconButton(btnBranchMap, BRANCH_MAP_ICON_SVG, branchMapTooltip);
+      setToolbarCountBadge(
+        btnBranchMap,
+        groupCount,
+        Boolean(branchNavigation) && !branchNavigationPending && groupCount > 0,
+      );
+      btnBranchMap.hidden = !(isClaudeSession || isCodexSession) || !branchFeatureEnabled;
+      btnBranchMap.disabled = branchSwitchPending || branchNavigationPending || !branchNavigation;
+      btnBranchMap.setAttribute("aria-disabled", noBranches ? "true" : "false");
+      btnBranchMap.setAttribute(
+        "aria-expanded",
+        branchOverlayOpen ? "true" : "false",
+      );
+      btnBranchMap.dataset.pending = branchNavigationPending ? "true" : "false";
+      btnBranchMap.dataset.unavailable = noBranches ? "true" : "false";
+    }
+    if (btnAgentRuns instanceof HTMLButtonElement) {
+      const ready = agentRunsState === "ready" && agentRunsModel;
+      const agentCount = ready ? agentRunsModel.agentCount : 0;
+      const label = agentRunsState === "loading"
+        ? getSafeUiText(i18n.agentRunsLoading, "Preparing Agent Runs")
+        : agentRunsState === "empty"
+          ? getSafeUiText(i18n.agentRunsNone, "No related agent runs were found for this session.")
+        : formatTemplate(
+            getSafeUiText(i18n.agentRunsRelatedCount, "Related agent runs: {0}"),
+            agentCount,
+          );
+      setToolbarIconButton(btnAgentRuns, AGENT_RUNS_ICON_SVG, label);
+      setToolbarCountBadge(btnAgentRuns, agentCount, Boolean(ready) && agentCount > 0);
+      btnAgentRuns.hidden = !isCodexSession || agentRunsState === "disabled";
+      btnAgentRuns.disabled = agentRunsState === "loading";
+      btnAgentRuns.setAttribute("aria-disabled", agentRunsState === "empty" ? "true" : "false");
+      btnAgentRuns.setAttribute("aria-expanded", agentRunsOverlayOpen ? "true" : "false");
+      btnAgentRuns.dataset.pending = agentRunsState === "loading" ? "true" : "false";
+      btnAgentRuns.dataset.unavailable = agentRunsState === "empty" ? "true" : "false";
     }
 
     const markdownLabel = i18n.markdown || "Markdown";
@@ -1144,6 +1528,3150 @@
       button.title = safeTooltip;
       button.setAttribute("aria-label", safeTooltip);
     }
+  }
+
+  function setToolbarCountBadge(button, count, visible) {
+    if (!(button instanceof HTMLElement) || visible !== true) return;
+    const safeCount = Number(count);
+    if (!Number.isSafeInteger(safeCount) || safeCount < 1) return;
+    const badge = document.createElement("span");
+    badge.className = "toolbarRelationCountBadge";
+    badge.textContent = safeCount > 99 ? "99+" : String(safeCount);
+    badge.setAttribute("aria-hidden", "true");
+    button.appendChild(badge);
+  }
+
+  function createBranchControl(group) {
+    const control = el("div", {
+      className: "branchActionRail",
+      role: "group",
+      ariaLabel: formatTemplate(
+        getSafeUiText(i18n.branchControlLabel, "Branch choices for user #{0}"),
+        group.anchorChatMessageIndex,
+      ),
+    });
+    const previousIndex = (group.currentChoiceIndex - 1 + group.choiceCount) % group.choiceCount;
+    const nextIndex = (group.currentChoiceIndex + 1) % group.choiceCount;
+    const previous = createBranchIconButton(
+      NAV_LEFT_ICON_SVG,
+      getSafeUiText(i18n.branchPrevious, "Switch to previous branch destination"),
+      () => requestBranchChoice(group, previousIndex, "previous", previous),
+    );
+    const positionText = formatTemplate(
+      getSafeUiText(i18n.branchPosition, "Branch destination {0} / {1}"),
+      group.currentChoiceIndex + 1,
+      group.choiceCount,
+    );
+    const chooseHistoryLabel = getSafeUiText(i18n.branchChooseHistory, "Choose a history");
+    const position = el("button", {
+      type: "button",
+      className: "branchControlPosition branchControlPositionButton",
+      ariaLabel: chooseHistoryLabel + " ・ " + positionText,
+      title: chooseHistoryLabel,
+    });
+    position.textContent = positionText;
+    position.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (!branchNavigationPending && !branchSwitchPending) showBranchChoiceList(group, position);
+    });
+    const next = createBranchIconButton(
+      NAV_RIGHT_ICON_SVG,
+      getSafeUiText(i18n.branchNext, "Switch to next branch destination"),
+      () => requestBranchChoice(group, nextIndex, "next", next),
+    );
+    const list = createBranchIconButton(
+      BRANCH_MAP_ICON_SVG,
+      getSafeUiText(i18n.branchMap, "Open branch list"),
+      () => openBranchOverlay(list, group.id),
+    );
+    control.append(previous, position, next, list);
+    attachBranchChoicePreview(previous, group, previousIndex, "previous");
+    attachBranchChoicePreview(next, group, nextIndex, "next");
+    control.dataset.branchGroupId = group.id;
+    control.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      if (event.key === "ArrowLeft") requestBranchChoice(group, previousIndex, "previous", previous);
+      else requestBranchChoice(group, nextIndex, "next", next);
+    });
+    attachBranchSwipe(control, group, previousIndex, nextIndex, previous, next);
+    for (const button of control.querySelectorAll("button")) {
+      button.disabled = branchNavigationPending || branchSwitchPending;
+    }
+    return control;
+  }
+
+  // Compare the normalized data rendered by inline rails; overlay-only changes do not rebuild the timeline.
+  function areSameBranchTimelineGroupMaps(left, right) {
+    if (!(left instanceof Map) || !(right instanceof Map) || left.size !== right.size) return false;
+    for (const [anchor, rightGroup] of right) {
+      const leftGroup = left.get(anchor);
+      if (!areSameBranchTimelineGroups(leftGroup, rightGroup)) return false;
+    }
+    return true;
+  }
+
+  function areSameBranchTimelineGroups(left, right) {
+    if (!left || !right) return left === right;
+    return (
+      left.id === right.id &&
+      left.anchorChatMessageIndex === right.anchorChatMessageIndex &&
+      left.currentChoiceIndex === right.currentChoiceIndex &&
+      left.choiceCount === right.choiceCount &&
+      areSameBranchTimelineChoices(left.choices, right.choices)
+    );
+  }
+
+  function areSameBranchTimelineChoices(left, right) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    for (let index = 0; index < right.length; index += 1) {
+      const leftChoice = left[index];
+      const rightChoice = right[index];
+      if (
+        !leftChoice ||
+        !rightChoice ||
+        leftChoice.id !== rightChoice.id ||
+        leftChoice.choiceIndex !== rightChoice.choiceIndex ||
+        leftChoice.preview !== rightChoice.preview ||
+        leftChoice.occurrenceCount !== rightChoice.occurrenceCount ||
+        !areSameBranchTimelineOccurrences(leftChoice.occurrences, rightChoice.occurrences)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function areSameBranchTimelineOccurrences(left, right) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    for (let index = 0; index < right.length; index += 1) {
+      const leftOccurrence = left[index];
+      const rightOccurrence = right[index];
+      if (
+        !leftOccurrence ||
+        !rightOccurrence ||
+        leftOccurrence.id !== rightOccurrence.id ||
+        leftOccurrence.sessionLabel !== rightOccurrence.sessionLabel ||
+        leftOccurrence.isCurrent !== rightOccurrence.isCurrent ||
+        leftOccurrence.isBookmarked !== rightOccurrence.isBookmarked ||
+        leftOccurrence.hasTags !== rightOccurrence.hasTags ||
+        leftOccurrence.hasNote !== rightOccurrence.hasNote ||
+        !areSameBranchTimelineAnchors(leftOccurrence.historyFirst, rightOccurrence.historyFirst) ||
+        !areSameBranchTimelineAnchors(leftOccurrence.preBranch, rightOccurrence.preBranch) ||
+        !areSameBranchTimelineAnchors(leftOccurrence.branchStart, rightOccurrence.branchStart) ||
+        !areSameBranchTimelineAnchors(leftOccurrence.historyEnd, rightOccurrence.historyEnd)
+      ) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  function areSameBranchTimelineAnchors(left, right) {
+    if (!left || !right) return left === right;
+    return (
+      left.role === right.role &&
+      left.chatMessageIndex === right.chatMessageIndex &&
+      left.timestampIso === right.timestampIso &&
+      left.preview === right.preview
+    );
+  }
+
+  function renderBranchTimelinePreservingViewState() {
+    const scrollAnchor = captureTimelineScrollAnchor();
+    queuePageSearchContentMutationRefresh(
+      pageSearchContentRevision,
+      buildActivePageSearchRefreshOptions({
+        preserveIndex: true,
+        reveal: false,
+        fallbackToNearest: true,
+      }),
+    );
+    render();
+    restoreBranchTimelineScrollAnchorAfterRender(scrollAnchor);
+  }
+
+  function restoreBranchTimelineScrollAnchorAfterRender(scrollAnchor) {
+    if (!scrollAnchor) return;
+    const restore = () => restoreTimelineScrollAnchorAfterLayout(scrollAnchor);
+    if (renderAfterCurrentFrame) {
+      // Run after page-search expansion callbacks so the original visual anchor wins.
+      renderAfterCurrentCallbacks.push(restore);
+      return;
+    }
+    restore();
+  }
+
+  function createBranchIconButton(iconSvg, label, onClick, className = "branchIconButton") {
+    const button = el("button", { type: "button", className, ariaLabel: label, title: label });
+    button.innerHTML = iconSvg;
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onClick();
+    });
+    return button;
+  }
+
+  function requestBranchChoice(group, choiceOrIndex, direction, anchor, targetKind = "branchStart") {
+    if (branchNavigationPending || branchSwitchPending || !group || !Array.isArray(group.choices)) return;
+    const choice = findBranchChoice(group, choiceOrIndex);
+    if (!choice || !Array.isArray(choice.occurrences) || choice.occurrences.length === 0) return;
+    if (choice.occurrences.length === 1 && choice.occurrenceCount <= 1) {
+      postBranchSwitch(group, choice, choice.occurrences[0], direction, targetKind);
+      return;
+    }
+    showBranchOccurrenceMenu(group, choice, direction, anchor, targetKind);
+  }
+
+  function findBranchChoice(group, choiceOrIndex) {
+    if (!group || !Array.isArray(group.choices)) return null;
+    return typeof choiceOrIndex === "number"
+      ? group.choices.find((candidate) => candidate.choiceIndex === choiceOrIndex) || null
+      : choiceOrIndex || null;
+  }
+
+  function postBranchSwitch(group, choice, occurrence, direction, targetKind = "branchStart") {
+    if (branchNavigationPending || branchSwitchPending) return;
+    closeBranchOccurrenceMenu();
+    branchSwitchRequestId += 1;
+    branchSwitchPendingRequestId = branchSwitchRequestId;
+    branchSwitchPending = true;
+    updateBranchControlDisabledState();
+    vscode.postMessage({
+      type: "switchClaudeBranch",
+      requestId: branchSwitchPendingRequestId,
+      generation: branchNavigation?.generation,
+      groupId: group.id,
+      choiceId: choice.id,
+      occurrenceId: occurrence.id,
+      direction,
+      targetKind,
+    });
+  }
+
+  function showBranchOccurrenceMenu(group, choice, direction, anchor, targetKind = "branchStart") {
+    if (branchNavigationPending || branchSwitchPending) return;
+    closeBranchOccurrenceMenu();
+    const menu = el("div", {
+      className: "branchChoiceMenu",
+      role: "menu",
+      ariaLabel: getSafeUiText(i18n.branchChooseSession, "Choose a session occurrence"),
+    });
+    const firstOccurrence = choice.occurrences[0];
+    if (firstOccurrence?.branchStart) {
+      const choicePosition = formatTemplate(
+        getSafeUiText(i18n.branchPosition, "History {0} of {1}"),
+        choice.choiceIndex + 1,
+        group.choiceCount,
+      );
+      menu.appendChild(createBranchChoiceContext(choice, firstOccurrence, choicePosition));
+    }
+    const optionList = el("div", { className: "branchChoiceOptions" });
+    for (const [occurrenceIndex, occurrence] of choice.occurrences.entries()) {
+      optionList.appendChild(createBranchOccurrenceOption({
+        choice,
+        occurrence,
+        occurrenceIndex,
+        interactive: true,
+        menuItem: true,
+        onSelect: () => postBranchSwitch(group, choice, occurrence, direction, targetKind),
+      }));
+    }
+    if (choice.occurrenceCount > choice.occurrences.length) {
+      optionList.appendChild(createBranchChoicePartial());
+    }
+    menu.appendChild(optionList);
+    const host = anchor instanceof HTMLElement ? anchor.closest(".branchActionRail, .branchTreeNode") : null;
+    const treeHost = host instanceof HTMLElement && host.classList.contains("branchTreeNode");
+    if (treeHost && branchOverlayRootEl instanceof HTMLElement) {
+      menu.classList.add("branchChoiceMenu-portal");
+      branchOverlayRootEl.appendChild(menu);
+    } else {
+      (host instanceof HTMLElement ? host : document.body).appendChild(menu);
+    }
+    branchChoiceMenuEl = menu;
+    branchChoiceMenuReturnFocus = anchor instanceof HTMLElement ? anchor : null;
+    addBranchChoiceViewportListeners();
+    menu.addEventListener("keydown", handleBranchChoiceMenuKeydown);
+    requestAnimationFrame(() => {
+      if (treeHost && anchor instanceof HTMLElement) positionBranchChoicePortal(menu, anchor);
+      menu.querySelector('[role="menuitem"][data-interactive="true"]')?.focus();
+    });
+    setTimeout(() => {
+      if (branchChoiceMenuEl === menu) document.addEventListener("pointerdown", handleBranchChoiceOutside);
+    }, 0);
+  }
+
+  function createBranchChoiceStatus(iconSvg, label) {
+    const status = el("span", { className: "branchChoiceStatus", title: label });
+    status.setAttribute("aria-hidden", "true");
+    status.innerHTML = iconSvg;
+    return status;
+  }
+
+  function showBranchChoiceList(group, anchor) {
+    if (branchNavigationPending || branchSwitchPending || !group || !Array.isArray(group.choices)) return;
+    closeBranchOccurrenceMenu();
+    const menu = el("div", {
+      className: "branchChoiceMenu branchChoiceMenu-portal branchChoiceList",
+      role: "menu",
+      ariaLabel: getSafeUiText(i18n.branchChooseHistory, "Choose a history"),
+    });
+    const orderedChoices = group.choices.slice().sort((left, right) => left.choiceIndex - right.choiceIndex);
+    for (const choice of orderedChoices) {
+      if (!Array.isArray(choice.occurrences) || choice.occurrences.length === 0) continue;
+      const choicePosition = formatTemplate(
+        getSafeUiText(i18n.branchPosition, "History {0} of {1}"),
+        choice.choiceIndex + 1,
+        group.choiceCount,
+      );
+      const section = el("div", { className: "branchChoiceGroup", role: "group", ariaLabel: choicePosition });
+      section.appendChild(createBranchChoiceContext(choice, choice.occurrences[0], choicePosition));
+      const optionList = el("div", { className: "branchChoiceOptions" });
+      for (const [occurrenceIndex, occurrence] of choice.occurrences.entries()) {
+        optionList.appendChild(createBranchOccurrenceOption({
+          choice,
+          occurrence,
+          occurrenceIndex,
+          interactive: !occurrence.isCurrent,
+          menuItem: true,
+          onSelect: () => postBranchSwitch(group, choice, occurrence, "direct", "branchStart"),
+        }));
+      }
+      if (choice.occurrenceCount > choice.occurrences.length) optionList.appendChild(createBranchChoicePartial());
+      section.appendChild(optionList);
+      menu.appendChild(section);
+    }
+    if (group.choiceCount > orderedChoices.length) menu.appendChild(createBranchChoicePartial());
+    document.body.appendChild(menu);
+    branchChoiceMenuEl = menu;
+    branchChoiceMenuReturnFocus = anchor instanceof HTMLElement ? anchor : null;
+    addBranchChoiceViewportListeners();
+    menu.addEventListener("keydown", handleBranchChoiceMenuKeydown);
+    requestAnimationFrame(() => {
+      if (anchor instanceof HTMLElement) positionBranchChoicePortal(menu, anchor);
+      menu.querySelector('[role="menuitem"][data-interactive="true"]')?.focus();
+    });
+    setTimeout(() => {
+      if (branchChoiceMenuEl === menu) document.addEventListener("pointerdown", handleBranchChoiceOutside);
+    }, 0);
+  }
+
+  function createBranchChoiceContext(choice, occurrence, positionText = "") {
+    const context = el("div", { className: "branchChoiceContext" });
+    const heading = el("span", { className: "branchChoiceContextHeading" });
+    const position = el("span", { className: "branchChoiceNumber" });
+    position.textContent = positionText;
+    const contextPreview = el("span", { className: "branchChoiceContextPreview" });
+    contextPreview.textContent = choice?.preview || occurrence?.branchStart?.preview || "";
+    contextPreview.title = contextPreview.textContent;
+    heading.append(position, contextPreview);
+    const contextMeta = el("span", { className: "branchChoiceContextMeta" });
+    contextMeta.textContent = occurrence?.branchStart
+      ? getSafeUiText(i18n.branchDestination, "Branch destination") + " ・ " + formatBranchAnchor(occurrence.branchStart)
+      : "";
+    contextMeta.title = contextMeta.textContent;
+    context.append(heading, contextMeta);
+    return context;
+  }
+
+  function createBranchOccurrenceOption({
+    choice,
+    occurrence,
+    occurrenceIndex,
+    interactive,
+    menuItem,
+    onSelect,
+  }) {
+    const staticClassName = menuItem
+      ? "branchChoiceOption branchChoiceOption-static"
+      : "branchChoiceOption branchChoiceOption-preview";
+    const option = interactive
+      ? el("button", { type: "button", className: "branchChoiceOption" })
+      : el("div", { className: staticClassName });
+    option.dataset.interactive = interactive ? "true" : "false";
+    if (menuItem) option.setAttribute("role", "menuitem");
+    if (!interactive && menuItem) {
+      option.setAttribute("aria-disabled", "true");
+      option.setAttribute("tabindex", "-1");
+    }
+    if (occurrence.isCurrent) {
+      option.dataset.current = "true";
+      if (interactive || menuItem) option.setAttribute("aria-current", "true");
+    }
+    const content = el("span", { className: "branchChoiceOptionContent" });
+    const accessibleLabels = [];
+    accessibleLabels.push(
+      occurrence.branchStart
+        ? getSafeUiText(i18n.branchDestination, "Branch destination") + " ・ " + formatBranchAnchor(occurrence.branchStart)
+        : "",
+      choice.preview || occurrence.branchStart?.preview || "",
+    );
+    const heading = el("span", { className: "branchChoiceOptionHeading" });
+    if (occurrence.isCurrent) {
+      const currentLabel = getSafeUiText(i18n.branchCurrent, "Current history");
+      const current = el("span", { className: "branchChoiceCurrent" });
+      current.textContent = currentLabel;
+      heading.appendChild(current);
+      accessibleLabels.push(currentLabel);
+    }
+    if (choice.occurrenceCount > 1) {
+      const ordinal = el("span", { className: "branchChoiceOrdinal" });
+      ordinal.textContent = formatTemplate(
+        getSafeUiText(i18n.branchOccurrencePosition, "History location {0} of {1}"),
+        occurrenceIndex + 1,
+        choice.occurrenceCount,
+      );
+      heading.appendChild(ordinal);
+      accessibleLabels.push(ordinal.textContent);
+    }
+    if (heading.childElementCount > 0) content.appendChild(heading);
+    const historyEnd = occurrence.historyEnd;
+    const title = el("span", { className: "branchChoiceTitle" });
+    title.textContent = historyEnd?.preview
+      || occurrence.sessionLabel
+      || occurrence.branchStart?.preview
+      || getSafeUiText(i18n.branchUnknownSession, "Unknown session");
+    title.title = title.textContent;
+    const footer = el("span", { className: "branchChoiceFooter" });
+    const meta = el("span", { className: "branchChoiceMeta" });
+    const displayAnchor = historyEnd || occurrence.branchStart;
+    const displayLabel = historyEnd
+      ? getSafeUiText(i18n.branchEnd, "History end")
+      : getSafeUiText(i18n.branchDestination, "Branch destination");
+    meta.textContent = displayAnchor ? displayLabel + " ・ " + formatBranchAnchor(displayAnchor) : "";
+    meta.title = meta.textContent;
+    const statuses = el("span", { className: "branchChoiceStatuses" });
+    const statusLabels = [];
+    if (occurrence.isBookmarked) {
+      const label = getSafeUiText(i18n.branchBookmark, "Bookmark");
+      statuses.appendChild(createBranchChoiceStatus(BOOKMARK_ICON_SVG, label));
+      statusLabels.push(label);
+    }
+    if (occurrence.hasTags) {
+      const label = getSafeUiText(i18n.branchTags, "Tags");
+      statuses.appendChild(createBranchChoiceStatus(TAG_ICON_SVG, label));
+      statusLabels.push(label);
+    }
+    if (occurrence.hasNote) {
+      const label = getSafeUiText(i18n.branchNote, "Note");
+      statuses.appendChild(createBranchChoiceStatus(NOTE_ICON_SVG, label));
+      statusLabels.push(label);
+    }
+    footer.append(meta, statuses);
+    content.append(title, footer);
+    option.appendChild(content);
+    accessibleLabels.push(title.textContent, meta.textContent, ...statusLabels);
+    if (interactive) {
+      const actionLabel = getSafeUiText(i18n.branchOpenInChat, "Open this position in the session view");
+      const action = el("span", { className: "branchChoiceAction", title: actionLabel });
+      action.setAttribute("aria-hidden", "true");
+      action.innerHTML = PATCH_JUMP_ICON_SVG;
+      option.appendChild(action);
+      accessibleLabels.push(actionLabel);
+      option.addEventListener("click", (event) => {
+        event.stopPropagation();
+        onSelect?.();
+      });
+    }
+    if (interactive || menuItem) {
+      option.setAttribute("aria-label", accessibleLabels.filter(Boolean).join(" ・ "));
+    }
+    return option;
+  }
+
+  function createBranchChoicePartial() {
+    const partial = el("p", { className: "branchChoicePartial" });
+    partial.textContent = getSafeUiText(i18n.branchOccurrencePartial, "Some history locations are omitted.");
+    return partial;
+  }
+
+  function handleBranchChoiceMenuKeydown(event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeBranchOccurrenceMenuAndRestoreFocus();
+      return;
+    }
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const menuItems = Array.from(
+      branchChoiceMenuEl?.querySelectorAll('[role="menuitem"][data-interactive="true"]') || [],
+    );
+    if (menuItems.length === 0) return;
+    event.preventDefault();
+    const currentIndex = menuItems.indexOf(document.activeElement);
+    const offset = event.key === "ArrowDown" ? 1 : -1;
+    menuItems[(currentIndex + offset + menuItems.length) % menuItems.length]?.focus();
+  }
+
+  function attachBranchChoicePreview(button, group, choiceIndex, direction) {
+    const choice = findBranchChoice(group, choiceIndex);
+    if (!(button instanceof HTMLElement)
+      || !choice
+      || !Array.isArray(choice.occurrences)
+      || choice.occurrences.length === 0) return;
+    button.removeAttribute("title");
+    button.addEventListener("pointerenter", (event) => {
+      if (event.pointerType === "touch") return;
+      cancelBranchChoicePreviewClose();
+      scheduleBranchChoicePreview(group, choice, direction, button);
+    });
+    button.addEventListener("pointerleave", scheduleBranchChoicePreviewClose);
+    button.addEventListener("focus", () => showBranchChoicePreview(group, choice, direction, button));
+    button.addEventListener("blur", scheduleBranchChoicePreviewClose);
+    button.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      closeBranchChoicePreview();
+    });
+  }
+
+  function scheduleBranchChoicePreview(group, choice, direction, anchor) {
+    if (branchChoicePreviewEl instanceof HTMLElement && branchChoicePreviewAnchor === anchor) return;
+    closeBranchChoicePreview();
+    branchChoicePreviewTimer = window.setTimeout(() => {
+      branchChoicePreviewTimer = 0;
+      showBranchChoicePreview(group, choice, direction, anchor);
+    }, BRANCH_CHOICE_PREVIEW_DELAY_MS);
+  }
+
+  function showBranchChoicePreview(group, choice, direction, anchor) {
+    if (
+      branchNavigationPending ||
+      branchSwitchPending ||
+      branchChoiceMenuEl instanceof HTMLElement ||
+      !(anchor instanceof HTMLElement)
+    ) {
+      return;
+    }
+    const occurrences = Array.isArray(choice?.occurrences) ? choice.occurrences : [];
+    if (occurrences.length === 0) return;
+    closeBranchChoicePreview();
+    const hasMultipleOccurrences = choice.occurrenceCount > 1 || occurrences.length > 1;
+    const actionLabel = hasMultipleOccurrences
+      ? getSafeUiText(i18n.branchChooseSession, "Choose a session occurrence")
+      : getSafeUiText(i18n.branchOpenInChat, "Open this position in the session view");
+    const choicePosition = formatTemplate(
+      getSafeUiText(i18n.branchPosition, "History {0} of {1}"),
+      choice.choiceIndex + 1,
+      group.choiceCount,
+    );
+    const preview = el("div", {
+      id: "branchChoicePreview",
+      className: "branchChoiceMenu branchChoiceMenu-portal branchChoicePreview",
+      role: "group",
+      ariaLabel: actionLabel + " ・ " + choicePosition,
+    });
+    const optionList = el("div", { className: "branchChoiceOptions" });
+    for (const [occurrenceIndex, occurrence] of occurrences.entries()) {
+      const option = createBranchOccurrenceOption({
+        choice,
+        occurrence,
+        occurrenceIndex,
+        interactive: true,
+        menuItem: false,
+        onSelect: () => postBranchSwitch(group, choice, occurrence, direction),
+      });
+      option.tabIndex = -1;
+      optionList.appendChild(option);
+    }
+    if (choice.occurrenceCount > occurrences.length) optionList.appendChild(createBranchChoicePartial());
+    preview.append(createBranchChoiceContext(choice, occurrences[0], choicePosition), optionList);
+    preview.addEventListener("pointerenter", cancelBranchChoicePreviewClose);
+    preview.addEventListener("pointerleave", scheduleBranchChoicePreviewClose);
+    document.body.appendChild(preview);
+    branchChoicePreviewEl = preview;
+    branchChoicePreviewAnchor = anchor;
+    addBranchChoiceViewportListeners();
+    document.addEventListener("keydown", handleBranchChoicePreviewKeydown);
+    anchor.setAttribute("aria-describedby", preview.id);
+    requestAnimationFrame(() => {
+      if (branchChoicePreviewEl === preview) positionBranchChoicePortal(preview, anchor);
+    });
+  }
+
+  function closeBranchChoicePreview() {
+    if (branchChoicePreviewTimer) window.clearTimeout(branchChoicePreviewTimer);
+    branchChoicePreviewTimer = 0;
+    cancelBranchChoicePreviewClose();
+    if (branchChoicePreviewAnchor instanceof HTMLElement
+      && branchChoicePreviewAnchor.getAttribute("aria-describedby") === "branchChoicePreview") {
+      branchChoicePreviewAnchor.removeAttribute("aria-describedby");
+    }
+    branchChoicePreviewAnchor = null;
+    if (branchChoicePreviewEl instanceof HTMLElement) branchChoicePreviewEl.remove();
+    branchChoicePreviewEl = null;
+    document.removeEventListener("keydown", handleBranchChoicePreviewKeydown);
+    if (!(branchChoiceMenuEl instanceof HTMLElement)) removeBranchChoiceViewportListeners();
+  }
+
+  function handleBranchChoicePreviewKeydown(event) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    closeBranchChoicePreview();
+  }
+
+  function scheduleBranchChoicePreviewClose() {
+    if (branchChoicePreviewTimer) window.clearTimeout(branchChoicePreviewTimer);
+    branchChoicePreviewTimer = 0;
+    cancelBranchChoicePreviewClose();
+    branchChoicePreviewCloseTimer = window.setTimeout(() => {
+      branchChoicePreviewCloseTimer = 0;
+      closeBranchChoicePreview();
+    }, BRANCH_CHOICE_PREVIEW_CLOSE_DELAY_MS);
+  }
+
+  function cancelBranchChoicePreviewClose() {
+    if (branchChoicePreviewCloseTimer) window.clearTimeout(branchChoicePreviewCloseTimer);
+    branchChoicePreviewCloseTimer = 0;
+  }
+
+  function addBranchChoiceViewportListeners() {
+    window.addEventListener("resize", closeBranchOccurrenceMenu);
+    document.addEventListener("scroll", handleBranchChoiceViewportScroll, true);
+  }
+
+  function removeBranchChoiceViewportListeners() {
+    window.removeEventListener("resize", closeBranchOccurrenceMenu);
+    document.removeEventListener("scroll", handleBranchChoiceViewportScroll, true);
+  }
+
+  function handleBranchChoiceViewportScroll(event) {
+    if ((branchChoiceMenuEl instanceof HTMLElement && branchChoiceMenuEl.contains(event.target))
+      || (branchChoicePreviewEl instanceof HTMLElement && branchChoicePreviewEl.contains(event.target))) return;
+    closeBranchOccurrenceMenu();
+  }
+
+  function resolveBranchOccurrenceAnchor(occurrence, targetKind) {
+    if (!occurrence) return null;
+    if (targetKind === "historyFirst") return occurrence.historyFirst || null;
+    if (targetKind === "preBranch") return occurrence.preBranch || null;
+    if (targetKind === "historyEnd") return occurrence.historyEnd || null;
+    return occurrence.branchStart || null;
+  }
+
+  function positionBranchChoicePortal(menu, anchor) {
+    if (!(menu instanceof HTMLElement) || !(anchor instanceof HTMLElement)) return;
+    const rect = anchor.getBoundingClientRect();
+    const margin = 8;
+    const left = Math.min(
+      Math.max(margin, rect.right - menu.offsetWidth),
+      Math.max(margin, window.innerWidth - menu.offsetWidth - margin),
+    );
+    const below = rect.bottom + 5;
+    const top = below + menu.offsetHeight <= window.innerHeight - margin
+      ? below
+      : Math.max(margin, rect.top - menu.offsetHeight - 5);
+    menu.style.left = left + "px";
+    menu.style.top = top + "px";
+  }
+
+  function handleBranchChoiceOutside(event) {
+    if (branchChoiceMenuEl instanceof HTMLElement && !branchChoiceMenuEl.contains(event.target)) {
+      closeBranchOccurrenceMenu();
+    }
+  }
+
+  function closeBranchOccurrenceMenuAndRestoreFocus() {
+    const returnFocus = branchChoiceMenuReturnFocus;
+    closeBranchOccurrenceMenu();
+    if (returnFocus instanceof HTMLElement && returnFocus.isConnected) returnFocus.focus();
+  }
+
+  function closeBranchOccurrenceMenu() {
+    closeBranchChoicePreview();
+    document.removeEventListener("pointerdown", handleBranchChoiceOutside);
+    removeBranchChoiceViewportListeners();
+    if (branchChoiceMenuEl instanceof HTMLElement) branchChoiceMenuEl.remove();
+    branchChoiceMenuEl = null;
+    branchChoiceMenuReturnFocus = null;
+  }
+
+  function updateBranchControlDisabledState() {
+    const pending = branchNavigationPending || branchSwitchPending || branchOverlayPagePending;
+    for (const button of document.querySelectorAll(
+      ".branchActionRail button, .branchTreeNavigateButton, .branchTreeNode-collapsed .branchTreeNodePrimary",
+    )) {
+      if (!(button instanceof HTMLButtonElement)) continue;
+      const requiresCursor = button.matches(".branchTreeNode-collapsed .branchTreeNodePrimary");
+      button.disabled = pending || (requiresCursor && button.dataset.branchTreeCursorAvailable !== "true");
+    }
+    if (btnBranchMap instanceof HTMLButtonElement) {
+      const groupCount = Number(branchNavigation?.groupCount) || 0;
+      const noBranches = Boolean(branchNavigation) && !branchNavigationPending && groupCount < 1;
+      btnBranchMap.disabled = branchSwitchPending || branchNavigationPending || !branchNavigation;
+      btnBranchMap.setAttribute("aria-disabled", noBranches ? "true" : "false");
+      btnBranchMap.dataset.unavailable = noBranches ? "true" : "false";
+    }
+  }
+
+  function handleCodexAgentRunsStateMessage(msg) {
+    if (Number(msg.version) !== 1) return;
+    const generation = Number(msg.generation);
+    if (!Number.isSafeInteger(generation) || generation < agentRunsGeneration) return;
+    const state = msg.state === "ready" || msg.state === "loading" || msg.state === "empty"
+      ? msg.state
+      : "disabled";
+    const nextModel = state === "ready" ? normalizeAgentRunsModel(msg.model) : null;
+    const sameGeneration = generation === agentRunsGeneration;
+    if (nextModel && sameGeneration && agentRunsModel && agentRunsPinRevision > nextModel.pinRevision) {
+      const currentPinState = new Map(
+        agentRunsModel.nodes
+          .filter((node) => node.actionTarget)
+          .map((node) => [node.actionTarget, node.isPinned]),
+      );
+      for (const node of nextModel.nodes) {
+        if (!node.actionTarget || !currentPinState.has(node.actionTarget)) continue;
+        node.isPinned = currentPinState.get(node.actionTarget) === true;
+      }
+      nextModel.pinRevision = agentRunsPinRevision;
+    }
+    if (!sameGeneration || !nextModel) {
+      agentRunsPendingPins = new Map();
+    }
+    agentRunsGeneration = generation;
+    agentRunsState = nextModel ? "ready" : state === "ready" ? "empty" : state;
+    agentRunsModel = nextModel;
+    agentRunsPinRevision = nextModel ? Math.max(agentRunsPinRevision, nextModel.pinRevision) : 0;
+    if (!sameGeneration && nextModel) agentRunsPinRevision = nextModel.pinRevision;
+    if (msg.i18n && typeof msg.i18n === "object") i18n = msg.i18n;
+    if (agentRunsState !== "ready") {
+      closeAgentRunsOverlay({ restoreFocus: false });
+    }
+    updateToolbar();
+    if (agentRunsOverlayOpen) renderAgentRunsOverlay();
+  }
+
+  function handleCodexAgentRunPinStateMessage(msg) {
+    if (
+      Number(msg.version) !== 1 ||
+      Number(msg.generation) !== agentRunsGeneration ||
+      agentRunsState !== "ready" ||
+      !agentRunsModel ||
+      !Array.isArray(msg.states) ||
+      msg.states.length > MAX_AGENT_RUN_NODES
+    ) {
+      return;
+    }
+    const pinRevision = Number(msg.pinRevision);
+    if (!Number.isSafeInteger(pinRevision) || pinRevision <= agentRunsPinRevision) return;
+    const states = new Map();
+    for (const raw of msg.states) {
+      if (!raw || typeof raw !== "object" || typeof raw.isPinned !== "boolean") continue;
+      const target = normalizeAgentRunToken(raw.target);
+      if (target) states.set(target, raw.isPinned);
+    }
+    for (const node of agentRunsModel.nodes) {
+      if (!node.actionTarget || !states.has(node.actionTarget)) continue;
+      node.isPinned = states.get(node.actionTarget) === true;
+      const pending = agentRunsPendingPins.get(node.actionTarget);
+      if (pending && pending.generation === agentRunsGeneration && pending.desiredPinned === node.isPinned) {
+        agentRunsPendingPins.delete(node.actionTarget);
+      }
+    }
+    agentRunsPinRevision = pinRevision;
+    agentRunsModel.pinRevision = pinRevision;
+    if (agentRunsOverlayOpen) renderAgentRunsOverlay();
+  }
+
+  function handleCodexAgentRunPinResultMessage(msg) {
+    if (
+      Number(msg.version) !== 1 ||
+      Number(msg.generation) !== agentRunsGeneration ||
+      agentRunsState !== "ready" ||
+      !agentRunsModel
+    ) {
+      return;
+    }
+    const target = normalizeAgentRunToken(msg.target);
+    const requestId = Number(msg.requestId);
+    const pending = target ? agentRunsPendingPins.get(target) : undefined;
+    if (
+      !pending ||
+      !Number.isSafeInteger(requestId) ||
+      requestId !== pending.requestId ||
+      pending.generation !== agentRunsGeneration
+    ) {
+      return;
+    }
+    agentRunsPendingPins.delete(target);
+    if (typeof msg.isPinned === "boolean") {
+      const node = agentRunsModel.nodes.find((candidate) => candidate.actionTarget === target);
+      if (node) node.isPinned = msg.isPinned;
+    }
+    if (agentRunsOverlayOpen) renderAgentRunsOverlay();
+  }
+
+  function normalizeAgentRunsModel(value) {
+    if (!value || typeof value !== "object" || !Array.isArray(value.nodes)) return null;
+    const rawNodes = value.nodes.slice(0, MAX_AGENT_RUN_NODES);
+    const ids = new Set();
+    const nodes = [];
+    let boundsApplied = value.nodes.length > MAX_AGENT_RUN_NODES;
+    for (const raw of rawNodes) {
+      if (!raw || typeof raw !== "object") continue;
+      const id = normalizeAgentRunToken(raw.id);
+      if (!id || ids.has(id)) continue;
+      ids.add(id);
+      nodes.push({
+        id,
+        parentId: normalizeAgentRunToken(raw.parentId),
+        navigationTarget: normalizeAgentRunToken(raw.navigationTarget),
+        actionTarget: normalizeAgentRunToken(raw.actionTarget),
+        title: normalizeAgentRunText(raw.title, 320),
+        titleIsCustom: raw.titleIsCustom === true,
+        taskLabel: normalizeAgentRunText(raw.taskLabel, 160),
+        agentRole: normalizeAgentRunText(raw.agentRole, 120),
+        started: normalizeAgentRunText(raw.started, 80),
+        lastActivity: normalizeAgentRunText(raw.lastActivity, 80),
+        directChildCount: normalizeAgentRunCount(raw.directChildCount, 1000000),
+        isCurrent: raw.isCurrent === true,
+        isSubagent: raw.isSubagent === true,
+        unavailableParent: raw.unavailableParent === true,
+        isPinned: raw.isPinned === true,
+        isBookmarked: raw.isBookmarked === true,
+        hasTags: raw.hasTags === true,
+        hasNote: raw.hasNote === true,
+      });
+    }
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const childCounts = new Map();
+    const accepted = [];
+    for (const node of nodes) {
+      if (node.parentId === node.id || (node.parentId && !byId.has(node.parentId))) node.parentId = "";
+      let depth = 0;
+      let cursor = node;
+      const seen = new Set();
+      while (cursor.parentId) {
+        if (seen.has(cursor.id) || depth >= MAX_AGENT_RUN_DEPTH) {
+          node.parentId = "";
+          boundsApplied = true;
+          break;
+        }
+        seen.add(cursor.id);
+        const parent = byId.get(cursor.parentId);
+        if (!parent) break;
+        cursor = parent;
+        depth += 1;
+      }
+      if (node.parentId) {
+        const count = childCounts.get(node.parentId) || 0;
+        if (count >= MAX_AGENT_RUN_CHILDREN) {
+          boundsApplied = true;
+          continue;
+        }
+        childCounts.set(node.parentId, count + 1);
+      }
+      accepted.push(node);
+    }
+    if (accepted.filter((node) => node.isCurrent).length !== 1) return null;
+    if (accepted.length < 2 && !accepted.some((node) => node.unavailableParent)) return null;
+    return {
+      sessionCount: normalizeAgentRunCount(value.sessionCount, 1000000),
+      agentCount: normalizeAgentRunCount(value.agentCount, 1000000),
+      relationPartial: value.relationPartial === true || boundsApplied,
+      omittedCount: normalizeAgentRunCount(value.omittedCount, 1000000),
+      pinRevision: normalizeAgentRunCount(value.pinRevision, Number.MAX_SAFE_INTEGER),
+      nodes: accepted,
+    };
+  }
+
+  function normalizeAgentRunToken(value) {
+    const text = typeof value === "string" ? value.trim() : "";
+    return text && text.length <= 128 && !/[\u0000-\u001f\u007f]/u.test(text) ? text : "";
+  }
+
+  function normalizeAgentRunText(value, maxLength) {
+    const text = typeof value === "string" ? value.trim() : "";
+    return text && text.length <= maxLength && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text)
+      ? text
+      : "";
+  }
+
+  function normalizeAgentRunCount(value, max) {
+    const count = Number(value);
+    return Number.isSafeInteger(count) ? Math.max(0, Math.min(max, count)) : 0;
+  }
+
+  function setSessionOverlayFocusKey(element, key) {
+    if (element instanceof HTMLElement && key) element.dataset.sessionOverlayFocusKey = key;
+    return element;
+  }
+
+  function getSessionOverlayFocusKey(root, target = document.activeElement) {
+    if (!(root instanceof HTMLElement) || !(target instanceof Element)) return "";
+    const control = target.closest("[data-session-overlay-focus-key]");
+    if (!(control instanceof HTMLElement) || !root.contains(control)) return "";
+    return control.dataset.sessionOverlayFocusKey || "";
+  }
+
+  function isSessionOverlayFocusTarget(element) {
+    if (!(element instanceof HTMLElement) || !element.isConnected || element.closest("[hidden]")) return false;
+    return !(element instanceof HTMLButtonElement && element.disabled);
+  }
+
+  function findSessionOverlayFocusTarget(root, key) {
+    if (!(root instanceof HTMLElement) || !key) return null;
+    for (const candidate of root.querySelectorAll("[data-session-overlay-focus-key]")) {
+      if (
+        candidate instanceof HTMLElement &&
+        candidate.dataset.sessionOverlayFocusKey === key &&
+        isSessionOverlayFocusTarget(candidate)
+      ) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  function restoreSessionOverlayFocus(root, key, getFallback) {
+    if (!(root instanceof HTMLElement) || root.hidden || !root.isConnected) return false;
+    const keyedTarget = findSessionOverlayFocusTarget(root, key);
+    const fallbackTarget = keyedTarget || (typeof getFallback === "function" ? getFallback() : null);
+    if (!isSessionOverlayFocusTarget(fallbackTarget) || !root.contains(fallbackTarget)) return false;
+    fallbackTarget.focus({ preventScroll: true });
+    return true;
+  }
+
+  function hasSessionOverlayPopupFocus() {
+    const active = document.activeElement;
+    return isImagePreviewOpen() ||
+      (branchChoiceMenuEl instanceof HTMLElement && branchChoiceMenuEl.contains(active)) ||
+      (branchChoicePreviewEl instanceof HTMLElement && branchChoicePreviewEl.contains(active));
+  }
+
+  function cancelSessionOverlayBackdropFocus() {
+    if (sessionOverlayBackdropFocusFrame) cancelAnimationFrame(sessionOverlayBackdropFocusFrame);
+    sessionOverlayBackdropFocusFrame = 0;
+  }
+
+  function handleSessionOverlayBackdropPointerdown(event, root, focusKey, isActive, getFallback) {
+    if (!(root instanceof HTMLElement) || event.target !== root || !isActive()) return;
+    event.preventDefault();
+    if (root.contains(document.activeElement)) return;
+    cancelSessionOverlayBackdropFocus();
+    sessionOverlayBackdropFocusFrame = requestAnimationFrame(() => {
+      sessionOverlayBackdropFocusFrame = 0;
+      if (!isActive() || hasSessionOverlayPopupFocus()) return;
+      restoreSessionOverlayFocus(root, focusKey, getFallback);
+    });
+  }
+
+  function syncSessionOverlayDocumentKeydown() {
+    const shouldAttach = agentRunsOverlayOpen || branchOverlayOpen;
+    if (sessionOverlayDocumentKeydownAttached === shouldAttach) return;
+    if (shouldAttach) {
+      sessionOverlayDocumentKeydownAttached = true;
+      document.addEventListener("keydown", handleSessionOverlayDocumentKeydown, true);
+    } else {
+      detachSessionOverlayDocumentKeydown();
+    }
+  }
+
+  function detachSessionOverlayDocumentKeydown() {
+    if (!sessionOverlayDocumentKeydownAttached) return;
+    sessionOverlayDocumentKeydownAttached = false;
+    document.removeEventListener("keydown", handleSessionOverlayDocumentKeydown, true);
+  }
+
+  function handleSessionOverlayDocumentKeydown(event) {
+    if (!agentRunsOverlayOpen && !branchOverlayOpen) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (isImagePreviewOpen()) {
+        closeImagePreview();
+        return;
+      }
+      if (branchChoiceMenuEl instanceof HTMLElement) {
+        closeBranchOccurrenceMenuAndRestoreFocus();
+        return;
+      }
+      if (branchChoicePreviewEl instanceof HTMLElement) {
+        closeBranchChoicePreview();
+        return;
+      }
+      if (agentRunsOverlayOpen) {
+        closeAgentRunsOverlay();
+        return;
+      }
+      closeBranchOverlay();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const root = agentRunsOverlayOpen ? agentRunsOverlayRootEl : branchOverlayRootEl;
+    if (!(root instanceof HTMLElement) || root.contains(document.activeElement)) return;
+    if (branchChoiceMenuEl instanceof HTMLElement && branchChoiceMenuEl.contains(document.activeElement)) return;
+    const focusable = Array.from(
+      root.querySelectorAll("button:not(:disabled), [tabindex]:not([tabindex='-1'])"),
+    ).filter((element) => element instanceof HTMLElement && element.getClientRects().length > 0);
+    if (focusable.length === 0) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const target = event.shiftKey ? focusable[focusable.length - 1] : focusable[0];
+    if (target instanceof HTMLElement) target.focus();
+  }
+
+  function openAgentRunsOverlay(returnFocus) {
+    if (agentRunsState === "empty") {
+      showToast(getSafeUiText(i18n.agentRunsNone, "No related agent runs were found for this session."));
+      return;
+    }
+    if (agentRunsState !== "ready" || !agentRunsModel || !(agentRunsOverlayRootEl instanceof HTMLElement)) return;
+    closeBranchOverlay({ restoreFocus: false, restorePageSearch: false });
+    if (isPageSearchOpen()) closePageSearch();
+    const shouldAnimate = !agentRunsOverlayOpen;
+    agentRunsOverlayOpen = true;
+    if (shouldAnimate) {
+      agentRunsOverlayFocusKey = "";
+      agentRunsOverlayRootEl.dataset.agentRunsOverlayEnter = "true";
+    }
+    agentRunsOverlayReturnFocus = returnFocus instanceof HTMLElement ? returnFocus : document.activeElement;
+    agentRunsTreeNeedsInitialReveal = true;
+    agentRunsTreeFocusNodeId = agentRunsModel.nodes.find((node) => node.isCurrent)?.id || "";
+    syncSessionOverlayDocumentKeydown();
+    renderAgentRunsOverlay();
+  }
+
+  function closeAgentRunsOverlay(options = {}) {
+    if (!(agentRunsOverlayRootEl instanceof HTMLElement)) return;
+    cancelSessionOverlayBackdropFocus();
+    rememberAgentRunsTreeViewport();
+    cancelAgentRunsOverlayResize(false);
+    agentRunsOverlayOpen = false;
+    syncSessionOverlayDocumentKeydown();
+    if (agentRunsTreeRenderFrame) cancelAnimationFrame(agentRunsTreeRenderFrame);
+    agentRunsTreeRenderFrame = 0;
+    agentRunsOverlayRootEl.hidden = true;
+    agentRunsOverlayRootEl.replaceChildren();
+    delete agentRunsOverlayRootEl.dataset.agentRunsOverlayEnter;
+    agentRunsOverlayRootEl.onkeydown = null;
+    agentRunsOverlayRootEl.onpointerdown = null;
+    agentRunsOverlayRootEl.onfocusin = null;
+    document.body.classList.remove("agentRunsOverlayOpen");
+    if (!branchOverlayOpen) {
+      if (scrollRootEl instanceof HTMLElement) scrollRootEl.inert = false;
+      if (toolbarEl instanceof HTMLElement) toolbarEl.inert = false;
+    }
+    if (options.restoreFocus !== false && agentRunsOverlayReturnFocus instanceof HTMLElement) {
+      agentRunsOverlayReturnFocus.focus();
+    }
+    agentRunsOverlayReturnFocus = null;
+    agentRunsOverlayFocusKey = "";
+    persistAgentRunsOverlayState();
+    updateToolbar();
+  }
+
+  function handleAgentRunsOverlayFocusIn(event) {
+    if (!agentRunsOverlayOpen || !(agentRunsOverlayRootEl instanceof HTMLElement)) return;
+    const key = getSessionOverlayFocusKey(agentRunsOverlayRootEl, event.target);
+    if (key) agentRunsOverlayFocusKey = key;
+  }
+
+  function handleAgentRunsOverlayBackdropPointerdown(event) {
+    handleSessionOverlayBackdropPointerdown(
+      event,
+      agentRunsOverlayRootEl,
+      agentRunsOverlayFocusKey,
+      () => agentRunsOverlayOpen,
+      findAgentRunsOverlayFallbackFocus,
+    );
+  }
+
+  function findAgentRunsOverlayFallbackFocus() {
+    if (!(agentRunsOverlayRootEl instanceof HTMLElement)) return null;
+    const stage = agentRunsOverlayRootEl.querySelector(".agentRunsTreeStage");
+    const node = findAgentRunsTreeFocusElement(stage);
+    if (isSessionOverlayFocusTarget(node)) return node;
+    return findSessionOverlayFocusTarget(agentRunsOverlayRootEl, "agent:header:close");
+  }
+
+  function renderAgentRunsOverlay() {
+    if (!agentRunsOverlayOpen || !agentRunsModel || !(agentRunsOverlayRootEl instanceof HTMLElement)) return;
+    cancelSessionOverlayBackdropFocus();
+    rememberAgentRunsTreeViewport();
+    cancelAgentRunsOverlayResize(true);
+    const restoreScrollTop = agentRunsTreeScrollTop;
+    agentRunsOverlayFocusKey =
+      getSessionOverlayFocusKey(agentRunsOverlayRootEl) || agentRunsOverlayFocusKey;
+    const restoreFocusKey = agentRunsOverlayFocusKey;
+    const animateEntry = agentRunsOverlayRootEl.dataset.agentRunsOverlayEnter === "true";
+    delete agentRunsOverlayRootEl.dataset.agentRunsOverlayEnter;
+    const graph = buildAgentRunsGraph(agentRunsModel);
+    const featureTitle = getSafeUiText(i18n.agentRunsTitle, "Agent Runs");
+    const panelTitle = getAgentRunsPanelTitle(graph, featureTitle);
+    const relationSummary = formatAgentRunsTreeSummary();
+    const panelSummary = panelTitle === featureTitle
+      ? relationSummary
+      : featureTitle + " · " + relationSummary;
+    const accessibleTitle = [panelTitle, panelTitle === featureTitle ? "" : featureTitle, relationSummary]
+      .filter(Boolean)
+      .join(" - ");
+
+    agentRunsOverlayRootEl.hidden = false;
+    agentRunsOverlayRootEl.replaceChildren();
+    agentRunsOverlayRootEl.setAttribute("role", "dialog");
+    agentRunsOverlayRootEl.setAttribute("aria-modal", "true");
+    agentRunsOverlayRootEl.setAttribute("aria-label", accessibleTitle);
+    agentRunsOverlayRootEl.onkeydown = handleAgentRunsOverlayKeydown;
+    agentRunsOverlayRootEl.onpointerdown = handleAgentRunsOverlayBackdropPointerdown;
+    agentRunsOverlayRootEl.onfocusin = handleAgentRunsOverlayFocusIn;
+    document.body.classList.add("agentRunsOverlayOpen");
+    if (scrollRootEl instanceof HTMLElement) scrollRootEl.inert = true;
+    if (toolbarEl instanceof HTMLElement) toolbarEl.inert = true;
+
+    const surface = el("section", {
+      className: animateEntry ? "agentRunsOverlaySurface entering" : "agentRunsOverlaySurface",
+    });
+    applyAgentRunsOverlayWidth(surface);
+    const resizeHandle = el("div", { className: "agentRunsOverlayResizeHandle" });
+    resizeHandle.setAttribute("aria-hidden", "true");
+    attachAgentRunsOverlayResize(resizeHandle, surface);
+    surface.appendChild(resizeHandle);
+
+    const header = el("header", { className: "agentRunsOverlayHeader" });
+    const heading = el("div", { className: "agentRunsOverlayHeading" });
+    const title = el("h2", {});
+    title.textContent = panelTitle;
+    title.title = panelTitle;
+    const summary = el("span", { className: "agentRunsOverlaySummary" });
+    summary.dataset.agentRunsTreeSummary = "true";
+    summary.textContent = panelSummary;
+    summary.title = panelSummary;
+    heading.append(title, summary);
+    if (agentRunsModel.relationPartial) {
+      const warning = el("span", { className: "agentRunsOverlayWarning", role: "status" });
+      warning.textContent = getSafeUiText(
+        i18n.agentRunsPartialWarning,
+        "Some agent relationships could not be shown. Only confirmed relationships are displayed.",
+      );
+      warning.title = warning.textContent;
+      heading.appendChild(warning);
+    }
+    const actions = el("div", { className: "agentRunsOverlayActions" });
+    const first = createAgentRunsIconButton(
+      SCROLL_TOP_ICON_SVG,
+      getSafeUiText(i18n.agentRunsShowFirst, "Scroll to top"),
+      () => scrollAgentRunsTreeBoundary("first"),
+    );
+    const last = createAgentRunsIconButton(
+      SCROLL_BOTTOM_ICON_SVG,
+      getSafeUiText(i18n.agentRunsShowLast, "Scroll to bottom"),
+      () => scrollAgentRunsTreeBoundary("last"),
+    );
+    const current = createAgentRunsIconButton(
+      BRANCH_CENTER_ICON_SVG,
+      getSafeUiText(i18n.agentRunsShowCurrent, "Show current session"),
+      () => centerCurrentAgentRunsTreeNode(true),
+    );
+    const close = createAgentRunsIconButton(
+      CLOSE_ICON_SVG,
+      getSafeUiText(i18n.agentRunsClose, "Close Agent Runs"),
+      () => closeAgentRunsOverlay(),
+    );
+    setSessionOverlayFocusKey(first, "agent:header:first");
+    setSessionOverlayFocusKey(last, "agent:header:last");
+    setSessionOverlayFocusKey(current, "agent:header:current");
+    setSessionOverlayFocusKey(close, "agent:header:close");
+    actions.append(first, last, current, close);
+    header.append(heading, actions);
+    surface.appendChild(header);
+
+    const viewport = el("div", {
+      className: "agentRunsTreeViewport",
+      tabIndex: 0,
+      role: "tree",
+      ariaLabel: accessibleTitle,
+    });
+    setSessionOverlayFocusKey(viewport, "agent:viewport");
+    const stage = el("div", { className: "agentRunsTreeStage" });
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.classList.add("agentRunsTreeConnectors");
+    svg.setAttribute("aria-hidden", "true");
+    const nodeLayer = el("div", { className: "agentRunsTreeNodeLayer" });
+    for (const node of graph.orderedNodes) nodeLayer.appendChild(renderAgentRunsTreeNode(node, graph));
+    stage.append(svg, nodeLayer);
+    viewport.appendChild(stage);
+    viewport.addEventListener("scroll", () => {
+      agentRunsTreeScrollTop = viewport.scrollTop;
+    }, { passive: true });
+    surface.appendChild(viewport);
+    agentRunsOverlayRootEl.appendChild(surface);
+    if (!agentRunsTreeNeedsInitialReveal) {
+      viewport.scrollTop = restoreScrollTop;
+      agentRunsTreeScrollTop = viewport.scrollTop;
+    }
+    updateToolbar();
+
+    if (agentRunsTreeRenderFrame) cancelAnimationFrame(agentRunsTreeRenderFrame);
+    agentRunsTreeRenderFrame = requestAnimationFrame(() => {
+      agentRunsTreeRenderFrame = 0;
+      layoutAgentRunsTree(viewport, stage, graph);
+      if (agentRunsTreeNeedsInitialReveal) {
+        agentRunsTreeNeedsInitialReveal = false;
+        centerCurrentAgentRunsTreeNode(false);
+      } else {
+        viewport.scrollTop = restoreScrollTop;
+        agentRunsTreeScrollTop = viewport.scrollTop;
+      }
+      restoreSessionOverlayFocus(
+        agentRunsOverlayRootEl,
+        restoreFocusKey,
+        findAgentRunsOverlayFallbackFocus,
+      );
+    });
+  }
+
+  function buildAgentRunsGraph(model) {
+    const nodes = model.nodes.map((node) => ({ ...node, currentPath: false }));
+    if (model.omittedCount > 0) {
+      let omittedId = "__agent-runs-omitted__";
+      while (nodes.some((node) => node.id === omittedId)) omittedId += "_";
+      nodes.push({
+        id: omittedId,
+        parentId: "",
+        navigationTarget: "",
+        actionTarget: "",
+        title: formatTemplate(
+          getSafeUiText(i18n.agentRunsOmitted, "{0} more agent runs are omitted."),
+          model.omittedCount,
+        ),
+        titleIsCustom: false,
+        taskLabel: "",
+        agentRole: "",
+        started: "",
+        lastActivity: "",
+        directChildCount: 0,
+        isCurrent: false,
+        isSubagent: false,
+        unavailableParent: false,
+        isPinned: false,
+        isBookmarked: false,
+        hasTags: false,
+        hasNote: false,
+        currentPath: false,
+        omitted: true,
+      });
+    }
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const childrenByParent = new Map();
+    for (const node of nodes) {
+      node.parentId = node.parentId && nodeById.has(node.parentId) ? node.parentId : "";
+      const children = childrenByParent.get(node.parentId) || [];
+      children.push(node.id);
+      childrenByParent.set(node.parentId, children);
+    }
+    const current = nodes.find((node) => node.isCurrent);
+    const currentPath = new Set();
+    let cursor = current;
+    while (cursor && !currentPath.has(cursor.id)) {
+      currentPath.add(cursor.id);
+      cursor = cursor.parentId ? nodeById.get(cursor.parentId) : undefined;
+    }
+    for (const node of nodes) node.currentPath = currentPath.has(node.id);
+
+    const depthById = new Map();
+    const resolving = new Set();
+    const resolveDepth = (node) => {
+      if (!node || !node.parentId || !nodeById.has(node.parentId)) return 0;
+      const cached = depthById.get(node.id);
+      if (cached !== undefined) return cached;
+      if (resolving.has(node.id)) return 0;
+      resolving.add(node.id);
+      const depth = Math.min(MAX_AGENT_RUN_DEPTH, resolveDepth(nodeById.get(node.parentId)) + 1);
+      resolving.delete(node.id);
+      depthById.set(node.id, depth);
+      return depth;
+    };
+    for (const node of nodes) depthById.set(node.id, resolveDepth(node));
+    const orderedNodes = [];
+    const visited = new Set();
+    const appendPreOrder = (nodeId) => {
+      if (!nodeId || visited.has(nodeId)) return;
+      const node = nodeById.get(nodeId);
+      if (!node) return;
+      visited.add(nodeId);
+      orderedNodes.push(node);
+      for (const childId of childrenByParent.get(nodeId) || []) appendPreOrder(childId);
+    };
+    for (const rootId of childrenByParent.get("") || []) appendPreOrder(rootId);
+    for (const node of nodes) appendPreOrder(node.id);
+    return { nodes, orderedNodes, nodeById, childrenByParent, depthById, currentNodeId: current?.id || "" };
+  }
+
+  function getAgentRunsPanelTitle(graph, fallback) {
+    let root = graph.nodeById.get(graph.currentNodeId);
+    const visited = new Set();
+    while (root?.parentId && !visited.has(root.id)) {
+      visited.add(root.id);
+      const parent = graph.nodeById.get(root.parentId);
+      if (!parent) break;
+      root = parent;
+    }
+    const title = typeof root?.title === "string" ? root.title.trim() : "";
+    if (
+      !root ||
+      root.unavailableParent ||
+      root.omitted ||
+      !title ||
+      (!root.titleIsCustom && isAgentRunProtocolTitle(title))
+    ) {
+      return fallback;
+    }
+    return title;
+  }
+
+  function renderAgentRunsTreeNode(node, graph) {
+    const card = el("article", { className: "agentRunsTreeNode" });
+    card.dataset.agentRunsNodeId = node.id;
+    const depth = graph.depthById.get(node.id) || 0;
+    card.style.setProperty("--agent-runs-node-indent", Math.min(depth, 8) * 28 + "px");
+    if (node.omitted) {
+      card.classList.add("omitted");
+      const omitted = el("div", { className: "agentRunsTreeNodePrimary", tabIndex: 0, role: "treeitem" });
+      omitted.dataset.agentRunsNodeId = node.id;
+      omitted.dataset.agentRunsParentId = "";
+      omitted.setAttribute("aria-level", "1");
+      omitted.setAttribute("aria-disabled", "true");
+      omitted.setAttribute("aria-label", node.title);
+      setSessionOverlayFocusKey(omitted, "agent:node:" + node.id + ":primary");
+      const omittedTitle = el("span", { className: "agentRunsTreeNodeTitle" });
+      omittedTitle.textContent = node.title;
+      omitted.appendChild(omittedTitle);
+      omitted.addEventListener("focus", () => { agentRunsTreeFocusNodeId = node.id; });
+      card.appendChild(omitted);
+      return card;
+    }
+    if (node.currentPath) card.classList.add("currentPath");
+    else card.classList.add("alternatePath");
+    if (node.isCurrent) card.classList.add("current");
+    if (node.unavailableParent) card.classList.add("unavailable");
+
+    const canNavigate = Boolean(node.navigationTarget && !node.isCurrent && !node.unavailableParent);
+    const canPin = Boolean(node.actionTarget && !node.unavailableParent);
+    if (canNavigate) card.classList.add("navigable");
+    if (canPin) card.classList.add("pinnable");
+    const control = document.createElement("div");
+    control.tabIndex = 0;
+    control.className = "agentRunsTreeNodePrimary";
+    control.setAttribute("role", "treeitem");
+    control.setAttribute("aria-level", String(depth + 1));
+    control.dataset.agentRunsNodeId = node.id;
+    control.dataset.agentRunsParentId = node.parentId || "";
+    setSessionOverlayFocusKey(control, "agent:node:" + node.id + ":primary");
+    if (node.isCurrent) control.setAttribute("aria-current", "true");
+    if (!canNavigate && !canPin) control.setAttribute("aria-disabled", "true");
+
+    const fallbackTitle = getSafeUiText(i18n.agentRunsParentUnavailable, "Parent session unavailable");
+    const primaryText = node.isSubagent
+      ? node.taskLabel || getSafeUiText(i18n.agentRunsSubagent, "Sub-agent")
+      : node.title || fallbackTitle;
+    const kindText = node.isSubagent ? getSafeUiText(i18n.agentRunsSubagent, "Sub-agent") : "Codex";
+    const top = el("span", { className: "agentRunsTreeNodeTop" });
+    const marker = el("span", {
+      className: node.isSubagent ? "agentRunsTreeNodeMarker subagent" : "agentRunsTreeNodeMarker",
+    });
+    marker.innerHTML = node.isSubagent ? AGENT_RUNS_ICON_SVG : CODEX_SOURCE_ICON_SVG;
+    marker.setAttribute("aria-hidden", "true");
+    const primaryTitle = el("span", { className: "agentRunsTreeNodeTitle" });
+    primaryTitle.textContent = primaryText;
+    primaryTitle.title = primaryText;
+    top.append(marker, primaryTitle);
+    if (node.isSubagent && node.agentRole) {
+      const role = el("span", { className: "agentRunsTreeNodeRole" });
+      role.textContent = node.agentRole;
+      role.title = node.agentRole;
+      top.appendChild(role);
+    }
+    if (node.isCurrent) {
+      const currentBadge = el("span", { className: "agentRunsTreeNodeCurrent" });
+      currentBadge.textContent = getSafeUiText(i18n.agentRunsCurrent, "Current session");
+      top.appendChild(currentBadge);
+    }
+
+    const actions = el("span", { className: "agentRunsTreeNodeActions" });
+    if (canPin) {
+      const pending = agentRunsPendingPins.get(node.actionTarget);
+      const pinLabel = node.isPinned
+        ? getSafeUiText(i18n.agentRunsUnpinSession, getSafeUiText(i18n.unpin, "Unpin"))
+        : getSafeUiText(i18n.agentRunsPinSession, getSafeUiText(i18n.pin, "Pin"));
+      const pinButton = document.createElement("button");
+      pinButton.type = "button";
+      pinButton.className = "agentRunsTreeNodePin";
+      pinButton.dataset.agentRunsPinTarget = node.actionTarget;
+      setSessionOverlayFocusKey(pinButton, "agent:node:" + node.id + ":pin");
+      pinButton.title = pinLabel;
+      pinButton.setAttribute("aria-label", pinLabel + ": " + primaryText);
+      pinButton.setAttribute("aria-pressed", node.isPinned ? "true" : "false");
+      pinButton.disabled = Boolean(pending);
+      pinButton.dataset.pending = pending ? "true" : "false";
+      if (pending) pinButton.setAttribute("aria-busy", "true");
+      const pinIcon = el("span", { className: "agentRunsTreeNodeActionIcon" });
+      pinIcon.innerHTML = PIN_ICON_SVG;
+      pinButton.appendChild(pinIcon);
+      pinButton.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        agentRunsPinRequestId += 1;
+        const desiredPinned = !node.isPinned;
+        agentRunsPendingPins.set(node.actionTarget, {
+          generation: agentRunsGeneration,
+          requestId: agentRunsPinRequestId,
+          desiredPinned,
+        });
+        pinButton.disabled = true;
+        pinButton.dataset.pending = "true";
+        pinButton.setAttribute("aria-busy", "true");
+        vscode.postMessage({
+          type: "toggleCodexAgentRunPin",
+          requestId: agentRunsPinRequestId,
+          generation: agentRunsGeneration,
+          target: node.actionTarget,
+          desiredPinned,
+        });
+      });
+      pinButton.addEventListener("focus", () => { agentRunsTreeFocusNodeId = node.id; });
+      actions.appendChild(pinButton);
+    }
+    if (canNavigate) {
+      const openLabel = getSafeUiText(i18n.agentRunsOpenSession, "Open session");
+      const openButton = document.createElement("button");
+      openButton.type = "button";
+      openButton.className = "agentRunsTreeNodeOpen";
+      setSessionOverlayFocusKey(openButton, "agent:node:" + node.id + ":open");
+      openButton.title = openLabel;
+      openButton.setAttribute("aria-label", openLabel + ": " + primaryText);
+      const openIcon = el("span", { className: "agentRunsTreeNodeActionIcon" });
+      openIcon.innerHTML = NAV_RIGHT_ICON_SVG;
+      openButton.appendChild(openIcon);
+      openButton.addEventListener("click", () => {
+        closeAgentRunsOverlay({ restoreFocus: false });
+        agentRunsNavigationRequestId += 1;
+        vscode.postMessage({
+          type: "openCodexAgentRun",
+          requestId: agentRunsNavigationRequestId,
+          generation: agentRunsGeneration,
+          target: node.navigationTarget,
+        });
+      });
+      openButton.addEventListener("focus", () => { agentRunsTreeFocusNodeId = node.id; });
+      actions.appendChild(openButton);
+    }
+    if (actions.childElementCount > 0) top.appendChild(actions);
+    control.appendChild(top);
+    const showSessionTitle = shouldShowAgentRunSessionTitle(node, primaryText);
+    if (showSessionTitle) {
+      const sessionTitle = el("span", { className: "agentRunsTreeNodeSessionTitle" });
+      sessionTitle.textContent = node.title;
+      sessionTitle.title = node.title;
+      control.appendChild(sessionTitle);
+    }
+
+    const badges = [];
+    if (node.isBookmarked) badges.push(getSafeUiText(i18n.agentRunsBookmark, "Bookmark"));
+    if (node.hasTags) badges.push(getSafeUiText(i18n.agentRunsTags, "Tags"));
+    if (node.hasNote) badges.push(getSafeUiText(i18n.agentRunsNote, "Note"));
+    if (node.directChildCount > 0) {
+      badges.push(`${getSafeUiText(i18n.agentRunsDirectChildren, "Direct agents")}: ${node.directChildCount}`);
+    }
+    if (badges.length > 0) {
+      const badgeRow = el("span", { className: "agentRunsTreeNodeBadges" });
+      for (const badgeText of badges) {
+        const badge = el("span", { className: "agentRunsTreeNodeBadge" });
+        badge.textContent = badgeText;
+        badgeRow.appendChild(badge);
+      }
+      control.appendChild(badgeRow);
+    }
+    const dates = [];
+    if (node.started) dates.push({ label: getSafeUiText(i18n.agentRunsStarted, "Started"), value: node.started });
+    if (node.lastActivity) {
+      dates.push({ label: getSafeUiText(i18n.agentRunsLastActivity, "Last activity"), value: node.lastActivity });
+    }
+    if (dates.length > 0) {
+      const meta = el("span", { className: "agentRunsTreeNodeDates" });
+      for (const date of dates) {
+        const row = el("span", { className: "agentRunsTreeNodeDateRow" });
+        const label = el("span", { className: "agentRunsTreeNodeDateLabel" });
+        const value = el("span", { className: "agentRunsTreeNodeDateValue" });
+        label.textContent = date.label;
+        value.textContent = date.value;
+        row.append(label, value);
+        meta.appendChild(row);
+      }
+      control.appendChild(meta);
+    }
+    const accessibleState = [];
+    if (node.isCurrent) accessibleState.push(getSafeUiText(i18n.agentRunsCurrent, "Current session"));
+    else if (!node.currentPath) accessibleState.push(getSafeUiText(i18n.agentRunsOtherRun, "Other agent run"));
+    if (node.unavailableParent) accessibleState.push(getSafeUiText(i18n.agentRunsParentUnavailable, "Parent session unavailable"));
+    const accessibleDates = dates.map((date) => `${date.label}: ${date.value}`);
+    control.setAttribute(
+      "aria-label",
+      [
+        kindText,
+        node.agentRole,
+        primaryText,
+        showSessionTitle ? node.title : "",
+        ...accessibleState,
+        ...badges,
+        ...accessibleDates,
+      ]
+        .filter(Boolean)
+        .join(", "),
+    );
+    control.addEventListener("focus", () => { agentRunsTreeFocusNodeId = node.id; });
+    card.appendChild(control);
+    return card;
+  }
+
+  function shouldShowAgentRunSessionTitle(node, primaryText) {
+    const title = typeof node?.title === "string" ? node.title.trim() : "";
+    if (!node?.isSubagent || !title || title === primaryText) return false;
+    return node.titleIsCustom === true || !isAgentRunProtocolTitle(title);
+  }
+
+  function isAgentRunProtocolTitle(title) {
+    return (
+      /^<(?:recommended_plugins|permissions instructions|collaboration_mode|skills_instructions|apps_instructions|plugins_instructions|multi_agent_mode|environment_context|user_instructions|instructions)>/iu.test(title) ||
+      /^# AGENTS\.md instructions(?:[^\n]*)?(?:\n|$)/iu.test(title)
+    );
+  }
+
+  function createAgentRunsIconButton(iconSvg, label, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "agentRunsIconButton";
+    setToolbarIconButton(button, iconSvg, label);
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function handleAgentRunsOverlayKeydown(event) {
+    if (!agentRunsOverlayOpen || !(agentRunsOverlayRootEl instanceof HTMLElement)) return;
+    const controls = Array.from(agentRunsOverlayRootEl.querySelectorAll(".agentRunsTreeNodePrimary"));
+    const current = event.target instanceof Element ? event.target.closest(".agentRunsTreeNodePrimary") : null;
+    const index = controls.indexOf(current);
+    if (current instanceof HTMLElement && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      const nodeId = current.dataset.agentRunsNodeId || "";
+      const parentId = current.dataset.agentRunsParentId || "";
+      let target = null;
+      if (event.key === "Home") target = controls[0];
+      else if (event.key === "End") target = controls[controls.length - 1];
+      else if (event.key === "ArrowUp") target = controls[Math.max(0, index - 1)];
+      else if (event.key === "ArrowDown") target = controls[Math.min(controls.length - 1, index + 1)];
+      else if (event.key === "ArrowLeft") target = controls.find((candidate) => candidate.dataset.agentRunsNodeId === parentId);
+      else target = controls.find((candidate) => candidate.dataset.agentRunsParentId === nodeId);
+      if (target instanceof HTMLElement) focusAgentRunsTreeControl(target);
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(agentRunsOverlayRootEl.querySelectorAll("button:not(:disabled), [tabindex='0']"));
+    if (focusable.length === 0) return;
+    const focusIndex = focusable.indexOf(document.activeElement);
+    if (!event.shiftKey && focusIndex === focusable.length - 1) {
+      event.preventDefault();
+      focusable[0].focus();
+    } else if (event.shiftKey && focusIndex <= 0) {
+      event.preventDefault();
+      focusable[focusable.length - 1].focus();
+    }
+  }
+
+  function focusAgentRunsTreeControl(control) {
+    if (!(control instanceof HTMLElement)) return;
+    agentRunsTreeFocusNodeId = control.dataset.agentRunsNodeId || agentRunsTreeFocusNodeId;
+    control.focus({ preventScroll: true });
+    control.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  function layoutAgentRunsTree(viewport, stage, graph) {
+    const elements = new Map();
+    for (const element of stage.querySelectorAll(".agentRunsTreeNode[data-agent-runs-node-id]")) {
+      if (element instanceof HTMLElement) elements.set(element.dataset.agentRunsNodeId || "", element);
+    }
+    const svg = stage.querySelector(".agentRunsTreeConnectors");
+    if (svg instanceof SVGElement) {
+      const nodeLayer = stage.querySelector(".agentRunsTreeNodeLayer");
+      const stageWidth = Math.max(1, stage.clientWidth);
+      const stageHeight = Math.max(
+        1,
+        stage.clientHeight,
+        nodeLayer instanceof HTMLElement ? nodeLayer.offsetTop + nodeLayer.offsetHeight + 28 : 0,
+      );
+      svg.replaceChildren();
+      svg.setAttribute("viewBox", "0 0 " + stageWidth + " " + stageHeight);
+      svg.setAttribute("width", String(stageWidth));
+      svg.setAttribute("height", String(stageHeight));
+      const appendConnector = (pathData, currentPath) => {
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", pathData);
+        path.classList.add("agentRunsTreeConnector");
+        if (currentPath) path.classList.add("currentPath");
+        svg.appendChild(path);
+      };
+      const stageRect = stage.getBoundingClientRect();
+      for (const [parentId, childIds] of graph.childrenByParent) {
+        if (!parentId || childIds.length === 0) continue;
+        const parentElement = elements.get(parentId);
+        if (!parentElement) continue;
+        const children = childIds
+          .map((childId) => {
+            const node = graph.nodeById.get(childId);
+            const element = elements.get(childId);
+            if (!node || !element) return null;
+            const rect = element.getBoundingClientRect();
+            return {
+              node,
+              left: rect.left - stageRect.left,
+              branchY: rect.top - stageRect.top + Math.min(24, rect.height / 2),
+            };
+          })
+          .filter(Boolean);
+        if (children.length === 0) continue;
+        const parentRect = parentElement.getBoundingClientRect();
+        const parentAnchorX = parentRect.left - stageRect.left + 18;
+        const parentY = parentRect.bottom - stageRect.top;
+        const trunkX = Math.min(parentAnchorX, ...children.map((child) => child.left - 10));
+        const shoulderY = Math.min(...children.map((child) => child.branchY), parentY + 10);
+        const lastBranchY = Math.max(...children.map((child) => child.branchY));
+        const currentChild = children.find((child) => child.node.currentPath === true);
+        const alternateChildren = children.filter((child) => child.node.currentPath !== true);
+        const trunkPath = (endY) =>
+          "M " + parentAnchorX + " " + parentY + " V " + shoulderY + " H " + trunkX + " V " + endY;
+
+        if (alternateChildren.length > 0) {
+          appendConnector(trunkPath(lastBranchY), false);
+          for (const child of alternateChildren) {
+            appendConnector("M " + trunkX + " " + child.branchY + " H " + child.left, false);
+          }
+        }
+        if (currentChild) {
+          appendConnector(trunkPath(currentChild.branchY), true);
+          appendConnector(
+            "M " + trunkX + " " + currentChild.branchY + " H " + currentChild.left,
+            true,
+          );
+        }
+      }
+    }
+    if (viewport instanceof HTMLElement) agentRunsTreeScrollTop = viewport.scrollTop;
+  }
+
+  function centerCurrentAgentRunsTreeNode(smooth) {
+    const viewport = agentRunsOverlayRootEl?.querySelector(".agentRunsTreeViewport");
+    const stage = agentRunsOverlayRootEl?.querySelector(".agentRunsTreeStage");
+    if (!(viewport instanceof HTMLElement) || !(stage instanceof HTMLElement)) return;
+    const current = stage.querySelector(".agentRunsTreeNode.current");
+    if (!(current instanceof HTMLElement)) return;
+    const behavior = smooth && !window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto";
+    current.scrollIntoView({ block: "center", inline: "nearest", behavior });
+    agentRunsTreeFocusNodeId = current.dataset.agentRunsNodeId || agentRunsTreeFocusNodeId;
+    if (smooth) {
+      const currentControl = current.querySelector(".agentRunsTreeNodePrimary");
+      if (currentControl instanceof HTMLElement) currentControl.focus({ preventScroll: true });
+    }
+    if (smooth) {
+      current.classList.remove("located");
+      requestAnimationFrame(() => {
+        if (!current.isConnected) return;
+        current.classList.add("located");
+        setTimeout(() => current.classList.remove("located"), 900);
+      });
+    }
+  }
+
+  function scrollAgentRunsTreeBoundary(boundary) {
+    const viewport = agentRunsOverlayRootEl?.querySelector(".agentRunsTreeViewport");
+    if (!(viewport instanceof HTMLElement)) return;
+    const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+    viewport.scrollTo({
+      top: boundary === "last" ? viewport.scrollHeight : 0,
+      behavior,
+    });
+  }
+
+  function findAgentRunsTreeFocusElement(stage) {
+    if (!(stage instanceof HTMLElement)) return null;
+    if (agentRunsTreeFocusNodeId) {
+      const selector = '.agentRunsTreeNodePrimary[data-agent-runs-node-id="' + cssEscape(agentRunsTreeFocusNodeId) + '"]';
+      const focused = stage.querySelector(selector);
+      if (focused instanceof HTMLElement) return focused;
+    }
+    const current = stage.querySelector(".agentRunsTreeNode.current .agentRunsTreeNodePrimary");
+    return current instanceof HTMLElement ? current : null;
+  }
+
+  function formatAgentRunsTreeSummary() {
+    return formatTemplate(
+      getSafeUiText(i18n.agentRunsRelatedCount, "Related agent runs: {0}"),
+      agentRunsModel?.agentCount || 0,
+    );
+  }
+
+  function scheduleAgentRunsTreeRelayout() {
+    if (!agentRunsOverlayOpen || !(agentRunsOverlayRootEl instanceof HTMLElement)) return;
+    if (agentRunsTreeRenderFrame) cancelAnimationFrame(agentRunsTreeRenderFrame);
+    agentRunsTreeRenderFrame = requestAnimationFrame(() => {
+      agentRunsTreeRenderFrame = 0;
+      const viewport = agentRunsOverlayRootEl?.querySelector(".agentRunsTreeViewport");
+      const stage = agentRunsOverlayRootEl?.querySelector(".agentRunsTreeStage");
+      if (!(viewport instanceof HTMLElement) || !(stage instanceof HTMLElement) || !agentRunsModel) return;
+      layoutAgentRunsTree(viewport, stage, buildAgentRunsGraph(agentRunsModel));
+    });
+  }
+
+  function attachAgentRunsOverlayResize(handle, surface) {
+    if (!(handle instanceof HTMLElement) || !(surface instanceof HTMLElement)) return;
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || agentRunsOverlayResizeState) return;
+      event.preventDefault();
+      event.stopPropagation();
+      agentRunsOverlayResizeState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: surface.getBoundingClientRect().width,
+        handle,
+      };
+      handle.setPointerCapture(event.pointerId);
+      document.body.classList.add("agentRunsOverlayResizing");
+    });
+    handle.addEventListener("pointermove", (event) => {
+      const state = agentRunsOverlayResizeState;
+      if (!state || state.pointerId !== event.pointerId || state.handle !== handle) return;
+      event.preventDefault();
+      agentRunsOverlayWidth = clampAgentRunsOverlayWidth(state.startWidth + (state.startX - event.clientX));
+      applyAgentRunsOverlayWidth(surface);
+    });
+    const finishResize = (event) => {
+      const state = agentRunsOverlayResizeState;
+      if (!state || state.pointerId !== event.pointerId || state.handle !== handle) return;
+      cancelAgentRunsOverlayResize(true);
+    };
+    handle.addEventListener("pointerup", finishResize);
+    handle.addEventListener("pointercancel", finishResize);
+    handle.addEventListener("lostpointercapture", finishResize);
+    handle.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      agentRunsOverlayWidth = null;
+      applyAgentRunsOverlayWidth(surface);
+      persistAgentRunsOverlayState();
+    });
+  }
+
+  function cancelAgentRunsOverlayResize(persist) {
+    const state = agentRunsOverlayResizeState;
+    agentRunsOverlayResizeState = null;
+    document.body.classList.remove("agentRunsOverlayResizing");
+    if (state?.handle instanceof HTMLElement && state.handle.hasPointerCapture(state.pointerId)) {
+      state.handle.releasePointerCapture(state.pointerId);
+    }
+    if (state && persist) persistAgentRunsOverlayState();
+  }
+
+  function applyAgentRunsOverlayWidth(surface = agentRunsOverlayRootEl?.querySelector(".agentRunsOverlaySurface")) {
+    if (!(surface instanceof HTMLElement)) return;
+    if (agentRunsOverlayWidth == null) {
+      surface.style.removeProperty("--chv-agent-runs-overlay-width");
+    } else {
+      surface.style.setProperty("--chv-agent-runs-overlay-width", agentRunsOverlayWidth + "px");
+    }
+    scheduleAgentRunsTreeRelayout();
+  }
+
+  function normalizeAgentRunsOverlayWidth(value) {
+    const width = Number(value);
+    if (!Number.isFinite(width) || width <= 0) return null;
+    return Math.min(100000, Math.max(MIN_AGENT_RUNS_OVERLAY_WIDTH, Math.round(width)));
+  }
+
+  function clampAgentRunsOverlayWidth(value) {
+    const availableWidth = Math.max(1, window.innerWidth - AGENT_RUNS_OVERLAY_HORIZONTAL_MARGIN);
+    const minimumWidth = Math.min(MIN_AGENT_RUNS_OVERLAY_WIDTH, availableWidth);
+    const width = Number(value);
+    if (!Number.isFinite(width)) return minimumWidth;
+    return Math.max(minimumWidth, Math.min(Math.round(width), availableWidth));
+  }
+
+  function rememberAgentRunsTreeViewport() {
+    const viewport = agentRunsOverlayRootEl?.querySelector(".agentRunsTreeViewport");
+    if (!(viewport instanceof HTMLElement)) return;
+    agentRunsTreeScrollTop = viewport.scrollTop;
+  }
+
+  function persistAgentRunsOverlayState() {
+    if (typeof vscode.setState !== "function") return;
+    webviewState = {
+      ...(webviewState && typeof webviewState === "object" ? webviewState : {}),
+      agentRunsOverlayWidth,
+    };
+    vscode.setState(webviewState);
+  }
+
+  function openBranchOverlay(returnFocus, requestedGroupId = "") {
+    if (branchNavigationPending || branchSwitchPending) return;
+    closeAgentRunsOverlay({ restoreFocus: false });
+    if (!branchNavigation || !(branchOverlayRootEl instanceof HTMLElement)) return;
+    if (branchNavigation.groupCount < 1) {
+      showToast(getSafeUiText(i18n.branchNone, "No branches were found for this session."));
+      return;
+    }
+    branchOverlayRestorePageSearch = isPageSearchOpen();
+    if (branchOverlayRestorePageSearch) closePageSearch();
+    closeBranchOccurrenceMenu();
+    const shouldAnimate = !branchOverlayOpen;
+    branchOverlayOpen = true;
+    if (shouldAnimate) {
+      branchOverlayFocusKey = "";
+      branchOverlayRootEl.dataset.branchOverlayEnter = "true";
+    }
+    branchOverlayReturnFocus = returnFocus instanceof HTMLElement ? returnFocus : document.activeElement;
+    const focusGroupId = requestedGroupId || branchNavigation.overlay.currentGroupId;
+    const focusGroup = branchNavigation.overlay.groups.find((group) => group.id === focusGroupId);
+    if (requestedGroupId) branchTreeNeedsInitialFit = true;
+    if (requestedGroupId && focusGroup) branchNavigation.overlay.currentGroupId = requestedGroupId;
+    const focusChoice = focusGroup?.choices.find((choice) => choice.choiceIndex === focusGroup.currentChoiceIndex) || focusGroup?.choices[0];
+    branchTreeFocusNodeId = focusGroup && focusChoice ? "branch-start:" + focusGroup.id + ":" + focusChoice.id : "";
+    if (requestedGroupId && !focusGroup) requestBranchTreePage("", requestedGroupId);
+    syncSessionOverlayDocumentKeydown();
+    persistBranchOverlayState();
+    renderBranchOverlay();
+  }
+
+  function closeBranchOverlay(options = {}) {
+    if (!(branchOverlayRootEl instanceof HTMLElement)) return;
+    cancelSessionOverlayBackdropFocus();
+    rememberBranchTreeViewport();
+    cancelBranchOverlayResize(false);
+    branchOverlayOpen = false;
+    syncSessionOverlayDocumentKeydown();
+    branchOverlayPagePending = false;
+    if (branchTreeRenderFrame) cancelAnimationFrame(branchTreeRenderFrame);
+    branchTreeRenderFrame = 0;
+    branchOverlayRootEl.hidden = true;
+    branchOverlayRootEl.replaceChildren();
+    delete branchOverlayRootEl.dataset.branchOverlayEnter;
+    branchOverlayRootEl.onkeydown = null;
+    branchOverlayRootEl.onpointerdown = null;
+    branchOverlayRootEl.onfocusin = null;
+    document.body.classList.remove("branchOverlayOpen");
+    if (scrollRootEl instanceof HTMLElement) scrollRootEl.inert = false;
+    if (toolbarEl instanceof HTMLElement) toolbarEl.inert = false;
+    closeBranchOccurrenceMenu();
+    persistBranchOverlayState();
+    updateToolbar();
+    if (options.restoreFocus !== false && branchOverlayReturnFocus instanceof HTMLElement) {
+      branchOverlayReturnFocus.focus();
+    }
+    branchOverlayReturnFocus = null;
+    branchOverlayFocusKey = "";
+    const restorePageSearch = options.restorePageSearch !== false && branchOverlayRestorePageSearch;
+    branchOverlayRestorePageSearch = false;
+    if (restorePageSearch) openPageSearch();
+  }
+
+  function handleBranchOverlayFocusIn(event) {
+    if (
+      !branchOverlayOpen ||
+      !(branchOverlayRootEl instanceof HTMLElement)
+    ) {
+      return;
+    }
+    const key = getSessionOverlayFocusKey(branchOverlayRootEl, event.target);
+    if (key) branchOverlayFocusKey = key;
+  }
+
+  function handleBranchOverlayBackdropPointerdown(event) {
+    handleSessionOverlayBackdropPointerdown(
+      event,
+      branchOverlayRootEl,
+      branchOverlayFocusKey,
+      () => branchOverlayOpen,
+      findBranchOverlayFallbackFocus,
+    );
+  }
+
+  function findBranchOverlayFallbackFocus() {
+    if (!(branchOverlayRootEl instanceof HTMLElement)) return null;
+    const stage = branchOverlayRootEl.querySelector(".branchTreeStage");
+    const node = findBranchTreeFocusElement(stage);
+    const primary = node?.querySelector(".branchTreeNodePrimary");
+    if (isSessionOverlayFocusTarget(primary)) return primary;
+    return findSessionOverlayFocusTarget(branchOverlayRootEl, "branch:header:close");
+  }
+
+  function renderBranchOverlay() {
+    if (!(branchOverlayRootEl instanceof HTMLElement) || !branchNavigation || !branchOverlayOpen) return;
+    closeBranchOccurrenceMenu();
+    syncSessionOverlayDocumentKeydown();
+    cancelSessionOverlayBackdropFocus();
+    const restoreViewportAnchor = captureBranchTreeViewportAnchor();
+    rememberBranchTreeViewport();
+    cancelBranchOverlayResize(true);
+    const restoreScrollLeft = branchTreeScrollLeft;
+    const restoreScrollTop = branchTreeScrollTop;
+    branchOverlayFocusKey =
+      getSessionOverlayFocusKey(branchOverlayRootEl) || branchOverlayFocusKey;
+    const restoreFocusKey = branchOverlayFocusKey;
+    const overlay = branchNavigation.overlay;
+    const titleText = overlay.title || getSafeUiText(i18n.branchUntitled, "Untitled session");
+    const animateEntry = branchOverlayRootEl.dataset.branchOverlayEnter === "true";
+    delete branchOverlayRootEl.dataset.branchOverlayEnter;
+    branchOverlayRootEl.hidden = false;
+    branchOverlayRootEl.replaceChildren();
+    branchOverlayRootEl.setAttribute("role", "dialog");
+    branchOverlayRootEl.setAttribute("aria-modal", "true");
+    branchOverlayRootEl.setAttribute("aria-label", titleText);
+    branchOverlayRootEl.onpointerdown = handleBranchOverlayBackdropPointerdown;
+    branchOverlayRootEl.onfocusin = handleBranchOverlayFocusIn;
+    document.body.classList.add("branchOverlayOpen");
+    if (scrollRootEl instanceof HTMLElement) scrollRootEl.inert = true;
+    if (toolbarEl instanceof HTMLElement) toolbarEl.inert = true;
+
+    const surface = el("section", {
+      className: animateEntry ? "branchOverlaySurface entering" : "branchOverlaySurface",
+    });
+    applyBranchOverlayWidth(surface);
+    const resizeHandle = el("div", { className: "branchOverlayResizeHandle" });
+    resizeHandle.setAttribute("aria-hidden", "true");
+    attachBranchOverlayResize(resizeHandle, surface);
+    surface.appendChild(resizeHandle);
+    const header = el("header", { className: "branchOverlayHeader" });
+    const heading = el("div", { className: "branchOverlayHeading" });
+    const title = el("h2", {});
+    title.textContent = titleText;
+    title.title = titleText;
+    const summary = el("span", { className: "branchOverlaySummary" });
+    summary.dataset.branchTreeSummary = "true";
+    summary.textContent = formatBranchTreeSummary(overlay);
+    heading.append(title, summary);
+    if (overlay.relationPartial || overlay.navigationIncomplete) {
+      const warning = el("span", { className: "branchOverlayWarning", role: "status" });
+      warning.textContent = getSafeUiText(i18n.branchPartialWarning, "Some branch information could not be resolved.");
+      warning.title = warning.textContent;
+      heading.appendChild(warning);
+    }
+
+    const actions = el("div", { className: "branchOverlayActions" });
+    const current = createBranchIconButton(BRANCH_CENTER_ICON_SVG, getSafeUiText(i18n.branchShowCurrent, "Center current history"), () => centerCurrentBranchTreeNode(true));
+    const fit = createBranchIconButton(BRANCH_FIT_ICON_SVG, getSafeUiText(i18n.branchFit, "Fit tree to view"), () => fitBranchTreeToViewport(false));
+    const zoomOut = createBranchIconButton(BRANCH_ZOOM_OUT_ICON_SVG, getSafeUiText(i18n.branchZoomOut, "Zoom out"), () => setBranchTreeScale(branchTreeScale - 0.25));
+    zoomOut.disabled = branchTreeScale <= 0.25;
+    const zoomIn = createBranchIconButton(BRANCH_ZOOM_IN_ICON_SVG, getSafeUiText(i18n.branchZoomIn, "Zoom in"), () => setBranchTreeScale(branchTreeScale + 0.25));
+    zoomIn.disabled = branchTreeScale >= 2;
+    const close = createBranchIconButton(CLOSE_ICON_SVG, getSafeUiText(i18n.branchCloseOverlay, "Close branch tree"), () => closeBranchOverlay());
+    setSessionOverlayFocusKey(current, "branch:header:current");
+    setSessionOverlayFocusKey(fit, "branch:header:fit");
+    setSessionOverlayFocusKey(zoomOut, "branch:header:zoom-out");
+    setSessionOverlayFocusKey(zoomIn, "branch:header:zoom-in");
+    setSessionOverlayFocusKey(close, "branch:header:close");
+    actions.append(current, fit, zoomOut, zoomIn, close);
+    header.append(heading, actions);
+    surface.appendChild(header);
+
+    const viewport = el("div", {
+      className: "branchTreeViewport",
+      tabIndex: 0,
+      role: "region",
+      ariaLabel: titleText + " ・ " + formatBranchTreeSummary(overlay),
+    });
+    setSessionOverlayFocusKey(viewport, "branch:viewport");
+    const scaler = el("div", { className: "branchTreeScaler" });
+    const stage = el("div", { className: "branchTreeStage" });
+    const graph = buildBranchTreeGraph(overlay);
+    if (graph.nodes.length === 0) {
+      const empty = el("p", { className: "branchOverlayState" });
+      empty.textContent = getSafeUiText(i18n.branchNone, "No branches were found for this session.");
+      viewport.appendChild(empty);
+    } else {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.classList.add("branchTreeConnectors");
+      svg.setAttribute("aria-hidden", "true");
+      const nodeLayer = el("div", { className: "branchTreeNodeLayer" });
+      for (const node of graph.nodes) nodeLayer.appendChild(renderBranchTreeNode(node));
+      stage.append(svg, nodeLayer);
+      scaler.appendChild(stage);
+      viewport.appendChild(scaler);
+    }
+    viewport.addEventListener("scroll", () => {
+      branchTreeScrollLeft = viewport.scrollLeft;
+      branchTreeScrollTop = viewport.scrollTop;
+    }, { passive: true });
+    attachBranchTreePan(viewport);
+    surface.appendChild(viewport);
+    branchOverlayRootEl.appendChild(surface);
+    if (!branchTreeNeedsInitialFit) {
+      viewport.scrollLeft = restoreScrollLeft;
+      viewport.scrollTop = restoreScrollTop;
+      branchTreeScrollLeft = viewport.scrollLeft;
+      branchTreeScrollTop = viewport.scrollTop;
+    }
+    branchOverlayRootEl.onkeydown = handleBranchOverlayKeydown;
+    updateToolbar();
+    updateBranchControlDisabledState();
+
+    if (graph.nodes.length > 0) {
+      if (branchTreeRenderFrame) cancelAnimationFrame(branchTreeRenderFrame);
+      branchTreeRenderFrame = requestAnimationFrame(() => {
+        branchTreeRenderFrame = 0;
+        layoutBranchTree(viewport, scaler, stage, graph);
+        if (branchTreeNeedsInitialFit) {
+          branchTreeNeedsInitialFit = false;
+          fitBranchTreeToViewport(true);
+          centerCurrentBranchTreeNode(false);
+        } else {
+          if (!restoreBranchTreeViewportAnchor(viewport, stage, restoreViewportAnchor)) {
+            viewport.scrollLeft = restoreScrollLeft;
+            viewport.scrollTop = restoreScrollTop;
+          }
+          branchTreeScrollLeft = viewport.scrollLeft;
+          branchTreeScrollTop = viewport.scrollTop;
+        }
+        restoreSessionOverlayFocus(
+          branchOverlayRootEl,
+          restoreFocusKey,
+          findBranchOverlayFallbackFocus,
+        );
+      });
+    } else {
+      requestAnimationFrame(() => {
+        restoreSessionOverlayFocus(
+          branchOverlayRootEl,
+          restoreFocusKey,
+          findBranchOverlayFallbackFocus,
+        );
+      });
+    }
+  }
+
+  function buildBranchTreeGraph(overlay) {
+    const nodes = [];
+    const nodeById = new Map();
+    const loadedGroupById = new Map(overlay.groups.map((group) => [group.id, group]));
+    const childrenByOwner = new Map();
+    for (const group of overlay.groups) {
+      if (!group.parentGroupId || !group.parentChoiceId) continue;
+      const key = group.parentGroupId + ":" + group.parentChoiceId;
+      const children = childrenByOwner.get(key) || [];
+      children.push(group);
+      childrenByOwner.set(key, children);
+    }
+    const renderedGroups = new Set();
+    let currentNodeId = "";
+
+    const addNode = (node) => {
+      if (!node || !node.id || nodeById.has(node.id) || nodes.length >= MAX_BRANCH_OVERLAY_CARDS) return "";
+      nodes.push(node);
+      nodeById.set(node.id, node);
+      if (node.current && !currentNodeId) currentNodeId = node.id;
+      return node.id;
+    };
+
+    const addCollapsed = (id, parentId, count, cursor, pageKind, group) => addNode({
+      id,
+      parentId,
+      kind: "collapsed",
+      label: pageKind === "group"
+        ? formatTemplate(getSafeUiText(i18n.branchCollapsedPoints, "{0} more branch points"), count)
+        : formatTemplate(getSafeUiText(i18n.branchCollapsedChoices, "{0} more histories"), count),
+      preview: "",
+      current: false,
+      collapsedCount: count,
+      cursor,
+      pageKind,
+      group,
+    });
+
+    const buildGroup = (group, attachedParentId) => {
+      if (!group || renderedGroups.has(group.id) || nodes.length >= MAX_BRANCH_OVERLAY_CARDS) return;
+      renderedGroups.add(group.id);
+      const primaryChoice = group.choices.find((choice) => choice.choiceIndex === group.currentChoiceIndex) || group.choices[0];
+      const primaryOccurrence = primaryChoice && primaryChoice.occurrences[0];
+      let parentId = attachedParentId || "";
+      const firstAnchor = group.commonRange && group.commonRange.first ? group.commonRange.first : primaryOccurrence && primaryOccurrence.historyFirst;
+      const beforeAnchor = group.commonRange && group.commonRange.last ? group.commonRange.last : primaryOccurrence && primaryOccurrence.preBranch;
+      const startsAtHistoryFirst = Boolean(
+        !attachedParentId &&
+        firstAnchor &&
+        primaryOccurrence &&
+        !primaryOccurrence.preBranch &&
+        anchorsMatch(firstAnchor, primaryOccurrence.branchStart),
+      );
+      if (!attachedParentId) {
+        if (firstAnchor && !startsAtHistoryFirst) {
+          const combinedWithBefore = anchorsMatch(firstAnchor, beforeAnchor);
+          const firstId = "history-first:" + group.id;
+          parentId = addNode({
+            id: firstId,
+            parentId: "",
+            kind: "historyFirst",
+            label: combinedWithBefore
+              ? getSafeUiText(i18n.branchHistoryStartAndBefore, "History start and before branch")
+              : getSafeUiText(i18n.branchHistoryStart, "History start"),
+            anchor: firstAnchor,
+            preview: firstAnchor.preview || "",
+            current: false,
+            group,
+            choice: primaryChoice,
+            targetKind: combinedWithBefore ? "preBranch" : "historyFirst",
+          }) || parentId;
+        }
+      }
+
+      if (beforeAnchor && (!parentId || !anchorsMatch(beforeAnchor, nodeById.get(parentId) && nodeById.get(parentId).anchor))) {
+        const beforeId = "before:" + group.id;
+        parentId = addNode({
+          id: beforeId,
+          parentId,
+          kind: "preBranch",
+          label: getSafeUiText(i18n.branchBefore, "Before branch"),
+          anchor: beforeAnchor,
+          preview: beforeAnchor.preview || "",
+          current: false,
+          group,
+          choice: primaryChoice,
+          targetKind: "preBranch",
+        }) || parentId;
+      }
+
+      if (group.previousChoiceCursor) addCollapsed("choice-prev:" + group.id, parentId, group.previousChoiceCount, group.previousChoiceCursor, "choice", group);
+
+      for (const choice of group.choices) {
+        if (nodes.length >= MAX_BRANCH_OVERLAY_CARDS - 2) break;
+        const occurrence = choice.occurrences[0];
+        if (!occurrence) continue;
+        const currentChoice = group.activeLineage && choice.choiceIndex === group.currentChoiceIndex;
+        const nestedGroups = childrenByOwner.get(group.id + ":" + choice.id) || [];
+        const combined = anchorsMatch(occurrence.branchStart, occurrence.historyEnd);
+        const branchedFromStart = !occurrence.preBranch && anchorsMatch(occurrence.historyFirst, occurrence.branchStart);
+        const routeBeforeAnchor = occurrence.preBranch && !anchorsMatchExactly(occurrence.preBranch, beforeAnchor)
+          ? occurrence.preBranch
+          : null;
+        const startId = "branch-start:" + group.id + ":" + choice.id;
+        const startLabel = getSafeUiText(i18n.branchDestination, "Branch destination");
+        const effectiveStartId = addNode({
+          id: startId,
+          parentId,
+          kind: combined ? "branchStartEnd" : "branchStart",
+          label: [
+            branchedFromStart ? getSafeUiText(i18n.branchFromStart, "Branched from history start") : "",
+            startLabel,
+            combined ? getSafeUiText(i18n.branchEnd, "History end") : "",
+          ].filter(Boolean).join(" · "),
+          anchor: occurrence.branchStart,
+          preview: choice.preview || occurrence.branchStart.preview || "",
+          beforeAnchor: routeBeforeAnchor,
+          current: currentChoice,
+          group,
+          choice,
+          targetKind: "branchStart",
+        });
+        if (!effectiveStartId) continue;
+
+        for (const nested of nestedGroups) buildGroup(nested, effectiveStartId);
+
+        if (!combined && nestedGroups.length === 0 && occurrence.historyEnd && nodes.length < MAX_BRANCH_OVERLAY_CARDS) {
+          addNode({
+            id: "history-end:" + group.id + ":" + choice.id,
+            parentId: effectiveStartId,
+            kind: "historyEnd",
+            label: getSafeUiText(i18n.branchEnd, "History end"),
+            anchor: occurrence.historyEnd,
+            preview: occurrence.historyEnd.preview || "",
+            current: currentChoice,
+            group,
+            choice,
+            targetKind: "historyEnd",
+          });
+        }
+      }
+
+      if (group.nextChoiceCursor) addCollapsed("choice-next:" + group.id, parentId, group.nextChoiceCount, group.nextChoiceCursor, "choice", group);
+    };
+
+    if (overlay.previousCursor) addCollapsed("group-prev", "", overlay.previousGroupCount, overlay.previousCursor, "group", null);
+    const roots = overlay.groups.filter((group) => !group.parentGroupId || !loadedGroupById.has(group.parentGroupId));
+    for (const group of roots) buildGroup(group, "");
+    for (const group of overlay.groups) {
+      if (!renderedGroups.has(group.id)) buildGroup(group, "");
+    }
+    if (overlay.nextCursor && nodes.length < MAX_BRANCH_OVERLAY_CARDS) addCollapsed("group-next", "", overlay.nextGroupCount, overlay.nextCursor, "group", null);
+
+    const currentPathNodeIds = new Set();
+    for (const currentNode of nodes.filter((node) => node.current)) {
+      let cursor = currentNode;
+      const visited = new Set();
+      while (cursor && !visited.has(cursor.id)) {
+        visited.add(cursor.id);
+        currentPathNodeIds.add(cursor.id);
+        cursor = cursor.parentId ? nodeById.get(cursor.parentId) : null;
+      }
+    }
+    for (const node of nodes) node.currentPath = currentPathNodeIds.has(node.id);
+
+    return { nodes, nodeById, currentNodeId };
+  }
+
+  function renderBranchTreeNode(node) {
+    const expanded = expandedBranchPreviewKeys.has(node.id);
+    const card = el("article", {
+      className: "branchTreeNode branchTreeNode-" + node.kind
+        + (node.currentPath ? " currentPath" : "")
+        + (node.current ? " current" : "")
+        + (expanded ? " previewExpanded" : ""),
+    });
+    card.dataset.branchTreeNodeId = node.id;
+    if (node.parentId) card.dataset.branchTreeParentId = node.parentId;
+    if (node.current) card.setAttribute("aria-current", "true");
+
+    const primary = el("button", { type: "button", className: "branchTreeNodePrimary" });
+    setSessionOverlayFocusKey(primary, "branch:node:" + node.id + ":primary");
+    const badges = el("span", { className: "branchTreeNodeBadges" });
+    const marker = el("span", { className: "branchTreeNodeMarker" });
+    marker.textContent = node.label;
+    badges.appendChild(marker);
+    if (node.current) {
+      const current = el("span", { className: "branchTreeNodeState" });
+      current.textContent = getSafeUiText(i18n.branchCurrent, "Current history");
+      badges.appendChild(current);
+    }
+    primary.appendChild(badges);
+    if (node.anchor) {
+      const anchor = el("span", { className: "branchTreeNodeAnchor" });
+      const anchorText = formatBranchAnchor(node.anchor);
+      anchor.textContent = anchorText;
+      anchor.title = anchorText;
+      primary.appendChild(anchor);
+    }
+    if (node.preview) {
+      const preview = el("span", { className: "branchTreeNodePreview" });
+      preview.textContent = node.preview;
+      primary.appendChild(preview);
+    }
+    if (node.beforeAnchor && !anchorsMatch(node.beforeAnchor, node.anchor)) {
+      const before = el("span", { className: "branchTreeNodeBefore" });
+      const beforeText = getSafeUiText(i18n.branchBefore, "Before branch") + " · " + formatBranchAnchor(node.beforeAnchor);
+      before.textContent = beforeText;
+      before.title = beforeText;
+      primary.appendChild(before);
+    }
+
+    if (node.kind === "collapsed") {
+      primary.dataset.branchTreeCursorAvailable = String(Boolean(node.cursor));
+      primary.disabled = branchOverlayPagePending || !node.cursor;
+      primary.addEventListener("click", () => {
+        if (node.pageKind === "choice" && node.group) requestBranchTreeChoicePage(node.group, node.cursor);
+        else requestBranchTreePage(node.cursor);
+      });
+    } else {
+      primary.disabled = !node.preview;
+      if (node.preview) primary.setAttribute("aria-expanded", String(expanded));
+      primary.addEventListener("click", () => {
+        branchTreeFocusNodeId = node.id;
+        toggleBranchTreeNodePreview(node);
+      });
+    }
+    primary.addEventListener("focus", () => { branchTreeFocusNodeId = node.id; });
+    card.appendChild(primary);
+
+    const actions = el("div", { className: "branchTreeNodeActions" });
+    if (node.kind !== "collapsed" && shouldShowBranchPreviewToggle(node.preview)) {
+      const expand = createBranchIconButton(
+        expanded ? NAV_UP_ICON_SVG : NAV_DOWN_ICON_SVG,
+        expanded ? getSafeUiText(i18n.branchCollapsePreview, "Collapse preview") : getSafeUiText(i18n.branchExpandPreview, "Expand preview"),
+        () => {
+          branchTreeFocusNodeId = node.id;
+          toggleBranchTreeNodePreview(node);
+        },
+        "branchTreePreviewButton branchIconButton",
+      );
+      expand.dataset.branchPreviewToggle = "true";
+      setSessionOverlayFocusKey(expand, "branch:node:" + node.id + ":preview");
+      expand.hidden = !expanded;
+      expand.addEventListener("focus", () => { branchTreeFocusNodeId = node.id; });
+      actions.appendChild(expand);
+    }
+    if (node.kind !== "collapsed" && node.group && node.choice) {
+      const navigateLabel = [
+        getSafeUiText(i18n.branchOpenInChat, "Open this position in the session view"),
+        node.label,
+        node.current ? getSafeUiText(i18n.branchCurrent, "Current history") : "",
+        node.anchor ? formatBranchAnchor(node.anchor) : "",
+      ].filter(Boolean).join(" · ");
+      const navigate = createBranchIconButton(
+        PATCH_JUMP_ICON_SVG,
+        navigateLabel,
+        () => {
+          branchTreeFocusNodeId = node.id;
+          requestBranchChoice(node.group, node.choice, "direct", navigate, node.targetKind);
+        },
+        "branchTreeNavigateButton branchIconButton",
+      );
+      setSessionOverlayFocusKey(navigate, "branch:node:" + node.id + ":navigate");
+      navigate.disabled = branchSwitchPending || branchOverlayPagePending;
+      navigate.addEventListener("focus", () => { branchTreeFocusNodeId = node.id; });
+      actions.appendChild(navigate);
+    }
+    if (actions.childElementCount > 0) card.appendChild(actions);
+
+    const actionLabel = node.kind === "collapsed"
+      ? node.label
+      : expanded
+        ? getSafeUiText(i18n.branchCollapsePreview, "Collapse preview")
+        : getSafeUiText(i18n.branchExpandPreview, "Expand preview");
+    primary.setAttribute("aria-label", [
+      actionLabel,
+      node.label,
+      node.current ? getSafeUiText(i18n.branchCurrent, "Current history") : "",
+      node.anchor ? formatBranchAnchor(node.anchor) : "",
+      node.preview || "",
+      ].filter(Boolean).join(" ・ "));
+    return card;
+  }
+
+  function toggleBranchTreeNodePreview(node) {
+    if (!node?.preview) return;
+    rememberBranchTreeViewport();
+    if (expandedBranchPreviewKeys.has(node.id)) expandedBranchPreviewKeys.delete(node.id);
+    else expandedBranchPreviewKeys.add(node.id);
+    renderBranchOverlay();
+  }
+
+  function attachBranchTreePan(viewport) {
+    if (!(viewport instanceof HTMLElement)) return;
+    let pan = null;
+    let suppressNextClick = false;
+
+    const finishPan = (event, suppressClick) => {
+      if (!pan || (event && event.pointerId !== pan.pointerId)) return;
+      const pointerId = pan.pointerId;
+      const dragged = pan.dragging;
+      pan = null;
+      viewport.classList.remove("panning");
+      if (viewport.hasPointerCapture(pointerId)) viewport.releasePointerCapture(pointerId);
+      if (!dragged) return;
+      rememberBranchTreeViewport();
+      persistBranchOverlayState();
+      if (suppressClick) {
+        suppressNextClick = true;
+        setTimeout(() => { suppressNextClick = false; }, 0);
+      }
+    };
+
+    viewport.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.isPrimary === false) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest(".branchTreeNodeActions, .branchOverlayActions")) return;
+      const rect = viewport.getBoundingClientRect();
+      if (event.clientX - rect.left >= viewport.clientWidth || event.clientY - rect.top >= viewport.clientHeight) return;
+      pan = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startScrollLeft: viewport.scrollLeft,
+        startScrollTop: viewport.scrollTop,
+        dragging: false,
+      };
+    });
+
+    viewport.addEventListener("pointermove", (event) => {
+      if (!pan || event.pointerId !== pan.pointerId) return;
+      const deltaX = event.clientX - pan.startX;
+      const deltaY = event.clientY - pan.startY;
+      if (!pan.dragging && Math.hypot(deltaX, deltaY) < BRANCH_TREE_PAN_THRESHOLD_PX) return;
+      if (!pan.dragging) {
+        pan.dragging = true;
+        viewport.classList.add("panning");
+        viewport.setPointerCapture(event.pointerId);
+        closeBranchOccurrenceMenu();
+      }
+      event.preventDefault();
+      viewport.scrollLeft = pan.startScrollLeft - deltaX;
+      viewport.scrollTop = pan.startScrollTop - deltaY;
+    });
+
+    viewport.addEventListener("pointerup", (event) => finishPan(event, true));
+    viewport.addEventListener("pointercancel", (event) => finishPan(event, false));
+    viewport.addEventListener("lostpointercapture", (event) => finishPan(event, false));
+    viewport.addEventListener("pointerleave", (event) => {
+      if (pan && !pan.dragging && event.pointerId === pan.pointerId) pan = null;
+    });
+    viewport.addEventListener("click", (event) => {
+      if (!suppressNextClick) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      suppressNextClick = false;
+    }, true);
+  }
+
+  function shouldShowBranchPreviewToggle(preview) {
+    return String(preview || "").trim().length > 0;
+  }
+
+  function anchorsMatch(left, right) {
+    return Boolean(left && right && left.role === right.role && left.chatMessageIndex === right.chatMessageIndex);
+  }
+
+  function anchorsMatchExactly(left, right) {
+    return anchorsMatch(left, right) && (left.timestampIso || "") === (right.timestampIso || "");
+  }
+
+  function layoutBranchTree(viewport, scaler, stage, graph) {
+    const elements = new Map();
+    for (const element of stage.querySelectorAll("[data-branch-tree-node-id]")) {
+      if (element instanceof HTMLElement) elements.set(element.dataset.branchTreeNodeId || "", element);
+    }
+    updateBranchPreviewToggleVisibility(stage);
+    const childrenByParent = new Map();
+    for (const node of graph.nodes) {
+      if (!node.parentId || !graph.nodeById.has(node.parentId)) continue;
+      const children = childrenByParent.get(node.parentId) || [];
+      children.push(node.id);
+      childrenByParent.set(node.parentId, children);
+    }
+    const roots = graph.nodes.filter((node) => !node.parentId || !graph.nodeById.has(node.parentId));
+    const depthById = new Map();
+    const resolving = new Set();
+    const resolveDepth = (node) => {
+      if (!node || !node.parentId || !graph.nodeById.has(node.parentId)) return 0;
+      const cached = depthById.get(node.id);
+      if (cached !== undefined) return cached;
+      if (resolving.has(node.id)) return 0;
+      resolving.add(node.id);
+      const depth = Math.min(100, resolveDepth(graph.nodeById.get(node.parentId)) + 1);
+      resolving.delete(node.id);
+      depthById.set(node.id, depth);
+      return depth;
+    };
+    for (const node of graph.nodes) depthById.set(node.id, resolveDepth(node));
+
+    const rowHeightByDepth = new Map();
+    for (const node of graph.nodes) {
+      const element = elements.get(node.id);
+      const depth = depthById.get(node.id) || 0;
+      rowHeightByDepth.set(depth, Math.max(rowHeightByDepth.get(depth) || 0, element?.offsetHeight || 90));
+    }
+    const yByDepth = new Map();
+    let nextY = 28;
+    const maxDepth = Math.max(0, ...Array.from(depthById.values()));
+    for (let depth = 0; depth <= maxDepth; depth += 1) {
+      yByDepth.set(depth, nextY);
+      nextY += (rowHeightByDepth.get(depth) || 90) + 76;
+    }
+
+    const positionById = new Map();
+    let leafX = 28;
+    const placing = new Set();
+    const place = (nodeId) => {
+      const known = positionById.get(nodeId);
+      if (known) return known;
+      const element = elements.get(nodeId);
+      const width = element?.offsetWidth || 260;
+      const childIds = childrenByParent.get(nodeId) || [];
+      let center;
+      if (childIds.length === 0 || placing.has(nodeId)) {
+        center = leafX + width / 2;
+        leafX += width + 48;
+      } else {
+        placing.add(nodeId);
+        const childCenters = childIds.map((childId) => place(childId).center);
+        placing.delete(nodeId);
+        center = (childCenters[0] + childCenters[childCenters.length - 1]) / 2;
+      }
+      const depth = depthById.get(nodeId) || 0;
+      const position = { x: Math.max(20, center - width / 2), y: yByDepth.get(depth) || 28, width, center };
+      positionById.set(nodeId, position);
+      return position;
+    };
+    for (const root of roots) place(root.id);
+
+    let stageWidth = 320;
+    let stageHeight = nextY + 24;
+    for (const node of graph.nodes) {
+      const element = elements.get(node.id);
+      const position = positionById.get(node.id);
+      if (!element || !position) continue;
+      element.style.left = position.x + "px";
+      element.style.top = position.y + "px";
+      stageWidth = Math.max(stageWidth, position.x + element.offsetWidth + 28);
+      stageHeight = Math.max(stageHeight, position.y + element.offsetHeight + 28);
+    }
+    stage.dataset.branchTreeWidth = String(Math.ceil(stageWidth));
+    stage.dataset.branchTreeHeight = String(Math.ceil(stageHeight));
+    stage.style.width = stageWidth + "px";
+    stage.style.height = stageHeight + "px";
+
+    const svg = stage.querySelector(".branchTreeConnectors");
+    if (svg instanceof SVGElement) {
+      svg.replaceChildren();
+      svg.setAttribute("viewBox", "0 0 " + stageWidth + " " + stageHeight);
+      svg.setAttribute("width", String(stageWidth));
+      svg.setAttribute("height", String(stageHeight));
+      const appendConnector = (pathData, segment, current) => {
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.setAttribute("d", pathData);
+        path.classList.add("branchTreeConnector", "branchTreeConnector-" + segment);
+        if (current) path.classList.add("current");
+        svg.appendChild(path);
+      };
+      for (const [parentId, childIds] of childrenByParent) {
+        const parentElement = elements.get(parentId);
+        const parent = positionById.get(parentId);
+        const parentNode = graph.nodeById.get(parentId);
+        if (!parentElement || !parent || !parentNode) continue;
+        const fromX = parent.x + parentElement.offsetWidth / 2;
+        const fromY = parent.y + parentElement.offsetHeight;
+        const childTop = Math.min(...childIds.map((childId) => positionById.get(childId)?.y ?? Number.POSITIVE_INFINITY));
+        if (!Number.isFinite(childTop)) continue;
+        const junctionY = fromY + Math.max(24, (childTop - fromY) / 2);
+
+        if (childIds.length > 1) {
+          appendConnector("M " + fromX + " " + fromY + " V " + junctionY, "trunk", parentNode.currentPath);
+        }
+
+        for (const childId of childIds) {
+          const childElement = elements.get(childId);
+          const child = positionById.get(childId);
+          const childNode = graph.nodeById.get(childId);
+          if (!childElement || !child || !childNode) continue;
+          const toX = child.x + childElement.offsetWidth / 2;
+          const toY = child.y;
+          const pathData = childIds.length > 1
+            ? "M " + fromX + " " + junctionY + " H " + toX + " V " + toY
+            : "M " + fromX + " " + fromY + " V " + junctionY + " H " + toX + " V " + toY;
+          appendConnector(pathData, childIds.length > 1 ? "branch" : "direct", childNode.currentPath);
+        }
+
+        if (childIds.length < 2) continue;
+        const junction = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+        junction.setAttribute("cx", String(parent.x + parentElement.offsetWidth / 2));
+        junction.setAttribute("cy", String(junctionY));
+        junction.setAttribute("r", "3.5");
+        junction.classList.add("branchTreeJunction");
+        if (parentNode.currentPath) junction.classList.add("current");
+        svg.appendChild(junction);
+      }
+    }
+    applyBranchTreeScale(viewport, scaler, stage);
+  }
+
+  function updateBranchPreviewToggleVisibility(stage) {
+    for (const card of stage.querySelectorAll(".branchTreeNode")) {
+      if (!(card instanceof HTMLElement)) continue;
+      const preview = card.querySelector(".branchTreeNodePreview");
+      const button = card.querySelector("[data-branch-preview-toggle]");
+      if (!(preview instanceof HTMLElement) || !(button instanceof HTMLButtonElement)) continue;
+      const expanded = card.classList.contains("previewExpanded");
+      button.hidden = !expanded && preview.scrollHeight <= preview.clientHeight + 1;
+    }
+  }
+
+  function applyBranchTreeScale(viewport, scaler, stage) {
+    const width = Math.max(1, Number(stage.dataset.branchTreeWidth) || stage.offsetWidth || 1);
+    const height = Math.max(1, Number(stage.dataset.branchTreeHeight) || stage.offsetHeight || 1);
+    stage.style.transform = "scale(" + branchTreeScale + ")";
+    scaler.style.width = Math.ceil(width * branchTreeScale) + "px";
+    scaler.style.height = Math.ceil(height * branchTreeScale) + "px";
+    updateBranchTreeSummary();
+    if (viewport instanceof HTMLElement) {
+      branchTreeScrollLeft = viewport.scrollLeft;
+      branchTreeScrollTop = viewport.scrollTop;
+    }
+  }
+
+  function scheduleBranchTreeRelayout() {
+    if (!branchOverlayOpen || !(branchOverlayRootEl instanceof HTMLElement)) return;
+    if (branchTreeRenderFrame) cancelAnimationFrame(branchTreeRenderFrame);
+    branchTreeRenderFrame = requestAnimationFrame(() => {
+      branchTreeRenderFrame = 0;
+      renderBranchOverlay();
+    });
+  }
+
+  function setBranchTreeScale(value) {
+    const viewport = document.querySelector(".branchTreeViewport");
+    const scaler = document.querySelector(".branchTreeScaler");
+    const stage = document.querySelector(".branchTreeStage");
+    if (!(viewport instanceof HTMLElement) || !(scaler instanceof HTMLElement) || !(stage instanceof HTMLElement)) return;
+    const next = normalizeBranchTreeScale(value);
+    if (next === branchTreeScale) return;
+    const previousScale = Math.max(0.01, branchTreeScale);
+    const viewportCenterX = viewport.clientWidth / 2;
+    const viewportCenterY = viewport.clientHeight / 2;
+    const logicalCenterX = (viewport.scrollLeft + viewportCenterX) / previousScale;
+    const logicalCenterY = (viewport.scrollTop + viewportCenterY) / previousScale;
+    branchTreeScale = next;
+    applyBranchTreeScale(viewport, scaler, stage);
+    viewport.scrollLeft = Math.max(0, logicalCenterX * branchTreeScale - viewportCenterX);
+    viewport.scrollTop = Math.max(0, logicalCenterY * branchTreeScale - viewportCenterY);
+    branchTreeScrollLeft = viewport.scrollLeft;
+    branchTreeScrollTop = viewport.scrollTop;
+    persistBranchOverlayState();
+    renderBranchOverlayActionsDisabledState();
+  }
+
+  function fitBranchTreeToViewport(initial) {
+    const viewport = document.querySelector(".branchTreeViewport");
+    const scaler = document.querySelector(".branchTreeScaler");
+    const stage = document.querySelector(".branchTreeStage");
+    if (!(viewport instanceof HTMLElement) || !(scaler instanceof HTMLElement) || !(stage instanceof HTMLElement)) return;
+    const width = Math.max(1, Number(stage.dataset.branchTreeWidth) || stage.offsetWidth || 1);
+    const height = Math.max(1, Number(stage.dataset.branchTreeHeight) || stage.offsetHeight || 1);
+    const horizontal = Math.max(0.01, (viewport.clientWidth - 40) / width);
+    const vertical = Math.max(0.01, (viewport.clientHeight - 40) / height);
+    const minimum = initial ? 0.5 : 0.25;
+    branchTreeScale = Math.min(1, Math.max(minimum, Math.min(horizontal, vertical)));
+    applyBranchTreeScale(viewport, scaler, stage);
+    viewport.scrollLeft = Math.max(0, (width * branchTreeScale - viewport.clientWidth) / 2);
+    viewport.scrollTop = 0;
+    branchTreeScrollLeft = viewport.scrollLeft;
+    branchTreeScrollTop = viewport.scrollTop;
+    persistBranchOverlayState();
+    renderBranchOverlayActionsDisabledState();
+  }
+
+  function centerCurrentBranchTreeNode(smooth) {
+    const viewport = document.querySelector(".branchTreeViewport");
+    const stage = document.querySelector(".branchTreeStage");
+    if (!(viewport instanceof HTMLElement) || !(stage instanceof HTMLElement)) return;
+    const current = findCurrentBranchTreeNode(stage);
+    if (!(current instanceof HTMLElement)) return;
+    const behavior = smooth && !window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto";
+    viewport.scrollTo({
+      left: Math.max(0, (current.offsetLeft + current.offsetWidth / 2) * branchTreeScale - viewport.clientWidth / 2),
+      top: Math.max(0, (current.offsetTop + current.offsetHeight / 2) * branchTreeScale - viewport.clientHeight / 2),
+      behavior,
+    });
+    branchTreeFocusNodeId = current.dataset.branchTreeNodeId || branchTreeFocusNodeId;
+    if (smooth) {
+      current.classList.remove("located");
+      requestAnimationFrame(() => {
+        if (!current.isConnected) return;
+        current.classList.add("located");
+        setTimeout(() => current.classList.remove("located"), 900);
+      });
+    }
+  }
+
+  function findBranchTreeFocusElement(stage) {
+    if (!(stage instanceof HTMLElement)) return null;
+    if (branchTreeFocusNodeId) {
+      const focused = stage.querySelector('[data-branch-tree-node-id="' + cssEscape(branchTreeFocusNodeId) + '"]');
+      if (focused instanceof HTMLElement) return focused;
+    }
+    return findCurrentBranchTreeNode(stage);
+  }
+
+  function findCurrentBranchTreeNode(stage) {
+    if (!(stage instanceof HTMLElement)) return null;
+    const currentGroup = branchNavigation?.overlay.groups.find((group) => group.id === branchNavigation.overlay.currentGroupId);
+    const currentChoice = currentGroup?.choices.find((choice) => choice.choiceIndex === currentGroup.currentChoiceIndex);
+    if (currentGroup && currentChoice) {
+      const nodeId = "branch-start:" + currentGroup.id + ":" + currentChoice.id;
+      const node = stage.querySelector('[data-branch-tree-node-id="' + cssEscape(nodeId) + '"]');
+      if (node instanceof HTMLElement) return node;
+    }
+    const current = stage.querySelector(".branchTreeNode.current");
+    return current instanceof HTMLElement ? current : null;
+  }
+
+  function renderBranchOverlayActionsDisabledState() {
+    const actions = document.querySelector(".branchOverlayActions");
+    if (!(actions instanceof HTMLElement)) return;
+    const buttons = actions.querySelectorAll("button");
+    if (buttons[2] instanceof HTMLButtonElement) buttons[2].disabled = branchTreeScale <= 0.25;
+    if (buttons[3] instanceof HTMLButtonElement) buttons[3].disabled = branchTreeScale >= 2;
+  }
+
+  function updateBranchTreeSummary() {
+    if (!branchNavigation) return;
+    const text = formatBranchTreeSummary(branchNavigation.overlay);
+    const summary = document.querySelector("[data-branch-tree-summary]");
+    if (summary instanceof HTMLElement) summary.textContent = text;
+    const viewport = document.querySelector(".branchTreeViewport");
+    if (viewport instanceof HTMLElement) {
+      const title = branchNavigation.overlay.title || getSafeUiText(i18n.branchUntitled, "Untitled session");
+      viewport.setAttribute("aria-label", title + " ・ " + text);
+    }
+  }
+
+  function formatBranchTreeSummary(overlay) {
+    return formatTemplate(
+      getSafeUiText(i18n.branchOverlaySummary, "{0} branch points · {1} histories · {2}%"),
+      overlay.totalGroupCount,
+      overlay.routeCount,
+      Math.round(branchTreeScale * 100),
+    );
+  }
+
+  function requestBranchTreePage(cursor, groupId = "") {
+    if (branchNavigationPending || !branchNavigation || branchOverlayPagePending || (!cursor && !groupId)) return;
+    branchOverlayPagePending = true;
+    updateBranchControlDisabledState();
+    vscode.postMessage({ type: "requestClaudeBranchTreePage", generation: branchNavigation.generation, cursor, groupId });
+  }
+
+  function requestBranchTreeChoicePage(group, cursor) {
+    if (branchNavigationPending || !branchNavigation || branchOverlayPagePending || !group || !cursor) return;
+    branchOverlayPagePending = true;
+    updateBranchControlDisabledState();
+    vscode.postMessage({
+      type: "requestClaudeBranchTreeChoicePage",
+      generation: branchNavigation.generation,
+      groupId: group.id,
+      cursor,
+    });
+  }
+
+  function formatBranchAnchor(anchor, includeTime = true) {
+    if (!anchor) return "";
+    const roleLabel = anchor.role === "assistant" ? getSafeUiText(i18n.branchRoleAssistant, "assistant") : getSafeUiText(i18n.branchRoleUser, "user");
+    const parts = [roleLabel + " #" + anchor.chatMessageIndex];
+    if (includeTime && anchor.timestampIso) parts.push(formatIsoYmdHms(anchor.timestampIso));
+    return parts.join(" · ");
+  }
+
+  function handleBranchOverlayKeydown(event) {
+    const treeHasFocus = event.target instanceof Element && event.target.closest(".branchTreeViewport");
+    if (treeHasFocus && !isTextInputElement(event.target)) {
+      if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        setBranchTreeScale(branchTreeScale + 0.25);
+        return;
+      }
+      if (event.key === "-") {
+        event.preventDefault();
+        setBranchTreeScale(branchTreeScale - 0.25);
+        return;
+      }
+      if (event.key === "0") {
+        event.preventDefault();
+        setBranchTreeScale(1);
+        return;
+      }
+    }
+    if (event.key !== "Tab" || !(branchOverlayRootEl instanceof HTMLElement)) return;
+    const focusable = Array.from(branchOverlayRootEl.querySelectorAll("button:not(:disabled), [tabindex]:not([tabindex='-1'])"));
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function attachBranchOverlayResize(handle, surface) {
+    if (!(handle instanceof HTMLElement) || !(surface instanceof HTMLElement)) return;
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || branchOverlayResizeState) return;
+      event.preventDefault();
+      event.stopPropagation();
+      branchOverlayResizeState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: surface.getBoundingClientRect().width,
+        handle,
+      };
+      handle.setPointerCapture(event.pointerId);
+      document.body.classList.add("branchOverlayResizing");
+    });
+    handle.addEventListener("pointermove", (event) => {
+      const state = branchOverlayResizeState;
+      if (!state || state.pointerId !== event.pointerId || state.handle !== handle) return;
+      event.preventDefault();
+      branchOverlayWidth = clampBranchOverlayWidth(state.startWidth + (state.startX - event.clientX));
+      applyBranchOverlayWidth(surface);
+    });
+    const finishResize = (event) => {
+      const state = branchOverlayResizeState;
+      if (!state || state.pointerId !== event.pointerId || state.handle !== handle) return;
+      cancelBranchOverlayResize(true);
+    };
+    handle.addEventListener("pointerup", finishResize);
+    handle.addEventListener("pointercancel", finishResize);
+    handle.addEventListener("lostpointercapture", finishResize);
+    handle.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      branchOverlayWidth = null;
+      applyBranchOverlayWidth(surface);
+      persistBranchOverlayState();
+    });
+  }
+
+  function cancelBranchOverlayResize(persist) {
+    const state = branchOverlayResizeState;
+    branchOverlayResizeState = null;
+    document.body.classList.remove("branchOverlayResizing");
+    if (state?.handle instanceof HTMLElement && state.handle.hasPointerCapture(state.pointerId)) {
+      state.handle.releasePointerCapture(state.pointerId);
+    }
+    if (state && persist) persistBranchOverlayState();
+  }
+
+  function applyBranchOverlayWidth(surface = document.querySelector(".branchOverlaySurface")) {
+    if (!(surface instanceof HTMLElement)) return;
+    if (branchOverlayWidth == null) {
+      surface.style.removeProperty("--chv-branch-overlay-width");
+      return;
+    }
+    surface.style.setProperty("--chv-branch-overlay-width", branchOverlayWidth + "px");
+  }
+
+  function normalizeBranchOverlayWidth(value) {
+    const width = Number(value);
+    if (!Number.isFinite(width) || width <= 0) return null;
+    return Math.min(100000, Math.max(MIN_BRANCH_OVERLAY_WIDTH, Math.round(width)));
+  }
+
+  function clampBranchOverlayWidth(value) {
+    const availableWidth = Math.max(1, window.innerWidth - BRANCH_OVERLAY_HORIZONTAL_MARGIN);
+    const minimumWidth = Math.min(MIN_BRANCH_OVERLAY_WIDTH, availableWidth);
+    const width = Number(value);
+    if (!Number.isFinite(width)) return minimumWidth;
+    return Math.max(minimumWidth, Math.min(Math.round(width), availableWidth));
+  }
+
+  function rememberBranchTreeViewport() {
+    const viewport = document.querySelector(".branchTreeViewport");
+    if (!(viewport instanceof HTMLElement)) return;
+    branchTreeScrollLeft = viewport.scrollLeft;
+    branchTreeScrollTop = viewport.scrollTop;
+  }
+
+  function captureBranchTreeViewportAnchor() {
+    const viewport = branchOverlayRootEl?.querySelector(".branchTreeViewport");
+    const stage = branchOverlayRootEl?.querySelector(".branchTreeStage");
+    if (
+      !(viewport instanceof HTMLElement) ||
+      !(stage instanceof HTMLElement) ||
+      viewport.clientWidth < 1 ||
+      viewport.clientHeight < 1
+    ) {
+      return null;
+    }
+    const viewportRect = viewport.getBoundingClientRect();
+    const viewportLeft = viewportRect.left + viewport.clientLeft;
+    const viewportTop = viewportRect.top + viewport.clientTop;
+    const viewportRight = viewportLeft + viewport.clientWidth;
+    const viewportBottom = viewportTop + viewport.clientHeight;
+    const viewportCenterX = viewportLeft + viewport.clientWidth / 2;
+    const viewportCenterY = viewportTop + viewport.clientHeight / 2;
+    let nearest = null;
+    for (const candidate of stage.querySelectorAll("[data-branch-tree-node-id]")) {
+      if (!(candidate instanceof HTMLElement)) continue;
+      const nodeId = candidate.dataset.branchTreeNodeId || "";
+      if (!nodeId || nodeId.length > 512) continue;
+      const rect = candidate.getBoundingClientRect();
+      if (
+        rect.right <= viewportLeft ||
+        rect.left >= viewportRight ||
+        rect.bottom <= viewportTop ||
+        rect.top >= viewportBottom
+      ) {
+        continue;
+      }
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const distanceX = (centerX - viewportCenterX) / viewport.clientWidth;
+      const distanceY = (centerY - viewportCenterY) / viewport.clientHeight;
+      const distance = distanceX * distanceX + distanceY * distanceY;
+      if (!nearest || distance < nearest.distance) {
+        nearest = {
+          nodeId,
+          viewportX: (centerX - viewportLeft) / viewport.clientWidth,
+          viewportY: (centerY - viewportTop) / viewport.clientHeight,
+          distance,
+        };
+      }
+    }
+    if (!nearest) return null;
+    return {
+      nodeId: nearest.nodeId,
+      viewportX: nearest.viewportX,
+      viewportY: nearest.viewportY,
+    };
+  }
+
+  function restoreBranchTreeViewportAnchor(viewport, stage, anchor) {
+    if (
+      !(viewport instanceof HTMLElement) ||
+      !(stage instanceof HTMLElement) ||
+      !anchor ||
+      typeof anchor.nodeId !== "string" ||
+      !anchor.nodeId ||
+      anchor.nodeId.length > 512 ||
+      !Number.isFinite(anchor.viewportX) ||
+      !Number.isFinite(anchor.viewportY) ||
+      Math.abs(anchor.viewportX) > 4 ||
+      Math.abs(anchor.viewportY) > 4 ||
+      viewport.clientWidth < 1 ||
+      viewport.clientHeight < 1
+    ) {
+      return false;
+    }
+    const candidate = stage.querySelector(
+      '[data-branch-tree-node-id="' + cssEscape(anchor.nodeId) + '"]',
+    );
+    if (!(candidate instanceof HTMLElement)) return false;
+    const viewportRect = viewport.getBoundingClientRect();
+    const viewportLeft = viewportRect.left + viewport.clientLeft;
+    const viewportTop = viewportRect.top + viewport.clientTop;
+    const candidateRect = candidate.getBoundingClientRect();
+    const currentCenterX = candidateRect.left + candidateRect.width / 2;
+    const currentCenterY = candidateRect.top + candidateRect.height / 2;
+    const targetCenterX = viewportLeft + viewport.clientWidth * anchor.viewportX;
+    const targetCenterY = viewportTop + viewport.clientHeight * anchor.viewportY;
+    viewport.scrollLeft = Math.max(0, viewport.scrollLeft + currentCenterX - targetCenterX);
+    viewport.scrollTop = Math.max(0, viewport.scrollTop + currentCenterY - targetCenterY);
+    return true;
+  }
+
+  function persistBranchOverlayState() {
+    if (typeof vscode.setState !== "function") return;
+    webviewState = {
+      ...(webviewState && typeof webviewState === "object" ? webviewState : {}),
+      branchOverlayOpen,
+      branchOverlayWidth,
+      branchTreeScale,
+      branchTreeScrollLeft,
+      branchTreeScrollTop,
+    };
+    vscode.setState(webviewState);
+  }
+
+  function normalizeBranchTreeScale(value) {
+    const scale = Number(value);
+    if (!Number.isFinite(scale)) return 1;
+    return Math.min(2, Math.max(0.25, Math.round(scale * 100) / 100));
+  }
+
+  function normalizeBranchTreeScroll(value) {
+    const offset = Number(value);
+    if (!Number.isFinite(offset) || offset < 0) return 0;
+    return Math.min(1000000, Math.floor(offset));
+  }
+
+  function runBranchTransition(direction) {
+    if (!(scrollRootEl instanceof HTMLElement) || !direction) return;
+    scrollRootEl.classList.remove("branchEnterPrevious", "branchEnterNext", "branchEnterDirect");
+    const className = direction === "previous"
+      ? "branchEnterPrevious"
+      : direction === "next"
+        ? "branchEnterNext"
+        : "branchEnterDirect";
+    void scrollRootEl.offsetWidth;
+    scrollRootEl.classList.add(className);
+    setTimeout(() => scrollRootEl.classList.remove(className), 220);
+  }
+
+  function attachBranchSwipe(control, group, previousIndex, nextIndex, previous, next) {
+    let start = null;
+    control.addEventListener("pointerdown", (event) => {
+      if (event.target instanceof Element && event.target.closest("button")) return;
+      start = { x: event.clientX, y: event.clientY, at: performance.now() };
+    });
+    control.addEventListener("pointerup", (event) => {
+      if (!start || branchSwitchPending) return;
+      const dx = event.clientX - start.x;
+      const dy = event.clientY - start.y;
+      const elapsed = Math.max(1, performance.now() - start.at);
+      start = null;
+      if (Math.abs(dx) < 48 || Math.abs(dy) > 30 || Math.abs(dx) / elapsed < 0.18) return;
+      if (dx > 0) requestBranchChoice(group, previousIndex, "previous", previous);
+      else requestBranchChoice(group, nextIndex, "next", next);
+    });
+    control.addEventListener("pointercancel", () => { start = null; });
+  }
+
+  function normalizeBranchTransitionDirection(value) {
+    return value === "previous" || value === "next" || value === "direct" ? value : "";
+  }
+
+  function mergeBranchTreePage(previous, incoming) {
+    if (!previous || !incoming || incoming.groups.length === 0) return incoming;
+    const previousById = new Map(previous.groups.map((group) => [group.id, group]));
+    const requiredIds = new Set();
+    let groupId = incoming.currentGroupId || previous.currentGroupId;
+    while (groupId && !requiredIds.has(groupId)) {
+      requiredIds.add(groupId);
+      groupId = previousById.get(groupId)?.parentGroupId || "";
+    }
+    const incomingIds = new Set(incoming.groups.map((group) => group.id));
+    const retained = previous.groups.filter((group) => requiredIds.has(group.id) && !incomingIds.has(group.id));
+    const groups = [...incoming.groups, ...retained].sort((left, right) => left.groupIndex - right.groupIndex || left.id.localeCompare(right.id));
+    const firstIncomingIndex = Math.min(...incoming.groups.map((group) => group.groupIndex));
+    const lastIncomingIndex = Math.max(...incoming.groups.map((group) => group.groupIndex));
+    const retainedBefore = retained.filter((group) => group.groupIndex < firstIncomingIndex).length;
+    const retainedAfter = retained.filter((group) => group.groupIndex > lastIncomingIndex).length;
+    return {
+      ...incoming,
+      groups,
+      previousGroupCount: Math.max(0, incoming.previousGroupCount - retainedBefore),
+      nextGroupCount: Math.max(0, incoming.nextGroupCount - retainedAfter),
+    };
+  }
+
+  function mergeBranchTreeChoicePage(previous, incoming) {
+    const current = previous.choices.find((choice) => choice.choiceIndex === previous.currentChoiceIndex);
+    if (!current || incoming.choices.length === 0 || incoming.choices.some((choice) => choice.id === current.id)) return incoming;
+    const choices = [...incoming.choices, current].sort((left, right) => left.choiceIndex - right.choiceIndex || left.id.localeCompare(right.id));
+    const firstIncomingIndex = Math.min(...incoming.choices.map((choice) => choice.choiceIndex));
+    const lastIncomingIndex = Math.max(...incoming.choices.map((choice) => choice.choiceIndex));
+    return {
+      ...incoming,
+      choices,
+      previousChoiceCount: Math.max(0, incoming.previousChoiceCount - (current.choiceIndex < firstIncomingIndex ? 1 : 0)),
+      nextChoiceCount: Math.max(0, incoming.nextChoiceCount - (current.choiceIndex > lastIncomingIndex ? 1 : 0)),
+    };
+  }
+
+  function normalizeBranchNavigation(value) {
+    if (!value || typeof value !== "object" || value.version !== 3 || !Array.isArray(value.groups)) return null;
+    const groups = value.groups.slice(0, 500).flatMap((rawGroup) => {
+      const id = sanitizeBranchId(rawGroup && rawGroup.id, 24);
+      const anchor = Number(rawGroup && rawGroup.anchorChatMessageIndex);
+      const choiceCount = Math.max(0, Math.floor(Number(rawGroup && rawGroup.choiceCount) || 0));
+      const choices = Array.isArray(rawGroup && rawGroup.choices)
+        ? rawGroup.choices.slice(0, MAX_BRANCH_CONTROL_CHOICES).flatMap(normalizeBranchChoice)
+        : [];
+      const currentChoiceIndex = Number(rawGroup && rawGroup.currentChoiceIndex);
+      if (!id || !Number.isSafeInteger(anchor) || anchor < 1 || choiceCount < 2 || !Number.isInteger(currentChoiceIndex)) return [];
+      if (currentChoiceIndex < 0 || currentChoiceIndex >= choiceCount) return [];
+      return [{ id, anchorChatMessageIndex: anchor, currentChoiceIndex, choiceCount, choices }];
+    });
+    const overlay = normalizeBranchOverlayPage(value.overlay);
+    if (!overlay) return null;
+    return {
+      version: 3,
+      generation: Number.isSafeInteger(Number(value.generation)) ? Number(value.generation) : 0,
+      groupCount: Math.max(0, Math.floor(Number(value.groupCount) || 0)),
+      groups,
+      overlay,
+    };
+  }
+
+  function getBranchCurrentRouteId(value) {
+    const overlay = value && typeof value === "object" ? value.overlay : null;
+    if (!overlay || !Array.isArray(overlay.groups)) return "";
+    const currentGroupId = typeof overlay.currentGroupId === "string" ? overlay.currentGroupId : "";
+    const group = overlay.groups.find((candidate) => candidate && candidate.id === currentGroupId);
+    if (!group) return currentGroupId;
+    const choice = Array.isArray(group.choices)
+      ? group.choices.find((candidate) => candidate.choiceIndex === group.currentChoiceIndex)
+      : null;
+    const occurrence = Array.isArray(choice?.occurrences)
+      ? choice.occurrences.find((candidate) => candidate.isCurrent) || choice.occurrences[0]
+      : null;
+    return [group.id, choice?.id || "", occurrence?.id || ""].join(":");
+  }
+
+  function normalizeBranchOverlayPage(value) {
+    if (!value || typeof value !== "object" || !Array.isArray(value.groups)) return null;
+    const groups = value.groups.slice(0, 50).flatMap((raw) => {
+      const group = normalizeBranchOverlayGroup(raw);
+      return group ? [group] : [];
+    });
+    return {
+      title: String(value.title || "").slice(0, 512),
+      groups,
+      totalGroupCount: Math.max(0, Math.floor(Number(value.totalGroupCount) || 0)),
+      routeCount: Math.max(0, Math.floor(Number(value.routeCount) || 0)),
+      currentGroupId: sanitizeBranchId(value.currentGroupId, 24),
+      previousCursor: sanitizeBranchCursor(value.previousCursor),
+      nextCursor: sanitizeBranchCursor(value.nextCursor),
+      previousGroupCount: Math.max(0, Math.floor(Number(value.previousGroupCount) || 0)),
+      nextGroupCount: Math.max(0, Math.floor(Number(value.nextGroupCount) || 0)),
+      relationPartial: value.relationPartial === true,
+      navigationIncomplete: value.navigationIncomplete === true,
+    };
+  }
+
+  function normalizeBranchOverlayGroup(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    const id = sanitizeBranchId(raw.id, 24);
+    const choiceCount = Math.max(0, Math.floor(Number(raw.choiceCount) || 0));
+    const currentChoiceIndex = Number(raw.currentChoiceIndex);
+    if (!id || choiceCount < 2 || !Number.isInteger(currentChoiceIndex)) return null;
+    if (currentChoiceIndex < -1 || currentChoiceIndex >= choiceCount) return null;
+    const choices = Array.isArray(raw.choices) ? raw.choices.slice(0, 50).flatMap(normalizeBranchChoice) : [];
+    const commonFirst = normalizeBranchAnchor(raw.commonRange && raw.commonRange.first);
+    const commonLast = normalizeBranchAnchor(raw.commonRange && raw.commonRange.last);
+    return {
+      id,
+      groupIndex: Math.max(0, Math.floor(Number(raw.groupIndex) || 0)),
+      parentGroupId: sanitizeBranchId(raw.parentGroupId, 24),
+      parentChoiceId: sanitizeBranchId(raw.parentChoiceId, 24),
+      choiceCount,
+      currentChoiceIndex,
+      activeLineage: raw.activeLineage === true,
+      ...(commonFirst && commonLast ? { commonRange: { first: commonFirst, last: commonLast } } : {}),
+      choices,
+      previousChoiceCursor: sanitizeBranchCursor(raw.previousChoiceCursor),
+      nextChoiceCursor: sanitizeBranchCursor(raw.nextChoiceCursor),
+      previousChoiceCount: Math.max(0, Math.floor(Number(raw.previousChoiceCount) || 0)),
+      nextChoiceCount: Math.max(0, Math.floor(Number(raw.nextChoiceCount) || 0)),
+    };
+  }
+
+  function normalizeBranchChoice(rawChoice) {
+    const choiceId = sanitizeBranchId(rawChoice && rawChoice.id, 24);
+    const choiceIndex = Math.max(0, Math.floor(Number(rawChoice && rawChoice.choiceIndex) || 0));
+    if (!choiceId) return [];
+    const occurrences = Array.isArray(rawChoice.occurrences)
+      ? rawChoice.occurrences.slice(0, MAX_BRANCH_CONTROL_OCCURRENCES).flatMap(normalizeBranchOccurrence)
+      : [];
+    return [{
+      id: choiceId,
+      choiceIndex,
+      preview: String(rawChoice.preview || "").slice(0, 6000),
+      occurrenceCount: Math.max(occurrences.length, Math.floor(Number(rawChoice.occurrenceCount) || 0)),
+      occurrences,
+    }];
+  }
+
+  function normalizeBranchOccurrence(raw) {
+    const id = sanitizeBranchId(raw && raw.id, 64);
+    const branchStart = normalizeBranchAnchor(raw && raw.branchStart);
+    if (!id || !branchStart) return [];
+    return [{
+      id,
+      sessionLabel: String(raw.sessionLabel || "").slice(0, 512),
+      isCurrent: raw.isCurrent === true,
+      historyFirst: normalizeBranchAnchor(raw.historyFirst),
+      preBranch: normalizeBranchAnchor(raw.preBranch),
+      branchStart,
+      historyEnd: normalizeBranchAnchor(raw.historyEnd),
+      isBookmarked: raw.isBookmarked === true,
+      hasTags: raw.hasTags === true,
+      hasNote: raw.hasNote === true,
+    }];
+  }
+
+  function normalizeBranchAnchor(raw) {
+    if (!raw || typeof raw !== "object" || (raw.role !== "user" && raw.role !== "assistant")) return null;
+    const chatMessageIndex = Number(raw.chatMessageIndex);
+    if (!Number.isSafeInteger(chatMessageIndex) || chatMessageIndex < 1) return null;
+    return {
+      role: raw.role,
+      chatMessageIndex,
+      timestampIso: typeof raw.timestampIso === "string" ? raw.timestampIso.slice(0, 128) : "",
+      preview: typeof raw.preview === "string" ? raw.preview.slice(0, 6000) : "",
+    };
+  }
+
+  function sanitizeBranchCursor(value) {
+    const cursor = typeof value === "string" ? value.trim() : "";
+    return /^(g|c)\.[0-9a-z]+\.[a-f0-9]{24}$/u.test(cursor) && cursor.length <= 256 ? cursor : "";
+  }
+
+  function sanitizeBranchId(value, length) {
+    const id = typeof value === "string" ? value.trim() : "";
+    return new RegExp(`^[a-f0-9]{${length}}$`, "u").test(id) ? id : "";
   }
 
   function updatePerformanceToolbarButton() {
@@ -2080,7 +5608,7 @@
     const topMessageIndex = findTopVisibleMessageIndex();
     const restore = {
       version: 1,
-      kind: panelKind === "reusable" ? "reusable" : "session",
+      kind: panelKind === "reusable" ? "reusable" : panelKind === "branch" ? "branch" : "session",
       fsPath: model.fsPath,
       autoRefreshMode: normalizeAutoRefreshMode(autoRefreshMode),
       detailMode: showDetails ? "full" : "summary",
@@ -2123,15 +5651,15 @@
     if (mode === "follow") {
       return getSafeUiText(
         i18n.autoRefreshFollowTooltip,
-        "Chat auto-refresh is on (follow latest).",
+        "Session auto-refresh is on (follow latest).",
       );
     }
     if (mode === "off") {
-      return getSafeUiText(i18n.autoRefreshOffTooltip, "Chat auto-refresh is off.");
+      return getSafeUiText(i18n.autoRefreshOffTooltip, "Session auto-refresh is off.");
     }
     return getSafeUiText(
       i18n.autoRefreshPreserveTooltip,
-      "Chat auto-refresh is on (preserve view).",
+      "Session auto-refresh is on (preserve view).",
     );
   }
 
@@ -2195,6 +5723,7 @@
     clearAllPageSearchTemporaryExpansions();
     expandedPatchGroupFileLists = new Set();
     expandedAttachmentDetails = new Set();
+    expandedProtocolContextKeys = new Set();
   }
 
   function resetPatchEntryDetailsCache() {
@@ -2243,6 +5772,8 @@
   }
 
   function openPageSearch() {
+    if (branchOverlayOpen) closeBranchOverlay({ restoreFocus: false, restorePageSearch: false });
+    if (agentRunsOverlayOpen) closeAgentRunsOverlay({ restoreFocus: false });
     if (!(pageSearchBarEl instanceof HTMLElement) || !(pageSearchInputEl instanceof HTMLInputElement)) return;
     applyPageSearchPanelWidth();
     pageSearchBarEl.hidden = false;
@@ -3650,6 +7181,7 @@
     }
     renderDepth += 1;
     try {
+    closeBranchOccurrenceMenu();
     if (lazyImageObserver) lazyImageObserver.disconnect();
     resetDeferredRenderWork({ nextGeneration: true });
     prepareTimeGuideForTimelineRender();
@@ -4435,7 +7967,12 @@
     }
     const hours = Math.floor(totalMinutes / 60);
     const minutes = String(totalMinutes % 60).padStart(2, "0");
-    return formatTemplate(getSafeUiText(i18n.turnDurationHoursMinutes, "{0}h {1}m"), hours, minutes);
+    return formatTemplate(
+      getSafeUiText(i18n.turnDurationHoursMinutesSeconds, "{0}h {1}m {2}s"),
+      hours,
+      minutes,
+      totalSeconds % 60,
+    );
   }
 
   function isLiveRunningTurn(turn, fallbackTurnId) {
@@ -5090,6 +8627,29 @@
     return toolbarBottom;
   }
 
+  function resolveStickyUserActiveIndex(rowBounds, threshold, tolerance) {
+    if (!Array.isArray(rowBounds) || rowBounds.length === 0 || !Number.isFinite(threshold)) return -1;
+    const safeTolerance = Number.isFinite(tolerance) ? Math.max(0, tolerance) : 0;
+    const boundary = threshold + safeTolerance;
+    for (let index = 0; index < rowBounds.length; index += 1) {
+      const current = rowBounds[index];
+      if (
+        !current ||
+        !Number.isFinite(current.top) ||
+        !Number.isFinite(current.bottom) ||
+        current.bottom > boundary
+      ) {
+        return -1;
+      }
+      const next = rowBounds[index + 1];
+      if (!next) return index;
+      if (!Number.isFinite(next.top) || !Number.isFinite(next.bottom)) return -1;
+      if (next.top <= boundary) continue;
+      return index;
+    }
+    return -1;
+  }
+
   function updateStickyUserOverlay() {
     if (!stickyUserPromptEnabled || !model || stickyUserRows.length === 0) {
       hideStickyUserOverlay();
@@ -5101,16 +8661,19 @@
     }
 
     const threshold = getStickyUserThreshold();
-    let active = null;
-    for (const row of stickyUserRows) {
-      if (!row || !(row.element instanceof HTMLElement) || row.element.offsetParent === null) continue;
+    const visibleRows = stickyUserRows.filter(
+      (row) => row && row.element instanceof HTMLElement && row.element.offsetParent !== null,
+    );
+    const rowBounds = visibleRows.map((row) => {
       const rect = row.element.getBoundingClientRect();
-      if (rect.top <= threshold + 1) {
-        active = row;
-        continue;
-      }
-      break;
-    }
+      return { top: rect.top, bottom: rect.bottom };
+    });
+    const activeIndex = resolveStickyUserActiveIndex(
+      rowBounds,
+      threshold,
+      STICKY_USER_BOUNDARY_TOLERANCE_PX,
+    );
+    const active = activeIndex >= 0 ? visibleRows[activeIndex] : null;
 
     if (!active) {
       hideStickyUserOverlay();
@@ -5138,6 +8701,7 @@
     );
     const summarySource = oneLineText || (attachments.length > 0 ? attachmentOnly : getSafeUiText(i18n.roleUser, "User"));
     const summary = truncatePlainText(summarySource, STICKY_USER_SUMMARY_LIMIT);
+    const summaryTitle = truncatePlainText(summarySource, STICKY_USER_PREVIEW_LIMIT);
     const previewText = truncatePlainText(fullText || summarySource, STICKY_USER_PREVIEW_LIMIT);
     const canExpand = !!fullText && (fullText.includes("\n") || fullText.length > STICKY_USER_SUMMARY_LIMIT);
     const expanded = canExpand && expandedStickyUserKeys.has(stickyKey);
@@ -5149,12 +8713,14 @@
 
     const row = el("div", { className: "userStickyHeaderRow" });
     const main = el("button", { type: "button", className: "userStickyHeaderMain" });
-    const ariaSummary = summarySource || getSafeUiText(i18n.roleUser, "User");
+    const ariaSummary = summaryTitle || getSafeUiText(i18n.roleUser, "User");
+    const promptLabel = formatTemplate(i18n.stickyUserAriaLabel || "Current user prompt: {0}", ariaSummary);
+    const openOriginalLabel = getSafeUiText(i18n.stickyUserOpenOriginal, "Jump to original user prompt");
     main.setAttribute(
       "aria-label",
-      formatTemplate(i18n.stickyUserAriaLabel || "Current user prompt: {0}", ariaSummary),
+      [promptLabel, openOriginalLabel].filter(Boolean).join(" · "),
     );
-    main.title = getSafeUiText(i18n.stickyUserOpenOriginal, "Jump to original user prompt");
+    main.title = summaryTitle;
     if (typeof messageIndex === "number" && document.getElementById(`msg-${messageIndex}`)) {
       main.setAttribute("aria-controls", `msg-${messageIndex}`);
     }
@@ -5240,6 +8806,7 @@
     const itemType = item && typeof item.type === "string" ? item.type : "note";
     let rendered = null;
     if (item.type === "message") rendered = renderMessage(item, cardKey);
+    else if (item.type === "protocolContext") rendered = renderProtocolContext(item, cardKey);
     else if (item.type === "patchGroup") rendered = renderPatchGroup(item, itemIndex, cardKey);
     else if (item.type === "tool") rendered = shouldRenderToolCard() ? renderTool(item, cardKey) : null;
     else if (item.type === "systemEvent") rendered = renderSystemEvent(item, cardKey);
@@ -5260,7 +8827,7 @@
 
   function getTimeGuideTargetElement(rendered) {
     if (!(rendered instanceof HTMLElement)) return null;
-    const bubble = rendered.querySelector(".bubble, .systemEventCard, .usageCard, .environmentCard");
+    const bubble = rendered.querySelector(".bubble, .protocolContextCard, .systemEventCard, .usageCard, .environmentCard");
     return bubble instanceof HTMLElement ? bubble : rendered;
   }
 
@@ -5535,6 +9102,9 @@
   }
 
   function renderSystemEvent(item, cardKey) {
+    if (item && item.kind === "localCommandOutput") {
+      return renderLocalCommandOutputEvent(item, cardKey);
+    }
     const row = el("div", { className: "row systemEvent" });
     const card = el("div", { className: `systemEventCard systemEventCard-${normalizeSystemEventKind(item)}` });
     applyTimelineCardWidthState(card, cardKey);
@@ -5583,11 +9153,41 @@
     return row;
   }
 
+  function renderLocalCommandOutputEvent(item, cardKey) {
+    const row = el("div", { className: "row systemEvent" });
+    const card = el("details", {
+      className: "systemEventCard systemEventCard-localCommandOutput",
+    });
+    applyTimelineCardWidthState(card, cardKey);
+
+    const summary = el("summary", { className: "systemEventSummary systemEventSummary-expandable" });
+    const disclosure = el("span", { className: "systemEventDisclosure", textContent: "›" });
+    disclosure.setAttribute("aria-hidden", "true");
+    summary.appendChild(disclosure);
+    summary.appendChild(el("span", { className: "systemEventBadge", textContent: getSystemEventBadgeText(item) }));
+    summary.appendChild(el("span", { className: "systemEventTitle", textContent: getSystemEventTitleText(item) }));
+    if (typeof item.timestampIso === "string" && item.timestampIso.trim()) {
+      const timestamp = el("span", { className: "systemEventMeta", textContent: formatIsoYmdHms(item.timestampIso) });
+      timestamp.title = item.timestampIso;
+      summary.appendChild(timestamp);
+    }
+    card.appendChild(summary);
+
+    const output = typeof item.output === "string" ? item.output : "";
+    card.appendChild(el("pre", { className: "systemEventOutput", textContent: output }));
+    row.appendChild(card);
+    return row;
+  }
+
   function normalizeSystemEventKind(item) {
+    if (item && item.kind === "localCommandOutput") return "localCommandOutput";
     return item && item.kind === "requestInterrupted" ? "interrupted" : "generic";
   }
 
   function getSystemEventBadgeText(item) {
+    if (item && item.kind === "localCommandOutput") {
+      return getSafeUiText(i18n.systemEventLocalCommandBadge, "Local command");
+    }
     if (item && item.kind === "requestInterrupted") {
       return getSafeUiText(i18n.systemEventInterruptedBadge, "Request stopped");
     }
@@ -5595,6 +9195,9 @@
   }
 
   function getSystemEventTitleText(item) {
+    if (item && item.kind === "localCommandOutput") {
+      return getSafeUiText(i18n.systemEventLocalCommandTitle, "Output");
+    }
     if (item && item.kind === "requestInterrupted" && item.scope === "toolUse") {
       return getSafeUiText(i18n.systemEventInterruptedToolUseTitle, "Tool use interrupted");
     }
@@ -5609,6 +9212,69 @@
       return getSafeUiText(i18n.systemEventInterruptedDescription, "The previous response was stopped by the user.");
     }
     return "";
+  }
+
+  function renderProtocolContext(item, cardKey) {
+    if (
+      !item ||
+      item.source !== "codex" ||
+      item.kind !== "sessionStart" ||
+      typeof item.text !== "string" ||
+      !item.text.trim() ||
+      typeof item.messageIndex !== "number" ||
+      !Number.isFinite(item.messageIndex)
+    ) {
+      return null;
+    }
+
+    const row = el("div", { className: "row protocolContext" });
+    const card = el("div", {
+      className: "protocolContextCard",
+      "data-page-search-ignore": "true",
+    });
+
+    const details = el("details", { className: "protocolContextDetails" });
+    details.open = expandedProtocolContextKeys.has(cardKey);
+    details.addEventListener("toggle", () => {
+      if (details.open) expandedProtocolContextKeys.add(cardKey);
+      else expandedProtocolContextKeys.delete(cardKey);
+      updateTimeGuide({ afterPaint: true, rebuildItems: true });
+    });
+
+    const summary = el("summary", { className: "protocolContextSummary" });
+    const summaryText = el("span", { className: "protocolContextSummaryText" });
+    const title = el("span", { className: "protocolContextTitle" });
+    title.textContent = getSafeUiText(i18n.sessionStartContextSummary, "Codex runtime context");
+    const description = el("span", { className: "protocolContextDescription" });
+    description.textContent = getSafeUiText(
+      i18n.sessionStartContextDescription,
+      "Instructions and environment supplied to Codex when this session started",
+    );
+    summaryText.append(title, description);
+    summary.appendChild(summaryText);
+    details.appendChild(summary);
+
+    const body = el("pre", { className: "protocolContextBody" });
+    body.textContent = item.text;
+    details.appendChild(body);
+    card.appendChild(details);
+
+    const actions = el("div", { className: "protocolContextActions" });
+    const copyButton = el("button", { type: "button", className: "iconBtn" });
+    const copyLabel = i18n.copyMessageTooltip || i18n.copy || "Copy";
+    copyButton.title = copyLabel;
+    copyButton.setAttribute("aria-label", copyLabel);
+    copyButton.innerHTML = COPY_ICON_SVG;
+    copyButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      vscode.postMessage({ type: "copy", text: item.text });
+    });
+    actions.appendChild(copyButton);
+    card.appendChild(actions);
+
+    row.appendChild(card);
+    return row;
   }
 
   function renderMessage(item, cardKey) {
@@ -5736,7 +9402,16 @@
       bubble.appendChild(actions);
     }
 
-    row.appendChild(bubble);
+    const branchGroup = role === "user" && typeof item.messageIndex === "number"
+      ? branchGroupByAnchor.get(item.messageIndex)
+      : null;
+    if (branchGroup) {
+      const wrapper = el("div", { className: "branchMessageWrapper" });
+      wrapper.append(bubble, createBranchControl(branchGroup));
+      row.appendChild(wrapper);
+    } else {
+      row.appendChild(bubble);
+    }
     return row;
   }
 
@@ -6169,7 +9844,8 @@
   function renderDocumentAttachment(attachment) {
     const label = getAttachmentLabel(attachment);
     const tooltip = buildAttachmentTitle(attachment);
-    const card = el("div", { className: `messageAttachmentCard messageAttachmentCard-document messageAttachmentCard-${getDocumentKind(attachment)}` });
+    const kind = getDocumentKind(attachment);
+    const card = el("div", { className: `messageAttachmentCard messageAttachmentCard-document messageAttachmentCard-${kind} fileKind fileKind-${kind}` });
     card.title = tooltip;
     appendAttachmentBadge(card, getAttachmentKindLabel(attachment), tooltip);
 
@@ -6211,7 +9887,8 @@
   function renderFileReferenceAttachment(attachment) {
     const label = getAttachmentLabel(attachment);
     const tooltip = buildAttachmentTitle(attachment);
-    const card = el("div", { className: `messageAttachmentCard messageAttachmentCard-file messageAttachmentCard-${getFileKind(attachment)}` });
+    const kind = getFileKind(attachment);
+    const card = el("div", { className: `messageAttachmentCard messageAttachmentCard-file messageAttachmentCard-${kind} fileKind fileKind-${kind}` });
     card.title = tooltip;
     appendAttachmentBadge(card, getAttachmentKindLabel(attachment), tooltip);
 
@@ -6521,7 +10198,7 @@
   function appendAttachmentBadge(card, label, tooltip) {
     const badge = el("div", { className: "messageAttachmentBadge" });
     if (tooltip) badge.title = tooltip;
-    badge.appendChild(el("span", { className: "messageAttachmentBadgeIcon", "aria-hidden": "true" }));
+    badge.appendChild(el("span", { className: "messageAttachmentBadgeIcon fileKindIcon", "aria-hidden": "true" }));
     const text = el("span", { className: "messageAttachmentBadgeText" });
     text.textContent = label;
     badge.appendChild(text);
@@ -8523,7 +12200,7 @@
   }
 
   function normalizePanelKind(value, legacyIsPreview) {
-    if (value === "reusable" || value === "session") return value;
+    if (value === "reusable" || value === "session" || value === "branch") return value;
     return legacyIsPreview === true ? "reusable" : "session";
   }
 
@@ -8836,6 +12513,9 @@
     const type = item && typeof item.type === "string" && item.type.trim() ? item.type.trim() : "item";
     const safeIndex = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex : 0;
     if (type === "message" && item && typeof item.messageIndex === "number") return `message:${item.messageIndex}`;
+    if (type === "protocolContext" && item && typeof item.messageIndex === "number") {
+      return `protocol-context:${Math.max(0, Math.floor(item.messageIndex))}`;
+    }
     if (type === "usage") {
       const messageIndex =
         item && typeof item.messageIndex === "number" && Number.isFinite(item.messageIndex)
@@ -8864,8 +12544,12 @@
       const source = normalizePatchGroupKeyPart(item && item.source) || "source";
       const scope = normalizePatchGroupKeyPart(item && item.scope) || "scope";
       const timestampIso = normalizePatchGroupKeyPart(item && item.timestampIso);
-      if (timestampIso) return `systemEvent:${kind}:${source}:${scope}:${stableStringHash(timestampIso)}`;
-      return `systemEvent:${kind}:${source}:${scope}:${safeIndex}`;
+      const outputSignature =
+        kind === "localCommandOutput" && item && typeof item.output === "string"
+          ? `:${stableStringHash(item.output)}`
+          : "";
+      if (timestampIso) return `systemEvent:${kind}:${source}:${scope}:${stableStringHash(timestampIso)}${outputSignature}`;
+      return `systemEvent:${kind}:${source}:${scope}:${safeIndex}${outputSignature}`;
     }
     if (type === "patchGroup") return buildPatchGroupCardKey(item, safeIndex);
     if (type === "tool") {
@@ -10406,9 +14090,10 @@
     if (typeof window.markdownit !== "function") return null;
     const mdi = window.markdownit({
       html: false,
-      linkify: true,
+      linkify: false,
       breaks: true,
     });
+    mdi.options.linkify = configureSafeMarkdownLinkify(mdi);
 
     const baseValidateLink = mdi.validateLink;
     mdi.validateLink = (url) => {
@@ -10439,6 +14124,19 @@
 
     installMathRenderer(mdi);
     return mdi;
+  }
+
+  function configureSafeMarkdownLinkify(mdi) {
+    const linkify = mdi?.linkify;
+    if (typeof linkify?.set !== "function" || typeof linkify?.add !== "function") return false;
+    try {
+      // Disable vulnerable email auto-detection while preserving ordinary URL linkification.
+      linkify.set({ fuzzyEmail: false });
+      linkify.add("mailto:", null);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function tryParseLocalFileLink(rawHref) {

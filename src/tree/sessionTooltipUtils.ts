@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { PreviewTooltipMode } from "../settings";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { t } from "../i18n";
+import type { CodexAgentPresentation } from "../agents/codexAgentRunsTypes";
 
 export interface SessionTooltipAnnotation {
   tags: readonly string[];
@@ -61,6 +62,7 @@ export function buildSessionHoverTooltip(params: {
   projectDisplayCwd?: string | null;
   primaryDateTime?: string;
   primaryDateLabelKey?: SessionDateLabelKey;
+  agentPresentation?: CodexAgentPresentation;
 }): string | vscode.MarkdownString {
   const { session, annotation, label, description, mode, projectAlias, projectDisplayCwd, primaryDateLabelKey } = params;
   if (mode === "titleOnly") {
@@ -76,6 +78,7 @@ export function buildSessionHoverTooltip(params: {
   appendSessionTooltipTitleLines(md, session);
   appendSessionTooltipDateLines(md, session, params.primaryDateTime, primaryDateLabelKey);
   appendSessionMetadataLines(md, session, annotation, projectAlias, projectDisplayCwd);
+  appendCodexAgentTooltipLines(md, params.agentPresentation);
 
   if (mode === "compact") return md;
 
@@ -86,6 +89,30 @@ export function buildSessionHoverTooltip(params: {
   }
   md.appendMarkdown(`---\n${escapeForMarkdown(t("tree.tooltip.sessionActions"))}\n`);
   return md;
+}
+
+export function appendCodexAgentTooltipLines(
+  md: vscode.MarkdownString,
+  presentation: CodexAgentPresentation | undefined,
+): void {
+  if (!presentation || presentation.relation === "none") return;
+  if (presentation.relation === "child" || presentation.relation === "both") {
+    md.appendMarkdown(
+      `${escapeForMarkdown(t("codexAgentRuns.kind"))}: ${escapeForMarkdown(t("codexAgentRuns.subagent"))}  \n`,
+    );
+    md.appendMarkdown(
+      `${escapeForMarkdown(t("codexAgentRuns.task"))}: ${escapeForMarkdown(presentation.taskLabel)}  \n`,
+    );
+    const parentLabel = presentation.parentSession?.displayTitle || t("codexAgentRuns.parentUnavailable");
+    md.appendMarkdown(
+      `${escapeForMarkdown(t("codexAgentRuns.parentSession"))}: ${escapeForMarkdown(parentLabel)}  \n`,
+    );
+  }
+  if (presentation.directChildCount > 0) {
+    md.appendMarkdown(
+      `${escapeForMarkdown(t("codexAgentRuns.directChildren"))}: ${presentation.directChildCount}  \n`,
+    );
+  }
 }
 
 export function appendSessionTooltipDateLines(

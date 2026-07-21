@@ -5,6 +5,9 @@ import {
   HISTORY_CACHE_FILE_PATTERN,
   SEARCH_INDEX_FILE_NAME,
   SEARCH_INDEX_FILE_PATTERN,
+  SESSION_ANALYSIS_INDEX_FILE_NAME,
+  SESSION_ANALYSIS_INDEX_FILE_PATTERN,
+  isLegacyVersionedCacheFile,
 } from "../storage/cacheFiles";
 
 const TRASH_DIR_NAMES = ["undo-delete", "deleted"] as const;
@@ -87,6 +90,7 @@ export async function listLegacyFiles(globalStorageUri: vscode.Uri): Promise<vsc
   const out: vscode.Uri[] = [];
   const currentHistoryCacheFile = HISTORY_CACHE_FILE_NAME.toLowerCase();
   const currentSearchIndexFile = SEARCH_INDEX_FILE_NAME.toLowerCase();
+  const currentSessionAnalysisIndexFile = SESSION_ANALYSIS_INDEX_FILE_NAME.toLowerCase();
   const now = Date.now();
   let entries: [string, vscode.FileType][];
   try {
@@ -101,15 +105,23 @@ export async function listLegacyFiles(globalStorageUri: vscode.Uri): Promise<vsc
     const fileUri = vscode.Uri.joinPath(globalStorageUri, name);
 
     if (
-      HISTORY_CACHE_FILE_PATTERN.test(lowerName) &&
-      lowerName !== currentHistoryCacheFile
+      isLegacyVersionedCacheFile(lowerName, currentHistoryCacheFile, HISTORY_CACHE_FILE_PATTERN)
     ) {
       out.push(fileUri);
       continue;
     }
     if (
-      SEARCH_INDEX_FILE_PATTERN.test(lowerName) &&
-      lowerName !== currentSearchIndexFile
+      isLegacyVersionedCacheFile(lowerName, currentSearchIndexFile, SEARCH_INDEX_FILE_PATTERN)
+    ) {
+      out.push(fileUri);
+      continue;
+    }
+    if (
+      isLegacyVersionedCacheFile(
+        lowerName,
+        currentSessionAnalysisIndexFile,
+        SESSION_ANALYSIS_INDEX_FILE_PATTERN,
+      )
     ) {
       out.push(fileUri);
       continue;

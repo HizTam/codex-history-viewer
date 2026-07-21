@@ -53,6 +53,21 @@ export class ProjectAssociationStore {
     return this.getGroupCanonicalProjectKey(cwd);
   }
 
+  public createCanonicalProjectKeyResolver(): (cwd: string | null | undefined) => string | null {
+    // Isolate callers from association changes published after this point.
+    const entries = new Map(
+      Array.from(this.getCachedEntries(), ([key, entry]) => [
+        key,
+        Object.freeze({ ...entry }),
+      ] as const),
+    );
+    return (cwd: string | null | undefined): string | null => {
+      const key = resolveProjectAssociationKey(cwd);
+      if (!key) return null;
+      return entries.size === 0 ? key : resolveGroupCanonicalProjectKey(key, entries);
+    };
+  }
+
   public getGroupCanonicalProjectKey(cwd: string | null | undefined): string | null {
     const key = resolveProjectAssociationKey(cwd);
     if (!key) return null;

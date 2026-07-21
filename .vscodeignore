@@ -4,6 +4,7 @@
 **/out/**
 **/*.map
 **/*.log
+**/.DS_Store
 **/*.ts
 **/tsconfig.json
 **/.gitignore
@@ -11,16 +12,21 @@
 **/.github/**
 **/*.vsix
 scripts/**
+**/.test-dist/**
+**/.test-tmp/**
+**/.root-review-*/**
+media/screenshot*.png
+test/**
+tsconfig.test.json
 
 # Developer documentation (not included in the VSIX)
 DEVELOPMENT.ja.md
 .private-docs/**
 AG*.md
+.agents
 .claude
 .codex
 
 # The chat view uses markdown-it for Markdown rendering, so include only the minimal runtime files
-!node_modules/markdown-it/
-!node_modules/markdown-it/dist/
 !node_modules/markdown-it/dist/markdown-it.min.js
 !node_modules/markdown-it/LICENSE

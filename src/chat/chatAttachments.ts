@@ -22,7 +22,14 @@ import {
   isPotentialImageAttachmentItem,
   stripImagePlaceholders,
 } from "./chatImageAttachments";
-import { getClaudeRequestInterruptedScope, isCodexTurnAbortedMessageText } from "../utils/textUtils";
+import {
+  extractCompactUserText,
+  getClaudeRequestInterruptedScope,
+  isCodexProtocolContextText,
+  isCodexSessionStartContextText,
+  isCodexTurnAbortedMessageText,
+} from "../utils/textUtils";
+import { inferFilePresentationKind } from "../utils/fileKind";
 
 export const CHAT_TEXT_DOCUMENT_PREVIEW_CHARS = 16_000;
 export const CHAT_TEXT_DOCUMENT_SEARCH_CHARS = 64_000;
@@ -37,6 +44,7 @@ export const CHAT_TASK_NOTIFICATION_RESULT_SEARCH_CHARS = 64_000;
 export const CHAT_INVOKE_PARAMETER_PREVIEW_CHARS = 4_000;
 export const CHAT_INVOKE_PARAMETER_MARKDOWN_CHARS = 120_000;
 export const CHAT_INVOKE_PARAMETER_SEARCH_CHARS = 32_000;
+export const CHAT_LOCAL_COMMAND_OUTPUT_MAX_CHARS = 4_096;
 
 const DEFAULT_DOCUMENT_LABEL = "document-attachment";
 const DEFAULT_FILE_REFERENCE_LABEL = "file-reference";
@@ -47,57 +55,6 @@ const TASK_NOTIFICATION_PREAMBLE =
 const TASK_NOTIFICATION_OPEN_TAG = "<task-notification";
 const TASK_NOTIFICATION_CLOSE_TAG = "</task-notification>";
 const TASK_NOTIFICATION_OPEN_TAG_MAX_CHARS = 512;
-const CODE_EXTENSIONS = new Set([
-  ".bash",
-  ".bat",
-  ".c",
-  ".cc",
-  ".cpp",
-  ".cs",
-  ".css",
-  ".go",
-  ".h",
-  ".hpp",
-  ".htm",
-  ".html",
-  ".java",
-  ".js",
-  ".json",
-  ".jsonc",
-  ".jsx",
-  ".kt",
-  ".kts",
-  ".php",
-  ".ps1",
-  ".py",
-  ".rb",
-  ".rs",
-  ".sh",
-  ".sql",
-  ".swift",
-  ".ts",
-  ".tsx",
-  ".xml",
-  ".yaml",
-  ".yml",
-]);
-const TEXT_EXTENSIONS = new Set([
-  ".csv",
-  ".diff",
-  ".env",
-  ".ini",
-  ".log",
-  ".md",
-  ".markdown",
-  ".patch",
-  ".text",
-  ".toml",
-  ".tsv",
-  ".txt",
-]);
-const ARCHIVE_EXTENSIONS = new Set([".7z", ".br", ".bz2", ".gz", ".rar", ".tar", ".tgz", ".xz", ".zip"]);
-const IMAGE_EXTENSIONS = new Set([".gif", ".jpeg", ".jpg", ".png", ".webp"]);
-
 export interface ExtractedMessageContent {
   text: string;
   attachments: ChatAttachment[];
@@ -110,6 +67,10 @@ export interface ExtractedCodexTextContent {
 
 export interface ClaudeRequestInterruptionContent {
   scope: ChatSystemEventScope;
+}
+
+export interface ClaudeLocalCommandOutputContent {
+  output: string;
 }
 
 export interface ClaudeMessageExtractionOptions {
@@ -236,6 +197,61 @@ export function isCodexTurnAbortedContent(content: unknown): boolean {
   return !extracted.hasNonTextContent && isCodexTurnAbortedMessageText(extracted.text);
 }
 
+export function isCodexProtocolContextContent(content: unknown): boolean {
+  return extractCodexProtocolContextText(content) !== null;
+}
+
+export function extractCodexProtocolContextText(content: unknown): string | null {
+  const text = extractCodexTextOnlyContentForContext(content);
+  return text !== null && isCodexProtocolContextText(text) ? text : null;
+}
+
+export function extractCodexCompactUserText(content: unknown, extractedText: string): string | null {
+  const textOnlyContent = extractCodexTextOnlyContentForContext(content);
+  const compactSource = textOnlyContent ?? extractedText;
+  const compact = extractCompactUserText(compactSource);
+  if (compact !== null) return compact;
+  if (isCodexProtocolContextText(compactSource) && !isCodexProtocolContextContent(content)) {
+    const visibleFallback = String(compactSource ?? "").trim();
+    return visibleFallback || null;
+  }
+  return null;
+}
+
+export function isCodexSessionStartContextContent(content: unknown): boolean {
+  return extractCodexSessionStartContextText(content) !== null;
+}
+
+export function extractCodexSessionStartContextText(content: unknown): string | null {
+  const text = extractCodexTextOnlyContentForContext(content);
+  return text !== null && isCodexSessionStartContextText(text) ? text : null;
+}
+
+function extractCodexTextOnlyContentForContext(content: unknown): string | null {
+  if (typeof content === "string") return content;
+  const items = normalizeContentItems(content);
+  if (items.length === 0) return null;
+  const texts: string[] = [];
+
+  for (const item of items) {
+    if (typeof item === "string") {
+      if (item.trim()) texts.push(item);
+      continue;
+    }
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+
+    const obj = item as Record<string, unknown>;
+    if (Object.keys(obj).length === 0) continue;
+    const type = normalizeType(readStringField(obj, "type"));
+    if (type !== "text" && type !== "inputtext") return null;
+    if (isPotentialImageAttachmentItem(obj)) return null;
+    if (typeof obj.text !== "string") return null;
+    if (obj.text.trim()) texts.push(obj.text);
+  }
+
+  return texts.length > 0 ? texts.join("\n") : null;
+}
+
 export function extractClaudeRequestInterruptionContent(content: unknown): ClaudeRequestInterruptionContent | null {
   if (!hasTextCandidate(content, "Request interrupted by user")) return null;
 
@@ -265,6 +281,46 @@ export function extractClaudeRequestInterruptionContent(content: unknown): Claud
   }
 
   return toClaudeRequestInterruptionContent(texts.join(""));
+}
+
+export function extractClaudeLocalCommandOutputContent(content: unknown): ClaudeLocalCommandOutputContent | null {
+  const openTag = "<local-command-stdout>";
+  const closeTag = "</local-command-stdout>";
+  if (!hasTextCandidate(content, openTag)) return null;
+
+  let text: string;
+  if (typeof content === "string") {
+    text = content;
+  } else {
+    const items = normalizeContentItems(content);
+    if (items.length === 0) return null;
+    const texts: string[] = [];
+    for (const item of items) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      const obj = item as Record<string, unknown>;
+      const type = normalizeType(readStringField(obj, "type"));
+      if (type !== "text" && type !== "inputtext" && type !== "outputtext" && (type || typeof obj.text !== "string")) {
+        return null;
+      }
+      if (isPotentialImageAttachmentItem(obj) || typeof obj.text !== "string") return null;
+      if (obj.text.trim()) texts.push(obj.text);
+    }
+    if (texts.length === 0) return null;
+    text = texts.join("\n");
+  }
+
+  const normalized = normalizeNewlines(text);
+  const match = /^\s*<local-command-stdout>([\s\S]*?)<\/local-command-stdout>\s*$/.exec(normalized);
+  if (!match) return null;
+  const rawOutput = match[1] ?? "";
+  if (
+    rawOutput.length > CHAT_LOCAL_COMMAND_OUTPUT_MAX_CHARS ||
+    rawOutput.includes(openTag) ||
+    rawOutput.includes(closeTag)
+  ) {
+    return null;
+  }
+  return { output: rawOutput.trim() };
 }
 
 function toClaudeRequestInterruptionContent(text: string): ClaudeRequestInterruptionContent | null {
@@ -1082,7 +1138,7 @@ export function sanitizeAttachmentForChannel(
 
 function assertNeverChatAttachment(attachment: never): never {
   const unknownType = (attachment as { type?: unknown } | undefined)?.type;
-  throw new Error(`Unsupported chat attachment type: ${String(unknownType ?? "unknown")}`);
+  throw new Error(`Unsupported session attachment type: ${String(unknownType ?? "unknown")}`);
 }
 
 function sanitizeImageAttachmentForChannel(
@@ -1697,29 +1753,7 @@ function inferDocumentKind(mimeType: string | undefined, label: string | undefin
 }
 
 export function inferFileKind(fsPath: string, fallbackLabel?: string): ChatFileKind {
-  const ext = path.extname(String(fsPath || fallbackLabel || "").trim()).toLowerCase();
-  if (ext === ".pdf") return "pdf";
-  if (ext === ".doc" || ext === ".docx" || ext === ".docm" || ext === ".rtf") return "word";
-  if (ext === ".xls" || ext === ".xlsx" || ext === ".xlsm") return "excel";
-  if (ext === ".ppt" || ext === ".pptx" || ext === ".pptm") return "powerpoint";
-  if (IMAGE_EXTENSIONS.has(ext)) return "image";
-  if (ARCHIVE_EXTENSIONS.has(ext)) return "archive";
-  if (CODE_EXTENSIONS.has(ext)) return "code";
-  if (TEXT_EXTENSIONS.has(ext)) return "text";
-  if (isWellKnownTextFileName(fsPath) || isWellKnownTextFileName(fallbackLabel)) return "text";
-  return "generic";
-}
-
-function isWellKnownTextFileName(value: string | undefined): boolean {
-  const base = path.basename(String(value ?? "").trim()).toLowerCase();
-  return (
-    base === "license" ||
-    base === "readme" ||
-    base === "changelog" ||
-    base === "authors" ||
-    base === "contributors" ||
-    base === "copying"
-  );
+  return inferFilePresentationKind(fsPath, fallbackLabel);
 }
 
 function defaultDocumentLabel(documentKind: ChatDocumentKind): string {

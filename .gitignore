@@ -1,12 +1,29 @@
+# Dependencies
 node_modules/
+
+# Build outputs
 dist/
 out/
+media/chatViewShiki.bundle.js
+
+# Test outputs
 .vscode-test/
-.DS_Store
+.test-dist/
+.test-tmp/
+.root-review-*/
+test/
+tsconfig.test.json
+
+# Package outputs and logs
 *.vsix
 *.log
-media/chatViewShiki.bundle.js
+
+# OS-generated files
+.DS_Store
+
+# Local tooling and private documents
 .private-docs/
 AG*.md
-.claude
-.codex
+.agents/
+.claude/
+.codex/

@@ -15,22 +15,22 @@ Notes:
 | Refresh History | `codexHistoryViewer.refreshHistoryPane` | Refreshes only the History view. |
 | Refresh Status | `codexHistoryViewer.refreshStatusPane` | Refreshes only the Status view. |
 | Open Settings | `codexHistoryViewer.openSettings` | Opens extension settings in the VS Code Settings UI. |
-| Rebuild Cache | `codexHistoryViewer.rebuildCache` | Rebuilds the local session cache/index from source files. |
+| Rebuild Cache | `codexHistoryViewer.rebuildCache` | Rebuilds the history, search, and analysis caches from the current source sessions. |
 | Rebuild Search Index | `codexHistoryViewer.rebuildSearchIndex` | Rebuilds only the local search index from source files. |
-| Cleanup Missing Pins | `codexHistoryViewer.cleanupMissingPins` | Removes pinned entries whose source files no longer exist. |
+| Remove Missing Pins | `codexHistoryViewer.cleanupMissingPins` | Removes pinned entries whose source files no longer exist. |
 | Delete Handoff Files | `codexHistoryViewer.cleanupHandoffs` | Deletes generated handoff files from extension global storage after confirmation. |
 | Empty Trash | `codexHistoryViewer.emptyTrash` | Clears internal trash/quarantine files and legacy cache/index generations after confirmation. |
 | Copy Path | `codexHistoryViewer.copyStatusPath` | Copies the selected Status view path or value to the clipboard. |
 | Undo Last Action | `codexHistoryViewer.undoLastAction` | Reverts the latest undoable operation. |
 
-## History and Source Filters
+## History, Pinned, and Source Filters
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
-| Filter History... | `codexHistoryViewer.filterHistory` | Opens the History filter picker (date/project/source/tags). |
+| Filter History... | `codexHistoryViewer.filterHistory` | Opens the History filter picker (date range/projects/source/archive location/tags). |
 | Filter History by Tags... | `codexHistoryViewer.filterHistoryByTag` | Applies a tag-based filter to the History view. |
-| Filter by Current Project | `codexHistoryViewer.filterHistoryCurrentProject` | Filters History to the active workspace project path. |
-| Show Latest First | `codexHistoryViewer.showHistoryLatestView` | Switches History to the latest-first list view. |
+| Filter by Current Project | `codexHistoryViewer.filterHistoryCurrentProject` | Toggles History between all projects and the current project group. |
+| Show Sessions List | `codexHistoryViewer.showHistoryLatestView` | Switches History to the latest-first list view. |
 | Show by Date | `codexHistoryViewer.showHistoryDateView` | Switches History to the date-grouped view. |
 | Show Codex History Only | `codexHistoryViewer.filterHistorySourceCodex` | Limits History to Codex sessions only. |
 | Show Claude Code History Only | `codexHistoryViewer.filterHistorySourceClaude` | Limits History to Claude Code sessions only. |
@@ -38,9 +38,12 @@ Notes:
 | Toggle Claude Code Source Filter | `codexHistoryViewer.toggleHistorySourceClaude` | Toggles Claude Code in the active source filter. |
 | Cycle Source Filter (Codex + Claude Code -> Codex -> Claude Code) | `codexHistoryViewer.cycleHistorySourceFilter` | Cycles History through all enabled sources, Codex only, and Claude Code only. |
 | Show All Sources | `codexHistoryViewer.clearHistorySourceFilter` | Clears source-only filtering and shows enabled sources. |
-| Clear History Filters | `codexHistoryViewer.clearHistoryFilter` | Clears date/project/source filtering in History. |
+| Clear History Filters | `codexHistoryViewer.clearHistoryFilter` | Resets History date, explicit project, source, archive-location, and tag filters. The Current Project Group scope remains active when selected. |
 | Clear History Tag Filter | `codexHistoryViewer.clearHistoryTagFilter` | Removes the active History tag filter. |
+| Filter Pinned... | `codexHistoryViewer.filterPinned` | Opens the independent Pinned filter picker (date/project/source/archive location/tags). |
+| Filter Pinned by Current Project | `codexHistoryViewer.filterPinnedCurrentProject` | Toggles Pinned between all projects and the current project group. |
 | Filter Pinned by Tags... | `codexHistoryViewer.filterPinnedByTag` | Applies a tag filter to the Pinned view. |
+| Clear Pinned Filters | `codexHistoryViewer.clearPinnedFilter` | Resets Pinned date, explicit project, source, archive-location, and tag filters. The Current Project Group scope remains active when selected. |
 | Clear Pinned Tag Filter | `codexHistoryViewer.clearPinnedTagFilter` | Removes the active Pinned tag filter. |
 
 ## Search Commands
@@ -49,7 +52,7 @@ Notes:
 | --- | --- | --- |
 | Search... | `codexHistoryViewer.search` | Opens the search input flow and runs a full-text search. |
 | Configure Default Search Roles... | `codexHistoryViewer.searchConfigureDefaultRoles` | Selects default roles included in Search. |
-| Rerun Search | `codexHistoryViewer.searchRerun` | Re-runs Search with the last saved query and filters. |
+| Rerun Search | `codexHistoryViewer.searchRerun` | Re-runs the last query with its saved role and case options against the current History target. |
 | Filter Search by Tags... | `codexHistoryViewer.searchFilterByTag` | Updates the History tag filter used as the Search scope. |
 | Clear Search Tag Filter | `codexHistoryViewer.clearSearchTagFilter` | Clears the History tag filter used as the Search scope. |
 | Run Saved Search... | `codexHistoryViewer.searchRunPreset` | Executes a saved search. |
@@ -63,7 +66,8 @@ Notes:
 | --- | --- | --- |
 | Move to Codex History | `codexHistoryViewer.restoreArchivedSession` | Restores selected archived Codex sessions back to normal Codex History. |
 | Move to Archive | `codexHistoryViewer.archiveSession` | Moves selected active Codex sessions to the Codex archive location. |
-| Toggle Archive Visibility | `codexHistoryViewer.filterArchiveLocation` | Cycles History, Pinned, and Search between active-only, all, and archived-only Codex sessions. |
+| Toggle Archive Visibility | `codexHistoryViewer.filterArchiveLocation` | Cycles History, and the Search scope that follows it, between active-only, all, and archived-only Codex sessions. |
+| Toggle Pinned Archive Visibility | `codexHistoryViewer.filterPinnedArchiveLocation` | Independently cycles Pinned between active-only, all, and archived-only Codex sessions. It is unavailable while Pinned shows Claude Code only. |
 
 ## File AI Change History
 
@@ -71,13 +75,20 @@ Notes:
 | --- | --- | --- |
 | Show File AI Change History | `codexHistoryViewer.openFileChangeHistory` | Opens AI-related change history for a selected workspace file. |
 
+## History Insights and Agent Runs
+
+| Command (EN label) | Command ID | Description |
+| --- | --- | --- |
+| Show History Insights | `codexHistoryViewer.showHistoryInsights` | Opens an analytics snapshot for the sessions matching the current History conditions. It is available from the History view header and the Command Palette. |
+| Open Parent Session | `codexHistoryViewer.openCodexAgentParent` | Opens the available parent of a selected Codex sub-agent session. When Agent Runs is enabled, this action appears only in the context menu for a sub-agent whose parent can be resolved; it is hidden from the Command Palette. |
+
 ## Session Actions
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
-| Open in New Tab (Chat) | `codexHistoryViewer.openSession` | Opens a selected session in its own chat-style webview tab, or activates an existing matching chat tab. |
-| Open Session (Markdown) | `codexHistoryViewer.openSessionMarkdown` | Opens a selected session as a Markdown transcript document. |
-| Copy Quick Prompt | `codexHistoryViewer.copyResumePrompt` | Copies a compact resume prompt from the selected chat view. |
+| Open Session in New Tab | `codexHistoryViewer.openSession` | Opens a selected session in its own session tab, or activates an existing matching session tab. |
+| Open Session as Markdown | `codexHistoryViewer.openSessionMarkdown` | Opens a selected session as a Markdown transcript document. |
+| Copy Quick Prompt | `codexHistoryViewer.copyResumePrompt` | Copies a compact resume prompt from the selected session view. |
 | Resume in OpenAI Codex | `codexHistoryViewer.resumeSessionInCodex` | Sends the selected Codex session to the OpenAI Codex extension. |
 | Resume in Claude Code | `codexHistoryViewer.resumeSessionInClaude` | Opens the selected Claude session in Claude Code. |
 | Promote to Today (Copy) | `codexHistoryViewer.promoteSession` | Copies a past session into today's folder without modifying the original. |

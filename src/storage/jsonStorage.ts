@@ -85,7 +85,11 @@ export function formatJsonReadOrDropCorruptDebug<T>(
   return parts.join(" ");
 }
 
-export async function writeJson<T>(uri: vscode.Uri, data: T, options?: { pretty?: boolean }): Promise<void> {
+export async function writeJson<T>(
+  uri: vscode.Uri,
+  data: T,
+  options?: { pretty?: boolean; beforeCommit?: () => void },
+): Promise<void> {
   const pretty = options?.pretty ?? true;
   const text = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
   const buf = new TextEncoder().encode(text);
@@ -98,10 +102,21 @@ export async function writeJson<T>(uri: vscode.Uri, data: T, options?: { pretty?
   }
 
   try {
+    options?.beforeCommit?.();
+  } catch (error) {
+    await deleteQuietly(tmpUri);
+    throw error;
+  }
+
+  try {
     await vscode.workspace.fs.rename(tmpUri, uri, { overwrite: true });
   } catch {
-    await vscode.workspace.fs.writeFile(uri, buf);
-    await deleteQuietly(tmpUri);
+    try {
+      options?.beforeCommit?.();
+      await vscode.workspace.fs.writeFile(uri, buf);
+    } finally {
+      await deleteQuietly(tmpUri);
+    }
   }
 }
 
@@ -125,7 +140,7 @@ async function deleteQuietly(uri: vscode.Uri): Promise<void> {
   }
 }
 
-function isFileNotFoundError(error: unknown): boolean {
+export function isFileNotFoundError(error: unknown): boolean {
   const code = getErrorCode(error);
   const name = getErrorName(error);
   return code === "FileNotFound" || code === "ENOENT" || name === "FileNotFound";

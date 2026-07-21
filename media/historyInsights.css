@@ -1,0 +1,1863 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  color-scheme: light dark;
+  --chv-bg: var(--vscode-editor-background);
+  --chv-fg: var(--vscode-editor-foreground);
+  --chv-muted: var(--vscode-descriptionForeground);
+  --chv-border: var(--vscode-editorWidget-border);
+  --chv-assistant-bg: var(--vscode-editorWidget-background);
+  --chv-tool-bg: var(--vscode-notifications-background, rgba(128, 128, 128, 0.08));
+  --chv-code-bg: var(--vscode-textCodeBlock-background, rgba(128, 128, 128, 0.15));
+  --chv-accent: var(--vscode-focusBorder);
+  --chv-search-chip-bg: color-mix(in srgb, var(--chv-accent) 10%, var(--chv-bg) 90%);
+  --chv-search-chip-border: color-mix(in srgb, var(--chv-accent) 24%, var(--chv-border) 76%);
+  --chv-panel-shadow: 0 8px 24px color-mix(in srgb, #000 12%, transparent);
+  --panel-accent: var(--vscode-textLink-foreground, var(--chv-accent));
+  --insights-header-height: 40px;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+  background: var(--chv-bg);
+  color: var(--chv-fg);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+button {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--chv-border);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--chv-accent);
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button:focus-visible,
+summary:focus-visible,
+.fileList:focus-visible {
+  outline: 1px solid var(--chv-accent);
+  outline-offset: 2px;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin-top: 0;
+}
+
+.muted {
+  color: var(--chv-muted);
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.statePanel {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px;
+  text-align: center;
+}
+
+.statePanelTitleRow {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.statePanelTitleRow h1 {
+  margin: 0;
+  font-size: 1.45rem;
+  font-weight: 650;
+}
+
+.statePanelIcon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  display: inline-block;
+  background: var(--state-panel-icon) center / contain no-repeat;
+}
+
+.stateMessage {
+  margin-bottom: 0;
+  font-size: 1.05rem;
+}
+
+.stateActions,
+.headerActions,
+.rowActions,
+.fileActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.iconActionButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.iconActionButton.iconOnly .actionLabel {
+  display: none;
+}
+
+.actionIcon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.primaryBtn {
+  border-color: transparent;
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
+
+.primaryBtn:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.insightsShell {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 16px 18px 30px;
+  display: grid;
+  gap: 14px;
+}
+
+.insightsHeader {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(48px, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 40px;
+  padding: 5px 7px;
+  border-bottom: 1px solid var(--chv-border);
+  background: var(--chv-bg);
+}
+
+.headerSummary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--chv-muted);
+  font-size: 0.84rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.insightsHeader > .headerActions {
+  justify-self: end;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+.insightsHeader .iconActionButton {
+  min-height: 29px;
+  white-space: nowrap;
+}
+
+.insightsHeader.compact .iconActionButton .actionLabel {
+  display: none;
+}
+
+.refreshBanner {
+  grid-column: 1 / -1;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--chv-accent) 36%, var(--chv-border) 64%);
+  border-left: 4px solid var(--chv-accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--chv-accent) 10%, var(--chv-bg) 90%);
+}
+
+.refreshBanner.stale {
+  border-left-color: var(--vscode-notificationsWarningIcon-foreground);
+}
+
+.insightsToastContainer {
+  position: fixed;
+  z-index: 90;
+  right: 14px;
+  bottom: 14px;
+  width: min(380px, calc(100vw - 28px));
+  display: grid;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.insightsToast {
+  padding: 9px 12px;
+  border: 1px solid var(--vscode-notifications-border, var(--chv-border));
+  border-radius: 7px;
+  background: var(--vscode-notifications-background, var(--chv-assistant-bg));
+  color: var(--vscode-notifications-foreground, var(--chv-fg));
+  box-shadow: var(--chv-panel-shadow);
+  overflow-wrap: anywhere;
+}
+
+.insightsToast.error {
+  border-left: 4px solid var(--vscode-notificationsErrorIcon-foreground, var(--vscode-errorForeground));
+}
+
+.filterOverlay {
+  position: fixed;
+  z-index: 60;
+  top: calc(var(--insights-header-height) + 8px);
+  right: 10px;
+  bottom: 10px;
+  width: min(360px, calc(100vw - 20px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: contain;
+  border: 1px solid var(--chv-border);
+  border-radius: 8px;
+  background: var(--vscode-editorWidget-background, var(--chv-bg));
+  box-shadow: var(--chv-panel-shadow);
+}
+
+.filterOverlayHeading {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 8px 8px 12px;
+  border-bottom: 1px solid var(--chv-border);
+  background: var(--vscode-editorWidget-background, var(--chv-bg));
+}
+
+.filterOverlayHeading h2 {
+  min-width: 0;
+  margin: 0;
+  font-size: 1rem;
+}
+
+.filterOverlayActions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.filterOverlayBody {
+  min-height: 0;
+  padding: 10px 12px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.filterApplyError {
+  margin-bottom: 9px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--vscode-errorForeground) 45%, var(--chv-border));
+  border-radius: 5px;
+  color: var(--vscode-errorForeground);
+  background: color-mix(in srgb, var(--vscode-errorForeground) 7%, transparent);
+}
+
+.historyApplyToggle {
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--chv-muted);
+  background: color-mix(in srgb, var(--chv-search-chip-bg) 78%, transparent);
+  border-color: color-mix(in srgb, var(--chv-search-chip-border) 86%, transparent);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.historyApplyToggle[aria-pressed="true"] {
+  color: var(--chv-fg);
+  border-color: color-mix(in srgb, var(--chv-accent) 74%, var(--chv-search-chip-border) 26%);
+  background: color-mix(in srgb, var(--chv-accent) 16%, var(--chv-search-chip-bg) 84%);
+  font-weight: 700;
+}
+
+.filterGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.filterControl {
+  position: relative;
+  min-width: 0;
+}
+
+.filterControl.open {
+  z-index: 70;
+}
+
+.filterControlSurface {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--chv-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--chv-bg) 82%, var(--chv-assistant-bg) 18%);
+}
+
+.filterButton {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  padding: 6px 9px 3px;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  background: transparent;
+}
+
+.filterControl.open .filterControlSurface,
+.filterControlSurface:focus-within {
+  border-color: var(--chv-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--chv-accent) 28%, transparent);
+}
+
+.filterButton:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.filterLabel {
+  grid-column: 1;
+  color: var(--chv-muted);
+  font-size: 0.76rem;
+}
+
+.filterValue {
+  grid-column: 1;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filterTokenList {
+  min-height: 27px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  padding: 1px 8px 7px;
+}
+
+.filterToken {
+  min-width: 0;
+  max-width: calc(100% - 4px);
+  min-height: 21px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--chv-accent) 36%, var(--chv-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chv-accent) 10%, var(--chv-bg));
+  color: var(--chv-fg);
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+.filterToken.invalid {
+  border-color: color-mix(in srgb, var(--vscode-errorForeground) 52%, var(--chv-border));
+  background: color-mix(in srgb, var(--vscode-errorForeground) 8%, var(--chv-bg));
+  color: var(--vscode-errorForeground);
+}
+
+.filterTokenLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filterTokenRemove {
+  width: 17px;
+  min-width: 17px;
+  min-height: 17px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 15px;
+}
+
+.filterTokenRemove:hover,
+.filterTokenRemove:focus-visible {
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.filterTokenMore {
+  cursor: pointer;
+}
+
+.filterTokenList.hasMore > .filterToken:not(.filterTokenMore) {
+  max-width: calc(50% - 18px);
+  flex: 1 1 calc(50% - 18px);
+}
+
+.filterSelectionError {
+  padding: 0 9px 7px;
+  color: var(--vscode-errorForeground);
+  font-size: 0.76rem;
+}
+
+.filterChevron {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-self: center;
+  color: var(--chv-muted);
+  font-size: 1.1rem;
+}
+
+.filterDropdown {
+  position: fixed;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  width: min(360px, calc(100vw - 48px));
+  padding: 6px;
+  border: 1px solid var(--chv-border);
+  border-radius: 8px;
+  background: var(--vscode-dropdown-background, var(--chv-assistant-bg));
+  color: var(--vscode-dropdown-foreground, var(--chv-fg));
+  box-shadow: 0 10px 28px color-mix(in srgb, #000 22%, transparent);
+}
+
+.filterDropdown[hidden],
+.filterOption[hidden],
+.filterNoOptions[hidden],
+.dateRangeError[hidden],
+.filterApplyError[hidden] {
+  display: none;
+}
+
+.filterSelectionError[hidden] {
+  display: none;
+}
+
+.filterSearch {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.filterSearch input,
+.dateField input {
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 7px;
+  border: 1px solid var(--vscode-input-border, var(--chv-border));
+  border-radius: 5px;
+  outline: none;
+  background: var(--vscode-input-background, var(--chv-bg));
+  color: var(--vscode-input-foreground, var(--chv-fg));
+  font: inherit;
+}
+
+.filterSearch input:focus,
+.dateField input:focus {
+  border-color: var(--vscode-focusBorder);
+  box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+}
+
+.filterOptionList {
+  min-height: 0;
+  max-height: min(320px, 45vh);
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.filterProjectSection {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 7px 3px 25px;
+  color: var(--chv-muted);
+  background: var(--vscode-dropdown-background, var(--chv-assistant-bg));
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.filterProjectSection[hidden] {
+  display: none;
+}
+
+.filterOption {
+  width: 100%;
+  min-height: 29px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  padding: 4px 7px;
+  border-color: transparent;
+  border-radius: 4px;
+  text-align: left;
+}
+
+.filterOption:hover,
+.filterOption:focus-visible {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.filterOption.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.filterOption.mixed {
+  background: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 45%, transparent);
+}
+
+.filterSelectAllOption {
+  margin-bottom: 4px;
+  border-bottom-color: var(--chv-border);
+  border-radius: 4px 4px 0 0;
+}
+
+.filterOptionMarker {
+  width: 18px;
+  text-align: center;
+  font-weight: 700;
+}
+
+.filterOptionLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filterOptionText {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.filterOptionDescription {
+  overflow: hidden;
+  color: var(--chv-muted);
+  font-size: 0.76rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filterOption.selected .filterOptionDescription {
+  color: inherit;
+  opacity: 0.78;
+}
+
+.filterCurrentBadge {
+  padding: 1px 5px;
+  border: 1px solid color-mix(in srgb, currentColor 32%, transparent);
+  border-radius: 999px;
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.filterNoOptions {
+  padding: 10px 8px;
+  text-align: center;
+}
+
+.dateRangeControl {
+  min-width: 0;
+  padding: 7px 9px 8px;
+  border: 1px solid var(--chv-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--chv-bg) 82%, var(--chv-assistant-bg) 18%);
+}
+
+.dateRangeTitle {
+  margin-bottom: 4px;
+}
+
+.dateRangeFields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+}
+
+.dateField {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  color: var(--chv-muted);
+  font-size: 0.76rem;
+}
+
+.dateField input {
+  color: var(--chv-fg);
+  font-size: var(--vscode-font-size);
+  color-scheme: light dark;
+}
+
+body.vscode-light .dateField input,
+body.vscode-high-contrast-light .dateField input {
+  color-scheme: light;
+}
+
+body.vscode-dark .dateField input,
+body.vscode-high-contrast .dateField input {
+  color-scheme: dark;
+}
+
+.dateRangeError {
+  margin-top: 6px;
+  color: var(--vscode-errorForeground);
+  font-size: 0.82rem;
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+  white-space: nowrap;
+}
+
+.metricGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+  gap: 9px;
+}
+
+.metricCard,
+.contentPanel,
+.emptyPanel {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 86%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--chv-tool-bg) 78%, var(--chv-bg) 22%);
+  box-shadow: 0 5px 18px color-mix(in srgb, #000 8%, transparent);
+}
+
+.metricCard {
+  min-height: 104px;
+  padding: 13px 13px 11px 16px;
+}
+
+.metricCard::before,
+.contentPanel::before,
+.emptyPanel::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--panel-accent);
+}
+
+.metricCard:nth-child(4n + 2) {
+  --panel-accent: var(--vscode-charts-green, #73c991);
+}
+
+.metricCard:nth-child(4n + 3) {
+  --panel-accent: var(--vscode-charts-purple, #b180d7);
+}
+
+.metricCard:nth-child(4n + 4) {
+  --panel-accent: var(--vscode-charts-orange, #d18616);
+}
+
+.metricCard.partial {
+  border-style: dashed;
+}
+
+.metricLabel {
+  color: var(--chv-muted);
+  font-weight: 550;
+}
+
+.metricValue {
+  margin-top: 5px;
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 5px;
+  font-size: 1.52rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.metricValue.longValue {
+  font-size: 1.24rem;
+}
+
+.metricValue.veryLongValue {
+  font-size: 1.08rem;
+}
+
+.metricLowerBoundBadge {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  border: 1px solid color-mix(in srgb, var(--chv-accent) 48%, var(--chv-border) 52%);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--chv-accent) 10%, transparent);
+  color: var(--chv-muted);
+  font-size: 0.68em;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.metricNumber {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.metricCoverage {
+  margin-top: 4px;
+  min-height: 18px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.metricCoverage .metricLowerBoundBadge {
+  flex: 0 0 auto;
+}
+
+.contentPanel,
+.emptyPanel {
+  padding: 14px;
+}
+
+.accentGreen {
+  --panel-accent: var(--vscode-charts-green, #73c991);
+}
+
+.accentBlue {
+  --panel-accent: var(--vscode-charts-blue, #75beff);
+}
+
+.accentPurple {
+  --panel-accent: var(--vscode-charts-purple, #b180d7);
+}
+
+.accentYellow {
+  --panel-accent: var(--vscode-charts-yellow, #cca700);
+}
+
+.sectionHeader {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px 16px;
+  margin: -14px -14px 12px;
+  padding: 11px 14px 10px 17px;
+  border-bottom: 1px solid color-mix(in srgb, var(--chv-border) 72%, transparent);
+  background: color-mix(in srgb, var(--chv-assistant-bg) 78%, transparent);
+}
+
+.sectionHeader h2,
+.contentPanel > h2 {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.03rem;
+  font-weight: 650;
+}
+
+.sectionHeader h2::before,
+.contentPanel > h2::before,
+.collapsibleTitle::before {
+  content: "";
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border: 2px solid color-mix(in srgb, var(--panel-accent) 78%, var(--chv-fg) 22%);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--panel-accent) 28%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--panel-accent) 10%, transparent);
+  transform: rotate(45deg);
+}
+
+.contentPanel > h2 {
+  margin: -14px -14px 12px;
+  padding: 11px 14px 10px 17px;
+  border-bottom: 1px solid color-mix(in srgb, var(--chv-border) 72%, transparent);
+  background: color-mix(in srgb, var(--chv-assistant-bg) 78%, transparent);
+}
+
+.collapsiblePanel {
+  padding-top: 0;
+}
+
+.collapsiblePanel:not([open]) {
+  padding-bottom: 0;
+}
+
+.collapsibleSummary {
+  margin: 0 -14px;
+  padding: 11px 14px 10px 17px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--chv-border) 72%, transparent);
+  background: color-mix(in srgb, var(--chv-assistant-bg) 78%, transparent);
+  font-weight: 650;
+  cursor: pointer;
+  list-style: none;
+}
+
+.collapsiblePanel[open] > .collapsibleSummary {
+  margin-bottom: 12px;
+}
+
+.collapsibleSummary::-webkit-details-marker {
+  display: none;
+}
+
+.collapsibleTitle {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.collapseChevron {
+  margin-left: auto;
+  color: var(--chv-muted);
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.collapsibleSummary.hasBadge .collapseChevron {
+  margin-left: 0;
+}
+
+.collapsiblePanel[open] > .collapsibleSummary .collapseChevron {
+  transform: rotate(90deg);
+}
+
+.panelToolbar {
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.activityMetricControl {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 360px);
+  align-items: center;
+  justify-content: end;
+  gap: 7px;
+  width: 100%;
+}
+
+.activityMetricControlLabel {
+  white-space: nowrap;
+}
+
+.activityMetricDropdown {
+  position: relative;
+  width: min(360px, 100%);
+  min-width: 0;
+}
+
+.activityMetricTrigger {
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--chv-bg) 78%, transparent);
+  text-align: left;
+}
+
+.activityMetricTriggerValue {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.activityMetricTriggerCoverage,
+.activityMetricCoverage {
+  color: var(--chv-muted);
+  font-size: 0.74rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityMetricChevron {
+  color: var(--chv-muted);
+}
+
+.activityMetricMenu {
+  position: fixed;
+  z-index: 55;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--chv-border);
+  border-radius: 8px;
+  background: var(--vscode-dropdown-background, var(--chv-assistant-bg));
+  color: var(--vscode-dropdown-foreground, var(--chv-fg));
+  box-shadow: 0 10px 28px color-mix(in srgb, #000 22%, transparent);
+}
+
+.activityMetricMenu[hidden] {
+  display: none;
+}
+
+.activityMetricGroupLabel {
+  padding: 5px 7px 3px;
+  color: var(--chv-muted);
+  font-size: 0.74rem;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.activityMetricOption {
+  width: 100%;
+  min-height: 29px;
+  display: grid;
+  grid-template-columns: 18px max-content minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  padding: 4px 7px;
+  border-color: transparent;
+  text-align: left;
+}
+
+.activityMetricOptionLabel {
+  white-space: nowrap;
+}
+
+.activityMetricOption:hover,
+.activityMetricOption:focus-visible {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.activityMetricOption.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.activityMetricMarker {
+  text-align: center;
+  font-weight: 700;
+}
+
+.filesToolbar {
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.segmentedControl {
+  display: inline-flex;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 82%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--chv-bg) 78%, transparent);
+}
+
+.segmentedControl button {
+  min-height: 24px;
+  padding: 2px 8px;
+  border-color: transparent;
+  border-radius: 5px;
+  color: var(--chv-muted);
+  white-space: nowrap;
+}
+
+.segmentedControl button.selected,
+.segmentedControl button[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--chv-accent) 68%, var(--chv-border) 32%);
+  background: color-mix(in srgb, var(--chv-accent) 20%, var(--chv-bg) 80%);
+  color: var(--chv-fg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chv-accent) 18%, transparent);
+}
+
+.heatmapScroller {
+  overflow-x: auto;
+  padding: 2px 0 5px;
+}
+
+.heatmapCanvas {
+  min-width: max-content;
+  display: grid;
+  grid-template-columns: 46px max-content;
+  grid-template-rows: auto auto;
+  gap: 6px 8px;
+}
+
+.heatmapHeaderAxis,
+.weekdayLabels {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: grid;
+  align-items: center;
+  padding-right: 5px;
+  background: color-mix(in srgb, var(--chv-tool-bg) 94%, var(--chv-bg) 6%);
+  color: var(--chv-muted);
+  font-size: 0.76rem;
+  text-align: right;
+}
+
+.heatmapHeaderAxis span,
+.weekdayLabels span {
+  min-width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 78%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chv-assistant-bg) 86%, var(--chv-bg) 14%);
+  font-weight: 650;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--chv-fg) 5%, transparent);
+}
+
+.heatmapHeaderAxis {
+  grid-column: 1;
+  grid-row: 1;
+  grid-template-rows: repeat(3, 22px);
+}
+
+.weekdayLabels {
+  grid-column: 1;
+  grid-row: 2;
+  grid-template-rows: repeat(7, 30px);
+  gap: 4px;
+}
+
+.heatmapHeaders {
+  grid-column: 2;
+  grid-row: 1;
+  display: grid;
+  grid-template-rows: repeat(3, 22px);
+}
+
+.heatmapHeaderRow {
+  display: grid;
+  grid-auto-columns: 42px;
+  gap: 4px;
+  min-width: max-content;
+}
+
+.heatmapHeaderCell {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  color: var(--chv-muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.periodHeaderCell {
+  margin: 1px 2px 1px 0;
+  padding: 1px 6px;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 78%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--chv-assistant-bg) 76%, transparent);
+  font-weight: 650;
+}
+
+.yearRow .periodHeaderCell {
+  border-color: color-mix(in srgb, var(--panel-accent) 36%, var(--chv-border) 64%);
+  background: color-mix(in srgb, var(--panel-accent) 9%, var(--chv-assistant-bg) 91%);
+}
+
+.dayHeaderCell {
+  justify-content: center;
+  width: 28px;
+  min-width: 28px;
+  height: 19px;
+  justify-self: center;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 74%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chv-bg) 80%, var(--chv-assistant-bg) 20%);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.heatmap {
+  grid-column: 2;
+  grid-row: 2;
+  display: grid;
+  grid-template-rows: repeat(7, 30px);
+  grid-auto-columns: 42px;
+  gap: 4px;
+  min-width: max-content;
+}
+
+.heatCell {
+  min-width: 42px;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-color: color-mix(in srgb, var(--vscode-charts-green, #2ea043) 45%, var(--chv-border));
+  background: color-mix(in srgb, var(--vscode-charts-green, #2ea043) var(--activity-level), var(--chv-bg));
+  font-variant-numeric: tabular-nums;
+}
+
+.heatDate {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+  white-space: nowrap;
+}
+
+.heatValue {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  overflow: hidden;
+  font-size: 0.77rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+}
+
+.heatValue .metricLowerBoundBadge {
+  min-width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  padding: 0 2px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+}
+
+.heatValue .metricNumber {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.filesHeader {
+  align-items: flex-start;
+}
+
+.fileControls {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+}
+
+.controlLabel {
+  color: var(--chv-muted);
+  font-size: 0.8rem;
+}
+
+.fileActions {
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.sortDirectionButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  white-space: nowrap;
+}
+
+.sortDirectionButton svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.fileList {
+  max-height: min(360px, 42vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 74%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--chv-bg) 86%, transparent);
+}
+
+.tableRow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  padding: 6px 9px;
+  border-top: 1px solid color-mix(in srgb, var(--chv-border) 62%, transparent);
+}
+
+.tableRow:first-child {
+  border-top: 0;
+}
+
+.fileRow {
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.fileRow .fileKindIcon {
+  justify-self: center;
+}
+
+.fileRowContent {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.fileRowMain {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.fileProjectName {
+  min-width: 0;
+  max-width: min(34vw, 36ch);
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fileRow:hover {
+  background: color-mix(in srgb, var(--chv-accent) 7%, var(--chv-bg) 93%);
+}
+
+.fileRow.selected,
+.fileRow[aria-selected="true"] {
+  background: color-mix(in srgb, var(--chv-accent) 14%, var(--chv-bg) 86%);
+  box-shadow: inset 3px 0 0 var(--chv-accent);
+}
+
+.rowMain {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowDetail {
+  overflow: hidden;
+  font-size: 0.82rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breakdownGroup {
+  min-width: 0;
+}
+
+.breakdownToolbar {
+  align-items: center;
+}
+
+.breakdownMetricControl {
+  grid-template-columns: max-content minmax(0, 280px);
+}
+
+.breakdownMetricDropdown {
+  width: min(280px, 100%);
+}
+
+.breakdownMetricTrigger {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.breakdownGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.breakdownGroupHeader {
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 10px;
+  padding: 3px 8px 4px;
+  border-bottom: 2px solid color-mix(in srgb, var(--panel-accent) 58%, var(--chv-border) 42%);
+  border-radius: 4px 4px 0 0;
+  background: color-mix(in srgb, var(--panel-accent) 7%, transparent);
+}
+
+.breakdownGroup h3 {
+  width: fit-content;
+  margin: 0;
+  padding: 0;
+  font-size: 0.96rem;
+}
+
+.breakdownGroupUnit {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.76rem;
+  font-weight: 550;
+}
+
+.breakdownEmpty {
+  margin: 7px 0 0;
+  line-height: 1.45;
+}
+
+.barRow {
+  display: grid;
+  grid-template-columns: minmax(70px, 1fr) minmax(60px, 2fr) var(--breakdown-value-width, 8ch);
+  gap: 7px;
+  align-items: center;
+  margin: 7px 0;
+}
+
+.modelBreakdownEntry {
+  min-width: 0;
+}
+
+.modelBreakdownEntry > .barRow {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 2px 3px;
+}
+
+.modelBarButton {
+  width: 100%;
+  padding: 2px 3px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.modelBarButton:hover {
+  background: color-mix(in srgb, var(--panel-accent) 8%, transparent);
+}
+
+.modelBarButton:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, var(--panel-accent));
+  outline-offset: 2px;
+}
+
+.modelChevron {
+  width: 1em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--panel-accent);
+  font-weight: 700;
+}
+
+.modelBreakdownGroup .barLabel {
+  display: grid;
+  grid-template-columns: 1em minmax(0, 1fr);
+  gap: 3px;
+  min-width: 0;
+  align-items: center;
+}
+
+.modelToggleGutter {
+  width: 1em;
+  min-width: 1em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.barLabelText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modelEffortPanel {
+  margin: 4px 0 10px 9px;
+  padding: 8px 8px 7px 11px;
+  border-left: 2px solid color-mix(in srgb, var(--panel-accent) 58%, var(--chv-border) 42%);
+  border-radius: 0 6px 6px 0;
+  background: color-mix(in srgb, var(--panel-accent) 5%, transparent);
+}
+
+.modelEffortPanel h4 {
+  margin: 0 0 6px;
+  color: var(--chv-fg);
+  font-size: 0.84rem;
+  font-weight: 650;
+}
+
+.modelEffortCoverage,
+.modelEffortOmitted {
+  margin: 4px 0 7px;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.modelEffortOmitted {
+  margin-bottom: 0;
+}
+
+.breakdownOmitted {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.effortBarRow {
+  grid-template-columns: minmax(62px, 1fr) minmax(54px, 2fr) var(--breakdown-value-width, 8ch);
+  margin: 6px 0;
+  font-size: 0.86rem;
+}
+
+.barLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barTrack {
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chv-muted) 18%, transparent);
+}
+
+.barFill {
+  height: 100%;
+  display: block;
+  background: var(--vscode-charts-blue, var(--chv-accent));
+}
+
+.barValue {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--breakdown-percentage-width, 7ch);
+  column-gap: 1ch;
+  align-items: baseline;
+  min-width: 0;
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.barAbsoluteValue,
+.barPercentage {
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.barRow .rowActions {
+  grid-column: 1 / -1;
+}
+
+.projectBarRow {
+  grid-template-columns: minmax(70px, 1fr) minmax(60px, 2fr) var(--breakdown-value-width, 8ch) 60px;
+}
+
+.projectBarRow .projectRowActions {
+  grid-column: 4;
+  justify-self: end;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+.projectRowAction.iconOnly {
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 4px;
+  justify-content: center;
+}
+
+.qualityBadge {
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--panel-accent) 45%, var(--chv-border) 55%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel-accent) 11%, var(--chv-bg) 89%);
+  color: var(--chv-fg);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.qualityCallout {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--panel-accent) 34%, var(--chv-border) 66%);
+  border-left: 4px solid var(--panel-accent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--panel-accent) 7%, var(--chv-bg) 93%);
+}
+
+.qualityInfoMark {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--panel-accent) 64%, var(--chv-border) 36%);
+  border-radius: 50%;
+  color: var(--panel-accent);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-weight: 700;
+}
+
+.qualityExplanations p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.qualityExplanations p + p {
+  margin-top: 6px;
+  color: var(--chv-muted);
+}
+
+.qualityGroups {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.qualityGroup {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 72%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--chv-bg) 78%, transparent);
+}
+
+.qualityGroup h3 {
+  margin: 0 0 9px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--panel-accent) 38%, var(--chv-border) 62%);
+  font-size: 0.9rem;
+}
+
+.qualityList {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) auto;
+  gap: 7px 12px;
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.qualityList dt {
+  color: var(--chv-muted);
+}
+
+.qualityList dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 1050px) {
+  .breakdownGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .sectionHeader,
+  .filesHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fileControls {
+    justify-content: flex-start;
+  }
+
+  .segmentedControl {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  .qualityGroups {
+    grid-template-columns: 1fr;
+  }
+
+  .filesToolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .fileActions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 760px) {
+  .insightsShell {
+    padding: 10px 10px 24px;
+  }
+
+  .breakdownGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .activityMetricControl {
+    grid-template-columns: minmax(0, 1fr);
+    justify-content: stretch;
+  }
+
+  .activityMetricDropdown {
+    width: 100%;
+  }
+
+  .barRow {
+    grid-template-columns: minmax(0, 1fr) var(--breakdown-value-width, 8ch);
+  }
+
+  .barTrack {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .projectBarRow {
+    grid-template-columns: minmax(0, 1fr) var(--breakdown-value-width, 8ch) 60px;
+  }
+
+  .projectBarRow .barLabel {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .projectBarRow .barValue {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .projectBarRow .projectRowActions {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .metricGrid {
+    grid-template-columns: repeat(auto-fit, minmax(min(210px, 100%), 1fr));
+  }
+
+
+  .sortDirectionLabel {
+    display: none;
+  }
+
+  .filterOverlay {
+    right: 8px;
+    left: 8px;
+    width: auto;
+  }
+}
+
+@media (max-width: 520px) {
+  .fileRowMain {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1px;
+  }
+
+  .fileProjectName {
+    max-width: 100%;
+    justify-self: end;
+  }
+}
+
+@media (forced-colors: active) {
+  .metricCard::before,
+  .contentPanel::before,
+  .emptyPanel::before {
+    background: Highlight;
+  }
+
+  .fileRow.selected,
+  .segmentedControl button[aria-pressed="true"] {
+    outline: 2px solid Highlight;
+  }
+}
+.simpleMetricControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.simpleMetricSelect {
+  min-width: 180px;
+  color: var(--vscode-dropdown-foreground);
+  background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border, var(--chv-border));
+  padding: 4px 8px;
+}
+
+.analyticsList,
+.activeSessionList {
+  display: grid;
+  gap: 6px;
+}
+
+.activeSessionRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  color: var(--chv-fg);
+  background: transparent;
+  border: 1px solid var(--chv-border);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.activeSessionRow:hover,
+.activeSessionRow:focus-visible {
+  background: var(--vscode-list-hoverBackground);
+  border-color: var(--vscode-focusBorder);
+}
+
+.activeSessionMain {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.activeSessionTitle,
+.activeSessionMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activeSessionValue {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.usageDetailGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.usageDetailGroup {
+  min-width: 0;
+  border: 1px solid var(--chv-border);
+  border-radius: 5px;
+  padding: 10px 12px;
+}
+
+.usageDetailGroup h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+
+.usageDetailList,
+.fileKindDetailList {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.usageDetailList {
+  grid-template-columns: minmax(0, 1fr) max-content;
+}
+
+.usageDetailList dt,
+.usageDetailList dd {
+  margin: 0;
+}
+
+.usageDetailList dd,
+.fileKindDetailValue {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.fileKindDetailRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 10px;
+}
+
+@media (max-width: 760px) {
+  .usageDetailGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

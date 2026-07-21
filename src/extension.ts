@@ -2,11 +2,16 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { resolveUiLanguage, t } from "./i18n";
 import { getConfig, type CodexHistoryViewerConfig } from "./settings";
-import { HistoryService } from "./services/historyService";
+import {
+  HistoryService,
+  isHistoryOperationSupersededError,
+  type HistoryRebuildSnapshot,
+} from "./services/historyService";
 import type { ArchiveLocationFilter, SessionSourceFilter, SessionSummary } from "./sessions/sessionTypes";
 import { PinnedTreeDataProvider, type PinnedSortMode } from "./tree/pinnedTree";
 import {
   HistoryTreeDataProvider,
+  buildProjectLabel,
   type HistoryRevealIdentity,
   type HistorySortOrder,
   type HistoryViewMode,
@@ -24,8 +29,17 @@ import {
 import { cleanupDeletedSessionUndoBackups, deleteSessionsWithConfirmation } from "./services/deleteService";
 import { PinStore, type PinEntry } from "./services/pinStore";
 import { BookmarkStore, type BookmarkEntry } from "./services/bookmarkStore";
-import { type SearchRequest, runSearchFlow } from "./services/searchService";
+import {
+  type HistorySearchIndexSnapshot,
+  type HistorySearchRefreshState,
+  type HistorySearchScopeSnapshot,
+  type SearchRequest,
+  createHistorySearchScopeSnapshot,
+  runSearchFlow,
+  waitForCurrentHistorySearchIndex,
+} from "./services/searchService";
 import { type IndexedSearchRole, SearchIndexService } from "./services/searchIndexService";
+import { SearchExecutionCoordinator } from "./services/searchExecutionCoordinator";
 import {
   GLOBAL_SEARCH_HISTORY_PROJECT_KEY,
   SearchHistoryStore,
@@ -96,15 +110,80 @@ import {
 import { ChatPanelManager } from "./chat/chatPanelManager";
 import { FileChangeHistoryPanelManager } from "./fileHistory/fileChangeHistoryPanelManager";
 import { FileChangeHistoryService } from "./fileHistory/fileChangeHistoryService";
-import { getDateScopeValue, sanitizeDateScope, type DateScope } from "./types/dateScope";
-import { resolveDateTimeSettings } from "./utils/dateTimeSettings";
+import { SessionAnalysisCancelledError, SessionAnalysisIndexService } from "./analysis/sessionAnalysisIndexService";
+import { HistoryInsightsPanelManager } from "./insights/historyInsightsPanelManager";
+import type { HistoryInsightsSnapshot } from "./insights/historyInsightsTypes";
+import { ClaudeBranchNavigationService } from "./branchMap/claudeBranchNavigationService";
+import { CodexForkNavigationService } from "./branchMap/codexForkNavigationService";
+import { getDateScopeValue, isSameDateScope, sanitizeDateScope, type DateScope } from "./types/dateScope";
+import {
+  createHistoryFilterStateV2,
+  HISTORY_FILTER_STATE_V2_KEY,
+  parseHistoryFilterStateV2,
+  type HistoryFilterStateV2,
+} from "./types/historyFilterState";
+import {
+  getSingleProjectSelectionCwd,
+  isSameProjectSelection,
+  MAX_PROJECT_SELECTION_GROUPS,
+  projectSelectionFromCwds,
+  reconcileProjectSelection,
+  type ProjectSelection,
+} from "./types/projectSelection";
+import {
+  resolveHistoryProjectFilterState,
+  restoreHistoryProjectScopeState,
+  type HistoryProjectScopePolicy,
+  type ProjectScopeMode,
+} from "./types/historyProjectScope";
+import {
+  buildHistoryInsightsFilterTransition,
+  validateHistoryInsightsArchiveLocation,
+} from "./insights/historyInsightsFilterTransition";
+import {
+  getDateTimeSettingsKey,
+  resolveDateTimeSettings,
+  type DateTimeSettings,
+} from "./utils/dateTimeSettings";
 import { safeDisplayPath } from "./utils/textUtils";
 import { normalizeCacheKey, normalizeProjectKey, pathExists } from "./utils/fsUtils";
+import { MementoTransactionError, updateMementoTransaction } from "./storage/mementoTransaction";
+import { CodexAgentRunsService } from "./agents/codexAgentRunsService";
+import { SessionIconResolver } from "./ui/sessionIconResolver";
 
 const SEARCH_ROLE_ORDER: IndexedSearchRole[] = ["user", "assistant", "developer", "tool"];
+// Keep staged rollout internal until the feature behavior is validated with real session data.
+const SESSION_ANALYSIS_FEATURES_ENABLED = true;
 
 type ProjectDisplayMode = "list" | "project";
-type ProjectScopeMode = "all" | "currentGroup";
+
+interface CoordinatedCacheRebuildInventory {
+  readonly searchSnapshot: HistorySearchIndexSnapshot;
+  readonly sessions: readonly SessionSummary[];
+}
+
+interface HistorySearchStartSnapshot {
+  readonly config: CodexHistoryViewerConfig;
+  readonly refreshState: HistorySearchRefreshState;
+}
+
+interface CacheMaintenanceProgressContext {
+  readonly progress: vscode.Progress<{ message?: string; increment?: number }>;
+  readonly token: vscode.CancellationToken;
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+}
+
+function createDeferred<T>(): Deferred<T> {
+  let resolveValue!: (value: T) => void;
+  const promise = new Promise<T>((resolve) => {
+    resolveValue = resolve;
+  });
+  return Object.freeze({ promise, resolve: resolveValue });
+}
 
 // Extension entry point. Initializes core services and tree views.
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
@@ -133,6 +212,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const SEARCH_DEFAULT_ROLES_CONFIG = "search.defaultRoles";
   const logger = new OutputChannelLogger();
   context.subscriptions.push(logger);
+  const commitWorkspaceStateTransaction = async (
+    writes: readonly { key: string; value: unknown }[],
+  ): Promise<void> => {
+    try {
+      await updateMementoTransaction(context.workspaceState, writes);
+    } catch (error) {
+      if (error instanceof MementoTransactionError && error.rollbackFailed) {
+        await vscode.window.showErrorMessage(t("history.filterState.rollbackFailed"));
+      }
+      throw error;
+    }
+  };
   let archiveLocationFilter: ArchiveLocationFilter = sanitizeArchiveLocationFilter(
     context.workspaceState.get(ARCHIVE_LOCATION_FILTER_KEY),
     context.workspaceState.get(LEGACY_SHOW_ARCHIVED_SESSIONS_KEY),
@@ -165,6 +256,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.uiLang", lang);
   };
   updateUiLanguageContext();
+  void vscode.commands.executeCommand(
+    "setContext",
+    "codexHistoryViewer.sessionAnalysisFeaturesEnabled",
+    SESSION_ANALYSIS_FEATURES_ENABLED,
+  );
   const updateHandoffMenuContext = (): void => {
     const latestConfig = getConfig();
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.handoffEnabled", latestConfig.handoffEnabled);
@@ -230,6 +326,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger,
   );
   const historyService = new HistoryService(context.globalStorageUri, config, titleOverrideStore, logger);
+  let historyRefreshQueue: Promise<void> = Promise.resolve();
+  const initialAuthoritativeHistoryRefreshSettled = createDeferred<void>();
+  let authoritativeHistoryIndexConfig: CodexHistoryViewerConfig | null = null;
+  let authoritativeHistoryInventoryGeneration: number | null = null;
+  const markAuthoritativeHistoryIndex = (candidateConfig: CodexHistoryViewerConfig): void => {
+    if (!historyService.isCurrentIndexForConfig(candidateConfig)) return;
+    authoritativeHistoryIndexConfig = Object.freeze({ ...candidateConfig });
+    authoritativeHistoryInventoryGeneration = historyService.getIndexInventoryGeneration();
+  };
+  const codexAgentRuns = new CodexAgentRunsService(historyService, logger);
+  const sessionIconResolver = new SessionIconResolver(context.extensionUri);
+  const sessionAnalysisIndex = new SessionAnalysisIndexService(context.globalStorageUri, logger);
+  const claudeBranchNavigation = new ClaudeBranchNavigationService(
+    historyService,
+    sessionAnalysisIndex,
+    bookmarkStore,
+    annotationStore,
+  );
+  const codexForkNavigation = new CodexForkNavigationService(historyService, {
+    getPresentationState: (session, branchStart) => {
+      const annotation = annotationStore.get(session.fsPath);
+      const isBookmarked = bookmarkStore.getAll().some(
+        (entry) =>
+          entry.sessionCacheKey === session.cacheKey &&
+          entry.kind === "message" &&
+          entry.messageIndex === branchStart.chatMessageIndex,
+      );
+      return {
+        isBookmarked,
+        hasTags: Boolean(annotation?.tags.length),
+        hasNote: Boolean(annotation?.note),
+      };
+    },
+  });
   const searchIndexService = new SearchIndexService(context.globalStorageUri, logger);
   const transcriptProvider = new TranscriptContentProvider(historyService, annotationStore, projectAssociationStore);
   const chatPanels = new ChatPanelManager(
@@ -241,6 +371,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     bookmarkStore,
     chatOpenPositionStore,
     searchHistoryStore,
+    claudeBranchNavigation,
+    codexForkNavigation,
+    codexAgentRuns,
+    sessionIconResolver,
     async () => {
       await vscode.commands.executeCommand("codexHistoryViewer.refresh");
     },
@@ -263,7 +397,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     chatPanels.registerSerializer(context.subscriptions);
     fileChangeHistoryPanels.registerSerializer(context.subscriptions);
   }
-  context.subscriptions.push(bookmarkStore, fileChangeHistoryPanels);
+  context.subscriptions.push(pinStore, bookmarkStore, annotationStore, chatPanels, fileChangeHistoryPanels);
   let storageStats: StorageStats = {
     globalStorageBytes: 0,
     trashFileCount: 0,
@@ -275,7 +409,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     storageStats = await collectStorageStats(context.globalStorageUri);
   };
   let lastSearchRequest: SearchRequest | null = sanitizeSearchRequest(context.workspaceState.get(LAST_SEARCH_REQUEST_KEY));
-  let searchExecutionGeneration = 0;
+  const searchExecution = new SearchExecutionCoordinator();
   const getConfiguredDefaultSearchRoles = (): IndexedSearchRole[] => {
     const raw = vscode.workspace.getConfiguration("codexHistoryViewer").get<unknown>(SEARCH_DEFAULT_ROLES_CONFIG);
     return sanitizeIndexedSearchRoles(raw);
@@ -362,15 +496,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const shouldClearPinnedProjectFilterForMigration =
     pinnedProjectDisplayRaw === undefined && sanitizeProjectGrouped(pinnedLegacyGroupedRaw) && pinnedProjectCwd !== null;
   if (shouldClearPinnedProjectFilterForMigration) pinnedProjectCwd = null;
-  if (shouldPersistHistoryProjectMigration || shouldClearHistoryProjectFilterForMigration) {
-    try {
-      await context.workspaceState.update(HISTORY_PROJECT_DISPLAY_KEY, historyProjectDisplay);
-      await context.workspaceState.update(HISTORY_PROJECT_SCOPE_KEY, historyProjectScope);
-      if (shouldClearHistoryProjectFilterForMigration) await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, "");
-    } catch (error) {
-      logger.debug(`history.projectState.migration failed error=${sanitizeDebugError(error)}`);
-    }
-  }
   if (shouldPersistPinnedProjectMigration || shouldClearPinnedProjectFilterForMigration) {
     try {
       await context.workspaceState.update(PINNED_PROJECT_DISPLAY_KEY, pinnedProjectDisplay);
@@ -379,6 +504,131 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch (error) {
       logger.debug(`pinned.projectState.migration failed error=${sanitizeDebugError(error)}`);
     }
+  }
+  const resolveHistoryProjectGroupKey = (cwd: string): string | null =>
+    projectAssociationStore.getGroupCanonicalProjectKey(cwd) ?? normalizeProjectKey(cwd);
+  const historyFilterStateRaw = context.workspaceState.get<unknown>(HISTORY_FILTER_STATE_V2_KEY);
+  let historyFilterStateCorrupt = false;
+  let historyFilterStateToPersist: HistoryFilterStateV2 | null = null;
+  let historyProjectScopeToPersist: ProjectScopeMode | null = null;
+  let historyProjectSelection: ProjectSelection;
+  if (historyFilterStateRaw === undefined) {
+    const legacyScopeCwd = historyProjectScope === "currentGroup"
+      ? resolveCurrentWorkspaceFolder()?.uri.fsPath ?? null
+      : null;
+    const migratedProjects = projectSelectionFromCwds(
+      historyProjectCwd,
+      legacyScopeCwd,
+      resolveHistoryProjectGroupKey,
+    );
+    const restoredProjectState = restoreHistoryProjectScopeState(
+      historyProjectScope,
+      migratedProjects,
+      resolveCurrentHistoryProjectSelection(migratedProjects),
+    );
+    historyProjectSelection = restoredProjectState.projects;
+    if (historyProjectScope !== restoredProjectState.scope) {
+      historyProjectScope = restoredProjectState.scope;
+      historyProjectScopeToPersist = historyProjectScope;
+    }
+    historyProjectCwd = getSingleProjectSelectionCwd(historyProjectSelection);
+    const migrated = createHistoryFilterStateV2({
+      date: historyFilter,
+      projects: historyProjectSelection,
+      source: historySourceFilter,
+      tags: historyTagFilter,
+      archiveLocation: historySourceFilter === "claude" ? "all" : archiveLocationFilter,
+    });
+    historyFilterStateToPersist = migrated;
+  } else {
+    const parsed = parseHistoryFilterStateV2(historyFilterStateRaw);
+    if (!parsed) {
+      historyFilterStateCorrupt = true;
+      historyFilter = { kind: "all" };
+      historyProjectSelection = { kind: "none" };
+      historyProjectCwd = null;
+      if (historyProjectScope !== "all") historyProjectScopeToPersist = "all";
+      historyProjectScope = "all";
+      historySourceFilter = resolveConstrainedHistorySourceFilter("all", config);
+      historyTagFilter = [];
+    } else {
+      historyFilter = parsed.date;
+      const reconciledProjects = reconcileProjectSelection(parsed.projects, resolveHistoryProjectGroupKey);
+      const restoredProjectState = restoreHistoryProjectScopeState(
+        historyProjectScope,
+        reconciledProjects,
+        resolveCurrentHistoryProjectSelection(reconciledProjects),
+      );
+      historyProjectSelection = restoredProjectState.projects;
+      historyProjectCwd = getSingleProjectSelectionCwd(historyProjectSelection);
+      if (historyProjectScope !== restoredProjectState.scope) {
+        historyProjectScope = restoredProjectState.scope;
+        historyProjectScopeToPersist = historyProjectScope;
+      }
+      historySourceFilter = resolveConstrainedHistorySourceFilter(parsed.source, config);
+      historyTagFilter = parsed.tags;
+      const parsedCodexArchiveLocation = parsed.source === "claude"
+        ? archiveLocationFilter
+        : parsed.archiveLocation;
+      const effectiveArchiveLocation = historySourceFilter === "claude"
+        ? "all"
+        : config.enableCodexArchivedSessions
+          ? parsedCodexArchiveLocation
+          : "activeOnly";
+      if (historySourceFilter !== "claude") archiveLocationFilter = effectiveArchiveLocation;
+      if (
+        !isSameProjectSelection(historyProjectSelection, parsed.projects) ||
+        historySourceFilter !== parsed.source ||
+        effectiveArchiveLocation !== parsed.archiveLocation
+      ) {
+        historyFilterStateToPersist = createHistoryFilterStateV2({
+          date: historyFilter,
+          projects: historyProjectSelection,
+          source: historySourceFilter,
+          tags: historyTagFilter,
+          archiveLocation: effectiveArchiveLocation,
+        });
+      }
+    }
+  }
+  const shouldPersistArchiveLocation =
+    historySourceFilter !== "claude" &&
+    sanitizeArchiveLocationFilter(
+      context.workspaceState.get(ARCHIVE_LOCATION_FILTER_KEY),
+      context.workspaceState.get(LEGACY_SHOW_ARCHIVED_SESSIONS_KEY),
+    ) !== archiveLocationFilter;
+  if (
+    historyFilterStateToPersist ||
+    historyProjectScopeToPersist ||
+    shouldPersistArchiveLocation ||
+    shouldPersistHistoryProjectMigration ||
+    shouldClearHistoryProjectFilterForMigration
+  ) {
+    try {
+      await commitWorkspaceStateTransaction([
+        ...(shouldPersistArchiveLocation
+          ? [{ key: ARCHIVE_LOCATION_FILTER_KEY, value: archiveLocationFilter }]
+          : []),
+        ...(historyFilterStateToPersist
+          ? [{ key: HISTORY_FILTER_STATE_V2_KEY, value: historyFilterStateToPersist }]
+          : []),
+        ...(shouldPersistHistoryProjectMigration
+          ? [{ key: HISTORY_PROJECT_DISPLAY_KEY, value: historyProjectDisplay }]
+          : []),
+        ...(shouldPersistHistoryProjectMigration || historyProjectScopeToPersist
+          ? [{ key: HISTORY_PROJECT_SCOPE_KEY, value: historyProjectScope }]
+          : []),
+        ...(shouldClearHistoryProjectFilterForMigration
+          ? [{ key: HISTORY_PROJECT_FILTER_KEY, value: "" }]
+          : []),
+      ]);
+    } catch (error) {
+      logger.debug(`history.filterState.startup persist failed error=${sanitizeDebugError(error)}`);
+    }
+  }
+  updateArchivedSessionsContext();
+  if (historyFilterStateCorrupt) {
+    void vscode.window.showWarningMessage(t("history.filterState.invalid"));
   }
   const pinnedProvider = new PinnedTreeDataProvider(
     historyService,
@@ -394,7 +644,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     resolveProjectScopeCwd(pinnedProjectScope),
     pinnedProjectDisplay === "project",
     pinnedSortMode,
-    context.extensionUri,
+    codexAgentRuns,
+    sessionIconResolver,
   );
   const historyProvider = new HistoryTreeDataProvider(
     historyService,
@@ -405,22 +656,145 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyViewMode,
     historySortOrder,
     historyFilter,
-    historyProjectCwd,
-    resolveProjectScopeCwd(historyProjectScope),
+    null,
+    null,
     historyProjectDisplay === "project",
     historySourceFilter,
     historyTagFilter,
     historySourceFilter === "claude" ? "all" : archiveLocationFilter,
-    context.extensionUri,
+    codexAgentRuns,
+    sessionIconResolver,
+    historyProjectSelection,
   );
   const searchProvider = new SearchTreeDataProvider(
     pinStore,
     annotationStore,
     projectAliasStore,
     projectAssociationStore,
-    historySourceFilter === "claude" ? "all" : archiveLocationFilter,
-    context.extensionUri,
+    codexAgentRuns,
+    sessionIconResolver,
   );
+  const historyInsightsPanels = new HistoryInsightsPanelManager(
+    context.extensionUri,
+    historyService,
+    sessionAnalysisIndex,
+    fileChangeHistoryPanels,
+    projectAssociationStore,
+    annotationStore,
+    {
+      waitForCurrentHistoryIndex: async (isRequestCurrent, requireAuthoritative) => {
+        if (!requireAuthoritative) {
+          return waitForCurrentHistorySearchIndex({
+            refreshState: Object.freeze({ queue: historyRefreshQueue }),
+            config: Object.freeze({ ...getConfig() }),
+            historyService,
+            isRequestCurrent,
+          });
+        }
+        await initialAuthoritativeHistoryRefreshSettled.promise;
+        if (!isRequestCurrent()) return null;
+        const refreshState = Object.freeze({ queue: historyRefreshQueue });
+        const currentConfig = Object.freeze({ ...getConfig() });
+        await refreshState.queue;
+        if (!isRequestCurrent() || !historyService.isCurrentIndexForConfig(currentConfig)) return null;
+        const authoritativeConfig = authoritativeHistoryIndexConfig;
+        const authoritativeInventoryGeneration = authoritativeHistoryInventoryGeneration;
+        const currentInventoryGeneration = historyService.getIndexInventoryGeneration();
+        if (
+          !authoritativeConfig ||
+          authoritativeInventoryGeneration === null ||
+          authoritativeInventoryGeneration !== currentInventoryGeneration ||
+          !historyService.isCurrentIndexForConfig(authoritativeConfig) ||
+          !historyService.isCurrentIndexForConfig(currentConfig)
+        ) {
+          return null;
+        }
+        const index = historyService.getIndex();
+        return Object.freeze({
+          config: currentConfig,
+          sessions: Object.freeze(Array.from(index.sessions)),
+        });
+      },
+      getCurrentSnapshot: () =>
+        historyProvider.createInsightsSnapshot(getDateTimeSettingsKey(resolveDateTimeSettings())),
+      prepareFilters: async (snapshot, filters) => {
+        const config = getConfig();
+        const nextArchiveLocation = validateHistoryInsightsArchiveLocation(filters, config.enableCodexArchivedSessions);
+        if (!nextArchiveLocation) return null;
+        const nextTags = sanitizeTagFilter(filters.tags);
+        const transition = buildHistoryInsightsFilterTransition({ ...filters, tags: nextTags }, nextArchiveLocation);
+        const condition = transition.condition;
+        const historyState = transition.historyState;
+        const nextSnapshot = historyProvider.createInsightsSnapshot(
+          getDateTimeSettingsKey(resolveDateTimeSettings()),
+          condition,
+        );
+        return {
+          snapshot: nextSnapshot,
+          ...(historyState
+            ? {
+                commitHistory: async (): Promise<void> => {
+                  await applyHistoryFilterState(historyState, {
+                    persist: true,
+                    rerunSearch: true,
+                    projectScopePolicy: "explicitSelection",
+                  });
+                },
+              }
+            : {}),
+        };
+      },
+      getProjectDisplayName: (projectCwd) => {
+        const displayCwd = projectAssociationStore.getDisplayCwd(projectCwd) ?? projectCwd;
+        return projectAliasStore.getAliasByCwd(displayCwd) ?? buildProjectLabel(displayCwd);
+      },
+      getCurrentProjectCwd: () => resolveCurrentWorkspaceFolder()?.uri.fsPath ?? null,
+      showDayInHistory: async (snapshot, ymd) => {
+        await applyHistoryFilterState({
+          date: { kind: "day", ymd },
+          projects: snapshot.descriptor.projects,
+          source: snapshot.descriptor.source,
+          tags: snapshot.descriptor.tags,
+          archiveLocation: snapshot.descriptor.archiveLocation,
+        }, { persist: true, rerunSearch: false, projectScopePolicy: "explicitSelection" });
+        await vscode.commands.executeCommand("codexHistoryViewer.historyView.focus");
+      },
+      showProjectInHistory: async (snapshot, projectKey) => {
+        const projectCwd = resolveInsightsProjectCwd(snapshot, projectKey, historyService.getIndex().sessions);
+        if (!projectCwd) return;
+        await applyHistoryFilterState({
+          date: snapshot.descriptor.date,
+          projects: projectSelectionFromCwds(projectCwd, null, resolveHistoryProjectGroupKey),
+          source: snapshot.descriptor.source,
+          tags: snapshot.descriptor.tags,
+          archiveLocation: snapshot.descriptor.archiveLocation,
+        }, { persist: true, rerunSearch: false, projectScopePolicy: "explicitSelection" });
+        await vscode.commands.executeCommand("codexHistoryViewer.historyView.focus");
+      },
+      searchProject: async (snapshot, projectKey) => {
+        const projectCwd = resolveInsightsProjectCwd(snapshot, projectKey, historyService.getIndex().sessions);
+        if (!projectCwd) return;
+        await applyHistoryFilterState({
+          date: snapshot.descriptor.date,
+          projects: projectSelectionFromCwds(projectCwd, null, resolveHistoryProjectGroupKey),
+          source: snapshot.descriptor.source,
+          tags: snapshot.descriptor.tags,
+          archiveLocation: snapshot.descriptor.archiveLocation,
+        }, { persist: true, rerunSearch: false, projectScopePolicy: "explicitSelection" });
+        await rerunVisibleSearch();
+        await vscode.commands.executeCommand("codexHistoryViewer.searchView.focus");
+      },
+      openSession: async (session) => {
+        if (await chatPanels.revealExistingSessionPanel(session.fsPath, undefined, { promoteReusable: true })) return;
+        await chatPanels.openSession(session, { kind: "session" });
+      },
+    },
+    context.workspaceState,
+    logger,
+  );
+  if (config.webviewRestoreAfterReload) {
+    historyInsightsPanels.registerSerializer(context.subscriptions);
+  }
   let lastHistoryRefreshAt: number | null = null;
 
   const resolveEffectiveArchiveLocationFilter = (): ArchiveLocationFilter =>
@@ -431,25 +805,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const syncArchiveLocationFilterToProviders = (): void => {
     historyProvider.setArchiveLocationFilter(resolveEffectiveArchiveLocationFilter());
-    searchProvider.setArchiveLocationFilter(resolveEffectiveArchiveLocationFilter());
     pinnedProvider.setArchiveLocationFilter(resolveEffectivePinnedArchiveLocationFilter());
   };
 
   const syncProjectScopeFiltersToProviders = (): void => {
     let scopeChanged = false;
     if (!resolveCurrentWorkspaceFolder()) {
-      if (historyProjectScope === "currentGroup") {
-        historyProjectScope = "all";
-        void context.workspaceState.update(HISTORY_PROJECT_SCOPE_KEY, historyProjectScope);
-        scopeChanged = true;
-      }
       if (pinnedProjectScope === "currentGroup") {
         pinnedProjectScope = "all";
         void context.workspaceState.update(PINNED_PROJECT_SCOPE_KEY, pinnedProjectScope);
         scopeChanged = true;
       }
     }
-    historyProvider.setProjectScopeFilter(resolveProjectScopeCwd(historyProjectScope));
+    historyProvider.setProjectSelection(historyProjectSelection);
     pinnedProvider.setProjectScopeFilter(resolveProjectScopeCwd(pinnedProjectScope));
     if (scopeChanged) {
       updateHistoryViewDescription();
@@ -524,20 +892,52 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   }
 
+  function resolveCurrentHistoryProjectSelection(
+    fallbackProjects?: ProjectSelection,
+  ): ProjectSelection | null {
+    const workspaceFolder = resolveCurrentWorkspaceFolder();
+    if (!workspaceFolder) return null;
+    const currentScopeCwd = resolveProjectScopeCwd("currentGroup");
+    if (!currentScopeCwd) return null;
+    const selection = projectSelectionFromCwds(currentScopeCwd, null, resolveHistoryProjectGroupKey);
+    if (
+      historyService.getIndex().sessions.length === 0 &&
+      fallbackProjects?.kind === "groups" &&
+      fallbackProjects.groups.length === 1
+    ) {
+      const fallbackCwd = fallbackProjects.groups[0]!.representativeCwd;
+      const fallbackKey = normalizePathForPrefixMatch(fallbackCwd);
+      const workspaceKey = normalizePathForPrefixMatch(workspaceFolder.uri.fsPath);
+      if (
+        fallbackKey &&
+        workspaceKey &&
+        (
+          isSameOrDescendantPath(fallbackKey, workspaceKey) ||
+          isSameOrDescendantPath(workspaceKey, fallbackKey)
+        )
+      ) {
+        return fallbackProjects;
+      }
+    }
+    return selection.kind === "groups" && selection.groups.length === 1 ? selection : null;
+  }
+
   const resolveSearchHistoryProjectKeyFromCwd = (projectCwd: string | null | undefined): string => {
     const raw = typeof projectCwd === "string" ? projectCwd.trim() : "";
     if (!raw) return GLOBAL_SEARCH_HISTORY_PROJECT_KEY;
     return normalizeSearchHistoryProjectKey(getCanonicalProjectKey(raw) ?? normalizeProjectKey(raw));
   };
 
-  const resolveSearchHistoryProjectKeyForSearch = (): string => {
-    if (historyProjectCwd) return resolveSearchHistoryProjectKeyFromCwd(historyProjectCwd);
-    const scopeCwd = resolveProjectScopeCwd(historyProjectScope);
-    if (scopeCwd) return resolveSearchHistoryProjectKeyFromCwd(scopeCwd);
+  const resolveSearchHistoryProjectKeyForSelection = (selection: ProjectSelection): string => {
+    const selectedCwd = getSingleProjectSelectionCwd(selection);
+    if (selectedCwd) return resolveSearchHistoryProjectKeyFromCwd(selectedCwd);
+    if (selection.kind === "groups") return GLOBAL_SEARCH_HISTORY_PROJECT_KEY;
     const workspaceFolder = resolveCurrentWorkspaceFolder();
     if (workspaceFolder) return resolveSearchHistoryProjectKeyFromCwd(workspaceFolder.uri.fsPath);
     return GLOBAL_SEARCH_HISTORY_PROJECT_KEY;
   };
+  const resolveSearchHistoryProjectKeyForSearch = (): string =>
+    resolveSearchHistoryProjectKeyForSelection(historyProjectSelection);
 
   const buildHistoryViewStateSummary = (): string => {
     const parts: string[] = [];
@@ -550,7 +950,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const parts: string[] = [];
     const dateValue = getDateScopeValue(historyFilter);
     if (dateValue) parts.push(dateValue);
-    if (historyProjectCwd) parts.push(t("history.filter.projectLabel", getProjectDisplayName(historyProjectCwd, 60)));
+    if (historyProjectScope !== "currentGroup") {
+      if (historyProjectSelection.kind === "none") {
+        parts.push(t("historyInsights.filterProjectsNone"));
+      } else if (historyProjectSelection.kind === "groups") {
+        parts.push(historyProjectSelection.groups.length === 1
+          ? t("history.filter.projectLabel", getProjectDisplayName(historyProjectSelection.groups[0]!.representativeCwd, 60))
+          : t("historyInsights.filterProjectGroupCount", historyProjectSelection.groups.length));
+      }
+    }
     const sourceSummary = buildSourceFilterSummary();
     if (sourceSummary) parts.push(sourceSummary);
     const archiveLocationSummary = buildArchiveLocationFilterSummary();
@@ -657,7 +1065,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       extensionVersion: resolveExtensionVersion(context),
     };
   });
-  // Provide a virtual document (conversation log).
+  // Provide a virtual document for the session transcript.
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(transcriptProvider.scheme, transcriptProvider),
     vscode.languages.registerDocumentLinkProvider(
@@ -939,7 +1347,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     pinnedView,
     historyView,
     searchView,
-    chatPanels,
+    historyInsightsPanels,
   );
 
   // Ensure the global storage directory exists before cache/index operations.
@@ -1255,85 +1663,297 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   };
 
-  const applyHistoryProjectState = async (
-    next: { projectCwd?: string | null; display?: ProjectDisplayMode; scope?: ProjectScopeMode },
+  let historyStateTransitionQueue: Promise<void> = Promise.resolve();
+  let historyStateTransitionRevision = 0;
+  let historyFilterSearchAbortEpoch = 0;
+  const appendHistoryStateTransition = <T>(operation: () => Promise<T>): Promise<T> => {
+    const result = historyStateTransitionQueue.then(operation, operation);
+    historyStateTransitionQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+  const enqueueHistoryStateTransition = <T>(
+    operation: (rerunAbortEpoch: number) => Promise<T>,
+  ): Promise<T> => {
+    const rerunAbortEpoch = historyFilterSearchAbortEpoch;
+    historyStateTransitionRevision += 1;
+    return appendHistoryStateTransition(() => operation(rerunAbortEpoch));
+  };
+  let historyFilterSearchRerunRequestRevision = 0;
+  let historyFilterSearchRerunHandledRevision = 0;
+  let historyFilterSearchRerunScheduled = false;
+  const scheduleHistoryFilterSearchRerun = (
+    expectedAbortEpoch = historyFilterSearchAbortEpoch,
+  ): void => {
+    if (expectedAbortEpoch !== historyFilterSearchAbortEpoch) return;
+    historyFilterSearchRerunRequestRevision += 1;
+    if (historyFilterSearchRerunScheduled) return;
+    historyFilterSearchRerunScheduled = true;
+
+    const appendDrain = (): void => {
+      const scheduledRevision = historyStateTransitionRevision;
+      void appendHistoryStateTransition(async () => {
+        if (scheduledRevision !== historyStateTransitionRevision) {
+          appendDrain();
+          return;
+        }
+        historyFilterSearchRerunScheduled = false;
+        if (historyFilterSearchRerunHandledRevision >= historyFilterSearchRerunRequestRevision) return;
+        historyFilterSearchRerunHandledRevision = historyFilterSearchRerunRequestRevision;
+        void rerunVisibleSearch().catch((error) => {
+          logger.debug(`history.filter search rerun failed error=${sanitizeDebugError(error)}`);
+        });
+      });
+    };
+
+    appendDrain();
+  };
+
+  const applyHistoryProjectState = (
+    next:
+      | { projectCwd?: string | null; display?: ProjectDisplayMode; scope?: ProjectScopeMode }
+      | (() => { projectCwd?: string | null; display?: ProjectDisplayMode; scope?: ProjectScopeMode }),
     opts: { persist: boolean; rerunSearch?: boolean },
-  ): Promise<void> => {
-    const previousProjectCwd = historyProjectCwd;
+  ): Promise<void> => enqueueHistoryStateTransition(async (rerunAbortEpoch) => {
+    const requested = typeof next === "function" ? next() : next;
+    const previousProjects = historyProjectSelection;
     const previousProjectScope = historyProjectScope;
+    const previousProjectDisplay = historyProjectDisplay;
+    let nextProjectCwd = historyProjectCwd;
+    let nextProjectSelection = historyProjectSelection;
+    let nextProjectScope = historyProjectScope;
+    let nextProjectDisplay = historyProjectDisplay;
+    if ("projectCwd" in requested) {
+      nextProjectCwd = sanitizeProjectCwd(requested.projectCwd);
+      nextProjectSelection = projectSelectionFromCwds(nextProjectCwd, null, resolveHistoryProjectGroupKey);
+      nextProjectScope = "all";
+    }
+    if (requested.display) nextProjectDisplay = sanitizeProjectDisplayMode(requested.display);
+    if (requested.scope === "currentGroup") {
+      const currentCwd = resolveProjectScopeCwd("currentGroup");
+      if (!currentCwd) return;
+      nextProjectSelection = projectSelectionFromCwds(currentCwd, null, resolveHistoryProjectGroupKey);
+      nextProjectCwd = getSingleProjectSelectionCwd(nextProjectSelection);
+      nextProjectScope = "currentGroup";
+    } else if (
+      requested.scope === "all" &&
+      previousProjectScope === "currentGroup" &&
+      !("projectCwd" in requested)
+    ) {
+      nextProjectSelection = { kind: "all" };
+      nextProjectCwd = null;
+      nextProjectScope = "all";
+    }
+    const projectsChanged = !isSameProjectSelection(previousProjects, nextProjectSelection);
+    const scopeChanged = previousProjectScope !== nextProjectScope;
+    const displayChanged = previousProjectDisplay !== nextProjectDisplay;
+    if (!projectsChanged && !scopeChanged && !displayChanged) return;
+    if (opts.persist) {
+      await commitWorkspaceStateTransaction([
+        ...(projectsChanged
+          ? [{
+              key: HISTORY_FILTER_STATE_V2_KEY,
+              value: createHistoryFilterStateV2({
+                date: historyFilter,
+                projects: nextProjectSelection,
+                source: historySourceFilter,
+                tags: historyTagFilter,
+                archiveLocation: resolveEffectiveArchiveLocationFilter(),
+              }),
+            }]
+          : []),
+        ...(displayChanged
+          ? [{ key: HISTORY_PROJECT_DISPLAY_KEY, value: nextProjectDisplay }]
+          : []),
+        ...(scopeChanged
+          ? [{ key: HISTORY_PROJECT_SCOPE_KEY, value: nextProjectScope }]
+          : []),
+      ]);
+    }
     const revealIdentity = captureHistoryRevealIdentity();
-    if ("projectCwd" in next) historyProjectCwd = sanitizeProjectCwd(next.projectCwd);
-    if (next.display) historyProjectDisplay = sanitizeProjectDisplayMode(next.display);
-    if (next.scope) historyProjectScope = sanitizeProjectScopeMode(next.scope);
-    historyProvider.setProjectFilter(historyProjectCwd);
-    historyProvider.setProjectScopeFilter(resolveProjectScopeCwd(historyProjectScope));
+    historyProjectCwd = nextProjectCwd;
+    historyProjectSelection = nextProjectSelection;
+    historyProjectScope = nextProjectScope;
+    historyProjectDisplay = nextProjectDisplay;
+    const rerunSearch =
+      opts.rerunSearch !== false &&
+      (projectsChanged || scopeChanged);
+    if (rerunSearch) scheduleHistoryFilterSearchRerun(rerunAbortEpoch);
+    await refreshCommittedHistoryFilterState(revealIdentity);
+  });
+
+  const projectCommittedHistoryFilterState = async (
+    revealIdentity: HistoryRevealIdentity | null,
+  ): Promise<void> => {
+    historyProvider.setFilterState(
+      historyFilter,
+      historyProjectSelection,
+      historySourceFilter,
+      historyTagFilter,
+      resolveEffectiveArchiveLocationFilter(),
+    );
     historyProvider.setProjectGrouped(historyProjectDisplay === "project");
+    syncArchiveLocationFilterToProviders();
     historyProvider.refresh();
+    updateArchivedSessionsContext();
     updateHistoryViewDescription();
     updateSearchViewDescription();
     statusProvider.refresh();
     await revealHistorySelection(revealIdentity);
-    if (opts.persist) {
-      await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, historyProjectCwd ?? "");
-      await context.workspaceState.update(HISTORY_PROJECT_DISPLAY_KEY, historyProjectDisplay);
-      await context.workspaceState.update(HISTORY_PROJECT_SCOPE_KEY, historyProjectScope);
-    }
-    if (
-      opts.rerunSearch !== false &&
-      (previousProjectCwd !== historyProjectCwd || previousProjectScope !== historyProjectScope)
-    ) {
-      await rerunVisibleSearch();
+  };
+
+  const refreshCommittedHistoryFilterState = async (
+    revealIdentity: HistoryRevealIdentity | null,
+  ): Promise<void> => {
+    try {
+      await projectCommittedHistoryFilterState(revealIdentity);
+    } catch (error) {
+      logger.debug(`history.filter refresh failed error=${sanitizeDebugError(error)}`);
+      void (async () => {
+        const retryAction = t("history.filterState.refreshRetry");
+        const choice = await vscode.window.showWarningMessage(t("history.filterState.refreshFailed"), retryAction);
+        if (choice === retryAction) {
+          await projectCommittedHistoryFilterState(captureHistoryRevealIdentity());
+        }
+      })().catch((retryError) => {
+        logger.debug(`history.filter refresh retry failed error=${sanitizeDebugError(retryError)}`);
+        void vscode.window.showErrorMessage(t("history.filterState.refreshRetryFailed"));
+      });
     }
   };
 
-  const applyHistoryFilters = async (
-    next: { date: DateScope; projectCwd: string | null; source: SessionSourceFilter; tags: string[] },
-    opts: { persist: boolean; rerunSearch?: boolean },
+  const commitHistoryFilterState = async (
+    state: HistoryFilterStateV2,
+    nextSource: SessionSourceFilter,
+    nextArchiveLocation: ArchiveLocationFilter,
+    nextProjectScope: ProjectScopeMode,
   ): Promise<void> => {
-    const previousDate = historyFilter;
-    const previousProjectCwd = historyProjectCwd;
-    const previousSource = historySourceFilter;
-    const previousTags = historyTagFilter;
-    const nextDate = sanitizeDateScope(next.date);
-    const nextProjectCwd = sanitizeProjectCwd(next.projectCwd);
-    const nextSource = constrainHistorySourceFilter(next.source);
-    const nextTags = sanitizeTagFilter(next.tags);
-    const dateChanged =
-      previousDate.kind !== nextDate.kind || getDateScopeValue(previousDate) !== getDateScopeValue(nextDate);
-    const changed =
-      dateChanged ||
-      previousProjectCwd !== nextProjectCwd ||
-      previousSource !== nextSource ||
-      !isSameTagFilter(previousTags, nextTags);
-    const revealIdentity = captureHistoryRevealIdentity();
+    await commitWorkspaceStateTransaction([
+      ...(nextSource === "claude" || archiveLocationFilter === nextArchiveLocation
+        ? []
+        : [{ key: ARCHIVE_LOCATION_FILTER_KEY, value: nextArchiveLocation }]),
+      { key: HISTORY_FILTER_STATE_V2_KEY, value: state },
+      ...(historyProjectScope === nextProjectScope
+        ? []
+        : [{ key: HISTORY_PROJECT_SCOPE_KEY, value: nextProjectScope }]),
+    ]);
+  };
 
+  const applyHistoryFilterState = (
+    next:
+      | {
+          date: DateScope;
+          projects: ProjectSelection;
+          source: SessionSourceFilter;
+          tags: readonly string[];
+          archiveLocation: ArchiveLocationFilter;
+        }
+      | (() => {
+          date: DateScope;
+          projects: ProjectSelection;
+          source: SessionSourceFilter;
+          tags: readonly string[];
+          archiveLocation: ArchiveLocationFilter;
+        }),
+    opts: { persist: boolean; rerunSearch?: boolean; projectScopePolicy: HistoryProjectScopePolicy },
+  ): Promise<boolean> => enqueueHistoryStateTransition(async (rerunAbortEpoch) => {
+    const requested = typeof next === "function" ? next() : next;
+    const nextDate = sanitizeDateScope(requested.date);
+    const reconciledProjects = reconcileProjectSelection(requested.projects, resolveHistoryProjectGroupKey);
+    const nextProjectState = resolveHistoryProjectFilterState(
+      historyProjectScope,
+      reconciledProjects,
+      resolveCurrentHistoryProjectSelection(historyProjectSelection),
+      opts.projectScopePolicy,
+    );
+    const nextProjects = nextProjectState.projects;
+    const nextProjectScope = nextProjectState.scope;
+    const nextSource = constrainHistorySourceFilter(requested.source);
+    const nextTags = sanitizeTagFilter(requested.tags);
+    const nextArchiveLocation = nextSource === "claude"
+      ? "all"
+      : getConfig().enableCodexArchivedSessions
+        ? sanitizeArchiveLocationFilter(requested.archiveLocation)
+        : "activeOnly";
+    const changed =
+      !isSameDateScope(historyFilter, nextDate) ||
+      !isSameProjectSelection(historyProjectSelection, nextProjects) ||
+      historyProjectScope !== nextProjectScope ||
+      historySourceFilter !== nextSource ||
+      !isSameTagFilter(historyTagFilter, nextTags) ||
+      resolveEffectiveArchiveLocationFilter() !== nextArchiveLocation;
+    const persisted = createHistoryFilterStateV2({
+      date: nextDate,
+      projects: nextProjects,
+      source: nextSource,
+      tags: nextTags,
+      archiveLocation: nextArchiveLocation,
+    });
+    if (!changed) return false;
+    if (opts.persist) {
+      await commitHistoryFilterState(persisted, nextSource, nextArchiveLocation, nextProjectScope);
+    }
+
+    const revealIdentity = captureHistoryRevealIdentity();
     historyFilter = nextDate;
-    historyProjectCwd = nextProjectCwd;
+    historyProjectSelection = nextProjects;
+    historyProjectCwd = getSingleProjectSelectionCwd(historyProjectSelection);
+    historyProjectScope = nextProjectScope;
     historySourceFilter = nextSource;
     historyTagFilter = nextTags;
-    historyProvider.setFilters(
-      historyFilter,
-      historyProjectCwd,
-      resolveProjectScopeCwd(historyProjectScope),
-      historySourceFilter,
-      historyTagFilter,
-    );
-    historyProvider.setProjectGrouped(historyProjectDisplay === "project");
-    historyProvider.refresh();
-    syncArchiveLocationFilterToProviders();
-    updateHistoryViewDescription();
-    updateSearchViewDescription();
-    statusProvider.refresh();
-    await revealHistorySelection(revealIdentity);
-    if (opts.persist) {
-      await context.workspaceState.update(HISTORY_FILTER_KEY, historyFilter);
-      await context.workspaceState.update(HISTORY_PROJECT_FILTER_KEY, historyProjectCwd ?? "");
-      await context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
-      await context.workspaceState.update(HISTORY_TAG_FILTER_KEY, historyTagFilter);
-    }
-    if (opts.rerunSearch !== false && changed) {
-      await rerunVisibleSearch();
-    }
+    if (nextSource !== "claude") archiveLocationFilter = nextArchiveLocation;
+    if (opts.rerunSearch !== false) scheduleHistoryFilterSearchRerun(rerunAbortEpoch);
+    await refreshCommittedHistoryFilterState(revealIdentity);
+    return true;
+  });
+
+  type HistoryFilterPatch = {
+    date?: DateScope;
+    projects?: ProjectSelection;
+    source?: SessionSourceFilter;
+    tags?: readonly string[];
+  };
+  type CurrentHistoryFilterState = {
+    date: DateScope;
+    projects: ProjectSelection;
+    source: SessionSourceFilter;
+    tags: readonly string[];
+  };
+
+  const applyHistoryFilters = (
+    next: HistoryFilterPatch | ((current: CurrentHistoryFilterState) => HistoryFilterPatch),
+    opts: { persist: boolean; rerunSearch?: boolean; projectScopePolicy?: HistoryProjectScopePolicy },
+  ): Promise<boolean> => {
+    const projectScopePolicy = opts.projectScopePolicy ?? "preserve";
+    return applyHistoryFilterState(() => {
+      const current = {
+        date: historyFilter,
+        projects: historyProjectSelection,
+        source: historySourceFilter,
+        tags: historyTagFilter,
+      };
+      const requested = typeof next === "function" ? next(current) : next;
+      const nextSource = constrainHistorySourceFilter(requested.source ?? current.source);
+      const nextArchiveLocation = nextSource === "claude"
+        ? "all"
+        : getConfig().enableCodexArchivedSessions
+          ? archiveLocationFilter
+          : "activeOnly";
+      return {
+        date: requested.date ?? current.date,
+        projects: projectScopePolicy === "explicitSelection"
+          ? requested.projects ?? current.projects
+          : current.projects,
+        source: nextSource,
+        tags: requested.tags ?? current.tags,
+        archiveLocation: nextArchiveLocation,
+      };
+    }, {
+      ...opts,
+      projectScopePolicy,
+    });
   };
 
   const resolveSourceFilterFromEnabledStates = (codexEnabled: boolean, claudeEnabled: boolean): SessionSourceFilter => {
@@ -1345,34 +1965,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const toggleHistorySource = async (source: "codex" | "claude"): Promise<void> => {
-    const codexEnabledNow = isCodexSourceEnabled(historySourceFilter);
-    const claudeEnabledNow = isClaudeSourceEnabled(historySourceFilter);
-    const codexEnabledNext = source === "codex" ? !codexEnabledNow : codexEnabledNow;
-    const claudeEnabledNext = source === "claude" ? !claudeEnabledNow : claudeEnabledNow;
-    const nextSource = resolveSourceFilterFromEnabledStates(codexEnabledNext, claudeEnabledNext);
-    await applyHistoryFilters(
-      {
-        date: historyFilter,
-        projectCwd: historyProjectCwd,
-        source: nextSource,
-        tags: historyTagFilter,
-      },
-      { persist: true },
-    );
+    await applyHistoryFilters((current) => {
+      const codexEnabledNow = isCodexSourceEnabled(current.source);
+      const claudeEnabledNow = isClaudeSourceEnabled(current.source);
+      const codexEnabledNext = source === "codex" ? !codexEnabledNow : codexEnabledNow;
+      const claudeEnabledNext = source === "claude" ? !claudeEnabledNow : claudeEnabledNow;
+      return { source: resolveSourceFilterFromEnabledStates(codexEnabledNext, claudeEnabledNext) };
+    }, { persist: true });
   };
 
   const cycleHistorySourceFilter = async (): Promise<void> => {
-    const nextSource: SessionSourceFilter =
-      historySourceFilter === "all" ? "codex" : historySourceFilter === "codex" ? "claude" : "all";
-    await applyHistoryFilters(
-      {
-        date: historyFilter,
-        projectCwd: historyProjectCwd,
-        source: nextSource,
-        tags: historyTagFilter,
-      },
-      { persist: true },
-    );
+    await applyHistoryFilters((current) => ({
+      source: current.source === "all" ? "codex" : current.source === "codex" ? "claude" : "all",
+    }), { persist: true });
   };
 
   const cyclePinnedSourceFilter = async (): Promise<void> => {
@@ -1419,6 +2024,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
   };
 
+  let historyConfigurationRefreshGeneration = 0;
+  let pendingHistoryConfigurationRefreshGeneration: number | null = null;
+  let failedHistoryConfigurationRefreshGeneration: number | null = null;
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       const uiLanguageChanged = e.affectsConfiguration("codexHistoryViewer.ui.language");
@@ -1455,6 +2063,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const longMessageFoldingChanged =
         userLongMessageFoldingChanged || assistantLongMessageFoldingChanged || legacyLongMessageFoldingChanged;
       const imagesChanged = e.affectsConfiguration("codexHistoryViewer.images");
+      const branchNavigationChanged = e.affectsConfiguration("codexHistoryViewer.branchNavigation.enabled");
+      const agentRunsChanged = e.affectsConfiguration("codexHistoryViewer.agentRuns.enabled");
       if (
         !uiLanguageChanged &&
         !headerActionsChanged &&
@@ -1475,19 +2085,43 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         !chatTurnTimelineModeChanged &&
         !toolDisplayModeChanged &&
         !longMessageFoldingChanged &&
-        !imagesChanged
+        !imagesChanged &&
+        !branchNavigationChanged &&
+        !agentRunsChanged
       ) {
         return;
       }
 
+      const historyIndexConfigChanged =
+        sourcesEnabledChanged ||
+        sessionsRootChanged ||
+        historyDateBasisChanged ||
+        historyTitleSourceChanged ||
+        previewMaxMessagesChanged;
+      const configurationRefreshGeneration = historyIndexConfigChanged
+        ? ++historyConfigurationRefreshGeneration
+        : historyConfigurationRefreshGeneration;
+      if (historyIndexConfigChanged) {
+        authoritativeHistoryIndexConfig = null;
+        authoritativeHistoryInventoryGeneration = null;
+        pendingHistoryConfigurationRefreshGeneration = configurationRefreshGeneration;
+        failedHistoryConfigurationRefreshGeneration = null;
+      }
+      if (historyIndexConfigChanged) historyService.updateConfig(getConfig());
+      if (historyIndexConfigChanged && getConfig().agentRunsEnabled) {
+        codexAgentRuns.setPresentationEnabled(false);
+        chatPanels.setCodexAgentRunsLoading(true);
+        refreshViews();
+        chatPanels.refreshCodexAgentRuns();
+      }
+
+      const historySourceConstraint = sourcesEnabledChanged
+        ? applyHistoryFilters(
+            (current) => ({ source: constrainHistorySourceFilter(current.source) }),
+            { persist: true, rerunSearch: false },
+          )
+        : null;
       if (sourcesEnabledChanged) {
-        const constrained = constrainHistorySourceFilter(historySourceFilter);
-        if (constrained !== historySourceFilter) {
-          historySourceFilter = constrained;
-          historyProvider.setSourceFilter(historySourceFilter);
-          syncArchiveLocationFilterToProviders();
-          void context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
-        }
         const constrainedPinned = constrainHistorySourceFilter(pinnedSourceFilter);
         if (constrainedPinned !== pinnedSourceFilter) {
           pinnedSourceFilter = constrainedPinned;
@@ -1513,7 +2147,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void autoRefreshService?.configure(getConfig(), computeAutoRefreshConsumerVisible(), vscode.window.state.focused);
       if (uiLanguageChanged || chatTurnTimelineModeChanged || toolDisplayModeChanged || longMessageFoldingChanged || imagesChanged) chatPanels.refreshPanels();
       else chatPanels.refreshI18n();
+      if (branchNavigationChanged) {
+        chatPanels.refreshBranchNavigation();
+      }
+      if (agentRunsChanged) {
+        runCodexAgentRunsConfigurationChange("configuration");
+      }
       if (uiLanguageChanged || timeGuideChanged) fileChangeHistoryPanels.refreshI18n();
+      if (uiLanguageChanged) {
+        historyInsightsPanels.refreshI18n();
+      }
       if (searchIndexToolContentChanged) fileChangeHistoryPanels.notifySettingsChanged("indexToolContent");
       if (sourcesEnabledChanged) fileChangeHistoryPanels.notifySettingsChanged("sources");
       void ensureAlwaysShowHeaderActions();
@@ -1547,12 +2190,48 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      void vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") }, async () => {
-        await refreshHistoryIndex(false);
-        refreshViews({ clearSearch: true, reloadProjectAssociations: true });
-        controlProvider.refresh();
-        chatPanels.refreshTitles();
-      });
+      const normalizedHistorySourceConstraint = historySourceConstraint
+        ? Promise.resolve(historySourceConstraint).catch((error) => {
+            logger.debug(
+              `history.configurationSourceConstraint retrying error=${sanitizeDebugError(error)}`,
+            );
+          })
+        : undefined;
+      const configurationHistoryRefresh = refreshHistoryIndex(false, normalizedHistorySourceConstraint);
+      const configurationRefresh = vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
+        async () => {
+          await configurationHistoryRefresh;
+          if (configurationRefreshGeneration !== historyConfigurationRefreshGeneration) return;
+          refreshViews({ clearSearch: true, reloadProjectAssociations: true });
+          controlProvider.refresh();
+          chatPanels.refreshTitles();
+          failedHistoryConfigurationRefreshGeneration = null;
+          pendingHistoryConfigurationRefreshGeneration = null;
+        },
+      );
+      void configurationRefresh.then(
+        () => undefined,
+        (error) => {
+          const isCurrent = configurationRefreshGeneration === historyConfigurationRefreshGeneration;
+          logger.debug(
+            `history.configurationRefresh failed current=${isCurrent ? 1 : 0} error=${sanitizeDebugError(error)}`,
+          );
+          if (!isCurrent) return;
+          failedHistoryConfigurationRefreshGeneration = configurationRefreshGeneration;
+          pendingHistoryConfigurationRefreshGeneration = null;
+          settleAgentRunsAfterHistoryRefreshFailure(true);
+          const notification = vscode.window.showErrorMessage(t("app.historyRefreshAfterSettingsFailed"));
+          void notification.then(
+            () => undefined,
+            (notificationError) => {
+              logger.debug(
+                `history.configurationRefresh notification failed error=${sanitizeDebugError(notificationError)}`,
+              );
+            },
+          );
+        },
+      );
     }),
   );
 
@@ -1656,6 +2335,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       statusProvider.refresh();
+      void reloadProjectAssociationCacheForRefresh().then(
+        () => refreshViews(),
+        (error) => {
+          logger.debug(`history.workspace project state refresh failed error=${sanitizeDebugError(error)}`);
+          refreshViews();
+        },
+      );
     }),
   );
 
@@ -2238,16 +2924,325 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   updateHasSearchPresetsContext();
 
-  let historyRefreshQueue: Promise<void> = Promise.resolve();
-  const performHistoryIndexRefresh = async (forceRebuildCache: boolean): Promise<void> => {
-    const latestConfig = getConfig();
-    historyService.updateConfig(latestConfig);
-    const constrainedSource = resolveConstrainedHistorySourceFilter(historySourceFilter, latestConfig);
-    if (constrainedSource !== historySourceFilter) {
-      historySourceFilter = constrainedSource;
-      historyProvider.setSourceFilter(historySourceFilter);
-      await context.workspaceState.update(HISTORY_SOURCE_FILTER_KEY, historySourceFilter);
+  let cacheMaintenanceQueue: Promise<void> = Promise.resolve();
+  let codexAgentRunsActivationGeneration = 0;
+  let codexAgentMetadataPartialWarningShown = false;
+
+  const activateCodexAgentRunsPresentation = (): void => {
+    codexAgentRuns.setPresentationEnabled(true);
+    if (!codexAgentRuns.isPresentationEnabled()) {
+      throw new Error("Codex agent graph activation was superseded.");
     }
+  };
+
+  const notifyCodexAgentMetadataPartial = (failed: number): void => {
+    if (failed <= 0 || codexAgentMetadataPartialWarningShown) return;
+    codexAgentMetadataPartialWarningShown = true;
+    void vscode.window.showWarningMessage(t("codexAgentRuns.metadataPartial"));
+  };
+
+  const hasSameCodexAgentRunsInventoryConfig = (
+    left: CodexHistoryViewerConfig,
+    right: CodexHistoryViewerConfig,
+  ): boolean =>
+    left.sessionsRoot === right.sessionsRoot &&
+    left.codexArchivedSessionsRoot === right.codexArchivedSessionsRoot &&
+    left.claudeSessionsRoot === right.claudeSessionsRoot &&
+    left.enableCodexSource === right.enableCodexSource &&
+    left.enableCodexArchivedSessions === right.enableCodexArchivedSessions &&
+    left.enableClaudeSource === right.enableClaudeSource;
+
+  const hasSameHistoryIndexConfig = (
+    left: CodexHistoryViewerConfig,
+    right: CodexHistoryViewerConfig,
+  ): boolean =>
+    hasSameCodexAgentRunsInventoryConfig(left, right) &&
+    left.previewMaxMessages === right.previewMaxMessages &&
+    left.historyDateBasis === right.historyDateBasis &&
+    left.historyTitleSource === right.historyTitleSource;
+
+  const ensureCodexAgentMetadataForCurrentConfig = async (
+    activationGeneration: number,
+    showProgress: boolean,
+  ): Promise<void> => {
+    if (!getConfig().agentRunsEnabled || historyService.hasCompleteCodexAgentMetadata()) return;
+    const run = async (progress?: vscode.Progress<{ message?: string; increment?: number }>): Promise<void> => {
+      const result = await historyService.ensureCodexAgentMetadata({
+        shouldApply: () =>
+          activationGeneration === codexAgentRunsActivationGeneration && getConfig().agentRunsEnabled,
+        onProgress: (completed, total) => {
+          if (total > 0) progress?.report({ message: `${completed} / ${total}` });
+        },
+      });
+      if (result.cancelled) return;
+      notifyCodexAgentMetadataPartial(result.failed);
+    };
+    if (showProgress) {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Window, title: t("codexAgentRuns.preparingMetadata") },
+        run,
+      );
+    } else {
+      await run();
+    }
+  };
+
+  const handleCodexAgentRunsConfigurationChange = async (): Promise<void> => {
+    const activationGeneration = ++codexAgentRunsActivationGeneration;
+    const activationConfig = getConfig();
+    const historyConfigurationGeneration = historyConfigurationRefreshGeneration;
+    const isCurrentActivationRequest = (): boolean => {
+      const currentConfig = getConfig();
+      return (
+        activationGeneration === codexAgentRunsActivationGeneration &&
+        historyConfigurationGeneration === historyConfigurationRefreshGeneration &&
+        activationConfig.agentRunsEnabled &&
+        currentConfig.agentRunsEnabled &&
+        hasSameCodexAgentRunsInventoryConfig(activationConfig, currentConfig)
+      );
+    };
+    const getHistoryConfigurationRefreshState = (): "stale" | "pending" | "failed" | "ready" => {
+      if (historyConfigurationGeneration !== historyConfigurationRefreshGeneration) return "stale";
+      if (pendingHistoryConfigurationRefreshGeneration !== null) return "pending";
+      if (failedHistoryConfigurationRefreshGeneration === historyConfigurationGeneration) return "failed";
+      return "ready";
+    };
+    const isCurrentActivation = (): boolean =>
+      isCurrentActivationRequest() && getHistoryConfigurationRefreshState() === "ready";
+    historyService.updateConfig(activationConfig);
+    if (!activationConfig.agentRunsEnabled) {
+      codexAgentRuns.setPresentationEnabled(false);
+      chatPanels.setCodexAgentRunsLoading(false);
+      codexAgentRuns.invalidate();
+      refreshViews();
+      chatPanels.refreshCodexAgentRuns();
+      return;
+    }
+    const initialHistoryConfigurationRefreshState = getHistoryConfigurationRefreshState();
+    if (initialHistoryConfigurationRefreshState === "pending") {
+      codexAgentRuns.setPresentationEnabled(false);
+      chatPanels.setCodexAgentRunsLoading(true);
+      refreshViews();
+      chatPanels.refreshCodexAgentRuns();
+      return;
+    }
+    if (initialHistoryConfigurationRefreshState === "stale") return;
+    const requiresHistoryRefresh =
+      initialHistoryConfigurationRefreshState === "failed" ||
+      !historyService.isCurrentIndexForConfig(activationConfig);
+    const indexReadyAtStart = !requiresHistoryRefresh;
+    const requiresBackfill =
+      indexReadyAtStart && !historyService.hasCompleteCodexAgentMetadata();
+    let preparationFailed = false;
+    try {
+      if (indexReadyAtStart && !requiresBackfill) {
+        activateCodexAgentRunsPresentation();
+      } else {
+        codexAgentRuns.setPresentationEnabled(false);
+      }
+      chatPanels.setCodexAgentRunsLoading(!indexReadyAtStart || requiresBackfill);
+      let queued: Promise<void>;
+      if (requiresHistoryRefresh) {
+        queued = refreshHistoryIndex(false);
+      } else {
+        queued = historyRefreshQueue.then(
+          () => ensureCodexAgentMetadataForCurrentConfig(activationGeneration, requiresBackfill),
+          () => ensureCodexAgentMetadataForCurrentConfig(activationGeneration, requiresBackfill),
+        );
+        historyRefreshQueue = queued.catch(() => undefined);
+      }
+      await queued;
+      if (
+        !requiresHistoryRefresh &&
+        isCurrentActivation() &&
+        historyService.isCurrentIndexForConfig(activationConfig)
+      ) {
+        activateCodexAgentRunsPresentation();
+      }
+    } catch (error) {
+      preparationFailed = true;
+      logger.debug(`codexAgentRuns activation failed error=${sanitizeDebugError(error)}`);
+      if (isCurrentActivationRequest()) {
+        codexAgentRuns.setPresentationEnabled(false);
+        codexAgentRuns.invalidate();
+        refreshViews();
+        chatPanels.handleCodexAgentRunsLoadFailure();
+        void vscode.window.showErrorMessage(t("codexAgentRuns.loadFailed"));
+      }
+    } finally {
+      if (isCurrentActivationRequest()) {
+        if (preparationFailed) {
+          chatPanels.setCodexAgentRunsLoading(false);
+        } else if (requiresHistoryRefresh) {
+          refreshViews();
+          chatPanels.refreshCodexAgentRuns();
+        } else if (!requiresHistoryRefresh) {
+          const historyConfigurationRefreshState = getHistoryConfigurationRefreshState();
+          if (historyConfigurationRefreshState === "failed") {
+            codexAgentRuns.setPresentationEnabled(false);
+            codexAgentRuns.invalidate();
+            refreshViews();
+            chatPanels.handleCodexAgentRunsLoadFailure();
+            chatPanels.setCodexAgentRunsLoading(false);
+          } else if (historyConfigurationRefreshState === "pending") {
+            codexAgentRuns.setPresentationEnabled(false);
+            chatPanels.setCodexAgentRunsLoading(true);
+            refreshViews();
+            chatPanels.refreshCodexAgentRuns();
+          } else if (
+            isCurrentActivation() &&
+            historyService.isCurrentIndexForConfig(activationConfig) &&
+            codexAgentRuns.isPresentationEnabled()
+          ) {
+            chatPanels.setCodexAgentRunsLoading(false);
+            refreshViews();
+            chatPanels.refreshCodexAgentRuns();
+          } else {
+            codexAgentRuns.setPresentationEnabled(false);
+            chatPanels.setCodexAgentRunsLoading(true);
+            refreshViews();
+            chatPanels.refreshCodexAgentRuns();
+          }
+        }
+      }
+    }
+  };
+  const runCodexAgentRunsConfigurationChange = (scope: string): void => {
+    void handleCodexAgentRunsConfigurationChange().then(
+      () => undefined,
+      (error) => {
+        logger.debug(`codexAgentRuns.${scope} failed error=${sanitizeDebugError(error)}`);
+        try {
+          if (!getConfig().agentRunsEnabled) return;
+          codexAgentRuns.setPresentationEnabled(false);
+          codexAgentRuns.invalidate();
+          refreshViews();
+          chatPanels.handleCodexAgentRunsLoadFailure();
+          chatPanels.setCodexAgentRunsLoading(false);
+        } catch (settlementError) {
+          logger.debug(
+            `codexAgentRuns.${scope} settlement failed error=${sanitizeDebugError(settlementError)}`,
+          );
+        }
+      },
+    );
+  };
+
+  const isCurrentAgentRunsHistoryIndex = (
+    config: CodexHistoryViewerConfig,
+    activationGeneration: number,
+  ): boolean => {
+    const currentConfig = getConfig();
+    return (
+      config.agentRunsEnabled &&
+      activationGeneration === codexAgentRunsActivationGeneration &&
+      currentConfig.agentRunsEnabled &&
+      hasSameCodexAgentRunsInventoryConfig(config, currentConfig) &&
+      historyService.isCurrentIndexForConfig(config)
+    );
+  };
+
+  const transitionAgentRunsToMatchingIndexLoading = (
+    config: CodexHistoryViewerConfig,
+    activationGeneration: number,
+  ): boolean => {
+    const currentConfig = getConfig();
+    if (
+      !config.agentRunsEnabled ||
+      activationGeneration !== codexAgentRunsActivationGeneration ||
+      !currentConfig.agentRunsEnabled ||
+      (
+        hasSameCodexAgentRunsInventoryConfig(config, currentConfig) &&
+        historyService.isCurrentIndexForConfig(currentConfig)
+      )
+    ) {
+      return false;
+    }
+    codexAgentRuns.setPresentationEnabled(false);
+    chatPanels.setCodexAgentRunsLoading(true);
+    refreshViews();
+    chatPanels.refreshCodexAgentRuns();
+    return true;
+  };
+
+  const discardStaleAgentRunsRefresh = (
+    config: CodexHistoryViewerConfig,
+    activationGeneration: number,
+  ): void => {
+    if (transitionAgentRunsToMatchingIndexLoading(config, activationGeneration)) return;
+    codexAgentRuns.invalidate();
+    chatPanels.refreshCodexAgentRuns();
+  };
+
+  const finalizeAdoptedHistoryIndex = async (
+    config: CodexHistoryViewerConfig,
+    activationGeneration: number,
+    options: { refreshStorage: boolean },
+  ): Promise<number> => {
+    if (isCurrentAgentRunsHistoryIndex(config, activationGeneration)) {
+      try {
+        if (!historyService.hasCompleteCodexAgentMetadata()) {
+          await ensureCodexAgentMetadataForCurrentConfig(activationGeneration, false);
+        }
+        if (!isCurrentAgentRunsHistoryIndex(config, activationGeneration)) {
+          discardStaleAgentRunsRefresh(config, activationGeneration);
+        } else {
+          activateCodexAgentRunsPresentation();
+          chatPanels.setCodexAgentRunsLoading(false);
+          chatPanels.refreshCodexAgentRuns();
+        }
+      } catch (error) {
+        logger.debug(`codexAgentRuns refresh activation failed error=${sanitizeDebugError(error)}`);
+        codexAgentRuns.setPresentationEnabled(false);
+        if (isCurrentAgentRunsHistoryIndex(config, activationGeneration)) {
+          chatPanels.setCodexAgentRunsLoading(false);
+          chatPanels.handleCodexAgentRunsLoadFailure();
+          void vscode.window.showErrorMessage(t("codexAgentRuns.loadFailed"));
+        } else {
+          discardStaleAgentRunsRefresh(config, activationGeneration);
+        }
+      }
+    } else {
+      discardStaleAgentRunsRefresh(config, activationGeneration);
+    }
+    if (!historyService.isCurrentIndexForConfig(config)) return activationGeneration;
+    const reconciledPins = await pinStore.reconcile(historyService.getIndex());
+    for (const move of reconciledPins.moves) {
+      await sessionReferenceRelocator.relocate(move.oldFsPath, move.newFsPath);
+    }
+    if (!historyService.isCurrentIndexForConfig(config)) return activationGeneration;
+    await chatPanels.closeMissingPanels();
+    if (!historyService.isCurrentIndexForConfig(config)) return activationGeneration;
+    if (getConfig().branchNavigationEnabled) {
+      chatPanels.refreshBranchNavigation();
+    }
+    if (options.refreshStorage) await refreshStorageStats();
+    lastHistoryRefreshAt = Date.now();
+    return activationGeneration;
+  };
+
+  const performHistoryIndexRefresh = async (forceRebuildCache: boolean): Promise<number> => {
+    const latestConfig = getConfig();
+    const agentRunsActivationGeneration = codexAgentRunsActivationGeneration;
+    historyService.updateConfig(latestConfig);
+    await applyHistoryFilterState(
+      () => {
+        const constrainedSource = resolveConstrainedHistorySourceFilter(historySourceFilter, latestConfig);
+        const constrainedArchiveLocation = constrainedSource === "claude"
+          ? "all"
+          : latestConfig.enableCodexArchivedSessions
+            ? archiveLocationFilter
+            : "activeOnly";
+        return {
+          date: historyFilter,
+          projects: historyProjectSelection,
+          source: constrainedSource,
+          tags: historyTagFilter,
+          archiveLocation: constrainedArchiveLocation,
+        };
+      },
+      { persist: true, rerunSearch: false, projectScopePolicy: "preserve" },
+    );
     const constrainedPinnedSource = resolveConstrainedHistorySourceFilter(pinnedSourceFilter, latestConfig);
     if (constrainedPinnedSource !== pinnedSourceFilter) {
       pinnedSourceFilter = constrainedPinnedSource;
@@ -2256,93 +3251,276 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       pinnedProvider.refresh();
       await context.workspaceState.update(PINNED_SOURCE_FILTER_KEY, pinnedSourceFilter);
     }
-    await historyService.refresh({ forceRebuildCache });
-    const reconciledPins = await pinStore.reconcile(historyService.getIndex());
-    for (const move of reconciledPins.moves) {
-      await sessionReferenceRelocator.relocate(move.oldFsPath, move.newFsPath);
+    if (!hasSameHistoryIndexConfig(latestConfig, getConfig())) {
+      return agentRunsActivationGeneration;
     }
-    await chatPanels.closeMissingPanels();
-    await refreshStorageStats();
-    lastHistoryRefreshAt = Date.now();
+    try {
+      await historyService.refresh({
+        forceRebuildCache,
+        shouldStart: () => hasSameHistoryIndexConfig(latestConfig, getConfig()),
+      });
+      markAuthoritativeHistoryIndex(latestConfig);
+    } catch (error) {
+      transitionAgentRunsToMatchingIndexLoading(latestConfig, agentRunsActivationGeneration);
+      throw error;
+    }
+    return finalizeAdoptedHistoryIndex(latestConfig, agentRunsActivationGeneration, { refreshStorage: true });
   };
-  const refreshHistoryIndex = (forceRebuildCache: boolean): Promise<void> => {
-    const nextRefresh = historyRefreshQueue.then(
-      () => performHistoryIndexRefresh(forceRebuildCache),
-      () => performHistoryIndexRefresh(forceRebuildCache),
+  const settleAgentRunsAfterHistoryRefreshFailure = (force = false): void => {
+    const currentConfig = getConfig();
+    if (
+      !currentConfig.agentRunsEnabled ||
+      (!force && historyService.isCurrentIndexForConfig(currentConfig))
+    ) {
+      return;
+    }
+    codexAgentRuns.setPresentationEnabled(false);
+    refreshViews();
+    chatPanels.handleCodexAgentRunsLoadFailure();
+    chatPanels.setCodexAgentRunsLoading(false);
+  };
+  const performCurrentHistoryIndexRefresh = async (forceRebuildCache: boolean): Promise<void> => {
+    let retryCount = 0;
+    for (;;) {
+      let completedAgentRunsActivationGeneration: number;
+      try {
+        completedAgentRunsActivationGeneration = await performHistoryIndexRefresh(forceRebuildCache);
+      } catch (error) {
+        if (!isHistoryOperationSupersededError(error)) {
+          if (pendingHistoryConfigurationRefreshGeneration === null) {
+            settleAgentRunsAfterHistoryRefreshFailure();
+          }
+          throw error;
+        }
+        retryCount += 1;
+        logger.debug(`history.refresh superseded retry=${retryCount}`);
+        continue;
+      }
+      if (
+        completedAgentRunsActivationGeneration === codexAgentRunsActivationGeneration &&
+        historyService.isCurrentIndexForConfig(getConfig())
+      ) {
+        return;
+      }
+      retryCount += 1;
+      logger.debug(`history.refresh staleAfterCompletion retry=${retryCount}`);
+    }
+  };
+
+  const enqueueHistoryOperation = <T>(
+    operation: () => Promise<T>,
+    onSuccess?: () => void,
+  ): Promise<T> => {
+    const nextOperation = historyRefreshQueue.then(operation, operation);
+    const completedOperation = nextOperation.then((value) => {
+      onSuccess?.();
+      return value;
+    });
+    historyRefreshQueue = completedOperation.then(
+      () => undefined,
+      () => undefined,
     );
-    historyRefreshQueue = nextRefresh.catch(() => undefined);
-    return nextRefresh;
+    return completedOperation;
+  };
+
+  const refreshHistoryIndex = (
+    forceRebuildCache: boolean,
+    preparation?: PromiseLike<unknown>,
+  ): Promise<void> => {
+    const refreshConfigurationGeneration = historyConfigurationRefreshGeneration;
+    return enqueueHistoryOperation(
+      async () => {
+        if (preparation) await preparation;
+        await performCurrentHistoryIndexRefresh(forceRebuildCache);
+      },
+      () => {
+        if (refreshConfigurationGeneration === historyConfigurationRefreshGeneration) {
+          failedHistoryConfigurationRefreshGeneration = null;
+        }
+      },
+    );
+  };
+
+  const rebuildHistorySnapshot = (
+    config: CodexHistoryViewerConfig,
+    dateTime: DateTimeSettings,
+    agentRunsActivationGeneration: number,
+    start: Promise<vscode.CancellationToken | null>,
+    onRebuilt?: (snapshot: HistoryRebuildSnapshot) => void,
+  ): Promise<HistoryRebuildSnapshot> =>
+    enqueueHistoryOperation(async () => {
+      const token = await start;
+      if (!token) throw new vscode.CancellationError();
+      if (token.isCancellationRequested) throw new vscode.CancellationError();
+      if (hasSameHistoryIndexConfig(config, getConfig())) {
+        historyService.updateConfig(config);
+      }
+      const snapshot = await historyService.rebuildSnapshot(config, token, dateTime);
+      onRebuilt?.(snapshot);
+      if (snapshot.adopted) {
+        markAuthoritativeHistoryIndex(snapshot.config);
+        await finalizeAdoptedHistoryIndex(
+          snapshot.config,
+          agentRunsActivationGeneration,
+          { refreshStorage: false },
+        );
+      }
+      return snapshot;
+    });
+
+  const enqueueCacheMaintenance = <T>(operation: () => Promise<T>): Promise<T> => {
+    const nextMaintenance = cacheMaintenanceQueue.then(operation, operation);
+    cacheMaintenanceQueue = nextMaintenance.then(
+      () => undefined,
+      () => undefined,
+    );
+    return nextMaintenance;
+  };
+
+  const getHistorySearchRefreshState = () => ({
+    queue: historyRefreshQueue,
+  });
+
+  const captureHistorySearchStartSnapshot = (): HistorySearchStartSnapshot =>
+    Object.freeze({
+      config: Object.freeze({ ...getConfig() }),
+      refreshState: Object.freeze(getHistorySearchRefreshState()),
+    });
+
+  const createCoordinatedCacheRebuildInventory = (
+    historySnapshot: HistoryRebuildSnapshot,
+  ): CoordinatedCacheRebuildInventory => {
+    const searchSnapshot: HistorySearchIndexSnapshot = Object.freeze({
+      config: historySnapshot.config,
+      index: historySnapshot.index,
+      sessions: historySnapshot.sessions,
+    });
+    return Object.freeze({
+      searchSnapshot,
+      sessions: historySnapshot.sessions,
+    });
   };
 
   const rebuildSearchIndex = async (
     progress?: vscode.Progress<{ message?: string; increment?: number }>,
     token?: vscode.CancellationToken,
+    inventory?: CoordinatedCacheRebuildInventory,
+    snapshotPromise?: Promise<HistorySearchIndexSnapshot | null>,
+    options: { refreshStorage?: boolean } = {},
   ): Promise<void> => {
-    const latestConfig = getConfig();
+    const snapshot = inventory?.searchSnapshot ?? (snapshotPromise ? await snapshotPromise : null);
+    if (token?.isCancellationRequested) throw new vscode.CancellationError();
+    if (!snapshot) throw new Error(t("search.error.historyUnavailable"));
     await searchIndexService.ensureUpToDate({
-      index: historyService.getIndex(),
-      codexSessionsRoot: latestConfig.sessionsRoot,
-      codexArchivedSessionsRoot: latestConfig.codexArchivedSessionsRoot,
-      claudeSessionsRoot: latestConfig.claudeSessionsRoot,
-      includeCodex: latestConfig.enableCodexSource,
-      includeCodexArchived: latestConfig.enableCodexArchivedSessions,
-      includeClaude: latestConfig.enableClaudeSource,
-      indexToolContent: latestConfig.searchIndexToolContent,
+      index: snapshot.index,
+      sessionInventory: inventory?.sessions ?? snapshot.sessions,
+      codexSessionsRoot: snapshot.config.sessionsRoot,
+      codexArchivedSessionsRoot: snapshot.config.codexArchivedSessionsRoot,
+      claudeSessionsRoot: snapshot.config.claudeSessionsRoot,
+      includeCodex: snapshot.config.enableCodexSource,
+      includeCodexArchived: snapshot.config.enableCodexArchivedSessions,
+      includeClaude: snapshot.config.enableClaudeSource,
+      indexToolContent: snapshot.config.searchIndexToolContent,
       token,
       progress,
       forceRebuild: true,
     });
-    await refreshStorageStats();
+    if (token?.isCancellationRequested) throw new vscode.CancellationError();
+    if (options.refreshStorage !== false) await refreshStorageStats();
+    if (token?.isCancellationRequested) throw new vscode.CancellationError();
     statusProvider.refresh();
   };
 
-  const reloadProjectAssociationCacheForRefresh = (): void => {
-    projectAssociationStore.invalidateCache();
-    updatePinnedViewDescription();
-    updateHistoryViewDescription();
-    updateSearchViewDescription();
+  const reloadProjectAssociationCacheForRefresh = (
+    options: { followCurrentGroup?: boolean } = {},
+  ): Promise<void> =>
+    enqueueHistoryStateTransition(async () => {
+      projectAssociationStore.invalidateCache();
+      const reconciledProjects = reconcileProjectSelection(historyProjectSelection, resolveHistoryProjectGroupKey);
+      const currentGroupProjects = resolveCurrentHistoryProjectSelection(
+        options.followCurrentGroup ? undefined : reconciledProjects,
+      );
+      const nextProjectState = restoreHistoryProjectScopeState(
+        historyProjectScope,
+        reconciledProjects,
+        currentGroupProjects,
+        options,
+      );
+      const changed =
+        !isSameProjectSelection(historyProjectSelection, nextProjectState.projects) ||
+        historyProjectScope !== nextProjectState.scope;
+      if (changed) {
+        const persisted = createHistoryFilterStateV2({
+          date: historyFilter,
+          projects: nextProjectState.projects,
+          source: historySourceFilter,
+          tags: historyTagFilter,
+          archiveLocation: resolveEffectiveArchiveLocationFilter(),
+        });
+        await commitHistoryFilterState(
+          persisted,
+          historySourceFilter,
+          resolveEffectiveArchiveLocationFilter(),
+          nextProjectState.scope,
+        );
+      }
+      historyProjectSelection = nextProjectState.projects;
+      historyProjectScope = nextProjectState.scope;
+      historyProjectCwd = getSingleProjectSelectionCwd(historyProjectSelection);
+      historyProvider.setProjectSelection(historyProjectSelection);
+      updatePinnedViewDescription();
+      updateHistoryViewDescription();
+      updateSearchViewDescription();
+    });
+
+  const clearVisibleSearchResults = (): void => {
+    searchProvider.clear();
+    setHasSearchResultsContext(false);
   };
 
   const refreshViews = (options?: { clearSearch?: boolean; reloadProjectAssociations?: boolean }): void => {
-    if (options?.reloadProjectAssociations) reloadProjectAssociationCacheForRefresh();
+    const clearSearchNow = options?.clearSearch === true && searchExecution.requestClearSearch();
+    if (clearSearchNow) clearVisibleSearchResults();
+    if (options?.reloadProjectAssociations) {
+      void reloadProjectAssociationCacheForRefresh().then(
+        () => {
+          refreshViews();
+          chatPanels.refreshProjectAssociations();
+        },
+        (error) => {
+          logger.debug(`history.filterState.reconcile persist failed error=${sanitizeDebugError(error)}`);
+          refreshViews();
+          chatPanels.refreshProjectAssociations();
+        },
+      );
+      return;
+    }
     syncProjectScopeFiltersToProviders();
     pinnedProvider.refresh();
     historyProvider.refresh();
-    if (options?.clearSearch) {
-      searchProvider.clear();
-      setHasSearchResultsContext(false);
-    } else {
+    if (!clearSearchNow) {
       searchProvider.refresh();
       setHasSearchResultsContext(searchProvider.root !== null);
     }
     statusProvider.refresh();
-    if (options?.reloadProjectAssociations) chatPanels.refreshProjectAssociations();
   };
 
-  const applyArchiveLocationFilter = async (
-    nextArchiveLocationFilter: ArchiveLocationFilter,
+  const applyArchiveLocationFilter = (
+    nextArchiveLocation:
+      | ArchiveLocationFilter
+      | ((current: ArchiveLocationFilter) => ArchiveLocationFilter),
     options: { persist: boolean; rerunSearch: boolean },
-  ): Promise<boolean> => {
-    const nextValue = sanitizeArchiveLocationFilter(nextArchiveLocationFilter);
-    if (archiveLocationFilter === nextValue) return false;
-
-    archiveLocationFilter = nextValue;
-    syncArchiveLocationFilterToProviders();
-    updateArchivedSessionsContext();
-    updatePinnedViewDescription();
-    updateHistoryViewDescription();
-    updateSearchViewDescription();
-
-    if (options.persist) {
-      await context.workspaceState.update(ARCHIVE_LOCATION_FILTER_KEY, archiveLocationFilter);
-    }
-    if (options.rerunSearch && searchProvider.root && lastSearchRequest) {
-      await executeSearch(lastSearchRequest);
-    } else {
-      refreshViews();
-    }
-    return true;
-  };
+  ): Promise<boolean> => applyHistoryFilterState(() => ({
+    date: historyFilter,
+    projects: historyProjectSelection,
+    source: historySourceFilter,
+    tags: historyTagFilter,
+    archiveLocation: sanitizeArchiveLocationFilter(
+      typeof nextArchiveLocation === "function"
+        ? nextArchiveLocation(archiveLocationFilter)
+        : nextArchiveLocation,
+    ),
+  }), { ...options, projectScopePolicy: "preserve" });
 
   const applyPinnedArchiveLocationFilter = async (
     nextArchiveLocationFilter: ArchiveLocationFilter,
@@ -2379,7 +3557,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   autoRefreshService = new AutoRefreshService(
     async (changedFsPaths) => {
       await refreshHistoryIndex(false);
-      reloadProjectAssociationCacheForRefresh();
+      await reloadProjectAssociationCacheForRefresh();
       refreshViews();
       chatPanels.refreshTitles();
       chatPanels.refreshAutoRefreshPanels(changedFsPaths);
@@ -2487,51 +3665,108 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     refreshViews();
   };
 
-  const executeSearch = async (request?: SearchRequest): Promise<boolean> => {
-    const searchGeneration = ++searchExecutionGeneration;
-    const isCurrentSearchGeneration = (): boolean => searchGeneration === searchExecutionGeneration;
-    const latestConfig = getConfig();
-    historyService.updateConfig(latestConfig);
-    const index = historyService.getIndex();
-    const results = await runSearchFlow(
-      index,
-      latestConfig,
-      searchIndexService,
-      annotationStore,
-      historyFilter,
-      historyProjectCwd,
-      historySourceFilter,
-      {
-        request,
-        defaultRoleFilter: getConfiguredDefaultSearchRoles(),
-        tagFilter: historyTagFilter,
-        archiveLocationFilter: resolveEffectiveArchiveLocationFilter(),
-        projectScopeCwd: resolveProjectScopeCwd(historyProjectScope),
-        getProjectDisplayName: (projectCwd) => getProjectDisplayName(projectCwd, 50),
-        getCanonicalProjectKey,
-      },
-    );
-    if (!results || !isCurrentSearchGeneration()) return false;
-
-    const savedHistory = await searchHistoryStore.save({
-      projectKey: resolveSearchHistoryProjectKeyForSearch(),
-      queryInput: results.request.queryInput,
+  const captureCurrentHistorySearchScope = (): HistorySearchScopeSnapshot =>
+    createHistorySearchScopeSnapshot({
+      date: historyFilter,
+      projects: historyProjectSelection,
+      source: historySourceFilter,
+      tags: historyTagFilter,
+      archiveLocation: resolveEffectiveArchiveLocationFilter(),
+      defaultRoleFilter: getConfiguredDefaultSearchRoles(),
+      searchHistoryProjectKey: resolveSearchHistoryProjectKeyForSearch(),
     });
-    if (!isCurrentSearchGeneration()) return false;
-    if (savedHistory) {
-      chatPanels.refreshSearchHistoryCandidates();
-      fileChangeHistoryPanels.refreshSearchHistoryCandidates();
+
+  const executeSearch = async (request?: SearchRequest): Promise<boolean> => {
+    const searchGeneration = searchExecution.beginSearch();
+    historyFilterSearchRerunHandledRevision = historyFilterSearchRerunRequestRevision;
+    const isCurrentSearchGeneration = (): boolean => searchExecution.isCurrent(searchGeneration);
+    const config: CodexHistoryViewerConfig = Object.freeze({ ...getConfig() });
+    const refreshState = getHistorySearchRefreshState();
+    const searchScope = captureCurrentHistorySearchScope();
+    const getSearchCanonicalProjectKey = projectAssociationStore.createCanonicalProjectKeyResolver();
+    const searchProjectDisplayNames = new Map<string, string>();
+    if (searchScope.projects.kind === "groups") {
+      for (const group of searchScope.projects.groups) {
+        searchProjectDisplayNames.set(
+          normalizeProjectKey(group.representativeCwd),
+          getProjectDisplayName(group.representativeCwd, 50),
+        );
+      }
     }
-    await persistLastSearchRequest(results.request);
-    if (!isCurrentSearchGeneration()) return false;
-    searchProvider.setResults(results);
-    setHasSearchResultsContext(true);
-    statusProvider.refresh();
-    await searchView.reveal(results.root, { focus: true, expand: true, select: true });
-    return true;
+    const getSearchProjectDisplayName = (projectCwd: string): string =>
+      searchProjectDisplayNames.get(normalizeProjectKey(projectCwd)) ?? safeDisplayPath(projectCwd, 50);
+    let published = false;
+    try {
+      const snapshot = await waitForCurrentHistorySearchIndex({
+        refreshState,
+        config,
+        historyService,
+        isRequestCurrent: isCurrentSearchGeneration,
+      });
+      if (!snapshot) {
+        if (isCurrentSearchGeneration()) {
+          void vscode.window.showErrorMessage(t("search.error.historyUnavailable"));
+        }
+        return false;
+      }
+      const results = await runSearchFlow(
+        snapshot.index,
+        snapshot.config,
+        searchIndexService,
+        annotationStore,
+        searchScope.date,
+        null,
+        searchScope.source,
+        {
+          request,
+          defaultRoleFilter: searchScope.defaultRoleFilter,
+          tagFilter: searchScope.tags,
+          archiveLocationFilter: searchScope.archiveLocation,
+          projectSelection: searchScope.projects,
+          getProjectDisplayName: getSearchProjectDisplayName,
+          getCanonicalProjectKey: getSearchCanonicalProjectKey,
+          isRequestCurrent: isCurrentSearchGeneration,
+          sessionInventory: snapshot.sessions,
+        },
+      );
+      if (!results || !isCurrentSearchGeneration()) return false;
+
+      const savedHistory = await searchHistoryStore.save({
+        projectKey: searchScope.searchHistoryProjectKey,
+        queryInput: results.request.queryInput,
+      });
+      if (!isCurrentSearchGeneration()) return false;
+      if (savedHistory) {
+        chatPanels.refreshSearchHistoryCandidates();
+        fileChangeHistoryPanels.refreshSearchHistoryCandidates();
+      }
+      await persistLastSearchRequest(results.request);
+      if (!isCurrentSearchGeneration()) return false;
+      searchProvider.setResults(results);
+      published = true;
+      setHasSearchResultsContext(true);
+      statusProvider.refresh();
+      await searchView.reveal(results.root, { focus: true, expand: true, select: true });
+      return true;
+    } finally {
+      const ownedAtFinish = searchExecution.isCurrent(searchGeneration);
+      const settlement = searchExecution.finishSearch(searchGeneration, published);
+      if (ownedAtFinish && !published) {
+        historyFilterSearchAbortEpoch += 1;
+        historyFilterSearchRerunHandledRevision = historyFilterSearchRerunRequestRevision;
+      }
+      if (settlement.clearSearch) {
+        clearVisibleSearchResults();
+        statusProvider.refresh();
+      }
+      if (settlement.rerunAutomatically && lastSearchRequest) {
+        scheduleHistoryFilterSearchRerun();
+      }
+    }
   };
 
   const rerunVisibleSearch = async (): Promise<void> => {
+    if (searchExecution.requestAutomaticRerun() === "deferred") return;
     if (searchProvider.root && lastSearchRequest) {
       await executeSearch(lastSearchRequest);
       return;
@@ -2662,7 +3897,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return true;
   };
 
-  const refreshAfterProjectAssociationChange = async (): Promise<void> => {
+  const applyProjectAssociationConsumers = (rerunAbortEpoch: number): void => {
     updatePinnedViewDescription();
     updateHistoryViewDescription();
     updateSearchViewDescription();
@@ -2670,7 +3905,70 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     statusProvider.refresh();
     chatPanels.refreshProjectAssociations();
     fileChangeHistoryPanels.notifySettingsChanged("association");
-    await rerunVisibleSearch();
+    scheduleHistoryFilterSearchRerun(rerunAbortEpoch);
+  };
+
+  const refreshProjectAssociationConsumers = async (rerunAbortEpoch: number): Promise<void> => {
+    try {
+      applyProjectAssociationConsumers(rerunAbortEpoch);
+    } catch (error) {
+      logger.debug(
+        `projectAssociation.consumer refresh failed error=${sanitizeDebugError(error)}`,
+      );
+      void (async () => {
+        const retryAction = t("history.filterState.refreshRetry");
+        const choice = await vscode.window.showWarningMessage(
+          t("history.filterState.refreshFailed"),
+          retryAction,
+        );
+        if (choice !== retryAction) return;
+        try {
+          applyProjectAssociationConsumers(rerunAbortEpoch);
+        } catch (retryError) {
+          logger.debug(
+            `projectAssociation.consumer refresh retry failed error=${sanitizeDebugError(retryError)}`,
+          );
+          void vscode.window.showErrorMessage(t("history.filterState.refreshRetryFailed"));
+        }
+      })().catch((notificationError) => {
+        logger.debug(
+          `projectAssociation.consumer refresh notification failed error=${sanitizeDebugError(notificationError)}`,
+        );
+      });
+    }
+  };
+
+  const refreshAfterProjectAssociationChange = async (
+    rollbackSnapshot?: readonly ProjectAssociation[],
+  ): Promise<void> => {
+    const rerunAbortEpoch = historyFilterSearchAbortEpoch;
+    try {
+      await reloadProjectAssociationCacheForRefresh({ followCurrentGroup: true });
+    } catch (error) {
+      if (!rollbackSnapshot) throw error;
+      try {
+        await projectAssociationStore.restoreSnapshot(rollbackSnapshot);
+        await reloadProjectAssociationCacheForRefresh({ followCurrentGroup: true });
+      } catch (rollbackError) {
+        logger.debug(
+          `projectAssociation.filterState rollback failed error=${sanitizeDebugError(rollbackError)}`,
+        );
+        void vscode.window.showErrorMessage(t("projectAssociation.filterStateRollbackFailed"));
+        throw error;
+      }
+      await refreshProjectAssociationConsumers(rerunAbortEpoch);
+      void vscode.window.showErrorMessage(t("projectAssociation.filterStateSaveFailed"));
+      throw error;
+    }
+    await refreshProjectAssociationConsumers(rerunAbortEpoch);
+  };
+
+  const restoreProjectAssociationsAndRefresh = async (
+    snapshot: readonly ProjectAssociation[],
+  ): Promise<void> => {
+    const rollbackSnapshot = projectAssociationStore.getAll();
+    await projectAssociationStore.restoreSnapshot(snapshot);
+    await refreshAfterProjectAssociationChange(rollbackSnapshot);
   };
 
   const removeSearchPreset = async (preset: SearchPreset): Promise<boolean> => {
@@ -2964,7 +4262,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { location: vscode.ProgressLocation.Window, title: t("app.loadingPinned") },
         async () => refreshHistoryIndex(false),
       );
-      reloadProjectAssociationCacheForRefresh();
+      await reloadProjectAssociationCacheForRefresh();
       syncProjectScopeFiltersToProviders();
       pinnedProvider.refresh();
       statusProvider.refresh();
@@ -2984,7 +4282,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { location: vscode.ProgressLocation.Window, title: t("app.loadingHistoryPane") },
         async () => refreshHistoryIndex(false),
       );
-      reloadProjectAssociationCacheForRefresh();
+      await reloadProjectAssociationCacheForRefresh();
       syncProjectScopeFiltersToProviders();
       historyProvider.refresh();
       statusProvider.refresh();
@@ -3048,7 +4346,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         { location: vscode.ProgressLocation.Window, title: t("app.loadingStatus") },
         async () => refreshHistoryIndex(false),
       );
-      reloadProjectAssociationCacheForRefresh();
+      await reloadProjectAssociationCacheForRefresh();
       statusProvider.refresh();
       chatPanels.refreshProjectAssociations();
     }),
@@ -3056,12 +4354,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.filterArchiveLocation", async () => {
-      if (historySourceFilter === "claude") return false;
-      await applyArchiveLocationFilter(nextArchiveLocationFilter(archiveLocationFilter), {
+      return applyArchiveLocationFilter((current) => nextArchiveLocationFilter(current), {
         persist: true,
         rerunSearch: true,
       });
-      return true;
     }),
   );
 
@@ -3075,37 +4371,172 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.toggleArchivedSessionsVisibility", async () => {
-      await applyArchivedSessionsVisibility(archiveLocationFilter === "activeOnly", { persist: true });
+      await applyArchiveLocationFilter(
+        (current) => current === "activeOnly" ? "all" : "activeOnly",
+        { persist: true, rerunSearch: true },
+      );
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.rebuildCache", async () => {
+      const action = t("app.rebuildCacheAction");
       const choice = await vscode.window.showWarningMessage(
         t("app.rebuildCacheConfirm"),
         { modal: true },
-        "OK",
+        action,
       );
-      if (choice !== "OK") return;
+      if (choice !== action) return;
 
-      await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: t("app.rebuildingCache") },
-        async (progress, token) => {
-          await refreshHistoryIndex(true);
-          await rebuildSearchIndex(progress, token);
+      const rebuildConfig: CodexHistoryViewerConfig = Object.freeze({ ...getConfig() });
+      const rebuildDateTime: DateTimeSettings = Object.freeze({ ...resolveDateTimeSettings() });
+      const rebuildAgentRunsActivationGeneration = codexAgentRunsActivationGeneration;
+      const historyRebuildState: {
+        rebuilt: boolean;
+        adoptedConfig: CodexHistoryViewerConfig | null;
+      } = {
+        rebuilt: false,
+        adoptedConfig: null,
+      };
+      const historyStart = createDeferred<vscode.CancellationToken | null>();
+      const historySnapshotPromise = rebuildHistorySnapshot(
+        rebuildConfig,
+        rebuildDateTime,
+        rebuildAgentRunsActivationGeneration,
+        historyStart.promise,
+        (snapshot) => {
+          historyRebuildState.rebuilt = true;
+          historyRebuildState.adoptedConfig = snapshot.adopted ? snapshot.config : null;
         },
       );
-      refreshViews({ clearSearch: true, reloadProjectAssociations: true });
-      controlProvider.refresh();
+      const maintenanceStart = createDeferred<CacheMaintenanceProgressContext | null>();
+      let outcome: "success" | "cancelled" | "failed" = "success";
+      const maintenancePromise = enqueueCacheMaintenance(async () => {
+        const progressContext = await maintenanceStart.promise;
+        if (!progressContext) {
+          historyStart.resolve(null);
+          await historySnapshotPromise.catch(() => undefined);
+          return;
+        }
+        const { progress, token } = progressContext;
+        historyStart.resolve(token);
+        const historySnapshot = await historySnapshotPromise;
+        if (token.isCancellationRequested) throw new vscode.CancellationError();
+        const inventory = createCoordinatedCacheRebuildInventory(historySnapshot);
+        await rebuildSearchIndex(
+          progress,
+          token,
+          inventory,
+          undefined,
+          { refreshStorage: false },
+        );
+        if (token.isCancellationRequested) throw new vscode.CancellationError();
+        if (!SESSION_ANALYSIS_FEATURES_ENABLED) return;
+        await sessionAnalysisIndex.rebuildAll({
+          sessions: inventory.sessions,
+          activeSessions: inventory.sessions,
+          config: inventory.searchSnapshot.config,
+          token,
+          onProgress: (value) => {
+            progress.report({ message: t(`analysis.progress.${value.phase}`) });
+          },
+        });
+        if (token.isCancellationRequested) {
+          throw new vscode.CancellationError();
+        }
+      });
+      let progressStarted = false;
+      try {
+        await vscode.window.withProgress(
+          {
+            location: vscode.ProgressLocation.Notification,
+            title: t("app.rebuildingCache"),
+            cancellable: true,
+          },
+          async (progress, token) => {
+            progressStarted = true;
+            maintenanceStart.resolve(Object.freeze({ progress, token }));
+            return maintenancePromise;
+          },
+        );
+      } catch (error) {
+        if (!progressStarted) {
+          historyStart.resolve(null);
+          maintenanceStart.resolve(null);
+        }
+        if (error instanceof vscode.CancellationError || error instanceof SessionAnalysisCancelledError) {
+          outcome = "cancelled";
+        } else {
+          outcome = "failed";
+          logger.debug(`cache rebuild failed error=${sanitizeDebugError(error)}`);
+        }
+      } finally {
+        if (historyRebuildState.rebuilt) {
+          try {
+            await refreshStorageStats();
+          } catch (error) {
+            logger.debug(`cache rebuild storage refresh failed error=${sanitizeDebugError(error)}`);
+          }
+          if (
+            historyRebuildState.adoptedConfig &&
+            historyService.isCurrentIndexForConfig(historyRebuildState.adoptedConfig)
+          ) {
+            refreshViews({ clearSearch: true, reloadProjectAssociations: true });
+          } else {
+            statusProvider.refresh();
+          }
+          controlProvider.refresh();
+        }
+      }
+      if (outcome === "success") {
+        if (
+          historyRebuildState.adoptedConfig &&
+          historyService.isCurrentIndexForConfig(historyRebuildState.adoptedConfig)
+        ) {
+          if (SESSION_ANALYSIS_FEATURES_ENABLED) {
+            historyInsightsPanels.refreshAnalysis();
+          }
+          chatPanels.invalidateBranchNavigation();
+        }
+        void vscode.window.showInformationMessage(t("app.rebuildCacheDone"));
+      } else if (outcome === "cancelled") {
+        void vscode.window.showInformationMessage(t("app.rebuildCacheCancelled"));
+      } else {
+        void vscode.window.showErrorMessage(t("app.rebuildCacheFailed"));
+      }
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.rebuildSearchIndex", async () => {
-      await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: t("app.rebuildingSearchIndex"), cancellable: true },
-        async (progress, token) => rebuildSearchIndex(progress, token),
-      );
+      const startSnapshot = captureHistorySearchStartSnapshot();
+      const snapshotPromise = waitForCurrentHistorySearchIndex({
+        refreshState: startSnapshot.refreshState,
+        config: startSnapshot.config,
+        historyService,
+        isRequestCurrent: () => true,
+      });
+      const maintenanceStart = createDeferred<CacheMaintenanceProgressContext | null>();
+      const maintenancePromise = enqueueCacheMaintenance(async () => {
+        const progressContext = await maintenanceStart.promise;
+        if (!progressContext) return;
+        const { progress, token } = progressContext;
+        await rebuildSearchIndex(progress, token, undefined, snapshotPromise);
+      });
+      let progressStarted = false;
+      try {
+        await vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: t("app.rebuildingSearchIndex"), cancellable: true },
+          async (progress, token) => {
+            progressStarted = true;
+            maintenanceStart.resolve(Object.freeze({ progress, token }));
+            return maintenancePromise;
+          },
+        );
+      } catch (error) {
+        if (!progressStarted) maintenanceStart.resolve(null);
+        throw error;
+      }
     }),
   );
 
@@ -3119,6 +4550,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.openFileChangeHistory", async (uri?: unknown) => {
       const fileUri = uri instanceof vscode.Uri ? uri : undefined;
       await fileChangeHistoryPanels.openForUri(fileUri);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.showHistoryInsights", async () => {
+      if (!SESSION_ANALYSIS_FEATURES_ENABLED) {
+        void vscode.window.showInformationMessage(t("analysis.featureDisabled"));
+        return;
+      }
+      const snapshot = historyProvider.createInsightsSnapshot(getDateTimeSettingsKey(resolveDateTimeSettings()));
+      await historyInsightsPanels.open(snapshot);
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.openCodexAgentParent", async (element?: unknown) => {
+      if (!getConfig().agentRunsEnabled) {
+        void vscode.window.showInformationMessage(t("codexAgentRuns.disabled"));
+        return;
+      }
+      const session = isSessionNode(element)
+        ? element.session
+        : resolveSessionFromElementOrFsPath(historyService, element);
+      if (!session || session.source !== "codex") return;
+      await chatPanels.openCodexAgentParent(session);
     }),
   );
 
@@ -3201,7 +4657,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.openSessionMarkdown", async (elementOrArgs?: unknown) => {
-      // Switching from the chat webview passes args (fsPath), so do not prefer bulk-selection handling.
+      // Switching from the session Webview passes args (fsPath), so do not prefer bulk-selection handling.
       const hasDirectFsPath =
         !!elementOrArgs &&
         typeof elementOrArgs === "object" &&
@@ -3390,8 +4846,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.searchClearResults", async () => {
       if (!searchProvider.root) return;
-      searchProvider.clear();
-      setHasSearchResultsContext(false);
+      clearVisibleSearchResults();
       statusProvider.refresh();
     }),
   );
@@ -3399,19 +4854,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.searchFilterByTag", async (tagArg?: unknown) => {
       const singleTag = typeof tagArg === "string" ? tagArg.trim() : "";
-      const applySearchTagShortcut = async (nextTags: readonly string[]): Promise<void> => {
-        const normalized = sanitizeTagFilter(nextTags);
-        const changed = !isSameTagFilter(historyTagFilter, normalized);
+      const applySearchTagShortcut = async (
+        nextTags: readonly string[] | ((currentTags: readonly string[]) => readonly string[]),
+      ): Promise<void> => {
         const hadVisibleSearch = !!searchProvider.root;
-        await applyHistoryFilters(
-          {
-            date: historyFilter,
-            projectCwd: historyProjectCwd,
-            source: historySourceFilter,
-            tags: normalized,
-          },
-          { persist: true, rerunSearch: changed },
-        );
+        const changed = await applyHistoryFilters((current) => ({
+          tags: sanitizeTagFilter(
+            typeof nextTags === "function" ? nextTags(current.tags) : nextTags,
+          ),
+        }), { persist: true });
         if (!changed) return;
         if (!hadVisibleSearch) {
           void vscode.window.showInformationMessage(t("search.tagFilter.deferred"));
@@ -3419,11 +4870,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       };
 
       if (singleTag) {
-        const normalizedCurrent = sanitizeTagFilter(historyTagFilter);
-        const isSameSingle =
-          normalizedCurrent.length === 1 &&
-          normalizedCurrent[0]!.toLowerCase() === singleTag.toLowerCase();
-        await applySearchTagShortcut(isSameSingle ? [] : [singleTag]);
+        await applySearchTagShortcut((currentTags) => {
+          const normalizedCurrent = sanitizeTagFilter(currentTags);
+          const isSameSingle =
+            normalizedCurrent.length === 1 &&
+            normalizedCurrent[0]!.toLowerCase() === singleTag.toLowerCase();
+          return isSameSingle ? [] : [singleTag];
+        });
         return;
       }
 
@@ -3466,18 +4919,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearSearchTagFilter", async () => {
-      if (historyTagFilter.length === 0) return;
       const hadVisibleSearch = !!searchProvider.root;
-      await applyHistoryFilters(
-        {
-          date: historyFilter,
-          projectCwd: historyProjectCwd,
-          source: historySourceFilter,
-          tags: [],
-        },
-        { persist: true },
-      );
-      if (!hadVisibleSearch) {
+      const changed = await applyHistoryFilters({ tags: [] }, { persist: true });
+      if (changed && !hadVisibleSearch) {
         void vscode.window.showInformationMessage(t("search.tagFilter.deferred"));
       }
     }),
@@ -4280,12 +5724,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage(t("projectAssociation.noChanges"));
       return false;
     }
-    await refreshAfterProjectAssociationChange();
+    await refreshAfterProjectAssociationChange(before);
     pushUndoAction(
       undoLabel,
       async () => {
-        await projectAssociationStore.restoreSnapshot(before);
-        await refreshAfterProjectAssociationChange();
+        await restoreProjectAssociationsAndRefresh(before);
       },
       undefined,
       { postUndoRefresh: "none" },
@@ -4454,16 +5897,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       if ((await vscode.window.showWarningMessage(message, { modal: true }, confirm)) !== confirm) return false;
       if (!(await projectAssociationStore.removeBySourceCwd(parentAssociation.sourceCwd))) return false;
+      await refreshAfterProjectAssociationChange(before);
       pushUndoAction(
         t("undo.label.projectAssociationClear"),
         async () => {
-          await projectAssociationStore.restoreSnapshot(before);
-          await refreshAfterProjectAssociationChange();
+          await restoreProjectAssociationsAndRefresh(before);
         },
         undefined,
         { postUndoRefresh: "none" },
       );
-      await refreshAfterProjectAssociationChange();
       offerUndo(t("projectAssociation.cleared"));
       return true;
     }
@@ -4510,31 +5952,23 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       if ((await vscode.window.showWarningMessage(message, { modal: true }, confirm)) !== confirm) return false;
       if (!(await projectAssociationStore.removeBySourceCwd(picked.source.sourceCwd))) return false;
-      pushUndoAction(
-        t("undo.label.projectAssociationClear"),
-        async () => {
-          await projectAssociationStore.restoreSnapshot(before);
-          await refreshAfterProjectAssociationChange();
-        },
-        undefined,
-        { postUndoRefresh: "none" },
-      );
     } else {
       const confirm = t("projectAssociation.button.clear");
       const message = t("projectAssociation.confirm.clearAll", targetCwd, sources.length);
       if ((await vscode.window.showWarningMessage(message, { modal: true }, confirm)) !== confirm) return false;
       await projectAssociationStore.removeDirectSourcesForTargetCwd(targetCwd);
-      pushUndoAction(
-        t("undo.label.projectAssociationClearAll"),
-        async () => {
-          await projectAssociationStore.restoreSnapshot(before);
-          await refreshAfterProjectAssociationChange();
-        },
-        undefined,
-        { postUndoRefresh: "none" },
-      );
     }
-    await refreshAfterProjectAssociationChange();
+    await refreshAfterProjectAssociationChange(before);
+    pushUndoAction(
+      picked.source
+        ? t("undo.label.projectAssociationClear")
+        : t("undo.label.projectAssociationClearAll"),
+      async () => {
+        await restoreProjectAssociationsAndRefresh(before);
+      },
+      undefined,
+      { postUndoRefresh: "none" },
+    );
     offerUndo(t("projectAssociation.cleared"));
     return true;
   };
@@ -4619,12 +6053,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage(t("projectAssociation.noChanges"));
       return false;
     }
-    await refreshAfterProjectAssociationChange();
+    await refreshAfterProjectAssociationChange(before);
     pushUndoAction(
       t("undo.label.projectAssociationChangeMode"),
       async () => {
-        await projectAssociationStore.restoreSnapshot(before);
-        await refreshAfterProjectAssociationChange();
+        await restoreProjectAssociationsAndRefresh(before);
       },
       undefined,
       { postUndoRefresh: "none" },
@@ -5080,34 +6513,58 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const idx = historyService.getIndex();
       const change = await promptHistoryFilter(idx, {
         date: historyFilter,
-        projectCwd: historyProjectCwd,
+        projectSelection: historyProjectSelection,
         source: historySourceFilter,
         sourceOptions: getHistorySourceOptionsForPrompt(),
-        archiveLocation: archiveLocationFilter,
+        archiveLocation: resolveEffectiveArchiveLocationFilter(),
         tags: historyTagFilter,
         availableTags: annotationStore.listTagStats().map((x) => x.tag),
         getProjectDisplayName: (projectCwd) => getProjectDisplayName(projectCwd, 80),
         getCanonicalProjectKey,
       });
       if (!change) return;
+      if (change.kind === "projectEdit") {
+        const projects = await promptHistoryProjectSelection(idx, {
+          selection: historyProjectSelection,
+          getProjectDisplayName: (projectCwd) => getProjectDisplayName(projectCwd, 80),
+          getCanonicalProjectKey,
+        });
+        if (!projects) return;
+        await applyHistoryFilters(
+          { projects },
+          { persist: true, projectScopePolicy: "explicitSelection" },
+        );
+        return;
+      }
+      if (change.kind === "project") {
+        await applyHistoryFilters(
+          { projects: projectSelectionFromCwds(change.projectCwd, null, resolveHistoryProjectGroupKey) },
+          { persist: true, projectScopePolicy: "explicitSelection" },
+        );
+        return;
+      }
       if (change.kind === "archiveLocation") {
         await applyArchiveLocationFilter(change.archiveLocation, { persist: true, rerunSearch: true });
         return;
       }
-      const next = {
-        date: change.kind === "date" ? change.date : historyFilter,
-        projectCwd: change.kind === "project" ? change.projectCwd : historyProjectCwd,
-        source: change.kind === "source" ? change.source : historySourceFilter,
-        tags: change.kind === "tags" ? change.tags : historyTagFilter,
-      };
+      const next: HistoryFilterPatch = change.kind === "date"
+        ? { date: change.date }
+        : change.kind === "source"
+          ? { source: change.source }
+          : { tags: change.tags };
       await applyHistoryFilters(next, { persist: true });
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearHistoryFilter", async () => {
-      await applyHistoryFilters({ date: { kind: "all" }, projectCwd: null, source: "all", tags: [] }, { persist: true });
-      await applyArchiveLocationFilter("activeOnly", { persist: true, rerunSearch: true });
+      await applyHistoryFilterState({
+        date: { kind: "all" },
+        projects: { kind: "all" },
+        source: "all",
+        tags: [],
+        archiveLocation: "activeOnly",
+      }, { persist: true, rerunSearch: true, projectScopePolicy: "clear" });
     }),
   );
 
@@ -5115,16 +6572,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.filterHistoryByTag", async (tagArg?: unknown) => {
       const singleTag = typeof tagArg === "string" ? tagArg.trim() : "";
       if (singleTag) {
-        const normalizedCurrent = sanitizeTagFilter(historyTagFilter);
-        const isSameSingle =
-          normalizedCurrent.length === 1 &&
-          normalizedCurrent[0]!.toLowerCase() === singleTag.toLowerCase();
         await applyHistoryFilters(
-          {
-            date: historyFilter,
-            projectCwd: historyProjectCwd,
-            source: historySourceFilter,
-            tags: isSameSingle ? [] : [singleTag],
+          (current) => {
+            const normalizedCurrent = sanitizeTagFilter(current.tags);
+            const isSameSingle =
+              normalizedCurrent.length === 1 &&
+              normalizedCurrent[0]!.toLowerCase() === singleTag.toLowerCase();
+            return { tags: isSameSingle ? [] : [singleTag] };
           },
           { persist: true },
         );
@@ -5165,29 +6619,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!picked) return;
 
       const nextTags = sanitizeTagFilter(picked.map((x) => x.tag));
-      await applyHistoryFilters(
-        {
-          date: historyFilter,
-          projectCwd: historyProjectCwd,
-          source: historySourceFilter,
-          tags: nextTags,
-        },
-        { persist: true },
-      );
+      await applyHistoryFilters({ tags: nextTags }, { persist: true });
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearHistoryTagFilter", async () => {
-      await applyHistoryFilters(
-        {
-          date: historyFilter,
-          projectCwd: historyProjectCwd,
-          source: historySourceFilter,
-          tags: [],
-        },
-        { persist: true },
-      );
+      await applyHistoryFilters({ tags: [] }, { persist: true });
     }),
   );
 
@@ -5201,7 +6639,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       await applyHistoryProjectState(
-        { display: "list", scope: historyProjectScope === "currentGroup" ? "all" : "currentGroup" },
+        () => ({ display: "list", scope: historyProjectScope === "currentGroup" ? "all" : "currentGroup" }),
         { persist: true },
       );
     }),
@@ -5209,14 +6647,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.showHistoryProjectGrouped", async () => {
-      if (historyProjectDisplay === "project" && historyProjectScope === "all") return;
       await applyHistoryProjectState({ display: "project", scope: "all" }, { persist: true });
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearHistoryProjectMode", async () => {
-      if (historyProjectDisplay === "list" && historyProjectScope === "all" && !historyProjectCwd) return;
       await applyHistoryProjectState({ projectCwd: null, display: "list", scope: "all" }, { persist: true });
     }),
   );
@@ -5224,7 +6660,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.toggleHistoryProjectDisplay", async () => {
       await applyHistoryProjectState(
-        { display: historyProjectDisplay === "project" ? "list" : "project" },
+        () => ({ display: historyProjectDisplay === "project" ? "list" : "project" }),
         { persist: true },
       );
     }),
@@ -5232,22 +6668,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.toggleHistoryProjectScope", async () => {
-      if (historyProjectScope === "currentGroup") {
-        await applyHistoryProjectState({ scope: "all" }, { persist: true });
-        return;
-      }
-      if (!resolveCurrentWorkspaceFolder()) {
+      if (historyProjectScope !== "currentGroup" && !resolveCurrentWorkspaceFolder()) {
         void vscode.window.showInformationMessage(t("history.project.scope.noWorkspace"));
         return;
       }
-      await applyHistoryProjectState({ scope: "currentGroup" }, { persist: true });
+      await applyHistoryProjectState(
+        () => ({ scope: historyProjectScope === "currentGroup" ? "all" : "currentGroup" }),
+        { persist: true },
+      );
     }),
   );
 
   const registerHistoryProjectDisplayCommand = (commandId: string, display: ProjectDisplayMode): void => {
     context.subscriptions.push(
       vscode.commands.registerCommand(commandId, async () => {
-        if (historyProjectDisplay === display) return;
         await applyHistoryProjectState({ display }, { persist: true });
       }),
     );
@@ -5259,7 +6693,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const registerHistoryProjectScopeCommand = (commandId: string, scope: ProjectScopeMode): void => {
     context.subscriptions.push(
       vscode.commands.registerCommand(commandId, async () => {
-        if (historyProjectScope === scope) return;
         if (scope === "currentGroup" && !resolveCurrentWorkspaceFolder()) {
           void vscode.window.showInformationMessage(t("history.project.scope.noWorkspace"));
           return;
@@ -5298,43 +6731,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.filterHistorySourceCodex", async () => {
-      await applyHistoryFilters(
-        {
-          date: historyFilter,
-          projectCwd: historyProjectCwd,
-          source: "codex",
-          tags: historyTagFilter,
-        },
-        { persist: true },
-      );
+      await applyHistoryFilters({ source: "codex" }, { persist: true });
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.filterHistorySourceClaude", async () => {
-      await applyHistoryFilters(
-        {
-          date: historyFilter,
-          projectCwd: historyProjectCwd,
-          source: "claude",
-          tags: historyTagFilter,
-        },
-        { persist: true },
-      );
+      await applyHistoryFilters({ source: "claude" }, { persist: true });
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearHistorySourceFilter", async () => {
-      await applyHistoryFilters(
-        {
-          date: historyFilter,
-          projectCwd: historyProjectCwd,
-          source: "all",
-          tags: historyTagFilter,
-        },
-        { persist: true },
-      );
+      await applyHistoryFilters({ source: "all" }, { persist: true });
     }),
   );
 
@@ -5342,16 +6751,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(
       vscode.commands.registerCommand(commandId, async () => {
         const normalized = constrainHistorySourceFilter(source);
-        if (historySourceFilter === normalized) return;
-        await applyHistoryFilters(
-          {
-            date: historyFilter,
-            projectCwd: historyProjectCwd,
-            source: normalized,
-            tags: historyTagFilter,
-          },
-          { persist: true },
-        );
+        await applyHistoryFilters({ source: normalized }, { persist: true });
       }),
     );
   };
@@ -5363,7 +6763,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const registerHistoryArchiveLocationCommand = (commandId: string, archiveLocation: ArchiveLocationFilter): void => {
     context.subscriptions.push(
       vscode.commands.registerCommand(commandId, async () => {
-        if (historySourceFilter === "claude") return false;
         return applyArchiveLocationFilter(archiveLocation, { persist: true, rerunSearch: true });
       }),
     );
@@ -5508,13 +6907,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       const fsPaths = sessions.map((session) => session.fsPath);
       if (fsPaths.length === 0) return;
-      const pinnedBefore = new Set(fsPaths.filter((p) => pinStore.isPinned(p)).map((p) => normalizeCacheKey(p)));
-      const { pinned, skipped } = await pinStore.pinSessions(sessions);
+      const { pinned, skipped, added } = await pinStore.pinSessions(sessions);
       refreshViews();
-      const newlyPinned = fsPaths.filter((p) => !pinnedBefore.has(normalizeCacheKey(p)));
+      const newlyPinned = added.map((pin) => pin.fsPath);
       if (newlyPinned.length > 0) {
+        const newlyPinnedTokens = added.map((pin) => ({
+          cacheKey: pin.cacheKey,
+          identityKey: pin.identityKey,
+          pinnedAt: pin.pinnedAt,
+        }));
         pushUndoAction(t("undo.label.pin", newlyPinned.length), async () => {
-          await pinStore.unpinMany(newlyPinned);
+          const relocatedPaths = pinStore
+            .getAll()
+            .filter((pin) =>
+              newlyPinnedTokens.some((token) =>
+                pin.pinnedAt === token.pinnedAt &&
+                (token.identityKey
+                  ? pin.identityKey === token.identityKey
+                  : pin.cacheKey === token.cacheKey),
+              ),
+            )
+            .map((pin) => pin.fsPath);
+          await pinStore.unpinMany([...newlyPinned, ...relocatedPaths]);
         });
         offerUndo(t("undo.offer.pin", newlyPinned.length));
       }
@@ -5539,7 +6953,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       let fsPaths: string[] = [];
       if (hasDirectFsPath) {
         const fsPath = String((element as { fsPath: string }).fsPath ?? "").trim();
-        fsPaths = fsPath ? [fsPath] : [];
+        const identityKey = resolveSessionIdentityKeyArgument(element);
+        const identityPins = identityKey
+          ? pinStore.getAll().filter((pin) => pin.identityKey === identityKey).map((pin) => pin.fsPath)
+          : [];
+        const currentSession = identityKey ? historyService.getIndex().byIdentityKey.get(identityKey) : undefined;
+        const candidates = [...identityPins, currentSession?.fsPath ?? "", fsPath].filter(Boolean);
+        fsPaths = Array.from(
+          candidates.reduce((byKey, candidate) => {
+            byKey.set(normalizeCacheKey(candidate), candidate);
+            return byKey;
+          }, new Map<string, string>()).values(),
+        );
       } else {
         const targets = resolveTargets(element);
         fsPaths = collectUnpinFsPaths(targets);
@@ -5672,6 +7097,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   registerUiCommandAlias("codexHistoryViewer.ui.ja.openSession", "codexHistoryViewer.openSession");
   registerUiCommandAlias("codexHistoryViewer.ui.en.openSession", "codexHistoryViewer.openSession");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.showHistoryInsights", "codexHistoryViewer.showHistoryInsights");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.showHistoryInsights", "codexHistoryViewer.showHistoryInsights");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.openCodexAgentParent", "codexHistoryViewer.openCodexAgentParent");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.openCodexAgentParent", "codexHistoryViewer.openCodexAgentParent");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.openSessionMarkdown", "codexHistoryViewer.openSessionMarkdown");
   registerUiCommandAlias("codexHistoryViewer.ui.en.openSessionMarkdown", "codexHistoryViewer.openSessionMarkdown");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.copyResumePrompt", "codexHistoryViewer.copyResumePrompt");
@@ -5972,6 +7401,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         chatPanels.refreshTitles();
       } catch (error) {
         logger.debug(`history.backgroundRefresh failed error=${sanitizeDebugError(error)}`);
+      } finally {
+        initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
       }
     })();
   };
@@ -5985,8 +7416,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   if (loadedCachedIndex) {
-    completeInitialTreeLoad();
-    runInitialBackgroundRefresh();
+    try {
+      completeInitialTreeLoad();
+      runCodexAgentRunsConfigurationChange("activation.cached");
+      runInitialBackgroundRefresh();
+    } catch (error) {
+      initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
+      throw error;
+    }
   } else {
     try {
       await vscode.window.withProgress(
@@ -5996,8 +7433,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         },
       );
     } finally {
-      completeInitialTreeLoad();
+      try {
+        completeInitialTreeLoad();
+      } finally {
+        initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
+      }
     }
+    runCodexAgentRunsConfigurationChange("activation.refreshed");
   }
   await autoRefreshService.configure(getConfig(), computeAutoRefreshConsumerVisible(), vscode.window.state.focused);
 }
@@ -6215,12 +7657,13 @@ function formatBytesForUi(bytes: number): string {
 type HistoryFilterChange =
   | { kind: "date"; date: DateScope }
   | { kind: "project"; projectCwd: string | null }
+  | { kind: "projectEdit" }
   | { kind: "source"; source: SessionSourceFilter }
   | { kind: "archiveLocation"; archiveLocation: ArchiveLocationFilter }
   | { kind: "tags"; tags: string[] };
 
 type HistoryFilterPick = vscode.QuickPickItem & {
-  pickKind?: "date" | "project" | "source" | "archiveLocation" | "tags";
+  pickKind?: "date" | "project" | "projectEdit" | "source" | "archiveLocation" | "tags";
   date?: DateScope;
   projectCwd?: string | null;
   source?: SessionSourceFilter;
@@ -6232,7 +7675,8 @@ async function promptHistoryFilter(
   idx: import("./sessions/sessionTypes").HistoryIndex,
   current: {
     date: DateScope;
-    projectCwd: string | null;
+    projectCwd?: string | null;
+    projectSelection?: ProjectSelection;
     source: SessionSourceFilter;
     sourceOptions: SessionSourceFilter[];
     archiveLocation: ArchiveLocationFilter;
@@ -6272,21 +7716,40 @@ async function promptHistoryFilter(
   const dateItemsBase: HistoryFilterPick[] = [
     { label: t("history.filter.section.date"), kind: vscode.QuickPickItemKind.Separator },
     { label: current.allDateLabel ?? t("history.filter.all"), pickKind: "date", date: { kind: "all" } },
+    ...(current.date.kind === "range"
+      ? [{
+          label: getDateScopeValue(current.date) ?? "",
+          description: t("common.current"),
+          pickKind: "date" as const,
+          date: current.date,
+        }]
+      : []),
     ...years.map((y) => ({ label: y, pickKind: "date" as const, date: { kind: "year" as const, yyyy: y } })),
     ...yms.map((ym) => ({ label: ym, pickKind: "date" as const, date: { kind: "month" as const, ym } })),
   ];
 
-  const projectItemsBase: HistoryFilterPick[] = [
-    { label: t("history.filter.section.project"), kind: vscode.QuickPickItemKind.Separator },
-    { label: t("history.project.clear"), pickKind: "project" as const, projectCwd: null },
-    ...projectCwds.map((cwd) => ({
-      label: current.getProjectDisplayName?.(cwd) ?? safeDisplayPath(cwd, 80),
-      description: t("history.filter.project"),
-      detail: cwd,
-      pickKind: "project" as const,
-      projectCwd: cwd,
-    })),
-  ];
+  const projectItemsBase: HistoryFilterPick[] = current.projectSelection
+    ? [
+        { label: t("history.filter.section.project"), kind: vscode.QuickPickItemKind.Separator },
+        {
+          label: t("history.project.editSelection"),
+          description: current.projectSelection.kind === "groups"
+            ? t("historyInsights.filterProjectGroupCount", current.projectSelection.groups.length)
+            : t("history.filter.all"),
+          pickKind: "projectEdit" as const,
+        },
+      ]
+    : [
+        { label: t("history.filter.section.project"), kind: vscode.QuickPickItemKind.Separator },
+        { label: t("history.project.clear"), pickKind: "project" as const, projectCwd: null },
+        ...projectCwds.map((cwd) => ({
+          label: current.getProjectDisplayName?.(cwd) ?? safeDisplayPath(cwd, 80),
+          description: t("history.filter.project"),
+          detail: cwd,
+          pickKind: "project" as const,
+          projectCwd: cwd,
+        })),
+      ];
 
   const sourceLabelByValue = (source: SessionSourceFilter): string => {
     if (source === "codex") return t("history.filter.source.codex");
@@ -6331,8 +7794,6 @@ async function promptHistoryFilter(
     ...archiveLocationItemsBase,
     ...tagItemsBase,
   ];
-
-  const isSameDateScope = (a: DateScope, b: DateScope): boolean => a.kind === b.kind && getDateScopeValue(a) === getDateScopeValue(b);
 
   return await new Promise<HistoryFilterChange | null>((resolve) => {
     const qp = vscode.window.createQuickPick<HistoryFilterPick>();
@@ -6392,6 +7853,10 @@ async function promptHistoryFilter(
         finish({ kind: "project", projectCwd: picked?.projectCwd ?? null });
         return;
       }
+      if (pickKind === "projectEdit") {
+        finish({ kind: "projectEdit" });
+        return;
+      }
       if (pickKind === "source") {
         finish({ kind: "source", source: sanitizeHistorySourceFilter(picked?.source) });
         return;
@@ -6438,6 +7903,73 @@ async function promptHistoryFilter(
   });
 }
 
+async function promptHistoryProjectSelection(
+  idx: import("./sessions/sessionTypes").HistoryIndex,
+  current: {
+    selection: ProjectSelection;
+    getProjectDisplayName: (projectCwd: string) => string;
+    getCanonicalProjectKey: (projectCwd: string) => string | null;
+  },
+): Promise<ProjectSelection | null> {
+  type ProjectPick = vscode.QuickPickItem & { group: { canonicalGroupKey: string; representativeCwd: string } };
+  const candidates = new Map<string, ProjectPick>();
+  const append = (representativeCwd: string, canonicalGroupKey?: string): void => {
+    const cwd = representativeCwd.trim();
+    const key = (canonicalGroupKey ?? current.getCanonicalProjectKey(cwd) ?? normalizeProjectKey(cwd)).trim();
+    if (!cwd || !key || candidates.has(key) || candidates.size >= 250) return;
+    candidates.set(key, {
+      label: current.getProjectDisplayName(cwd),
+      description: t("history.filter.project"),
+      group: { canonicalGroupKey: key, representativeCwd: cwd },
+    });
+  };
+  if (current.selection.kind === "groups") {
+    for (const group of current.selection.groups) append(group.representativeCwd, group.canonicalGroupKey);
+  }
+  for (const session of idx.sessions) {
+    const cwd = typeof session.meta.cwd === "string" ? session.meta.cwd.trim() : "";
+    if (cwd) append(cwd);
+    if (candidates.size >= 250) break;
+  }
+  const items = Array.from(candidates.values());
+  return new Promise<ProjectSelection | null>((resolve) => {
+    const picker = vscode.window.createQuickPick<ProjectPick>();
+    picker.title = t("history.project.editSelection");
+    picker.placeholder = t("history.project.multiSelectPlaceholder", MAX_PROJECT_SELECTION_GROUPS);
+    picker.canSelectMany = true;
+    picker.matchOnDescription = true;
+    picker.items = items;
+    const selectedKeys = new Set(
+      current.selection.kind === "groups"
+        ? current.selection.groups.map((group) => group.canonicalGroupKey)
+        : [],
+    );
+    picker.selectedItems = items.filter((item) => selectedKeys.has(item.group.canonicalGroupKey));
+    let updating = false;
+    picker.onDidChangeSelection((selection) => {
+      if (updating || selection.length <= MAX_PROJECT_SELECTION_GROUPS) return;
+      updating = true;
+      picker.selectedItems = selection.slice(0, MAX_PROJECT_SELECTION_GROUPS);
+      updating = false;
+    });
+    let done = false;
+    const finish = (value: ProjectSelection | null): void => {
+      if (done) return;
+      done = true;
+      resolve(value);
+      picker.dispose();
+    };
+    picker.onDidAccept(() => {
+      const selected = picker.selectedItems.slice(0, MAX_PROJECT_SELECTION_GROUPS);
+      finish(selected.length === 0
+        ? { kind: "all" }
+        : { kind: "groups", groups: selected.map((item) => item.group) });
+    });
+    picker.onDidHide(() => finish(null));
+    picker.show();
+  });
+}
+
 function resolveProjectCwdForFilterList(
   fallbackCwd: string,
   canonicalKey: string,
@@ -6457,6 +7989,25 @@ function resolveProjectCwdForFilterList(
     if (key === canonicalKey) return cwd;
   }
   return fallbackCwd;
+}
+
+function resolveInsightsProjectCwd(
+  snapshot: HistoryInsightsSnapshot,
+  projectKey: string,
+  sessions: readonly SessionSummary[],
+): string | null {
+  const byCacheKey = new Map(sessions.map((session) => [session.cacheKey, session]));
+  const byIdentityKey = new Map(sessions.map((session) => [session.identityKey, session]));
+  for (const reference of snapshot.references) {
+    if (reference.projectKey !== projectKey) continue;
+    const cacheMatch = byCacheKey.get(reference.cacheKey);
+    const session = cacheMatch?.identityKey === reference.identityKey
+      ? cacheMatch
+      : byIdentityKey.get(reference.identityKey);
+    const cwd = typeof session?.meta.cwd === "string" ? session.meta.cwd.trim() : "";
+    if (cwd) return cwd;
+  }
+  return null;
 }
 
 // Cleanup hook called by VS Code.
@@ -6509,9 +8060,26 @@ function resolveRevealIndexFromArgs(args: unknown): number | undefined {
 function resolveSessionFromElementOrFsPath(historyService: HistoryService, elementOrArgs: unknown): SessionSummary | undefined {
   if (isSessionNode(elementOrArgs)) return elementOrArgs.session;
   if (!elementOrArgs || typeof elementOrArgs !== "object") return undefined;
+  const identityKey = resolveSessionIdentityKeyArgument(elementOrArgs);
+  if (identityKey) {
+    const session = historyService.getIndex().byIdentityKey.get(identityKey);
+    if (session) return session;
+  }
   const fsPath = (elementOrArgs as any).fsPath;
   if (typeof fsPath !== "string" || fsPath.length === 0) return undefined;
   return historyService.findByFsPath(fsPath);
+}
+
+function resolveSessionIdentityKeyArgument(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const identityKey = (value as { identityKey?: unknown }).identityKey;
+  if (typeof identityKey !== "string") return undefined;
+  const normalized = identityKey.trim();
+  return normalized &&
+    normalized.length <= 1024 &&
+    !/[\u0000-\u001f\u007f]/u.test(normalized)
+    ? normalized
+    : undefined;
 }
 
 function resolveSessionFromElementOrActive(
@@ -6521,7 +8089,7 @@ function resolveSessionFromElementOrActive(
 ): SessionSummary | undefined {
   if (isSessionNode(element)) return element.session;
 
-  // Allow "switch to chat view" from an opened Markdown transcript.
+  // Allow switching to the session view from an opened Markdown transcript.
   const doc = vscode.window.activeTextEditor?.document;
   if (!doc) return undefined;
   if (doc.uri.scheme !== transcriptScheme) return undefined;

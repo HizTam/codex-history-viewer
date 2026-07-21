@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-07-02
-- 対象バージョン: 2.7.0
+- 最終更新: 2026-07-21
+- 対象バージョン: 2.8.0
 
 ## 1. 概要
 
@@ -16,8 +16,11 @@
 ## 2. ディレクトリ構成（主要）
 
 - `src/`: TypeScript 実装
+  - `analysis/`: History Insights / Claude Branch Navigation 共通のセッション解析基盤
+  - `insights/`: History Insights の snapshot、集計、Webview 管理
+  - `branchMap/`: Branch Navigation（Codex / Claude）の関係解析、表示モデル、遷移解決
 - `dist/`: ビルド成果物
-- `media/`: Webview（チャット表示）用の CSS / JS
+- `media/`: セッションビュー / File AI Change History / History Insights Webview 用の CSS / JS
 - `l10n/`: 実行時 UI / Webview 用のローカライズバンドル
 - `package.nls*.json`: VS Code manifest (`package.json`) 用のローカライズ
 - `resources/`: アイコン等
@@ -35,7 +38,6 @@
   - `Undo Last Action`
   - `Import Sessions`
   - `Rebuild Cache`
-  - `Rebuild Search Index`
   - `Cleanup Missing Pins`
   - `Bulk Rename Tag`
   - `Bulk Delete Tags`
@@ -58,13 +60,13 @@
 - **History**: 年 / 月 / 日でグルーピングした履歴ツリー、またはセッション一覧のフラット一覧
   - 表示モード: `日付別` / `セッション一覧`
   - 表示順: More Actions から `開始日時 新しい順 / 古い順`、`最終メッセージ日時 新しい順 / 古い順`、`名前 昇順 / 降順` を選択する
-  - 絞り込み: 日付スコープ / プロジェクト (`cwd`) / ソース / アーカイブ表示 / タグ
+  - 絞り込み: 日付スコープ / プロジェクト選択 (`ProjectSelection`: `all` / `groups` / `none`) / ソース / アーカイブ表示 / タグ
   - プロジェクト表示: `一覧表示` / `プロジェクト別表示`
-  - プロジェクト対象範囲: `すべて` / `現在のプロジェクトグループ`
+  - プロジェクト対象範囲: `すべて` / `現在のプロジェクトグループ`。実効対象は`ProjectSelection`を正本とし、後者は現在workspaceの1groupを選んだことを表す保存UI状態として扱う
   - プロジェクト (`cwd`) に別名が設定されている場合は、プロジェクト見出し、セッション行の CWD 表示、tooltip、絞り込み表示で別名を優先する
   - `プロジェクト別表示` では、`セッション一覧` は `Project -> Session`、`日付別` は `Project -> Year -> Month -> Day -> Session` として表示する
-  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、表示モード切替、並び替え、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、再読み込み、エクスポート、Undo など
-  - `絞り込み解除` は日付 / プロジェクト CWD / ソース / アーカイブ表示 / タグを解除し、プロジェクト表示と対象範囲は表示状態として維持する
+  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、表示モード切替、並び替え、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、履歴インサイト、再読み込み、エクスポート、Undo など
+  - `絞り込み解除`は日付 / 明示的なプロジェクト選択 / ソース / アーカイブ表示 / タグを解除し、プロジェクト表示と対象範囲は表示状態として維持する。対象範囲が`現在のプロジェクトグループ`なら、その裏付けとなる1groupの`ProjectSelection`も維持する
   - 複数選択で開く / エクスポート / Promote / Delete が可能
   - Codex アーカイブ済みセッションは、アーカイブ表示が `すべて` または `アーカイブのみ` のときに表示し、アイコン / 説明 / tooltip で通常履歴と区別する
   - 初回履歴ロード中は、空状態案内ではなく読み込み中ノードを表示する
@@ -95,14 +97,34 @@
   - 拡張機能バージョン
   - `Current project` と `Sessions root` 系のパスは行右側のコピーアイコンからクリップボードへコピーできる
 
+### 3.1.1 History Insights
+
+- History ビューのタイトルメニューまたは Command Palette の `履歴インサイトを表示` から、現在の History 条件に一致するセッションを集計する editor Webview を開く
+- 起動時の対象セッション集合は snapshot として固定する。History 側の条件変更や新規セッションを自動追従せず、`再集計` は同じ対象集合の更新分だけを解析し、`履歴の条件を適用` は現在の History 条件から snapshot を作り直す
+- 対象条件はソース、両端包含の From / To、Codex の保存場所、関連付け後の複数プロジェクト、タグを扱う
+- Webview 内のフィルターは未適用 draft として保持し、`適用` するまで snapshot を変更しない。既定では History / Search の条件を変更せず、`履歴にも適用` を選択してから `適用` した場合だけ同じ検証済み条件を History へ原子的に反映する
+- フィルター適用では、新しい snapshot の保存、必要な History 条件の保存、panel state の公開をこの順で行う。保存前に表示状態を切り替えず、History 条件の保存に失敗した場合は snapshot を以前の値へ補償ロールバックする
+- `open`、`refreshCurrent`、フィルター適用は開始順に直列化する。先行処理が公開した snapshot を後着loadで上書きせず、後発の検証済みフィルター適用を黙って破棄しない。保存失敗時は直前のpanel stateと解析lifecycleを復旧する
+- serializer から復元した panel は、初回 full History refresh が完了するまで待ち、現在設定と同じ同期区間で full scan された session inventory を確認できた場合だけ保存 snapshot を再解決する。fresh cache または初期空 index だけで対象 0 件へ確定せず、refresh 失敗、待機中の cancel / panel 破棄 / state 置換では保存 snapshot を変更しない。full scan 後の current index が正当に 0 件の場合だけ対象 0 件へ確定する
+- authoritative History index の待機は serializer 復元時だけに適用する。通常 command からの open、`履歴の条件を適用`、フィルター適用で作成した snapshot は、開始時の current index を使い、cache 採用後の background refresh を無条件に待たない
+- History 条件の保存後に History の再描画、選択位置復元、Search の再実行だけが失敗した場合は条件を巻き戻さず、適用済み条件から表示を再試行できる通知を出す
+- 概要、活動ヒートマップ、ソース / モデル / プロジェクト内訳、ツール利用内訳、指標別のアクティブセッション、変更頻度が高いファイル、利用詳細、データ品質を表示する。概要には推論トークンと変更イベント数を含め、活動ヒートマップでは推論トークンを選択できる。プロンプト本文や応答本文は集計画面へ転載しない
+- 折りたたみパネルの初期状態は活動ヒートマップだけを開き、それ以外を閉じる。利用者が変更した開閉状態は Webview state に保存し、同じタブ内の再描画、再集計、非表示からの復帰では維持する。タブを閉じて新規作成した場合は引き継がず、初期状態へ戻す
+- ツール利用内訳は Chat model builder が生成した tool item を正規化済みツール名ごとに集計し、呼び出し回数と利用セッション数を切り替えて表示する。ツール名は前後空白を除去し、空値を `unknown`、長さを 256 文字、1セッションあたりの種類数を 2,000 件に制限する。上限超過や名前切り詰めがある解析結果は `partial` とし、集計表示は各指標の上位32件の和集合を最大128件まで保持する
+- アクティブセッションはユーザー依頼数、ツール呼び出し数、推論トークン数、合計トークン数、変更行数を切り替えて表示し、各指標の上位20件の和集合だけをmodelへ含める。取得不能な値を0とみなさず、同値時は最終アクティビティ、タイトル、opaque IDで決定的に整列する。Webviewからセッションを開く操作はmodelに含まれるopaque IDをhost側のsnapshot内セッションへ再解決し、任意パスを受け付けない
+- 利用詳細は、キャッシュ済み / キャッシュ読み取り / キャッシュ作成の入力トークンと推論トークン、ユーザー依頼 / アシスタント応答 / developer メッセージ / ツール呼び出し / ツール出力、全 / 完了 / 中断 / ロールバックのターン数、変更ファイル種別ごとの重複除外後のファイル数 / 変更イベント数を表示する。トークン、メッセージ、ターンの各指標は概要と同じ取得可否と下限表示を使い、変更ファイル種別は解析できたファイル変更の範囲を集計する
+- トークン、変更行数などは確定値、取得できた下限、取得不能を区別し、不完全なログを 0 として扱わない。safe integerを超える合計は最大安全整数へ飽和させ、データ品質にoverflowを表示する
+- 日付の drill-down は History、プロジェクトの drill-down は History / Search へ、snapshot の他条件を維持して適用する。欠損referenceが混在する場合は、現在のindexで同じprojectを解決できる行だけ操作を表示する。ファイル行からは既存 File AI Change History または対象ファイルを開く
+- 集計は Session Analysis Index を必要時に差分更新する。同じcache contextの同時要求は共有jobへまとめ、consumerごとの進捗とキャンセルを維持する。2秒を超えたloadだけVS Codeのキャンセル可能な進捗通知を1件表示し、キャンセル、部分解析、stale 表示に対応する。失敗しても History / Search / Pinned / セッションビューの通常機能へ波及させない
+
 ### 3.2 セッション操作
 
-- `Open in New Tab (Chat)`: Webview で会話をセッションタブとして表示
+- `Open Session in New Tab`: Webview のセッションビューとして別タブに表示
 - `Custom Title...`: QuickPick からカスタムタイトルの設定 / 消去を選択する
 - `Project Alias...`: History / Pinned のプロジェクトノード右クリックから、プロジェクト別名の設定 / 消去を選択する
 - `Project Association...`: History / Pinned のプロジェクトノード右クリックから、別プロジェクトへの関連付け、関連付けモード変更、解除を選択する
-- `Open Session (Markdown)`: 仮想ドキュメントとして Markdown 化して表示
-- `Copy Quick Prompt`: チャット表示内で、タスクと直近メッセージだけの軽量な再開用プロンプトをクリップボードへコピー
+- `Open Session as Markdown`: 仮想ドキュメントとして Markdown 化して表示
+- `Copy Quick Prompt`: セッションビュー内で、タスクと直近メッセージだけの軽量な再開用プロンプトをクリップボードへコピー
 - `Resume in OpenAI Codex`: OpenAI Codex 拡張へ引き継ぐ
 - `Resume in Claude Code`: Claude Code 拡張へ引き継ぐ
 - `他のAIへ引継ぎ`: Handoff 用の階層メニューを表示する
@@ -121,15 +143,15 @@
 - `codexHistoryViewer.sources.enabled` に `codex` が含まれ、かつ `codexHistoryViewer.codex.archivedSessions.enabled` が有効な場合、通常の Codex `sessions` に加えて Codex `archived_sessions` も読み込む
 - `codexHistoryViewer.codex.archivedSessionsRoot` が空の場合は、Codex `sessionsRoot` と同階層の `archived_sessions` を既定値にする
 - `codexHistoryViewer.sources.enabled` に `codex` が含まれていない場合は、`codexHistoryViewer.codex.archivedSessions.enabled = true` でも archived sessions を使用しない
-- `archiveLocationFilter` は History と Search の検索対象範囲用として workspace ごとに保持し、既定は `通常のみ` とする
+- History / Search の Codex 用 `archiveLocationFilter` は workspace ごとに保持し、既定は `通常のみ` とする。Claude のみを選択している間の実効条件は `すべて` に固定するが、この値で Codex 用の保存値を上書きせず、Codex または All へ戻したときと再起動後に直前の Codex 条件を復元する
 - Pinned は `pinnedArchiveLocationFilter` を別に保持し、History と Pinned の view title action からそれぞれ独立して `通常のみ` / `すべて` / `アーカイブのみ` を切り替えられる。Search は History 側のアーカイブ表示を検索対象範囲として参照する
 - History のソース絞り込みが `claude` の場合、History のアーカイブ表示切替は toolbar では disabled 表示にし、More Actions ではアーカイブ表示 group を非表示にする
 - Pinned のソース絞り込みが `claude` の場合、Pinned のアーカイブ表示切替は disabled 表示かつ実行しても状態を変更しない
 - archived 由来の session は `storage.archiveState = "archived"`、`rootKind = "codexArchivedSessions"` として扱う
 - active と archived に同じ session identity がある場合は active を優先し、重複表示を避ける
-- archived Codex session の Markdown には `Location: Archived` を表示し、Chat では `Archived` 表示で通常履歴と区別する
-- archived Codex session の Chat では `Resume in Codex` の位置に `Move to Codex History` を表示する
-- active Codex session の Chat / 履歴 Webview には `Move to Archive` ボタンを置かない
+- archived Codex session の Markdown には `Location: Archived` を表示し、セッションビューでは `Archived` 表示で通常履歴と区別する
+- archived Codex session のセッションビューでは `Resume in Codex` の位置に `Move to Codex History` を表示する
+- active Codex session のセッションビュー / 履歴 Webview には `Move to Archive` ボタンを置かない
 - 右クリックメニューでは、active Codex session は `Move to Archive` だけ、archived Codex session は `Move to Codex History` だけを表示する
 - 移動系 action はカスタムタイトル系 action の下に区切って配置し、Delete はさらに下に区切って配置する
 - archived Codex session では `Resume in Codex` と `Promote to Today (Copy)` を表示しない
@@ -137,7 +159,7 @@
 - `Move to Codex History` は公式 Codex provider の `thread/unarchive` を優先し、使えない場合は filesystem provider で `<sessionsRoot>/<YYYY>/<MM>/<DD>/` へ Move する
 - filesystem provider fallback の Move は、同名衝突時に suffix を付け、copy+verify+delete fallback と Undo で安全性を確保する
 - archive / unarchive / pin reconcile では、annotation / bookmark / chat open position などの path-keyed metadata を移動先へ寄せる
-- `chat.openPosition = lastMessage` の archived Codex Chat から `Move to Codex History` を実行した場合は、操作直前に見ていた本文メッセージへ復元後に移動する
+- `chat.openPosition = lastMessage` の archived Codex セッションビューから `Move to Codex History` を実行した場合は、操作直前に見ていた本文メッセージへ復元後に移動する
 - `PinEntry` は `identityKey` / `archiveState` / `rootKind` を保持し、公式側でアーカイブされて path が変わった場合も refresh 後に追従する
 - archived sessions が無効またはアーカイブ非表示のとき、archived 由来と判断できる pin は Pinned に欠損として出さず、Status の missing pin count にも含めない
 - archived 由来と判断できない missing pin は、通常の削除 / 外部移動と区別できないため従来通り missing として扱う
@@ -244,21 +266,34 @@
     - `search.indexToolContent`
     - 各ファイルの `mtime` / `size`
   - `search.indexToolContent`:
-    - `conversationOnly`: 会話本文とタイトル / 注釈だけを保存する
-    - `toolCalls`: 会話本文に加えてツール名 / 引数を保存する
-    - `toolCallsAndOutputs`: 会話本文、ツール名 / 引数、ツール出力を保存する（互換性維持の既定値）
+    - `conversationOnly`: メッセージ本文とタイトル / 注釈だけを保存する
+    - `toolCalls`: メッセージ本文に加えてツール名 / 引数を保存する
+    - `toolCallsAndOutputs`: メッセージ本文、ツール名 / 引数、ツール出力を保存する（互換性維持の既定値）
   - Codex の `custom_tool_call` は `toolCalls` / `toolCallsAndOutputs` のとき、tool 名、action、command、files、paths などの軽量メタだけを保存する
   - `custom_tool_call` の patch / diff 本文、巨大 JSON、base64 / data URI、secret / token / password 系キーの値は保存しない
   - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ、取得できる場合に status / exitCode / durationMs / success / error などの短い実行メタだけを保存する
   - ファイル履歴向けの `fileChangeHints` は関連セッションの優先付け補助として使う。最終的な diff 抽出結果の正しさは元のセッション JSONL の再解析で担保する
-  - Chat attachment metadata は label、path、MIME type、file kind を検索対象に含める
+  - セッションの attachment metadata は label、path、MIME type、file kind を検索対象に含める
   - Claude text document の text は上限内だけ検索対象にし、PDF / Office / binary / base64 document の本文は検索対象にしない
   - Codex file reference は履歴に保存された label / path だけを検索対象にし、参照先ファイルは読み込まない
   - 保存形式: 整形なし JSON（サイズ削減のため）
+- Session Analysis Index:
+  - 保存先: `globalStorageUri/session-analysis-index.v1.json`
+  - 用途: History Insights の統計と Claude Branch Navigation の構造化 occurrence を共用する差分解析キャッシュ。履歴キャッシュや検索インデックスの代替にはしない
+  - History Insights、Claude Branch Navigation、または `Rebuild Cache` を要求したときだけ lazy load / lazy build し、拡張機能の起動や通常の History / Search 表示を待たせない
+  - セッションごとの `cacheKey`、source、`mtime`、`size`、parser version と、sessions root / 有効ソースを含む cache context を検証し、変更された entry だけを再解析する
+  - 2.8.0最終状態のsource parser versionはCodex / Claudeともに`8`とする。cache hardening後の旧entry、Codex session-start protocol contextを通常user件数へ含めていた旧Codex entry、`used_percent`の小数を欠損扱いしていた旧Codex entry、Claudeの`<local-command-stdout>`を通常user件数へ含めていた旧Claude entry、ツール名別利用回数を保持しないversion 7 entryは再解析する
+  - 既存 Chat model builder と同じ抽出結果を使って message index、turn、usage、file change、ツール名別呼び出し回数を集計し、解析側で独自の message index を採番しない
+  - 同一セッションの重複解析を共有し、全体の更新、保存、clear は直列化する。進捗通知とキャンセルに対応する
+  - 破損 JSON は削除して次回要求時に再生成し、権限エラーなどの read error では既存ファイルを削除しない
+  - 通常の lazy 解析は cache 保存失敗時も process-local の解析結果を利用できる best-effort とし、History Insights / Claude Branch Navigation の可用性を維持する
+  - `Rebuild Cache` からの手動再作成は `rebuildAll()` の strict 経路を使う。既存 index の削除では FileNotFound だけを無視し、権限 / lock / I/O error と新 index の保存失敗は呼び出し元へ伝播する。保存失敗時は新しい process-local cache を公開しない
+  - 256 MiB を超えるセッションは `unsupported`、壊れた JSONL 行や解析上限超過は `partial` として保持し、取得不能と確定値を区別する
+  - Claude の構造化 graph record は 1 セッション 100,000 件を上限とし、上限へ到達した後に追加 record があった場合だけ `partial` とする
 - JSON 永続化:
   - JSON 読み込み失敗は `missing` / `parseError` / `readError` に分け、parse error だけを再生成可能な破損ファイルとして削除する
   - 権限エラーや provider unavailable などの read error では既存ファイルを削除しない
-  - JSON 書き込みは同一ディレクトリの一時ファイルへ書いた後に rename する。rename に失敗した場合は従来互換の直接書き込みへフォールバックし、フォールバックも失敗した場合は書き込み済み一時ファイルを残す
+  - JSON 書き込みは同一ディレクトリの一時ファイルへ書いた後に rename する。rename に失敗した場合は commit guard を再確認してから従来互換の直接書き込みへフォールバックし、その成否にかかわらず一時ファイルを best-effort で削除する
   - 診断ログには reason や削除成否だけを出し、JSON 本文やセッションパスは出さない
 - Handoff 生成ファイル:
   - 保存先: `globalStorageUri/handoffs/<source>/<source-root-relative-path-with-final-stem>/`
@@ -269,10 +304,17 @@
   - 自動整理では 30 日超または 100 ディレクトリ超の古い Handoff ディレクトリを削除対象にする
 - `Rebuild Cache`:
   - 実行前に確認ダイアログを出す
-  - 履歴キャッシュと検索インデックスを両方とも強制再作成する
-  - 実行後は検索結果をクリアする
+  - 確認ダイアログの承認直後に設定と日時条件を固定し、その条件で履歴キャッシュ、検索インデックス、Session Analysis Index を順番に強制再作成する。途中の History refresh、Auto Refresh、filter / scope、関連設定、index generation の変更は中断条件にせず、進捗通知からの明示キャンセルだけを中断条件にする
+  - 履歴の強制再作成直後に固定した同一の readonly session inventory を検索と分析へ渡す。開始設定が途中で current ではなくなった場合も detached snapshot として後続段階を完走し、新しい設定の live History Index は上書きしない
+  - 検索インデックスは専用 working state と明示キャンセルだけを確認する commit guard を使い、保存成功後にだけ disk / process-local index を一括更新する。保存前のキャンセルや保存失敗では直前の index を維持し、保存成功後のキャンセルでは完成済み検索インデックスを維持したまま後続段階へ進まない
+  - 進捗表示とキャンセルに対応する。Session Analysis Index を削除する前にキャンセルされた場合は既存の解析結果を維持し、削除後にキャンセルされた場合は不完全な現行 index を保存せず次回要求時に lazy 再構築できる状態にする
+  - Session Analysis Index の削除または保存に失敗した場合は再作成全体を失敗として通知し、成功通知を出さない
+  - 履歴 snapshot が current として採用されている場合だけ live History UI を更新し、既存検索結果の clear を要求する。検索実行中に発生した clear 要求は旧表示結果だけを対象とし、実行中検索が新しい結果を公開した場合はその結果を消さない。再作成全体が成功し、同じ snapshot が引き続き current の場合だけ、開いている History Insights と Branch Navigation を更新する
 - `Rebuild Search Index`:
   - 検索インデックスだけを強制再作成する
+  - 開始時に互換性のある current History snapshot がなければ、その時点で捕捉した History refresh queue を一度だけ待つ。待機後も開始設定と互換な snapshot を取得できなければ失敗とし、後発の queue や別設定の snapshot へ切り替えない
+  - snapshot を取得した後は readonly session inventory と設定を処理終了まで固定する。待機中または再作成中の History refresh、Auto Refresh、filter / scope、関連設定、index generation の変更では取り直しや中断を行わず、進捗通知からの明示キャンセルだけを中断条件にする。対象 session が 0 件でも空 index を保存する
+  - `Rebuild Cache` と単独の `Rebuild Search Index` は共通 maintenance queue で投入順に直列化し、全キャッシュ再作成の段階間を単独再作成が追い越さない
   - `search.indexToolContent` 変更時は通知から再作成を実行できる
 - `Delete`:
   - 既定は OS のゴミ箱 / リサイクルビンへ移動
@@ -287,10 +329,10 @@
   - 実行前に Handoff 件数と容量を確認ダイアログで表示する
 - `Empty Trash`:
   - `deleted` と `undo-delete` を手動削除する
-  - あわせて旧世代の `cache.v*.json` / `search-index.v*.json` と、1 時間以上古い `*.tmp-*.json` も削除する。ただし現在の `cache.v9.json` / `search-index.v2.json` は削除しない
+  - あわせて旧世代の `cache.v*.json` / `search-index.v*.json` / `session-analysis-index.v*.json` と、1 時間以上古い `*.tmp-*.json` も削除する。ただし現在の `cache.v9.json` / `search-index.v2.json` / `session-analysis-index.v1.json` は削除しない
   - ダイアログでは古い一時ファイルの件数を個別表示せず、ストレージ整理として扱う。Status 表示上の件数は「ゴミ箱件数」のみを扱う
 - 自動削除:
-  - 履歴キャッシュ、検索インデックス、ゴミ箱はユーザー操作 (`Empty Trash` / `Rebuild Cache`) に委ねる
+  - 履歴キャッシュ、検索インデックス、Session Analysis Index、ゴミ箱は自動で全削除せず、`Empty Trash`、`Rebuild Cache`、`Rebuild Search Index` などの明示的なユーザー操作に委ねる
   - Handoff 生成ファイルは作成時に古い世代だけを整理し、全削除はユーザー操作 (`Delete Handoff Files`) に委ねる
 
 ### 3.5 自動更新
@@ -300,25 +342,25 @@
 - Codex source と Codex archived sessions が有効な場合は archived root も監視対象に含める
 - 変更イベントは `autoRefresh.debounceMs` でまとめ、`autoRefresh.minIntervalMs` より短い間隔では refresh しない
 - 実際の refresh 実行条件:
-  - History view が表示中、または自動更新オンのチャットタブが開いている
+  - History view が表示中、または自動更新オンのセッションタブが開いている
   - VS Code ウィンドウがフォーカス中
-- 自動更新オンのチャットタブは、エディタ上で裏タブになっていても更新対象にする
+- 自動更新オンのセッションタブは、エディタ上で裏タブになっていても更新対象にする
 - VS Code ウィンドウ非フォーカス中、または更新対象 consumer がない間の変更は pending として保持する
 - フォーカス復帰時、または更新対象 consumer が現れた時に pending があれば更新予約する
-- チャットヘッダーの自動更新ボタンは、履歴の自動更新設定が有効なときだけ表示する
-- チャットタブの自動更新モードは `off` / `preserve` / `follow` を持つ
-- 新規チャットタブ、または再利用タブで別セッションへ切り替わったチャットタブは `off` から開始する
-- 同じセッションの既存チャットタブを再表示する場合は、そのタブの自動更新モードを維持する
+- セッションビューのヘッダーにある自動更新ボタンは、履歴の自動更新設定が有効なときだけ表示する
+- セッションタブの自動更新モードは `off` / `preserve` / `follow` を持つ
+- 新規セッションタブ、または再利用タブで別セッションへ切り替わったタブは `off` から開始する
+- 同じセッションの既存タブを再表示する場合は、そのタブの自動更新モードを維持する
 - `preserve` は現在の表示位置と UI 状態を維持して再読み込みする
 - `follow` は UI 状態を維持し、`liveRunningTurnId` / `latestTurnId` がある場合はその turn 内の live running marker、completed end marker、最後の意味ある表示カードの順にスクロール対象を選ぶ。末尾が patch group の場合は、同じ turn 内の直前の非 patch group 表示カードを優先する
 - 自動更新では Search 結果を消さない
 - 自動更新では検索インデックス再構築を行わない
 
-### 3.6 チャット表示 / 添付 / 画像
+### 3.6 セッションタイムライン / 添付 / 画像
 
-- チャット表示では Codex / Claude のメッセージ内に含まれる添付 / ファイル参照を `attachments` に統合して扱う
+- セッションタイムラインでは Codex / Claude のメッセージ内に含まれる添付 / ファイル参照を `attachments` に統合して扱う
 - `ChatMessageItem.images` は Chat model の出力としては使わず、画像も `attachments` の `type: "image"` として扱う
-- チャット表示では Codex / Claude のメッセージ内に含まれる対応画像をサムネイル表示する
+- セッションタイムラインでは Codex / Claude のメッセージ内に含まれる対応画像をサムネイル表示する
 - 対応形式:
   - `image/png`
   - `image/jpeg`
@@ -331,7 +373,7 @@
 - remote-only / API 参照のみ / 未対応形式 / 欠損ファイル / サイズ超過 / 設定無効の場合は、画像カードに理由を表示する
 - 対応画像の実データは初回描画では Webview に送らず、表示範囲に入ったサムネイルやプレビュー要求時にオンデマンドで読み込む
 - `images.maxSizeMB` はプレビュー表示と保存のために読み込む画像サイズ上限として扱う
-- `images.thumbnailSize` はチャット本文内のサムネイルサイズだけを切り替える
+- `images.thumbnailSize` はセッションタイムライン内のサムネイルサイズだけを切り替える
 - Claude Code の `type: "document"` は document card として表示する
   - PDF は PDF document card として表示し、初期 Webview model へ base64 payload を渡さない
   - text document は text document card として表示し、プレビュー表示には上限内の抜粋だけを使う
@@ -340,7 +382,7 @@
 - Claude Code の `<task-notification>` は user message の通常本文ではなく task notification attachment として扱う。`summary` / `result` / `usage` はカード、検索、Markdown transcript、Resume / Handoff の用途別 policy に従って使い、`taskId` / `toolUseId` / `outputFile` / system preamble / 定型 `note` は通常表示や Webview model へ出さない
 - Claude Code の assistant message に raw text として残る `<invoke name="...">` は tool invocation attachment として扱う。Markdown の fenced code / inline code / blockquote 内に引用された `<invoke>` は抽出せず、壊れた block や境界が曖昧な block は raw text として残す
 - `<task-notification>` / `<invoke>` の共通 scanner は open / close 候補を tag 種別ごとに一度だけ列挙し、close 欠落や malformed open が大量にある履歴でも open ごとに EOF まで再走査しない
-- Claude Code の `queue-operation` / `attachment.type = "queued_command"` に含まれる task notification / invoke 風 text は、会話として materialize された user / assistant message ではないためカード化しない
+- Claude Code の `queue-operation` / `attachment.type = "queued_command"` に含まれる task notification / invoke 風 text は、メッセージとして materialize された user / assistant item ではないためカード化しない
 - Codex の `# Files mentioned by the user:` block は、message 先頭または IDE context 後ろの本文途中から file reference card に変換し、raw block と `## My request for Codex:` ヘッダーは除去して前置 context と依頼本文を残す
 - Codex の `## My request for Codex:` がない variant は、安全に file block と本文の境界を判定できる場合だけ分離する
 - Codex file reference は参照先ファイルを自動で読まず、履歴に保存された label / path / line 情報だけを表示する
@@ -370,14 +412,17 @@
   - 表示中の画像を保存できる
   - `Escape`、閉じるボタン、背景クリックで閉じる
   - 別セッションへ切り替わった場合は閉じる
-- チャットのスクロール領域は固定ヘッダーの下に分離し、スクロールバーがヘッダー横から始まらないようにする
-- チャットヘッダーには、検索ボタンと再読み込みボタンの間に自動更新ボタンを置く
-- チャットヘッダーには、ピン留めボタンの右にカスタムタイトルの pencil アイコンを置き、QuickPick から設定 / 消去を選べるようにする
-- チャット本文では、現在のユーザープロンプトを上部に追従表示できる
+- セッションビューのスクロール領域は固定ヘッダーの下に分離し、スクロールバーがヘッダー横から始まらないようにする
+- セッションビューのヘッダーには、検索ボタンと再読み込みボタンの間に自動更新ボタンを置く
+- セッションビューのヘッダーには、ピン留めボタンの右にカスタムタイトルの pencil アイコンを置き、QuickPick から設定 / 消去を選べるようにする
+- セッションタイムラインでは、現在のユーザープロンプトを上部に追従表示できる
 - assistant 応答に Codex のメモリー引用情報が含まれる場合は、本文末尾ではなく折りたたみ表示として扱う
-- チャットタブの自動更新ボタンは、履歴の自動更新設定が有効なときだけ表示し、`off` / `preserve` / `follow` をクリックで循環する
+- Codex の最初の通常会話より前にある text-only protocol bundle は、既知の完全 block だけで構成され、開始 marker を持つ場合に限って専用 `protocolContext` item へ変換する。通常 user message とは分離し、既定で閉じた `Codex 実行コンテキスト` カードとして通常表示・詳細表示の両方に出す
+- protocol context 判定は可変の本文、件数、path、hash ではなく raw content の block 構造で行う。未知 content type、raw 添付、閉じ tag 欠落、余剰の自然文があれば通常 user message へ fail-open し、単独の environment / user instructions は従来どおり詳細表示用 context とする。strict 判定後に本文から file reference attachment が派生しても、raw 判定を覆さず context のまま扱う
+- 専用 context card は raw message index を消費して後続番号を維持するが、user 件数、sticky user、user 前後移動、role filter、branch anchor、全体 Search、ページ内検索、Resume / Handoff の通常依頼には含めない。展開本文は `textContent` で描画し、同一セッション自動更新では開閉状態を維持する
+- セッションタブの自動更新ボタンは、履歴の自動更新設定が有効なときだけ表示し、`off` / `preserve` / `follow` をクリックで循環する
 - `preserve` / `follow` はボタンの背景色でオン状態を示し、`follow` はさらに別色で追従中であることを示す
-- チャットの先頭 / 末尾スクロールは、スクロールコンテナの絶対端ではなく、実際に描画されている最初 / 最後の visual target を対象にする。先頭ボタンは target を toolbar 直下へ貼り付けず小さな上端余白を残し、先頭 user card で sticky user header が不要に出ないようにする。末尾ボタンと `chat.openPosition=latest` は reveal 操作ではないため、ユーザーが折りたたんだ turn を勝手に展開しない
+- セッションタイムラインの先頭 / 末尾スクロールは、スクロールコンテナの絶対端ではなく、実際に描画されている最初 / 最後の visual target を対象にする。先頭ボタンは target を toolbar 直下へ貼り付けず小さな上端余白を残し、先頭 user card で sticky user header が不要に出ないようにする。末尾ボタンと `chat.openPosition=latest` は reveal 操作ではないため、ユーザーが折りたたんだ turn を勝手に展開しない
 - 自動更新 `follow` は、`liveRunningTurnId` / `latestTurnId` がある場合はその turn 内の live running marker、completed end marker、最後の意味あるカードの順に追従する。末尾が patch group の場合は同じ turn 内の直前の非 patch group カードを優先し、該当 turn の描画カードがない場合は描画済み marker / visual target へフォールバックする。手動で折りたたまれた completed turn は勝手に展開せず、collapsed summary marker を追従対象にできる
 - 末尾スクロールと `follow` の着地点では、最後の card / marker が Webview 下端に貼り付かないよう小さな下端余白を残す。通常 card / diff card は 10px、running / completed / collapsed marker は 12px 程度の余白を目安にする
 - Codex turn は timeline 上で start marker、end marker、turn rail に分けて表示し、`live` mode では running anchored chip / running fallback chip を追加する。`basic` mode では live running 状態を表示せず、turn は JSONL 由来の永続 status のまま表示する
@@ -391,7 +436,7 @@
 - `live` mode の running anchored chip は同じ turn 内の最後の意味ある表示カードの直後に、turn rail 基準の独立 anchored row として左寄せ表示する。user card の後でも右寄せせず、patch group / ファイル変更 card の内部には入れない
 - anchored chip が viewport 外に流れた場合だけ、左下 fixed の running fallback sticky を表示する。fallback sticky は Webview 内の running marker と同じ表示部品を固定表示し、中身の font size / pill / meta text は Webview 内 marker と同一にする。本文上でも読めるよう、外側には user sticky と同系統の座布団 surface / border / shadow を敷く。座布団は内側の running marker より縦方向に余白を持たせ、outer surface 側の最小高さと上下 padding で枠が text / pill に密着して細く見えないようにする。独自の大きな chip や別 typography にはしない。本文カードの下に潜らず、`ターン N` / `実行中` / `経過` / `最終活動` が潰れない幅を確保する。クリック / Enter / Space で running turn へ移動する
 - running chip は user bubble 内や sticky user header 内には入れず、sticky user header の切り替え条件とは独立させる
-- running chip は `実行中` を `開始` / `完了` と同系統の pill として表示し、`経過 N` と `最終活動 ...` は muted meta text として表示する。経過時間は `startedAtIso` から live 更新し、最終活動時刻は `updatedAtIso` が変わるまで進めない。文字サイズ、pill、meta text、余白、teal-green 系の running 色は start / end marker と同系統にし、省略時は ellipsis と tooltip / title で全文を確認できる
+- running chip は `実行中` を `開始` / `完了` と同系統の pill として表示し、`経過 N` と `最終活動 ...` は muted meta text として表示する。経過時間は `startedAtIso` から live 更新し、1時間以上でも秒を省略しない。最終活動時刻は `updatedAtIso` が変わるまで進めない。文字サイズ、pill、meta text、余白、teal-green 系の running 色は start / end marker と同系統にし、省略時は ellipsis と tooltip / title で全文を確認できる
 - running chip には小さな dot / ring の activity cue を表示し、実行中であることだけを opacity / box-shadow の控えめな pulse で示す。dot は start marker には出さず、anchored row では turn rail 側の左端、左下 fallback sticky では marker 先頭に同じ見た目で出す
 - running turn の `updatedAtIso` / `lastItemIndex` / `itemCount` が変わったときだけ短い update flash を出し、初回描画、scroll、resize、anchored / fallback の表示切り替えだけでは flash しない
 - running chip の枠は常時回転させない。進捗更新時だけ、update flash と同じ activity signature 変化で薄い border glint を 1 回だけ流す
@@ -407,7 +452,7 @@
   - `auto`: ファイルサイズ、item 数、diff entry 数、diff 行見積もり、画像数に応じて `normal` / `simplified` を選ぶ
   - `normal`: 表示状態をできるだけ保持する
   - `simplified`: diff 本文や詳細を必要時に読み込み、タブ再表示時は重い描画済み section を一時的に軽量化する
-- チャットヘッダーのパフォーマンスモードボタンは、この画面だけの一時設定として `auto` / `normal` / `simplified` を循環する。永続化は設定側で行う
+- セッションビューのヘッダーにあるパフォーマンスモードボタンは、この画面だけの一時設定として `auto` / `normal` / `simplified` を循環する。永続化は設定側で行う
 - タブ再表示や `visibilitychange` 復帰時は restore cover で本文領域を覆い、レイアウト安定後に cover を外す。cover 中は date guide 更新と重い diff body 復元を保留する
 - assistant の model / effort / token usage は `Show details` ON のときだけ、assistant 応答後の細い usage 行として表示する
 - usage 行は初期状態では 1 行表示とし、クリックすると入力 / 出力 / キャッシュ / 推論 / 累計 / context window / rate limit / service tier など取得できた項目だけを展開表示する
@@ -423,12 +468,12 @@
   - 保存時に画面内の本文メッセージがない場合は、直前の描画済み本文メッセージを保存し、直前もなければ先頭扱いにする
   - 復元対象の本文メッセージが描画されていない場合は、直前の描画済み本文メッセージへフォールバックし、直前もなければ先頭へ戻す
   - 復元フォールバックでは直後の本文メッセージへは進めない
-  - archived Codex Chat から `Move to Codex History` を実行する場合は、ボタン押下時に現在見えている本文メッセージ index を保存し、復元後の active Chat panel で同じ本文メッセージを明示的に reveal する
-- ツリー選択で開くチャットは再利用タブとして扱い、次のツリー選択で中身を差し替える
-- メニューから開くチャットはセッションタブとして扱い、別セッションを開いても差し替えない
+  - archived Codex セッションビューから `Move to Codex History` を実行する場合は、ボタン押下時に現在見えている本文メッセージ index を保存し、復元後の active セッションパネルで同じ本文メッセージを明示的に reveal する
+- ツリー選択で開くセッションビューは再利用タブとして扱い、次のツリー選択で中身を差し替える
+- メニューから開くセッションビューはセッションタブとして扱い、別セッションを開いても差し替えない
 - 再利用タブに表示中の同じセッションをメニューから開いた場合、そのタブをセッションタブへ昇格する
-- ツリー選択 / メニュー操作のどちらでも、同じセッションのチャットタブが既に開いていれば既存タブをアクティブにする
-- Reload とチャットタブの自動更新は、表示位置、選択メッセージ、詳細表示、展開カード、展開 diff、diff 折り返し、検索サイドバー状態を維持する
+- ツリー選択 / メニュー操作のどちらでも、同じセッションを表示するタブが既に開いていれば既存タブをアクティブにする
+- Reload とセッションタブの自動更新は、表示位置、選択メッセージ、詳細表示、展開カード、展開 diff、diff 折り返し、検索サイドバー状態を維持する
 - 再利用タブで別セッションへ切り替わる場合は、検索状態、検索リサイズ状態、画像プレビュー、画像データキャッシュ、画像保存先 CWD、patch entry 詳細の pending 要求などのセッション依存 UI / panel-side 状態をリセットする
 - grouped diff カードの最大幅状態は、再読み込みでカードの並び順が変わっても維持しやすいように安定キーで管理する
 
@@ -436,7 +481,7 @@
 
 - 目的:
   - ワークスペース内の 1 ファイルを起点に、そのファイルへ影響した Codex / Claude の AI diff 履歴を時系列で確認できるようにする
-  - diff から元の通常履歴 Webview の該当 diff カードへ戻り、会話文脈を確認できるようにする
+  - diff から元の通常履歴 Webview の該当 diff カードへ戻り、セッション文脈を確認できるようにする
 - 起動方法:
   - Command Palette / Explorer ファイル右クリックメニューから `Show File AI Change History` を実行する
   - Explorer ファイル右クリックメニューへの表示は `codexHistoryViewer.fileChangeHistory.explorerContextMenu.enabled` が `true` のときだけ有効
@@ -523,6 +568,51 @@
   - レンズは件数に応じて高さを変え、最小 140px、最大 220px、かつ画面高さの 45% を上限とする
   - レンズ内の item 選択では現在位置としおりを優先し、user だけで埋まらないよう通常 item も混ぜる
 
+### 3.6.3 Codex Branch Navigation
+
+- 共通設定 `codexHistoryViewer.branchNavigation.enabled` が `true` のときだけ有効になる実験的機能で、既定は無効とする。公開前の旧 `claudeBranches.enabled` と開発途中の `codexForks.enabled` は残さず、aliasやmigrationも設けない
+- Codex のローカル Fork 操作が先頭 `session_meta.payload.forked_from_id` に保存した direct parent IDだけを関係の正本とする。Codex アプリの `ローカルにフォークする` と Codex 拡張機能の `新しいタスクで続ける` のどちらも対象とし、本文の類似、開始時刻、同じ `cwd` だけを根拠に Fork を推定しない
+- Codex subagent も `forked_from_id` を持つため、検証済みの `session_meta.payload.source.subagent.thread_spawn` を Fork metadata より優先する。`codexAgent` と `codexFork` の両方を持つ session は Agent Runs の対象とし、Branch Navigation の node / edge に含めない
+- Agent Runs の設定に依存せず、Codex Branch Navigation の load 前に未確認 agent metadata を補完する。一部を確認できない場合は未確認 session を Fork と推測せず除外し、確認済みの関係だけを partial として扱う
+- parent / child の正規化済み absolute `cwd` が同一の場合だけ local Fork の resolved edge とする。`新しい Worktree にフォークする`、異なる `cwd`、relative path、比較不能な `cwd` は 2.8.0 の対象外とし、通常の Fork 経路へ混在させない
+- direct Fork、同じ parent からの複数 Fork、nested Forkを current session の component 内で表示する。parent 欠落、ID 重複、self reference、cycle、上限超過は任意の別sessionへ補完せず、確認できる経路だけを partial として扱う
+- parent / child にmaterializeされた可視 user / assistant messageの共通prefixから、既存Chatと同じ1-based message indexのFork anchorを求める。Codexがコピー履歴へtimestampを再付与する場合があるため、timestampを同一messageの必須条件にしない
+- Codexセッションビューのヘッダー、タイムライン上の前後操作、経路ツリーoverlayはClaude Branch Navigationと同じ操作・paging・focus・Escape契約を共用する。ヘッダーアイコンはCodexの向きに合わせて上2点から下1点へ合流する形とし、Agent Runsボタンとは併存するが両overlayは同時に開かない
+- 経路選択は同じセッションWebviewを`stateOverride`の二相commitで切り替える。History generation、snapshot、opaque target、対象fileの`mtime` / `size`、最新request IDを非同期境界で再検証し、stale targetでは現在表示を変更しない
+- relation node 500件、depth 64、1 sessionの可視message 100,000件、対象file 256 MiBを上限とする。evidence cacheは`cacheKey`、`mtime`、`size`へ結び付け、History更新、設定無効化、明示的cache再作成で失効させる
+- bookmark / tag / noteは各load時のpresentation stateとして反映し、relation topologyや永続cacheへ混在させない。元のCodex JSONL、workspace、Fork、注釈を作成・変更・merge・削除しない
+
+### 3.6.4 Claude Branch Navigation
+
+- タイムラインカード右上の前／次ボタンは隣接する履歴へ切り替える。hover / focus では occurrence 数にかかわらず、同じ #番号の本文と取得済みの履歴末尾を preview card にすべて表示し、各 occurrence card の click で該当履歴へ直接切り替える。未 load occurrence がある場合だけ省略表示を出す。前／次ボタン自体の click は、単一なら直接切り替え、複数なら既存の履歴位置 picker を開く。pointer がボタンと card の間を移動する間は card を維持する。
+- 中央の `履歴 N / M` は全候補の一覧を開く。各 group header は `履歴 N / M` badge、同じ位置の1行本文、role / #番号 / timestamp を表示する。子の履歴位置はインデントと guide line で分け、各履歴末尾を1行表示し、移動可能な card だけ移動 icon と hover / focus 装飾を持つ。
+- 全候補一覧の現在 occurrence は静的 card とし、現在 badge は表示するが移動 icon と hover を付けない。overlay の occurrence picker では current session 内の別 anchor へ移動できるため操作可能なままとする。
+- occurrence の表示契約には `isCurrent`、`historyEnd`、bookmark / tag / note の有無を含める。Webview は absolute path や occurrence ID を候補ラベルとして表示しない。
+- 候補一覧は choice と choice ごとの occurrence をそれぞれ最大20件に制限する。Extension Host と Webview の受信正規化で同じ上限を独立に適用し、総件数を維持して未表示候補の省略案内を出す。
+
+- 共通設定 `codexHistoryViewer.branchNavigation.enabled` が `true` のときだけ有効になる実験的機能で、既定は無効とする。この設定は Codex / Claude の Branch Navigation を一括で切り替える
+- 対象は同じ物理 Claude project folder にある top-level primary Claude セッションだけとし、Codex、sidechain、別 project folder のセッションは分岐関係へ含めない
+- Claude のセッションビューのヘッダーとタイムラインカードから分岐解析を要求できる。独立した全体マップ、セッション右クリック、Command Paletteの専用表示コマンドは設けず、現在のセッション Webview 内の切り替え操作と経路ツリー overlay で完結する
+- タイムラインカード上の前後操作は同じ分岐点の履歴を切り替え、overlay は履歴の開始、分岐直前、各履歴の分岐開始、各履歴の末尾だけを landmark node として表示する。通常メッセージのすべてを node 化しない
+- Codex / Claude 共通の経路ツリー node は role、#番号、秒までの timestamp を省略せず表示する。幅が不足する場合は metadata 行を折り返し、anchor と分岐前補助行の完全値を native tooltip でも確認できるようにする
+- 分岐先を選ぶと同じセッション Webview で対象セッションへ切り替え、既存のセッションタイムラインと同じ 1-based message index の位置を表示する。bookmark、annotation、Search、File AI Change History の anchor を再採番しない
+- primary candidate が 2 件未満の場合は追加解析を開始しない。分岐 0 件が確定した場合は理由を toast で通知し、解析中や遷移中は重複操作を無効化する
+- 関係解析は raw メッセージ本文を ID やログへ保存せず、確定できない関係を内容類似だけで推測しない。部分的な関係しか保証できない場合は、確認できた分岐だけを表示して warning を出す
+- 無効化しても Session Analysis Index、現在のセッションビュー、bookmark、annotation、元の Claude JSONL を変更しない
+
+### 3.6.5 Agent Runs（Codex 対応）
+
+- `codexHistoryViewer.agentRuns.enabled` が `true` のときだけ有効になる実験的機能で、既定は無効とする。現在は Codex セッションのみに対応する。設定が有効なら Codex のセッションビューのヘッダーへ常に操作アイコンを表示し、関連する実行がない場合は toast で通知する
+- Codex JSONL の `session_meta.payload.source.subagent.thread_spawn` だけを親子関係の正本とし、親セッション ID、depth、agent nickname、agent role、task path を bounded に取得する。本文の類似度、時刻の近さ、同じ `cwd` だけを根拠に関係を推測しない
+- relation presentation の準備完了後は、利用可能な親を解決できたサブエージェントだけを History から抑制する。親不明、削除済み親、cycle / self-parent、未確認 metadata のサブエージェントは fail-open で History に残す。Pinned / Search では全サブエージェントを専用アイコン、説明、tooltip で区別して独立表示し、検索・集計の対象集合は変更しない
+- セッションビューの右側ペインは、現在セッションを含む component の root、ancestor、sibling、descendant を縦方向の pre-order tree で表示する。主見出しは利用可能な root session title、副見出しは機能名と関連 agent 件数とする
+- node card は task label、設定されている場合の agent role、必要な場合の session title、開始日時、最終アクティビティ、bookmark / tag / note、直接の子件数を表示する。固定の最小高さを設けず、情報を省略しない範囲で compact にする
+- current node と root から current までの経路は青、他の agent 経路はオレンジで表示する。connector は parent ごとの共有幹線と短い枝線で描き、通常 depth では parent 下辺から同じ X 座標へ真下に伸ばす。視覚インデント上限で card を避ける必要がある場合だけ短い折れを許可する
+- card 本体は静的な treeitem とし、利用可能な別 node の header 右端にある `セッションを開く` アイコンだけを移動操作にする。hover / focus-within では card と icon を強調し、icon の active 中は押下状態を示す。current、missing parent、省略 node は移動可能に見せない
+- 移動先のセッションタブが開いていれば reveal し、未 open なら通常の固定 session panel を開く。元 panel の session、scroll、search、details state を別 session へ置き換えない
+- ペイン幅はドラッグで変更して Webview state に保存するが、ペインの open 状態は Reload Window 後に復元しない。Branch Navigation overlay、page search と同時には開かない
+- Webview では表示 node 500 件、depth 64、parent ごとの child 200 件を上限とし、current path を優先して省略件数を表示する。partial relation、missing parent、stale navigation target は確認できた範囲だけを表示し、元の JSONL や注釈を変更しない
+
 ### 3.7 設定（`codexHistoryViewer.*`）
 
 - `sources.enabled`
@@ -530,6 +620,8 @@
 - `codex.archivedSessions.enabled`
 - `codex.archivedSessionsRoot`
 - `claude.sessionsRoot`
+- `agentRuns.enabled`
+- `branchNavigation.enabled`
 - `handoff.enabled`
 - `preview.openOnSelection`
 - `preview.maxMessages`
@@ -539,6 +631,7 @@
 - `search.caseSensitive`
 - `search.maxResults`
 - `fileChangeHistory.explorerContextMenu.enabled`
+- `webview.restoreAfterReload`
 - `history.dateBasis`
 - `history.titleSource`
 - `autoRefresh.enabled`
@@ -549,6 +642,8 @@
 - `chat.toolDisplayMode`
 - `chat.userLongMessageFolding`
 - `chat.assistantLongMessageFolding`
+- `chat.stickyUserPrompt`
+- `chat.turnTimeline.mode`
 - `images.enabled`
 - `images.maxSizeMB`
 - `images.thumbnailSize`
@@ -588,7 +683,7 @@
   - `readJsonDetailed()` は JSON 読み込み結果を `ok` / `missing` / `parseError` / `readError` として返す
   - `readJsonOrDropCorrupt()` は parse error のときだけ対象 JSON を best-effort で削除し、履歴キャッシュ / 検索インデックスで共通利用する
   - read / delete result は `errorName` だけを保持し、JSON 本文や path を含み得る `errorMessage` は保持しない
-  - `writeJson()` は同一ディレクトリの一時ファイルへ書いてから rename し、rename 失敗時は直接書き込みへフォールバックする。フォールバック失敗時は一時ファイルを残す
+  - `writeJson()` は同一ディレクトリの一時ファイルへ書いてから rename し、rename 失敗時は `beforeCommit` を再確認してから直接書き込みへフォールバックする。フォールバックの成功 / 失敗にかかわらず一時ファイルを best-effort で削除する
 - `src/services/historyService.ts`
   - `cache.v9.json` を読み書きする。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
   - 有効な cache context から `HistoryIndex` を復元し、初回表示を先に完了できるようにする
@@ -625,32 +720,32 @@
   - watcher root signature には `rootKind` を含め、通常 Codex と archived Codex の root を区別する
   - watcher イベントは即 refresh せず、変更された `fsPath` を pending 集合に入れて debounce / min interval を適用する
   - refresh callback には変更された `fsPath` の配列を渡す
-  - `History` view が非表示かつ自動更新オンのチャットタブが開いていない場合、または VS Code ウィンドウが非フォーカスの場合は timer を止めて pending を保持する
+  - `History` view が非表示かつ自動更新オンのセッションタブが開いていない場合、または VS Code ウィンドウが非フォーカスの場合は timer を止めて pending を保持する
   - `vscode.window.state.focused` と `onDidChangeWindowState` により、フォーカス中のウィンドウだけ自動 refresh を実行する
-  - 自動 refresh は `refreshHistoryIndex(false)`、view refresh、チャットタイトル更新、対象チャットタブ更新を行い、Search 結果のクリアや検索インデックス再構築は行わない
+  - 自動 refresh は `refreshHistoryIndex(false)`、view refresh、セッションビューのタイトル更新、対象セッションタブ更新を行い、Search 結果のクリアや検索インデックス再構築は行わない
 - `src/extension.ts`
-  - 自動更新 consumer は `History` view が表示中、または `ChatPanelManager` に自動更新オンの開いているチャットタブがある場合に存在するとみなす
-  - `historyView.onDidChangeVisibility`、チャット consumer 変更イベント、`onDidChangeWindowState` で `AutoRefreshService` の実行条件を更新する
+  - 自動更新 consumer は `History` view が表示中、または `ChatPanelManager` に自動更新オンの開いているセッションタブがある場合に存在するとみなす
+  - `historyView.onDidChangeVisibility`、セッションビュー consumer 変更イベント、`onDidChangeWindowState` で `AutoRefreshService` の実行条件を更新する
   - `codexHistoryViewer.manageProjectAlias` / `setProjectAlias` / `clearProjectAlias` を登録し、Project node 文脈がない direct / UI command では active project を推定せず no-op にする
   - プロジェクト別名の変更後は view description と tree view を更新し、`refreshHistoryIndex(false)` と `chatPanels.refreshTitles()` は呼ばない
 - `src/chat/chatPanelManager.ts`
-  - チャットタブごとに `autoRefreshMode` と `pendingAutoRefresh` を保持する
+  - セッションタブごとに `autoRefreshMode` と `pendingAutoRefresh` を保持する
   - `codexHistoryViewer.webview.restoreAfterReload = true` のときだけ `codexHistoryViewer.chat` の `WebviewPanelSerializer` を登録し、Reload Window / VS Code 再起動後も session path、panel kind、detail mode、自動更新 mode を復元する
   - Webview serializer 復元時は、最後に見ていた scroll 位置も `scrollY` / `topMessageIndex` として保存し、復元後に同じ message 付近へ戻す
   - Webview 復元設定は実験的な opt-in 設定として既定無効にし、VS Code の復元遅延により同じ履歴を再度開いたときにタブが重複する場合があることを設定説明で明示する
   - serializer 復元時も通常生成と同じ `webview.options`、HTML、`onDidReceiveMessage`、`onDidChangeViewState`、`onDidDispose` を再アタッチする
-  - 開いているチャットタブは裏タブでも自動更新対象にする
-  - `refreshAutoRefreshPanels(changedFsPaths)` は変更されたセッションファイルに対応するチャットタブだけ再読み込みする
+  - 開いているセッションタブは裏タブでも自動更新対象にする
+  - `refreshAutoRefreshPanels(changedFsPaths)` は変更されたセッションファイルに対応するセッションタブだけ再読み込みする
   - Webview がまだ ready でない場合のみ `pendingAutoRefresh` として保持し、ready 後に 1 回反映する
   - Webview 内検索は入力ごとの即時 DOM 全走査を避けるため短い debounce を入れ、Enter / 前へ / 次へ / query クリアは即時反映する
-  - 新規チャットタブ、または別セッションへ差し替えた再利用チャットタブは `off` から開始する
+  - 新規セッションタブ、または別セッションへ差し替えた再利用タブは `off` から開始する
   - 同じセッションの既存タブは自動更新モードを維持する
 
 ### 4.5 検索インデックス
 
 - `src/services/searchIndexService.ts`
   - `search-index.v2.json` を管理する。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
-  - `SEARCH_INDEX_FILE_VERSION = 10` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering 追加前の既存インデックスは再構築対象にする
+  - `SEARCH_INDEX_FILE_VERSION = 12` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude local command output filtering 追加前の既存インデックスは再構築対象にする
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
   - 検索インデックス読み込み時の parse error はインデックスを削除して `null` 扱いにし、次回検索時に再構築する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
@@ -735,17 +830,130 @@
   - ファイル履歴 Webview の表示文字列、エラー、空状態、load more、source 件数、date guide 文字列を管理する
   - hidden source のみが追加された load more 用の toast 文言を英日両方で管理する
 
-### 4.6 検索フロー
+### 4.6 History Insights / Session Analysis / Branch Navigation 実装
 
+- `src/analysis/sessionAnalysisTypes.ts`
+  - source 共通の message / usage / tool usage / file change 統計、解析完全性、Claude occurrence、cache context / file schema を定義する
+  - `complete` / `partial` / `unsupported` / `failed` と、指標単位の `available` / `partial` / `unavailable` を分離する
+- `src/analysis/sessionAnalysisAdapter.ts`
+  - 1 セッション単位で JSONL を streaming 解析し、既存 `buildChatSessionModel()` の message item / turn / tool / patch / usage を共通の意味として再利用する
+  - tool item は正規化済みの名前ごとに呼び出し回数を集計し、名前長と種類数をboundedに保持する。切り詰めまたは種類数上限超過を検出したentryは `partial` とする
+  - Codex と Claude の token 規則を混同せず、Claude だけは branch relation 用の bounded occurrence と既存のセッションタイムライン表示に一致する visible message anchor を追加する
+  - prompt / response 本文、tool output、認証情報候補を cache ID や debug log へ保存しない
+- `src/analysis/sessionAnalysisIndexService.ts`
+  - `session-analysis-index.v1.json` の lazy load、context / version 検証、mtime / size による差分更新、orphan cleanup、single-flight、キャンセル、進捗、atomic save、clear、strict な `rebuildAll()` を担当する
+  - 解析要求を直列化し、再構築と通常の Insights / Branch 要求が同じ cache を競合更新しないようにする
+  - 通常の `ensureEntries()` は保存失敗後も process-local 結果を返すが、`rebuildAll()` は削除 / 保存失敗を伝播し、保存成功前の結果を current cache として公開しない
+- `src/insights/historyInsightsSnapshot.ts` / `src/insights/historyInsightsAggregator.ts`
+  - History provider が確定した session reference 集合と `bucketLocalDate` を snapshot の正本にし、Webview や集計側で History の条件述語 / 日付境界を再実装しない
+  - snapshot と解析 entry を `cacheKey` / `identityKey` で結合し、推論トークン / 変更イベント数を含む概要、推論トークンを含む日別 bucket、ソース / モデル / プロジェクト / ツール内訳、指標別アクティブセッション、ファイル統計、利用詳細、充足率を構築する
+  - 利用詳細では入力キャッシュと推論、メッセージ構成、ターン状態を指標単位で集計し、変更ファイル種別は共通の `FilePresentationKind` ごとに重複除外後のファイル数と変更イベント数を構築する
+  - ツール内訳とアクティブセッションは指標ごとの上位候補だけをmodelへ含め、safe integer飽和と取得可否を他の集計指標と同じ規則で扱う
+- `src/types/dateScope.ts` / `src/types/historyFilterState.ts` / `src/types/projectSelection.ts`
+  - 両端包含の日付 range、関連付け後の複数プロジェクト選択、source / archive / tag を含む History filter state V2 の検証、canonicalize、比較、永続化契約を定義する
+  - History Tree と Insights の一括適用は同じ型と検証規則を使い、不正な range や project selection を暗黙に `すべて` へ広げない
+- `src/storage/mementoTransaction.ts`
+  - 複数の `workspaceState` key を直列更新し、途中失敗時は成功済み key を逆順で旧値へ戻す補償 transaction を提供する
+  - 通常の commit 失敗と補償ロールバック失敗を区別し、呼び出し側が後者を利用者へ通知できるようにする
+- `src/tree/historyTree.ts`
+  - History の確定条件を適用した Insights snapshot を作り、各 session reference へ既存の日付基準を適用済みの `bucketLocalDate` を付与する
+  - Insights の filter / drill-down は History Tree の共通条件適用経路を使い、Webview 側の独自述語で対象集合を作らない
+- `src/insights/historyInsightsPanelManager.ts`
+  - panel の作成 / 再利用 / serializer、snapshot の置換と同一集合の再集計、フィルター適用、進捗、キャンセル、drill-down を管理する
+  - フィルター適用を副作用のない prepared application、snapshot 保存、任意の History commit、panel state 公開に分離し、全 commit 成功後だけ新しい state を Webview へ送る
+  - filter 適用の進行中 Promise を保持し、適用中の外部 `open()` は完了後に現在の History 条件を再取得してから snapshot を保存する
+  - request generation、panel instance、state instance を照合し、閉じた旧 panel の非同期結果を新しい panel へ送らない
+  - Webview から受け取る filter / opaque ID を Host 側でも検証し、物理 path や session 集合の判定を Webview に委ねない
+  - serializer から復元した state だけに authoritative History index 必須フラグを付け、初回 full refresh の待機中も panel、state generation、load ownership、明示 cancel を検証する。authoritative index で reference を再解決してから snapshot を保存し、待機中の cancel / dispose / state 置換後に遅れて完了した処理は公開しない
+  - snapshot と current config の date context が不一致の場合は旧 model、file ID map、project ID map を破棄し、cache model と最終 model の公開直前にも再確認して stale な drill-down 操作を残さない
+- `src/extension.ts` / `src/services/historyService.ts`
+  - serializer 復元用に初回 full History refresh の完了、authoritative config、session inventory generation を管理し、同じ同期区間の current sessions を copy して Insights へ渡す
+  - full refresh と fresh cache 採用は inventory generation を更新し、Codex agent metadata backfill のような session inventory を変えない更新は generation を維持する。History index 条件変更時は authoritative marker を無効化し、source constraint を含む refresh operation を待機前に History refresh queue へ登録する
+- `media/historyInsights.js` / `media/historyInsights.css` / `media/sharedFileKind.css`
+  - 履歴インサイトの toolbar、filter overlay、概要、ヒートマップ、ソース / モデル / プロジェクト / ツール内訳、指標別アクティブセッション、ファイル一覧、データ品質、状態表示を描画する
+  - セッションビューと Insights の file kind は `src/utils/fileKind.ts` と shared CSS を使い、同じファイルを画面ごとに別分類しない
+- `src/analysis/claudeBranchAnalysisService.ts`
+  - 同一物理 project folder の解析 entry を canonicalize し、確定した parent / child、branch group、lane を process-local snapshot として構築する
+  - relation node 数と処理 occurrence 数に上限を設け、cycle、missing parent、identity conflict を推測で補完しない
+- `src/branchMap/claudeBranchNavigationService.ts` / `src/branchMap/claudeBranchMapTypes.ts`
+  - セッションビュー用 branch control、経路ツリー overlay、opaque navigation target、同一 Webview 内の session / message anchor 遷移を解決する
+  - bookmark / annotation の表示状態は永続 topology に混ぜず、表示 payload を作る時点で反映する
+- `src/chat/chatPanelManager.ts` / `media/chatView.js`
+  - Codex / Claudeそれぞれの有効なセッションビューへsource固有のbranch modelを共通のcontrol / overlay payloadとして追加し、既存のChat itemやmessage indexは変更しない
+  - 既存 panel が ready 前でも session、reveal index、overlay 自動表示要求を candidate state として保持し、初回 bootstrap 後に適用する
+
+### 4.6.1 Codex Branch Navigation 実装
+
+- `src/branchMap/codexForkMetadata.ts` / `src/sessions/sessionSummary.ts` / `src/services/historyService.ts`
+  - Codexの先頭`session_meta`からboundedな`forked_from_id`だけを抽出し、通常summaryとHistory cacheへ保存する。後続のmaterialize済みancestor metadataでcurrent sessionのparentを上書きしない
+  - cache復元時にも同じsanitizerを適用し、不正metadataを持つentryだけを元JSONLから再生成する。Claude summaryへCodex専用metadataを残さない
+- `src/branchMap/codexForkRelationService.ts` / `src/branchMap/codexForkRelationTypes.ts`
+  - 明示parent IDと同一absolute `cwd`からlocal Fork graphを構築し、current component、nested parent / child、sibling、missing parent、cycle、上限を決定的に解決する
+  - sanitize済み`codexAgent`を持つsessionは、`codexFork`も持っていてもFork graphのparent / child / current候補から除外する
+  - 既存Chat modelの可視messageからrole、1-based message index、本文・attachmentの安定hash、利用可能なsource item ID / turn IDを取得し、timestampに依存しない共通prefixとFork anchorを求める
+- `src/branchMap/codexForkNavigationService.ts` / `src/branchMap/codexForkNavigationTypes.ts`
+  - relation構築前にHistory cacheのCodex agent metadataを補完し、補完後のHistory generationをsnapshot基準にする。未確認entryはfail-closedで除外し、partial snapshotへ反映する
+  - current componentのfile inventoryを検証しながら最大4並列でevidenceを構築し、boundedなprocess-local cache、opaque target、Claudeと共通shapeのinline control / overlay page / cursorへ変換する
+  - 解析中のfile変化はservice内で1回再読込し、load全体のsuperseded後に行うHost再起動も1回までに制限する。実行中JSONLが継続更新されても無制限な解析loopにせず、次の手動reload / 自動更新 / History更新で再試行する
+  - History generation、file inventory、active lineage、group / choice / occurrenceの所属をHost側で再検証し、別component、stale cursor、変更済みfileへ移動しない
+  - bookmark / tag / noteはload時に注入したpresentation providerから取得し、evidence cacheを再解析せず最新表示へ更新する
+- `src/chat/chatPanelManager.ts` / `media/chatView.js`
+  - session sourceと設定に応じてCodex / Claudeのnavigation serviceを選び、共通ヘッダーボタン、件数badge、timeline control、route tree、paging、same-Webview transitionへ公開する
+  - 共通route treeのanchor / 分岐前metadataは秒までの時刻を折り返して全文表示し、同じ完全値をtitleへ設定する
+  - sourceごとにsnapshot型、失敗文言、target validatorを分離しながら、共通設定、generation、request ID、Escape、focus、overlay相互排他、auto-refresh中の表示維持は共通契約を使う。新generation開始時はHostの旧snapshotを失効させ、Webviewも旧paging応答を最新global generationで拒否する
+  - 同一sessionかつcurrent group / choice / occurrenceから成るcurrent route nodeが存続する自動更新ではtree scroll、scale、stable focusを維持し、current route node変更またはsession境界だけで再fitする。別sessionのoverlayを直接開くcommandは設けず、cross-sessionのone-shot open intentやsuspend stateを持たない
+  - Codex切替はtarget準備前とcommit直前の2回、同じsnapshot、target包含関係、History generation、全component inventoryを検証する。別sessionのmodel構築中だけでなく、同一sessionのsource file確認中にfileが変化した要求も古いmessage indexへcommitしない
+- `src/extension.ts` / `src/settings.ts` / `package.json`
+  - application scope、default falseの共通`branchNavigation.enabled`を登録する。Branch Navigation専用のcanonical command、英日alias、Codex / Claude session context menuは登録しない
+  - 共通設定はCodex / Claudeの両navigationを一括で切り替え、公開前のsource別設定には互換aliasやmigrationを設けない
+  - 設定変更、History generation更新、bookmark / annotation変更、cache再作成で開いているCodex sessionのFork modelを再取得する
+
+### 4.6.2 Agent Runs（Codex）実装
+
+- `src/agents/codexAgentMetadata.ts` / `src/agents/codexAgentRunsTypes.ts`
+  - `thread_spawn` の外部入力を検証し、親 rollout ID、recorded depth、task path、nickname、role だけを bounded metadata として保持する
+  - raw prompt、response、tool output、absolute session path は relation ID や表示名として使用しない
+- `src/services/historyService.ts` / `src/sessions/sessionSummary.ts`
+  - 新規・更新 Codex session の通常 summary 作成時に agent metadata を同時抽出する
+  - 既存 `cache.v9.json` は設定無効時もそのまま利用し、有効化時だけ未確認 entry の `session_meta` を bounded scan して metadata marker version 1 を補完する。成功済み entry は再走査せず、全 Codex entry を確認できた場合だけ file marker を付ける
+  - metadata backfill は通常の History summary、mtime、size、Search Index、Session Analysis Index を再生成しない。read / save の部分失敗では確認済み結果を利用しつつ、未確認 entry を次回再試行できる状態にする
+  - process-local の Index / cache snapshot は構築時の History config key と generation に結び付ける。現在設定、要求設定、Index構築時設定、cacheのtime zone keyが一致する場合だけcurrentと判定し、date basis / title source変更後の旧IndexをAgent Runsへ流用しない
+- `src/agents/codexAgentRunsService.ts`
+  - History Index から rollout identity と明示的な parent edge を解決し、cycle / self-parent を除外した component、presentation、opaque navigation target を process-local に構築する
+  - root / ancestor / sibling / descendant の順序、missing parent placeholder、current path、node / child 上限を決定的に解決する。annotation や project alias は topology へ混ぜず表示時に反映する
+- `src/ui/sessionIconResolver.ts` / `resources/icons/*/source-codex-subagent.svg`
+  - History で fail-open により残るサブエージェントと、Pinned / Search に残す全サブエージェントについて、source icon と subagent icon を一元的に解決し、Light / Dark theme 用 asset を使い分ける
+- `src/tree/historyTree.ts` / `src/tree/pinnedTree.ts` / `src/tree/searchTree.ts`
+  - 設定有効かつ relation presentation の準備完了後、History では利用可能な親を持つサブエージェントだけを抑制し、親セッションの直接の agent 件数と、History に残す orphan / 不正 edge の presentation を構築する。Pinned / Search では全サブエージェントの専用アイコン、description、tooltipと、利用可能な子セッション用の`親セッションを開く` context値を構築する。`Agent Runs を表示` context値は作らない
+  - 通常の filter、sort、session count、Search hit、archive、bookmark、annotation の意味は変更しない
+- `src/chat/chatPanelManager.ts` / `media/chatView.js` / `media/chatView.css`
+  - Branch Navigation とは独立した generation、snapshot、opaque target、右側ペインを管理し、stale target や別 panel の message を fail closed にする
+  - root title を panel heading、機能名と件数を副見出しにし、compact card、agent role 補助ラベル、共有幹線、青い current path、オレンジの他経路、header 右端の移動 icon、hover / focus / active stateを描画する
+  - resize、scroll、focus、Escape、相互排他 overlay の状態を明示的に破棄・復元し、一時 listener、古い DOM、旧 session の model を残さない。`ChatPanelManager` 自体も extension subscription として dispose し、store listener と進行中の分岐解析を解放する
+- `src/extension.ts` / `src/settings.ts`
+  - application scope の実験的設定を監視し、有効化時だけ metadata backfill と presentation refresh を開始する。無効化時は実行中 generation を無効化し、relation 表示を消すが履歴 cache や元 JSONL は削除しない
+  - History関連設定変更とAgent Runs有効化が同時に発生した場合、またはAgent Runs ON中にHistory関連設定が変わった場合は旧snapshotとopaque targetを破棄してloadingかつfail-openを維持し、新設定のHistory refreshがcurrent Indexをcommitした後だけrelationを有効化する。replacement refreshが失敗しても旧ready表示へ戻さず、設定変更のない通常refreshでは既存overlayを維持する
+
+### 4.7 検索フロー
+
+- `src/extension.ts` / `src/services/searchExecutionCoordinator.ts`
+  - 検索 generation を発行した直後、最初の await より前に、設定、History の date / project / source / tag / archive 条件、project association resolver、current History refresh queue を固定する
+  - 実行中検索を非公開にする通常条件は、進捗通知からの明示キャンセルと新しい検索開始だけとする。History filter / scope、project association、関連設定、Auto Refresh、手動 History refresh、明示 maintenance の開始では generation を変更せず、開始時条件の検索を完走させる
+  - 実行中に filter / scope が変わった場合は自動再検索要求を1件へまとめ、開始時条件の結果を公開した後に最新条件で一度だけ再検索する。旧検索が明示キャンセル、入力キャンセル、失敗で結果を公開しなかった場合は自動再検索しない
+  - 実行中の `refreshViews({ clearSearch: true })` は保留し、検索が新結果を公開した場合は旧結果向けの clear 要求を破棄する。検索が結果を公開せず終了した場合だけ保留した clear を実行する
 - `src/services/searchService.ts`
-  - 検索開始時に検索インデックスの差分同期を行う
+  - 開始時に互換性のある History Index がなければ、呼び出し時に捕捉した History refresh queue を一度だけ待つ。待機後も開始設定と互換な Index を取得できなければ `historyUnavailable` とし、後発 queue または後発設定を追わない
+  - current History Index から readonly session inventory を copy し、検索インデックスの差分同期、候補抽出、結果作成まで同じ開始時 snapshot を使う
   - 削除済みファイルに対応してインデックスから不要エントリを落とす
   - 候補絞り込みは「日付 / プロジェクト / ソース / History タグ」の順で適用する
   - `includeArchivedSessions` に従って archived session を除外し、除外後に `search.maxResults` を適用する
   - プロジェクト別名は検索 hit 対象には含めず、検索実行時に SearchRootNode の scope label へだけ反映する
   - 進捗表示とキャンセルに対応する
+- `src/services/searchIndexService.ts`
+  - operation ごとに専用 working Map を構築し、保存成功後にだけ process-local current を一括更新する。後発 operation が別 context を公開しても、先行検索は当該 operation から受け取った readonly read snapshot を最後まで使う
+  - 通常検索と再作成の token が確認する外部中断条件を分離し、History generation や関連設定の変更を暗黙のキャンセルへ変換しない
 
-### 4.7 削除とゴミ箱
+### 4.8 削除とゴミ箱
 
 - `src/services/deleteService.ts`
   - 削除前に確認ダイアログを出す
@@ -761,7 +969,7 @@
   - `handoffs` 配下の Handoff 件数 / 容量も集計する。件数は `handoff.md` の数、容量は `metadata.json` を含む配下全体の合算とする
   - `Empty Trash` 実行時に旧世代キャッシュ / インデックスと、1 時間以上古い `*.tmp-*.json` も整理する
 
-### 4.8 注釈 / ピン / 保存済み検索 / プロジェクト関連付け
+### 4.9 注釈 / ピン / 保存済み検索 / プロジェクト関連付け
 
 - `src/services/sessionAnnotationStore.ts`
   - タグ / ノートを `globalState` に保存する
@@ -773,7 +981,13 @@
   - refresh 後の `reconcile()` で identity key を使い、active / archived 間で移動した pin path を追従する
   - archived 由来 pin は archived sessions 無効時またはアーカイブ非表示時に missing として出さない
 - View / filter state
-  - History の日付 / project CWD / project display / project scope / source / tag / view mode は `workspaceState` に保存する
+  - Historyの日付 / `ProjectSelection` / source / tag / archive locationは`HistoryFilterStateV2`として`workspaceState`に保存する。`ProjectSelection`がHistory / Searchの実効project集合の正本で、project display / project scope / view modeはV2の対象集合に含めず独立して保存する。`historyProjectScope=currentGroup`は、V2 selectionが現在workspaceのcanonical group 1件と一致する場合だけ有効なtoolbar由来状態とする
+  - Reload時はV2とproject scopeを両方復元し、current-group不変条件を検証する。不一致ならV2 selectionを安全な明示条件として維持してscopeだけ`all`へ正規化し、scopeが`all`でも明示selectionは保持する。scopeが`all`のときにV2 selectionから`currentGroup`を推測しない
+  - V2が破損している場合は旧条件へfallbackせず`ProjectSelection.none`とscope=`all`を使い、古いscope markerも`all`へ保存する。V2本体はユーザーが条件をリセットまたは再適用するまで自動上書きしない
+  - date / source / tag / archive locationだけの変更ではproject selectionを維持し、現在workspace groupとの一致が続く場合だけ`currentGroup` scopeも維持する。不一致またはworkspaceなしならselectionを変えずscopeだけ`all`へ正規化する。明示project選択、History InsightsからのHistory適用、drill-downではscopeを`all`へする。clearはscopeが`currentGroup`なら現在group selectionを維持する
+  - archive preferenceと`HistoryFilterStateV2`、または`ProjectSelection`とdisplay / scopeのように複数keyの値を同時更新する場合は、変更するkeyを同じ補償transactionへ含める。成功済みkeyの旧値を保持し、後段失敗時に逆順で補償ロールバックする。初回V2移行時もV2、必要なarchive preference、display、scope、一度限りのlegacy project filter補正を1 transactionにまとめる。保存完了前にin-memory state、provider、context、view descriptionを変更しない
+  - Historyのproject stateとfilter stateの更新は共通queueで直列化し、source / tagなど変更対象以外のfieldはqueue内の最新確定stateから合成する。association再読込と実際の関連付け追加 / 解除 / 種類変更後もselectionとscopeの整合性を再検証し、変更時はV2とscopeを同じtransactionで保存する。拡張自身の関連付け操作では変更前scopeが`currentGroup`なら現在workspace groupを再選択してscopeを維持し、外部変更を取り込む通常refreshで不一致ならselectionを維持してscopeだけ`all`へする。V2修復を保存できなければ関連付けを操作前snapshotへ戻し、復元にも失敗した場合はReloadを案内する。保存成功後の派生view / Search更新だけが失敗した場合は確定stateを維持し、再試行導線を出す
+  - History / Searchの説明では`現在のプロジェクトグループ`と、その裏付けの単一group selectionを重複表示しない。Pinnedは従来どおり独立したproject filter / scopeモデルを維持する
   - Pinned の日付 / project CWD / project display / project scope / source / archive location / sort mode / tag は `workspaceState` に保存し、History / Search とは独立して扱う
   - Search の `lastSearchRequest` は `workspaceState` に保存する。Search 独自の tag filter は持たず、History 側の tag filter を使う
   - `pinnedSourceFilter` の初回未保存時は `historySourceFilter` を初期値として移行し、`pinnedArchiveLocationFilter` の初回未保存時は `archiveLocationFilter` を初期値として移行する
@@ -795,7 +1009,7 @@
   - session path 移動時は `relocateSessionPath()` で保存位置を新 path へ移す
   - path 移動時に移行先 entry が既にある場合は移行先を優先し、source 側で上書きしない
 
-### 4.8.1 Handoff
+### 4.9.1 Handoff
 
 - `src/services/handoffService.ts`
   - 元セッション JSONL を UTF-8 stream として読み取り、Handoff 用の transcript 抜粋とファイル変更を生成する
@@ -823,7 +1037,7 @@
   - `codexHistoryViewer.codexToClaudeHandoffEnabled` context key により、`Claude Code へ引き継ぐ` だけ Handoff が有効かつ Codex / Claude の両ソースが有効な Codex セッションに限定して表示する
   - `引き継ぎファイルを作成` / `引き継ぎプロンプトをクリップボードにコピー` / `引き継ぎファイルを開く` は Codex / Claude セッションで表示する
 
-### 4.8.2 Codex アーカイブ / 復元
+### 4.9.2 Codex アーカイブ / 復元
 
 - `src/services/restoreArchivedSessionService.ts`
   - `restoreArchivedSessionToActive()` は archived Codex session を通常 Codex history へ戻す
@@ -840,21 +1054,21 @@
   - 個別 metadata の移行に失敗しても archive / restore 自体は破綻させず、診断ログに留める
 - `src/extension.ts`
   - `codexHistoryViewer.restoreArchivedSession` は確認後に restore を実行し、成功後に履歴を refresh する
-  - Chat Webview 由来の restore は direct 引数の `revealMessageIndex` を検証し、復元先 active path の `ChatOpenPositionStore` に保存する
+  - セッション Webview 由来の restore は direct 引数の `revealMessageIndex` を検証し、復元先 active path の `ChatOpenPositionStore` に保存する
   - restore が例外を投げた場合は `app.restoreArchivedFailed` を表示し、履歴と view を更新して部分移動済み状態にも追従する
   - filesystem restore の場合だけ Undo を出し、公式 provider restore では本家状態との整合を優先して Undo を出さない
   - `codexHistoryViewer.archiveSession` は Codex source と archived sessions が有効な active Codex session だけを対象にする
-  - `archiveLocationFilter` は History / Search 用として `workspaceState` に保存し、VS Code context `codexHistoryViewer.archiveLocationFilter` に反映する
+  - `archiveLocationFilter` は History / Search の Codex 用 preference として `workspaceState` に保存し、VS Code context `codexHistoryViewer.archiveLocationFilter` に反映する。Claude のみでは provider / filter state の実効値を `all` にするが、preference へ書き戻さない
   - `pinnedArchiveLocationFilter` は Pinned 用として `workspaceState` に保存し、VS Code context `codexHistoryViewer.pinnedArchiveLocationFilter` に反映する
 
-### 4.9 表示
+### 4.10 表示
 
-- チャット表示: `src/chat/*`
+- セッションタイムライン表示: `src/chat/*`
   - `ChatPanelManager` は対象ファイルの存在を確認してから開く / reload する
   - refresh や削除で元ファイルが消えたパネルは閉じる
   - archived Codex session では `Resume in Codex` の代わりに `Move to Codex History` を表示する
   - `restoreArchivedSession` message を受け取り、復元成功後は同じ Webview panel を通常 session で開き直す
-  - archived Codex Chat からの restore message は `lastMessage` 時に現在見えている `revealMessageIndex` を渡し、復元後 panel で明示 reveal する
+  - archived Codex セッションビューからの restore message は `lastMessage` 時に現在見えている `revealMessageIndex` を渡し、復元後 panel で明示 reveal する
   - `ChatPanelManager` はツリー選択用の `reusable` タブと、明示的に開いた `session` タブを区別する
   - 既存タブ検索では `session` タブを優先し、なければ同じセッションを表示中の `reusable` タブを使う
   - `ChatPanelManager` は `ChatOpenPositionStore` を使い、明示的な移動先がない場合だけ最後に見えていたメッセージ付近を復元する
@@ -914,7 +1128,7 @@
   - grouped diff カードは前後の diff へ移動する上下ナビゲーションを持つ
   - 画像プレビューは Webview 内モーダルとして実装し、ヘッダーのサムネイル列、前後ボタン、左右キー、fit / 原寸切替、保存、閉じる操作を持つ
   - Webview のスクロール対象は `#scrollRoot` に限定し、固定ヘッダーをスクロール領域から分離する
-  - チャットヘッダーの自動更新ボタンは `btnPageSearch` と `btnReload` の間に配置する
+  - セッションビューのヘッダーにある自動更新ボタンは `btnPageSearch` と `btnReload` の間に配置する
   - Webview 側は `requestReload` / `reload` message で自動更新時のスクロール・UI 状態保持を行う
   - Webview 側は `Show details` 切り替え時にカード anchor を保持し、再描画後に同じカードまたは次の表示カードへ復元する
   - Webview 側は performance mode に応じて heavy diff body の遅延描画、タブ復帰時の hibernation、restore cover 後の復元を行う
@@ -938,7 +1152,7 @@
   - Webview 側の `live` mode running anchored chip は同じ turn 内の最後の意味ある表示カードの直後に、turnBlock 直下の独立 anchored row として描画する。user card 後も右寄せにせず、patch group / ファイル変更 card / sticky header の内部には入れない
   - Webview 側は anchored chip が viewport 外に流れた場合だけ左下 fixed の fallback sticky を表示し、fallback sticky から running turn へ移動できるようにする。fallback sticky の中身は Webview 内 running marker と同じ表示部品と同一 font size を使い、外側に user sticky と同系統の座布団 surface / border / shadow を敷く。座布団は outer surface 側の min-height と上下 padding で内側 marker より縦に大きく見せ、button baseline や theme 差で枠が潰れないようにする。本文カードより前面に出し、内容が dot だけに潰れないよう nowrap / width / z-index を明示する
   - Webview 側は running chip を user bubble 内や sticky user header 内へ入れず、sticky user header の切り替えとは独立させる
-  - Webview 側は running chip の `実行中` を `開始` / `完了` と同系統の pill として表示し、`経過 N` と `最終活動 ...` は muted meta text として表示する。anchored row と左下 fallback sticky の中身は同じ marker 表示部品、同じ font size、同じ teal-green 系 running 色を使い、省略時は ellipsis と tooltip / title で全文を確認できる。fallback sticky は button の font shorthand で body size に戻さず、Webview 内 marker と同じ密度を維持する。経過時間 timer は現在描画中の running chip の elapsed text だけを更新し、timeline 全体は再描画しない
+  - Webview 側は running chip の `実行中` を `開始` / `完了` と同系統の pill として表示し、`経過 N` と `最終活動 ...` は muted meta text として表示する。anchored row と左下 fallback sticky の中身は同じ marker 表示部品、同じ font size、同じ teal-green 系 running 色を使い、省略時は ellipsis と tooltip / title で全文を確認できる。fallback sticky は button の font shorthand で body size に戻さず、Webview 内 marker と同じ密度を維持する。経過時間 timer は1時間以上でも秒を表示し、現在描画中の running chip の elapsed text だけを更新してtimeline 全体は再描画しない
   - Webview 側は running chip の elapsed target 探索を現在の timeline / 表示中 fallback chip に限定し、表示 text / hidden state が変わった場合だけ tooltip / aria-label を更新する
   - Webview 側は狭幅で turn marker counts を視覚的に省略する場合も、件数 / token 補足を marker 本体の tooltip / aria-label に統合して参照可能にする
   - Webview 側は running chip に CSS の pulse dot を表示する。dot は start marker には出さず、anchored row では turn rail 側の左端、左下 fallback sticky では marker 先頭に同じ見た目で出す。`turnId` / `updatedAtIso` / `lastItemIndex` / `itemCount` から作る activity signature が変わった場合だけ `runningTurnChip-flash` を付ける
@@ -958,7 +1172,7 @@
   - Webview 側は IntersectionObserver で表示範囲付近の画像だけ data URI を要求し、セッション切替時は画像データキャッシュを破棄する
   - Webview 側の `saveImage` / `saveAttachment` message は現在の session `fsPath` を添えて送信し、host 側は stale / missing session request を保存処理から除外する
   - `follow` モードは、`liveRunningTurnId` / `latestTurnId` がある場合はその turn 内の live running marker、completed end marker、最後の意味ある `.row` の順に優先し、末尾が `patchGroup` の場合は直前の非 `patchGroup` 行を優先する。該当 turn の描画行がない場合は描画済み marker / visual target へフォールバックする
-  - チャット末尾ボタンは、`#timeline` に描画済みの最後の visual target へスクロールする。末尾が diff / patch group card、running marker、completed end marker、collapsed summary marker のいずれでも、現在の表示状態を尊重してそこへ移動する
+  - セッションタイムライン末尾ボタンは、`#timeline` に描画済みの最後の visual target へスクロールする。末尾が diff / patch group card、running marker、completed end marker、collapsed summary marker のいずれでも、現在の表示状態を尊重してそこへ移動する
   - patch group のカード幅保持キーは `turnId`、メッセージ index、変更ファイル情報などから安定的に作る
 - Markdown transcript: `src/transcript/*`
   - Codex session の `Location: Active` / `Location: Archived` を transcript metadata として表示する
@@ -976,7 +1190,7 @@
   - archived Codex session は description / tooltip / icon 色で通常履歴と区別する
   - `archiveLocationFilter="activeOnly"` のときは archived Codex session を History / Pinned / Search から除外する
 
-### 4.10 ツール意味付けレイヤー
+### 4.11 ツール意味付けレイヤー
 
 - `src/tools/toolSemantics.ts`
   - ツール名からカード表示用のメタ情報（アイコン・アクセント・ラベル）を解決する
@@ -984,7 +1198,7 @@
 - `src/tools/toolTypes.ts`
   - ツール関連の共通型定義
 
-### 4.11 ローカルファイルリンク
+### 4.12 ローカルファイルリンク
 
 - `src/utils/localFileLinks.ts`
   - Webview / transcript 内のローカルパス文字列を VS Code URI に変換する
@@ -992,7 +1206,7 @@
 - `src/transcript/transcriptDocumentLinkProvider.ts`
   - Markdown transcript ドキュメント上のリンクを `DocumentLinkProvider` として解決する
 
-### 4.12 設定
+### 4.13 設定
 
 - `src/settings.ts`
   - 拡張設定の読み取りヘルパーをまとめる
@@ -1006,7 +1220,7 @@
   - 日付時刻表示は VS Code Extension Host のタイムゾーンを使う
   - UI 言語はタイムゾーン決定に使わない
 
-### 4.13 ローカライズ
+### 4.14 ローカライズ
 
 - `package.nls.json` / `package.nls.ja.json`
   - VS Code が拡張起動前に解決する `package.json` の `%...%` プレースホルダーを担当する
@@ -1024,7 +1238,7 @@
   - 新しい UI 文言は `t("...")` と `l10n/bundle.l10n*.json` に追加する
   - ソースコードコメントは英語で記述する
 
-### 4.14 診断ログ
+### 4.15 診断ログ
 
 - `src/services/logger.ts`
   - `codexHistoryViewer.debug.logging.enabled` が `true` のときだけ OutputChannel `Codex History Viewer` に出力する
@@ -1040,7 +1254,7 @@
 - `Debug Info (Copy)` のような通常 UI 導線は持たない
   - 必要時は `settings.json` で診断ログを有効化し、OutputChannel からコピーする
 
-### 4.15 しおり / 日付ガイド実装
+### 4.16 しおり / 日付ガイド実装
 
 - `src/services/bookmarkStore.ts`
   - しおり状態を VS Code `globalState` の `codexHistoryViewer.bookmarks.v1` に保存する
@@ -1077,7 +1291,7 @@
   - 日付ガイド用 item には `bookmarked` と user role を渡し、Webview DOM にも `data-bookmarked` / `data-time-guide-role` を反映する
 - `media/sharedTimeGuide.js` / `media/sharedTimeGuide.css`
   - 日付ガイド上で user / しおり / 現在位置を別表現として描画する
-  - Chat の日付ガイド item では `attachmentKind` を受け取り、添付あり / 画像のみ / mixed の dot ring を描画する
+  - セッションタイムラインの日付ガイド item では `attachmentKind` を受け取り、添付あり / 画像のみ / mixed の dot ring を描画する
   - 添付 indicator は user / しおり / 現在位置と同時に表示されても潰れないよう、dot の塗りではなく外側 ring を使う
   - 現在位置は独立した `dateGuideCurrentMarker` として描画し、通常 tick より前面に置く
   - 密集時だけ `dateGuideLens` を表示し、近辺 item を拡大表示する
@@ -1105,6 +1319,19 @@ npm run compile
 npm run watch
 ```
 
+### 5.2.1 検証
+
+```powershell
+# TypeScript の型を検証します
+npm run typecheck
+
+# ローカライズと Webview JavaScript の構文を検証します
+npm run lint
+
+# 差分に不要な空白エラーがないことを確認します
+git diff --check
+```
+
 ### 5.3 VSIX 作成
 
 ```powershell
@@ -1114,12 +1341,62 @@ npm run package
 
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
+- README用の `media/screenshot*.png` は配布VSIXへ含めない。README内の画像はpackage時にremote URLへ変換されるため、`.vscodeignore`で除外する
+- ローカル最終確認用の `.root-review-*` は `.gitignore` と `.vscodeignore` の双方で除外する。リリース前は完成したVSIXを展開し、private docs、test、source map、別VSIX、レビュー用一時ファイルが混入していないことを確認する
 
-### 5.4 v2.7.0 リリースメモ（2026-07-02）
+### 5.4 v2.8.0 リリースメモ（2026-07-21）
 
 **追加された機能**
 
-- Codex JSONL の `task_started` / `task_complete` / `turn_aborted` / `thread_rolled_back` / `patch_apply_end` / `token_count` を使い、チャット timeline に Codex turn の start marker、end marker、turn rail を表示するようにした
+- History ビューの現在条件を固定 snapshot として集計する History Insights を追加した。推論トークン / 変更イベント数を含む概要、推論トークンを選択できる活動ヒートマップ、ソース / モデル / プロジェクト / ツール内訳、指標別のアクティブセッション、変更頻度が高いファイル、入力キャッシュと推論 / メッセージ構成 / ターン状態 / 変更ファイル種別の利用詳細、データ品質を editor Webview で確認できる
+- History Insights から、両端包含の日付範囲、複数の関連プロジェクト、ソース、Codex の保存場所、タグをまとめて適用できるようにした。既定では History 条件を変更せず、明示的に `履歴にも適用` を選択した場合だけ同じ条件を History へ反映する
+- History Insights と Claude Branch Navigation が共用する Session Analysis Index を追加した。更新されたセッションだけを lazy 解析し、通常の履歴キャッシュ / 検索インデックスとは独立して管理する
+- Codexアプリの`ローカルにフォークする`またはCodex拡張機能の`新しいタスクで続ける`で作成されたdirect / nested Forkを検出し、Codexセッションビュー内の前後操作と経路ツリーoverlayから切り替えられるCodex Branch Navigationを実験的機能として追加した。`新しい Worktree にフォークする`は2.8.0では非対応とした
+- Claude セッションビュー内で分岐先を切り替え、履歴の開始、分岐点、各履歴の開始 / 末尾を経路ツリー overlay で確認できる Claude Branch Navigation を実験的機能として追加した
+- Codex の親セッションとサブエージェント実行を専用アイコンと右側の関係ツリーで確認し、各 node から対応するセッションを開ける Agent Runs を実験的機能として追加した
+- 管理の `Rebuild Cache` で履歴キャッシュ、検索インデックス、Session Analysis Index をまとめて再作成できるようにした
+
+**変更された機能**
+
+- History の条件モデルへ任意の日付範囲と複数プロジェクト選択を追加し、History Insights の drill-down と History への一括適用で同じ検証・永続化規則を使うようにした
+- History Insights の source / model / project 内訳は、選択した共通指標と単位で比較できるようにし、Codex のモデル行では取得できた範囲の推論レベル別 token 内訳を展開できるようにした
+- History Insights の tool 内訳は呼び出し回数 / 利用セッション数、アクティブセッションはユーザー依頼数 / ツール呼び出し数 / 推論トークン数 / 合計トークン数 / 変更行数で切り替えられ、アクティブセッション行から対象セッションを直接開けるようにした
+- History Insights に利用詳細を追加し、入力キャッシュと推論、メッセージ構成、ターン状態、変更ファイル種別ごとのファイル数 / 変更イベント数を確認できるようにした
+- セッションビューと History Insights のファイル種別判定と表示 CSS を共有し、同じ path が画面ごとに異なる種別へ分類されないようにした
+- Session Analysis の message / turn / tool / patch / usage は既存 Chat model の抽出規則を再利用し、Search、bookmark、File AI Change History と共通の message index を維持するようにした
+- `Empty Trash` の旧世代 cache 整理対象へ Session Analysis Index を追加し、現行 `session-analysis-index.v1.json` は削除しないようにした
+
+**修正された機能**
+
+- History の source を Claude のみに切り替えたとき、適用不能な archive 条件を実効値 `すべて` にしつつ、直前の Codex 用 archive 条件は失わず、Codex / All へ戻したときと再起動後に復元するようにした
+- History Insights panel を閉じて開き直した場合、旧 panel の非同期解析結果や進捗が新しい panel へ混入しないようにした
+- History Insights の再open、現在条件の適用、フィルター適用が重なった場合も、snapshot、History条件、panel表示を開始順に確定し、旧loadの後着保存や後発操作の消失を防ぐようにした
+- History Insights の外部再解析を既存modelを保持するtoast表示へ統一し、stale / error状態で言語を変更しても旧modelが復帰しないようにした
+- History Insights の2秒を超える解析へキャンセル可能なVS Code進捗通知を追加し、短時間処理では表示せず、panel遷移・破棄後に旧通知を残さないようにした。過去のキャンセルは後から明示したopen／条件適用へ引き継がず、遷移待機中はcancel／retryの最後の利用者意図だけを新stateへ反映する
+- History Insights のsession横断token・変更行数・内訳合計をsafe integerへ飽和させ、overflowを下限値として表示するようにした。欠損session混在時のproject drill-downも解決可能なreferenceへfallbackする
+- History Insights をアクティブにしたまま `Developer: Reload Window` を実行すると、serializer 復元直後の初期空 index を対象セッションの消失と誤判定し、snapshot が空で保存されて `対象セッションがありません` となり、`再集計`でも回復できない問題を修正した。復元時は初回 full History refresh 後の authoritative inventory を待ち、refresh 失敗や待機中の cancel では保存 snapshot を維持するようにした
+- 検索中の History filter / scope、project association、関連設定、Auto Refresh、手動 refresh、cache maintenance が実行中検索を暗黙に終了させる問題を修正した。検索開始時の設定、条件、readonly inventory、Search Index read snapshot で一度完走し、filter由来の自動再検索は公開後に最新条件で1回だけ実行するようにした。実行中検索の通常の中断条件は明示キャンセルと新しい検索開始だけに戻した
+- `Rebuild Cache` と `Rebuild Search Index` は、開始時の設定とreadonly inventoryを固定して、途中のAuto Refresh、filter / scope、関連設定、index generation変更では中止しないようにした。明示maintenance同士を共通queueで直列化し、全キャッシュ再作成では同じinventoryをHistory、Search、Analysisへ渡すようにした
+- Branch Navigationのpending通知ではセッションタイムラインを再描画せず、最終的なinline timelineに実差分がある場合だけ再描画するようにした。再描画時はWebview内検索をsemantic anchorから復元し、hitが消失した場合は近傍へfallbackしつつ、閲覧中anchorを可能な範囲で維持する
+- 破損したHistory V2 filter stateをfail-closedで復旧するとき、独立したCodex archive preferenceを`通常のみ`で上書きしないようにした
+- Session Analysis の同時利用者を共有解析jobへ統合し、一方のキャンセルで他方の解析を中断したり同じsessionを重複解析したりしないようにした。全利用者がtemp保存中にキャンセルした場合はcommit前に破棄し、commit境界後は成功結果とdisk / memory公開を分離しない。model usageは2,000件で決定的に制限し、raw tokenの負数・少数・非数値・unsafe値とtoken加算overflowは0へ変換せず部分解析として隔離する
+- JSON の best-effort atomic write は、rename 失敗後の直接書き込み直前にも commit guard を再確認し、処理が失効していれば stale な結果を公開しないようにした。直接書き込みが失敗した場合も一時ファイルを best-effort で回収する
+- Claude Branch Navigation は、同文の親を持つ別rootの子を誤って同一分岐へ統合しないようcanonical parent identityをrootから確定するようにした。未解決・衝突parentは切替候補から除外し、cycle検出とdepth付与を非再帰O(N)へ変更した
+- Agent Runs / Codex・Claude分岐のoverlayは、画像preview、候補一覧、分岐preview、overlay本体の順にEscape 1回で1層だけ閉じ、暗い背景へfocusが移っても操作できるようにした
+- Codexセッション開始時の推奨plugin、AGENTS指示、権限・実行mode、environmentなどの注入contextがraw user messageとして見える問題を修正し、内容変更に耐える構造判定と折りたたみカードへ置き換えた。検索・title・分析・Fork evidence用cacheはalgorithm / parser version更新で再生成する
+- セッションビューのsticky user headerは、元cardの下端と次user cardの上端を基準に切り替え、全文summaryをtooltip、操作説明をaria-labelへ分離した
+- turnの所要時間とrunning chipの経過時間は、1時間以上でも秒を省略せず、`1時間03分5秒` / `1h 03m 5s`形式で表示するようにした
+- Branch Navigation / Agent Runsの専用表示commandとセッション右クリック項目を削除し、現在のセッションビューのヘッダー／タイムライン操作からだけ開くようにした。Agent Runsの`親セッションを開く`は維持した
+- Codex使用量の`used_percent`は2.7.0互換で有限な非負小数を保持し、usage percentageとSession Analysisのrate limit snapshotから小数値が消えないようにした
+- Session Analysis の上限、壊れた JSONL、取得不能な指標を部分値 / 不明として扱い、確定した 0 と混同しないようにした
+- 配布するMarkdown rendererを`markdown-it@14.3.0` / `linkify-it@5.0.2`へ更新し、fuzzy emailと`mailto:`自動検出を無効にするfail-closed対策もdefense-in-depthとして維持した
+- `package.json` / `package-lock.json` のバージョンを `2.8.0` に更新した
+
+### 5.5 v2.7.0 リリースメモ（2026-07-02）
+
+**追加された機能**
+
+- Codex JSONL の `task_started` / `task_complete` / `turn_aborted` / `thread_rolled_back` / `patch_apply_end` / `token_count` を使い、セッションタイムラインに Codex turn の start marker、end marker、turn rail を表示するようにした
 - turn は `ターン N` として表示し、full `turn_id` は tooltip / aria-label で確認できるようにした
 - turn end marker に item 数、tool 数、変更数、入力 / 出力 / 合計 token を表示するようにした。token 合計がない場合は usage 記録件数へフォールバックする
 - turn end marker に完了までの所要時間を表示し、`live` mode の running chip には開始からの経過時間と最終活動時刻を表示するようにした
@@ -1190,7 +1467,7 @@ npm run package
 - Claude Code の `queue-operation` / `queued_command` に含まれる task notification が、materialized user message と二重にカード化されないようにした
 - task notification / invoke の内部 field、ローカル `outputFile`、system / harness preamble、task id、tool-use id、定型 note が Webview model に流れないようにした
 - `<result>` 内の `<status>` / `<usage>` 風 text や fenced / quoted の `<task-notification>` / `<invoke>` が、top-level field や card として誤抽出されないようにした
-- close が欠落した `<invoke` / `<task-notification>` が大量に含まれる病的な Claude message で、chat 表示、検索インデックス、Markdown transcript、Resume / Handoff 生成が数秒単位で固まる可能性を抑えた
+- close が欠落した `<invoke` / `<task-notification>` が大量に含まれる病的な Claude message で、セッションタイムライン表示、検索インデックス、Markdown transcript、Resume / Handoff 生成が数秒単位で固まる可能性を抑えた
 - attachment details の開閉直後に、Webview 内検索の件数、highlight、active result が古い DOM のまま残らないようにした
 - malformed attachment が notification / invoke の前に混在しても、Webview 内検索の一時展開 key と描画側 details key が同じ ordinal を使い、検索で該当 attachment details を展開できるようにした
 - session reload 直前に render 中 deferred render が予約されていても、reload 後に冗長 render や古い scroll restore callback が走らないようにした
@@ -1201,7 +1478,7 @@ npm run package
 - page-search temporary expansion の clear、query 取得、render 後 restore dispatch の小さな重複を整理し、状態変化がない場合の余分な render を減らした
 - `package.json` / `package-lock.json` のバージョンを `2.7.0` に更新した
 
-### 5.5 v2.6.1 リリースメモ（2026-06-22）
+### 5.6 v2.6.1 リリースメモ（2026-06-22）
 
 **追加された機能**
 
@@ -1223,7 +1500,7 @@ npm run package
 - Claude Code の text-only 中断 record と tool result / attachment 混在 record を raw content で区別し、混在 record は通常 message として扱うようにした
 - `package.json` / `package-lock.json` のバージョンを `2.6.1` に更新した
 
-### 5.6 v2.6.0 リリースメモ（2026-06-12）
+### 5.7 v2.6.0 リリースメモ（2026-06-12）
 
 **追加された機能**
 
@@ -1247,7 +1524,7 @@ npm run package
 - sort / 表示状態の切り替え後に、選択中の履歴が見失われやすい問題を軽減した
 - `package.json` / `package-lock.json` のバージョンを `2.6.0` に更新した
 
-### 5.7 v2.5.1 リリースメモ（2026-06-10）
+### 5.8 v2.5.1 リリースメモ（2026-06-10）
 
 **修正された機能**
 
@@ -1257,7 +1534,7 @@ npm run package
 - JSON 書き込みを一時ファイル経由の best-effort atomic write に変更し、rename に失敗する provider では直接書き込みへフォールバックするようにした。古い孤立一時ファイルは `Empty Trash` で内部的に回収できるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.5.1` に更新した
 
-### 5.8 v2.5.0 リリースメモ（2026-06-07）
+### 5.9 v2.5.0 リリースメモ（2026-06-07）
 
 **追加された機能**
 
@@ -1268,7 +1545,7 @@ npm run package
 - 履歴ビュー内検索とファイル変更履歴の検索で、正規表現や完全一致など、より柔軟な検索表現に対応した
 - 履歴ビュー内検索とファイル変更履歴の検索に、検索履歴候補の表示・選択・削除を追加した
 - Codex のメモリー引用情報を、履歴ビュー内で折りたたみ表示できるようにした
-- チャット履歴で、現在のユーザープロンプトを上部に追従表示できるようにした
+- セッションタイムラインで、現在のユーザープロンプトを上部に追従表示できるようにした
 - Handoff がプロジェクト関連付けを考慮するようになり、関連付け後のプロジェクト表示に沿った引き継ぎ内容を作れるようにした
 
 **変更された機能**
@@ -1289,7 +1566,7 @@ npm run package
 - ピン留めビューのプロジェクト並び順が、同じ時間に更新された場合に崩れることがある問題を修正した
 - `package.json` / `package-lock.json` のバージョンを `2.5.0` に更新した
 
-### 5.9 v2.4.1 リリースメモ（2026-05-26）
+### 5.10 v2.4.1 リリースメモ（2026-05-26）
 
 - プロジェクト (`cwd`) に、この拡張機能内だけの別名を設定 / 消去できるようにした
 - プロジェクト別名は History / Pinned のプロジェクト見出し、セッション行、tooltip、絞り込み表示、Status、Search の scope / セッション表示に反映する
@@ -1299,10 +1576,10 @@ npm run package
 - Webview 内検索の入力を debounce し、通常履歴 Webview / ファイル履歴 Webview の検索中の入力負荷を抑えた
 - 通常履歴 Webview / ファイル履歴 Webview の検索パネルがウィンドウ幅 860px 以下で強制的に画面全幅になり、リサイズハンドルが消える挙動を修正した
 - Webview 復元時に、通常履歴 Webview は最後に見ていた message 付近、ファイル履歴 Webview は最後に見ていた card 付近へ戻るようにした
-- Chat Webview で `::code-comment{...}` directive をレビューコメントカードとして表示し、comma 区切りや複数行、未知 segment を含む出力も既知キーから復元できるようにした
+- セッション Webview で `::code-comment{...}` directive をレビューコメントカードとして表示し、comma 区切りや複数行、未知 segment を含む出力も既知キーから復元できるようにした
 - `package.json` のバージョンを `2.4.1` に更新した
 
-### 5.10 v2.4.0 リリースメモ（2026-05-23）
+### 5.11 v2.4.0 リリースメモ（2026-05-23）
 
 - History に `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位` のプロジェクト表示 mode を追加した
 - プロジェクト判定用 key を全 OS で大文字小文字非区別に統一した
@@ -1320,9 +1597,9 @@ npm run package
 - Codex の `# Files mentioned by the user:` block が IDE context 後ろにある場合も、HTML / log / JSON などの file reference attachment として表示されるように修正した
 - `package.json` / `package-lock.json` のバージョンを `2.4.0` に更新した
 
-### 5.11 v2.3.0 リリースメモ（2026-05-22）
+### 5.12 v2.3.0 リリースメモ（2026-05-22）
 
-- Chat message の添付モデルを `attachments` に統合し、画像も `type: "image"` の attachment として扱うようにした
+- セッションメッセージの添付モデルを `attachments` に統合し、画像も `type: "image"` の attachment として扱うようにした
 - Claude Code の `type: "document"` を document card として表示できるようにした
 - Claude Code の PDF document は PDF card、text document は text card、unknown document は generic document card として表示するようにした
 - Claude text document の preview / search / Save As に上限を設け、巨大 text / binary payload を初期 Webview model へ渡さないようにした
@@ -1332,7 +1609,7 @@ npm run package
 - Codex の `## My request for Codex:` 以降だけを本文として残し、区切りがない variant は安全に判定できる場合だけ file block と本文を分離するようにした
 - Codex file reference は参照先ファイルを自動で読まず、履歴に保存された label / path / line 情報だけを使うようにした
 - Word / Excel / PowerPoint / PDF / zip / 任意拡張子を file reference として扱えるようにした
-- Chat attachment card は file kind badge、ファイル名、action icon 中心の compact 表示にし、path / MIME type / byte size は tooltip へ寄せた
+- セッションタイムラインの attachment card は file kind badge、ファイル名、action icon 中心の compact 表示にし、path / MIME type / byte size は tooltip へ寄せた
 - text document preview は保存ボタン左の preview action icon から開閉し、開いた場合は同じ card 内の下段に full-width panel として表示するようにした
 - file kind ごとに badge icon / accent を変え、PDF / Word / Excel / PowerPoint / Text / Code / Archive / Image reference / Selection / Generic file を区別できるようにした
 - Code / Image reference の badge text が generic `File` に落ちないよう、専用 l10n label を追加した
@@ -1354,7 +1631,7 @@ npm run package
 - Resume / Handoff では clean text と attachment summary を使い、raw tag / `Files mentioned` block の重複やバイナリ再添付を避けるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.3.0` に更新した
 
-### 5.12 v2.2.0 リリースメモ（2026-05-21）
+### 5.13 v2.2.0 リリースメモ（2026-05-21）
 
 - Codex の通常 `sessions` に加えて、任意で `archived_sessions` を読み込めるようにした
 - `codexHistoryViewer.codex.archivedSessions.enabled` と `codexHistoryViewer.codex.archivedSessionsRoot` を追加した
@@ -1364,9 +1641,9 @@ npm run package
 - History / Pinned / Search に `通常のみ` / `すべて` / `アーカイブのみ` のアーカイブ表示切り替え view title action を追加した
 - `通常のみ` のときは、History / Pinned / Search から archived Codex session を即時に除外するようにした
 - Search はアーカイブ非表示時に archived hit を候補から除外し、表示される hit 数が `search.maxResults` に達するようにした
-- Codex archived session を History / Pinned / Search / Markdown / Chat で通常 session と区別できるようにした
-- Markdown transcript に `Location: Active` / `Location: Archived` を表示し、Chat では archived Codex session を `Archived` 表示で識別できるようにした
-- archived Codex session の Chat では、`Resume in Codex` の代わりに `Move to Codex History` を表示するようにした
+- Codex archived session を History / Pinned / Search / Markdown / セッションビューで通常 session と区別できるようにした
+- Markdown transcript に `Location: Active` / `Location: Archived` を表示し、セッションビューでは archived Codex session を `Archived` 表示で識別できるようにした
+- archived Codex session のセッションビューでは、`Resume in Codex` の代わりに `Move to Codex History` を表示するようにした
 - active Codex session の右クリックメニューに `Move to Archive` を追加した
 - archived Codex session の右クリックメニューに `Move to Codex History` を追加した
 - 移動系 action は active / archived で相互排他にし、カスタムタイトル系 action の下、Delete より上に区切って配置した
@@ -1377,7 +1654,7 @@ npm run package
 - filesystem restore の Move には Undo を提供し、公式 provider restore では本家状態との整合を優先して Undo を出さないようにした
 - restore / archive / pin reconcile 時に、annotation / bookmark / chat open position を移動先 path へ寄せるようにした
 - archive / unarchive 時の bookmark key 移行で target hash を維持し、Webview で同じしおりとして認識できるようにした
-- archived Chat の `Move to Codex History` は `chat.openPosition = lastMessage` のとき操作直前の表示位置へ復元後に移動するようにした
+- archived セッションビューの `Move to Codex History` は `chat.openPosition = lastMessage` のとき操作直前の表示位置へ復元後に移動するようにした
 - Export した Markdown transcript にも `Location: Active` / `Location: Archived` を出すようにした
 - metadata relocation の衝突時は、annotation note と chat open position で移行先を優先するようにした
 - pin に `identityKey` / `archiveState` / `rootKind` を追加し、公式側でアーカイブされた Codex session の path 変更へ追従できるようにした
@@ -1388,7 +1665,7 @@ npm run package
 - 検索インデックスの context に archived root / archived 有効状態を含めるようにした
 - `package.json` のバージョンを `2.2.0` に更新した
 
-### 5.13 v2.1.0 リリースメモ（2026-05-19）
+### 5.14 v2.1.0 リリースメモ（2026-05-19）
 
 - Codex / Claude Code 間の Handoff を新規実装した
 - History / Pinned / Search のセッション右クリックに、`他のAIへ引継ぎ` 階層メニューを追加した
@@ -1405,10 +1682,10 @@ npm run package
 - `引き継ぎファイルを開く` を追加した
 - Control / Status に Handoff 生成ファイルの削除、件数、容量表示を追加した
 - `Delete Handoff Files` は Control で `Empty Trash` の直前に配置し、Handoff 表示設定が無効でも利用できるようにした
-- チャット表示内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
+- セッションビュー内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
 - `package.json` / `package-lock.json` のバージョンを `2.1.0` に更新した
 
-### 5.14 v2.0.1 リリースメモ（2026-05-15）
+### 5.15 v2.0.1 リリースメモ（2026-05-15）
 
 - 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
 - しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
@@ -1432,10 +1709,10 @@ npm run package
 - ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
 - `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
 
-### 5.15 v2.0.0 リリースメモ（2026-05-14）
+### 5.16 v2.0.0 リリースメモ（2026-05-14）
 
 - ワークスペース内のファイルを起点に、Codex / Claude の diff 履歴を時系列で確認できる File AI Change History を追加した
-- カスタムタイトル操作を QuickPick 入口へ統一し、チャット履歴ビューアのヘッダーからも設定 / 消去できるようにした
+- カスタムタイトル操作を QuickPick 入口へ統一し、セッションビューのヘッダーからも設定 / 消去できるようにした
 - Explorer のファイル右クリックメニューに `Show File AI Change History` を表示できる設定 `codexHistoryViewer.fileChangeHistory.explorerContextMenu.enabled` を追加した
 - ファイル履歴 Webview では、source toggle、Webview 内検索、前後 card 移動、先頭 / 末尾移動、`続きを読み込む`、`履歴で開く` を提供する
 - `履歴で開く` は通常履歴 Webview を現在のエディタグループに別タブとして開き、該当 diff card へ reveal する
@@ -1450,27 +1727,27 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.16 v1.5.1 リリースメモ（2026-05-08）
+### 5.17 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
 - `chat.openPosition = lastMessage` で、画面内に本文メッセージがない位置の保存や、復元対象メッセージが描画されない場合に、直前の描画済み本文メッセージまたは先頭へフォールバックするようにした
-- `chat.openPosition = latest` で、移動先指定のないチャット表示を最新の描画済み visual target から開けるようにした
-- チャット末尾ボタンは最後に描画された visual target へ移動するため、末尾の diff / patch group card、running marker、completed end marker、collapsed summary marker そのものを確認できる
+- `chat.openPosition = latest` で、移動先指定のないセッションタイムライン表示を最新の描画済み visual target から開けるようにした
+- セッションタイムライン末尾ボタンは最後に描画された visual target へ移動するため、末尾の diff / patch group card、running marker、completed end marker、collapsed summary marker そのものを確認できる
 - Codex の `custom_tool_call` を、`toolCalls` / `toolCallsAndOutputs` の検索インデックスに軽量メタとして含めるようにした
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.17 v1.5.0 リリースメモ（2026-05-07）
+### 5.18 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
-- カスタムタイトルは History / Pinned / チャット Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
+- カスタムタイトルは History / Pinned / セッション Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
 - ツリー項目ツールチップの表示量を `full` / `compact` / `titleOnly` から選べるようにした
 - 検索インデックスに保存するツール情報の範囲を `conversationOnly` / `toolCalls` / `toolCallsAndOutputs` から選べるようにした
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.18 v1.4.3 リリースメモ（2026-04-30）
+### 5.19 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -1480,6 +1757,71 @@ npm run package
 
 ## 6. 手動テスト観点
 
+- History ビューのタイトルメニュー / Command Palette から History Insights を開くと、起動時の History 条件に一致するセッションだけが集計される
+- History Insights を開いた後に History 条件や履歴ファイルが変わっても対象集合は自動で増減せず、`再集計` は同じ snapshot、`履歴の条件を適用` は現在の History 条件から作り直した snapshot を使う
+- History Insights のフィルターで From / To の片側開放・両端指定、複数プロジェクト、ソース、Codex の保存場所、タグを組み合わせて適用でき、不正日付、From > To、未選択 source は状態を変えずエラーになる
+- History Insights のフィルターを `適用` せず閉じた場合は draft だけが破棄される。`履歴にも適用` が非選択なら History / Search 条件は変わらず、選択中に `適用` した場合だけ全条件が History へ反映される
+- History Insights のフィルター適用後に Reload Window を実行しても、適用済み snapshot と、`履歴にも適用` を選択した場合の History 条件が一致して復元される
+- 保存 snapshot を持つ History Insights をアクティブにしたまま `Developer: Reload Window` を実行しても、非アクティブのまま Reload 後に選択した場合と同じ対象集合が初回 full History refresh 後に復元され、`対象セッションがありません`へ誤遷移せず、`再集計`が同じ対象集合で動作する
+- fresh History cache の採用直後または HistoryService の初期空 index では保存 snapshot を空で上書きしない。初回 full refresh の失敗、待機中の cancel / panel close / state 置換でも保存 snapshot を維持し、authoritative な full scan が正当に 0 件を返した場合だけ対象 0 件へ確定する。serializer 復元以外の通常 open / 条件適用は current index から従来どおり開始する
+- History Insights のフィルター適用中に History ビューのタイトルメニューまたは Command Palette から再度開いても、適用途中の snapshot が割り込まず、完了後の History 条件と保存・表示される snapshot が一致する。`履歴にも適用` が非選択または適用失敗の場合は変更前の History 条件から開く
+- Historyの`絞り込み解除`では日付、source、tag、archive locationが1回の適用で既定値へ戻り、scopeが`all`なら`ProjectSelection.all`へ戻る。scopeが`currentGroup`ならscopeと現在group selectionを維持し、途中条件や一部だけの旧値を表示しない
+- Historyの対象範囲を`現在のプロジェクトグループ`にしてReload Windowを実行すると、家アイコン、More Actionsの現在表示、対象セッション、History / Searchの説明が同じcurrent-group状態で復元される。家アイコンを1回押すと地球アイコンと全件へ、もう1回押すと家アイコンと現在groupへ切り替わる
+- `currentGroup`中に日付、source、tag、archive location、表示形式、表示モード、sortを変更してもscopeと家アイコンを維持する。詳細project picker、History Insightsの`履歴にも適用`、日付 / project drill-downでproject selectionを明示適用した場合は地球アイコンへ切り替わり、Reload後もV2 selectionとscope表示が一致する
+- source切替とtag変更などを保存待ち中に連続操作しても、後の操作が先に確定した別fieldを旧値へ戻さない。同じsource toggleを連打した場合も、各操作をqueue内の確定stateから順に計算する
+- More Actionsから`すべて` / `現在のプロジェクトグループ`を直接指定した場合も1回で対象とアイコンが一致し、現在値の再指定はno-opになる。workspaceが無い状態、association再読込、保存失敗時にもV2、scope、providerの一部だけが切り替わらない
+- `currentGroup`中に現在workspaceとは別groupの明示selectionが残る不整合を作った場合、非project条件変更または再読込でselectionを別groupへ置き換えず、scopeだけ`all`へ正規化する。関連付け追加 / 解除 / 種類変更の直後にもcurrent-group selectionを再解決し、保存失敗時は関連付けとV2 / scopeの両方が操作前へ戻る
+- History の source を Codex / All から Claude のみへ切り替えると実効 archive 条件が `すべて` になり、Codex / All へ戻すと直前の Codex 用 archive 条件が復元される。Claude のまま再起動してから Codex / All へ戻した場合も同じ条件が復元される
+- History Insights の概要、ヒートマップ、ソース / モデル / プロジェクト / ツール内訳、アクティブセッション、ファイル一覧、利用詳細で、確定値、取得できた下限、取得不能が区別され、確定 0 と partial 0 / 不明を混同しない
+- History Insights のツール内訳を呼び出し回数 / 利用セッション数で切り替えると順位、合計、省略件数が対応する指標へ切り替わり、長いツール名や2,000種類を超えるセッションはboundedな `partial` として扱われる
+- History Insights のアクティブセッションをユーザー依頼数 / ツール呼び出し数 / 推論トークン数 / 合計トークン数 / 変更行数で切り替えると、同じsnapshot内の上位候補が決定的な順序で表示される。行から開けるのはhost側が現在model用に保持するopaque IDと一致するセッションだけで、未知IDや古いmodelから任意パスを開けない
+- History Insights の概要に推論トークン / 変更イベント数が表示され、活動ヒートマップを推論トークンへ切り替えると日別の値とcoverageが更新される。利用詳細ではキャッシュ済み / キャッシュ読み取り / キャッシュ作成の入力トークンと推論トークン、ユーザー依頼 / アシスタント応答 / developer メッセージ / ツール呼び出し / ツール出力、全 / 完了 / 中断 / ロールバックのターン数が対応する取得可否で表示され、変更ファイル種別は解析できた範囲の重複除外後のファイル数 / 変更イベント数を表示する
+- History Insights の日付から History、プロジェクトから History / Search へ drill-down した場合は対象外の source、プロジェクト集合、タグ、保存場所、日付範囲を維持し、ファイル操作は選択した opaque ID に対応する File AI Change History / ローカルファイルだけを開く
+- History Insights の解析をキャンセルしても既存表示を stale として安全に保持し、panel を閉じて開き直した場合に旧 panel の進捗、エラー、model、VS Code通知が新しい panel へ混入しない。2秒未満のloadでは通知が出ず、2秒を超える初回load／model保持refreshでは通知からキャンセルできる。完了済みcancel後の新しいopen／条件適用はloadを開始し、snapshot保存中の最後の意図がcancelなら自動loadを抑止、cancel後にretryした場合は再開する
+- 新規 storage では `session-analysis-index.v1.json` は History Insights / Claude Branch Navigation / `Rebuild Cache` の初回解析要求まで作成されず、通常の History / Search / Pinned / セッションタイムライン表示を待たせない
+- Session Analysis Index は cache context が一致する限り未変更セッションを再利用し、mtime / size または parser version が変わった entry だけを再解析する。root / source context が変わった場合は新しい context で対象 entry を構築する
+- Session Analysis のsource parser versionはCodex / Claudeともに`8`で、ツール名別利用回数を持たないversion 7 entryは再解析される
+- 破損した `session-analysis-index.v1.json` は次の解析要求で安全に再生成され、read error では既存ファイルを削除しない
+- `Rebuild Cache` は確認後に履歴キャッシュ、検索インデックス、Session Analysis Index を同じ履歴集合から順番に再作成し、進捗とキャンセルが機能する。独立した Session Analysis 再構築コマンドは公開しない
+- `Rebuild Cache` をSession Analysis Index削除前にキャンセルした場合は既存indexが残り、削除後のキャンセルでは不完全なindexが保存されない。削除 / 保存失敗時は成功通知が出ない
+- `Rebuild Cache` の実行中に Auto Refresh、History filter / scope、project association、関連設定を変更しても「中止」とならず、開始時の設定と1つのreadonly inventoryでHistory、Search、Analysisを最後まで処理する。開始設定が完了時にcurrentではない場合は新設定のlive History表示を上書きしない
+- `Rebuild Search Index` は開始時に互換snapshotがなければ捕捉済みrefresh queueを一度だけ待ち、取得できなければ`historyUnavailable`で終了する。snapshot取得後はAuto Refresh、History filter / scope、関連設定が変わっても固定snapshotで完走する。進捗通知から明示キャンセルした場合は中止し、対象sessionが0件の場合は空indexを保存する
+- 通常検索中に History のdate / project / source / tag / archive条件またはproject associationを変更しても、開始時条件の結果が一度公開され、その後に最新条件の自動再検索が1回だけ行われる。Auto Refresh、手動History refresh、関連設定、cache maintenanceが重なった場合も開始時snapshotの検索を暗黙に中止しない
+- 通常検索を明示キャンセルした場合は保留中の自動再検索を行わず、新しい検索を開始した場合は旧検索結果を公開しない。検索開始時に互換History Indexがなく、捕捉済みrefreshを待っても開始設定のIndexを取得できなかった場合は、別設定のIndexを誤用せず`historyUnavailable`で終了する
+- `codexHistoryViewer.branchNavigation.enabled = false` のとき Codex / Claude の branch control、overlay、relation / evidence build が動作せず、`true` へ変更すると再起動なしに開いている両sourceのセッションビューへ反映される
+- Claude の同一物理 project folder に top-level primary session が 2 件未満の場合は追加 branch 解析を開始せず、分岐 0 件が確定したセッションビューでは理由を toast で確認できる
+- Claude Branch Navigation の card 操作 / overlay から分岐先を選ぶと、同じセッション Webview で対象セッションの正しい 1-based message anchor へ移動し、通常の Search / bookmark / File History の移動位置がずれない
+- ready 前の既存セッションパネルを分岐先として選んだ場合も、初回 bootstrap 後に対象 session、message anchor、overlay 表示が適用される
+- Claude Branch Navigation の overlay は現在の lineage component の landmark だけを表示し、別 project folder、sidechain、無関係な root component、通常のセッションタイムラインの全メッセージを混在させない
+- Claude Branch Navigation の候補 payload に21件以上の choice または occurrence があっても、Webview は各階層を20件までに制限し、現在候補と総件数、省略案内を維持する
+- branch relation が部分的な場合は確認できた分岐だけを表示して warning を出し、機能を無効化してもセッションビュー、Session Analysis Index、bookmark、annotation、Claude JSONL を変更しない
+- 旧`codexHistoryViewer.claudeBranches.enabled`と開発途中の`codexHistoryViewer.codexForks.enabled`はmanifest、実装、文書に残らず、共通`branchNavigation.enabled`だけを正本とする
+- Codexの先頭`session_meta.payload.forked_from_id`だけからdirect / sibling / nested Forkを構築し、同じabsolute `cwd`を持つparent / childだけをlocal Forkとして表示する。異なる・relative・欠落した`cwd`、重複parent ID、cycle、self referenceを別sessionへ推測で接続しない
+- `source.subagent.thread_spawn` と `forked_from_id` の両方を持つdirect / nested subagentはCodex Branch Navigationへ混入せず、Agent Runsだけから到達できる。Agent Runsを無効にしてBranch Navigationだけを有効にした場合も同じ分類になる
+- agent metadataの補完が一部失敗した場合は、未確認sessionをForkと推測せず、確認済みrelationだけをpartialとして表示する
+- Codexが共有履歴のtimestampを再付与していても、role、本文・attachment fingerprint、利用可能なsource item ID / turn IDから正しい共通prefixと1-based message anchorを求める。共通prefixを証明できないedgeでは誤った位置への移動を出さない
+- 親セッションとmaterializeされた各Codex Forkに同じsession-start protocol bundleがあっても、それを共通履歴の通常user evidenceやFork anchorに含めない。カード化後もraw message indexは消費し、最初の実user message以降の1-based indexを変えない
+- Codex Branch Navigation のinline操作 / overlayからtargetを選ぶと、同じセッションWebviewで対象session / messageへ移動する。History generation、file inventory、snapshot、request IDがstaleな場合や、target model構築中にcomponent fileが変化した場合は、commit直前の再検証で現在session、panel registry、表示modelを変更しない
+- Codex Forkのheader buttonは上2点から下1点へ合流する公式Codexと同じ向き、関係ありの場合は件数badge付きで表示する。toolbar右側は`自動更新 -> Agent Runs -> Branch Navigation -> Reload`の順とし、branch buttonをReloadの直前へ固定する。Agent Runs buttonと同時に存在しても、片方のoverlayを開くと他方を安全に閉じる
+- Codex Fork overlayはdirect / nested componentのlandmarkだけをbounded表示し、`新しい Worktree にフォークする`、別`cwd`、無関係なCodex session、通常タイムラインの全messageを混在させない
+- bookmark / tag / note変更後はevidenceを再parseせずFork presentationだけを更新し、同一sessionの手動reloadと自動更新`preserve` / `follow`ではoverlay open、tree scroll、stable focusを可能な範囲で維持する
+- Branch Navigationの再確認がpendingになっただけではセッションタイムライン、Webview内検索、スクロール位置を再描画しない。最終通知のinline分岐表示が同一ならセッションタイムラインは再描画せず、toolbar / controlと、開いているoverlayだけを更新する。実差分がある場合はactive検索結果をsemantic anchorで復元し、消失時は近傍へfallbackしつつ閲覧中anchorを可能な範囲で維持する
+- `codexHistoryViewer.agentRuns.enabled = false` のときは History / Pinned / Search の通常 Codex アイコンとセッションタイムライン表示が従来どおり動く。`true` へ変更すると再起動なしで metadata を準備し、利用可能な親を持つサブエージェントだけを History から抑制する一方、Pinned / Search では全サブエージェントの専用表示を維持し、セッションビューのヘッダー操作へ反映する。2.8.0 では Codex セッションだけを対象とし、Claude の表示と履歴には影響しない
+- Search 結果を開いたまま Agent Runs を有効化または metadata 更新しても、保持中の古い summary ではなく最新 relation presentation に従って session row の subagent アイコンが更新される
+- 設定有効時は通常の Codex セッションビューで Agent Runs アイコンが常に表示され、関係がない session では押下時に toast が出る。親、子、孫、sibling がある session では右側ペインへ同じ component だけが表示される
+- Agent Runs の主見出しは利用可能な root session title、副見出しは機能名と件数になり、task、設定済みの agent role、session title、開始日時、最終アクティビティ、bookmark / tag / note、直接の子件数が欠落せず表示される
+- root から current までの connector / card accent は青、他経路はオレンジになり、通常 depth の parent 出口は共有幹線へ真下に接続する。sibling と孫が混在しても幹線が card 内部や別 card の裏へ入り込まず、深い階層でだけ card 回避の短い折れが出る
+- available card の hover / focus-within で枠、背景、影と移動 icon が強調され、icon の pointer active 中は押下状態が分かる。card 本体の click では移動せず、current、missing parent、省略 node は移動可能に見えない
+- 別 node の header 右端にある移動 icon から親、sibling、子、孫のセッションを開くと、既存 panel は reveal、未 open session は固定セッションタブとして開き、元 panel の scroll、検索、details state は変わらない。削除済み target、古い generation、未知 target は元 panel を閉じず、ローカライズしたエラーを表示する
+- Agent Runs ペインの幅変更は閉じて開き直しても維持され、Reload Window 後はペイン自体を自動で開かない。同一セッションの手動 reload と自動更新 `preserve` / `follow` では開いたペイン、tree scroll、focus nodeを可能な範囲で維持し、セッション切り替えや非 ready 状態では閉じる。Branch Navigation overlay、page search、session 再描画との切り替えで古い DOM、focus、resize stateが残らない
+- Codex / Claude の Branch Navigation overlay は同一セッションの手動 reload と自動更新 `preserve` / `follow` では開いた状態を維持し、最新 generation を current node 基準で再描画する。overlay 内の別セッションへの切り替え成功後は閉じ、後続navigationで勝手に再表示しない
+- History / Pinned / Searchのセッション右クリックとCommand Paletteに`Branch Navigationを表示`／`Agent Runsを表示`が出ず、現在のセッションビューのヘッダー／タイムライン操作は従来どおり利用できる。Codexサブエージェントの`親セッションを開く`は利用可能な場合だけ表示される
+- Claude user recordが短い単独`<local-command-stdout>`の場合は既定で閉じた出力カードになり、先頭以外に現れても通常user message番号、検索結果、preview、Resume、Handoff、Session Analysisのhuman messageへ混入しない。属性付き、複数block、通常文との混在、4,096文字超は通常textとして残る
+- Codex rate limitの`used_percent`が`12.5`のような有限な非負小数でもusage cardとSession Analysisへ保持され、負数、非有限値、unsafeな大きさは従来どおり不正値になる
+- Codex / Claude の Branch Navigation経路ツリーはrole、#番号、秒までのtimestampを省略せず表示し、anchorと分岐前補助行のtooltipでも同じ完全値を確認できる
+- Agent Runs を有効化した既存 cache では未確認 Codex entry だけを bounded scanし、完了後の通常起動では再走査しない。部分失敗後は未確認 entry だけを再試行し、History / Search / Session Analysis Index の既存結果を作り直さない
+- History Date Basis / History Title SourceなどのHistory関連設定変更とAgent Runs有効化を同時に適用しても、旧Indexの完了markerではreadyにせず、新設定のrefresh成功までloadingかつdisabledを維持する
+- Agent Runs ON中にsessions root / sourceなどのHistory関連設定を変更してreplacement refreshを失敗させても、旧badge、overlay、opaque targetが残らず、設定変更のない通常refreshでは開いたoverlayを維持する
 - `codexHistoryViewer.codex.archivedSessions.enabled = false` のとき、通常の Codex / Claude 履歴表示が従来通り動く
 - 有効な `cache.v9.json` がある通常起動では、History / Pinned / Status が cache から先に表示され、その後 background refresh 完了時に最新状態へ更新される
 - cache context が設定と一致しない場合や `Rebuild Cache` では、cache 即時表示を使わず従来通り最新 refresh を待つ
@@ -1492,10 +1834,10 @@ npm run package
 - アーカイブ表示を切り替えると、History / Pinned は再スキャンなしで即時に更新される
 - Search 結果がある状態でアーカイブ表示を切り替えると、最後の検索条件で再検索される
 - アーカイブ非表示時の Search は、表示される通常履歴 hit 数が `search.maxResults` に達する
-- archived Codex session の Markdown に `Location: Archived` が表示され、Chat では `Archived` 表示で通常履歴と区別できる
+- archived Codex session の Markdown に `Location: Archived` が表示され、セッションビューでは `Archived` 表示で通常履歴と区別できる
 - active Codex session の Markdown に `Location: Active` が表示される
-- archived Codex session の Chat では `Resume in Codex` の位置に `Move to Codex History` が表示される
-- active Codex session の Chat / 履歴 Webview には `Move to Archive` ボタンが表示されない
+- archived Codex session のセッションビューでは `Resume in Codex` の位置に `Move to Codex History` が表示される
+- active Codex session のセッションビュー / 履歴 Webview には `Move to Archive` ボタンが表示されない
 - active Codex session の右クリックメニューには `Move to Archive` だけが表示され、`Move to Codex History` は表示されない
 - archived Codex session の右クリックメニューには `Move to Codex History` だけが表示され、`Move to Archive` は表示されない
 - `Move to Archive` / `Move to Codex History` はカスタムタイトル系 action の下に区切って表示され、Delete はさらに下に区切って表示される
@@ -1512,14 +1854,14 @@ npm run package
 - archive / unarchive / pin reconcile 後に、annotation / bookmark / chat open position が可能な範囲で新 path へ移行される
 - active で付けたしおりは archive / unarchive 後も同じカードのしおりとして表示される
 - archived 側で付けたしおりは `Move to Codex History` 後も同じカードのしおりとして表示される
-- `chat.openPosition = lastMessage` の archived Chat で `Move to Codex History` を実行した場合、復元後の Chat は操作直前に見ていた本文メッセージ付近へ移動する
+- `chat.openPosition = lastMessage` の archived セッションビューで `Move to Codex History` を実行した場合、復元後のセッションビューは操作直前に見ていた本文メッセージ付近へ移動する
 - Export した active / archived Codex Markdown transcript に `Location: Active` / `Location: Archived` が表示される
 - Codex source と archived sessions が有効な場合、Auto Refresh 有効時に archived root の `rollout-*.jsonl` 変更で履歴が更新される
 - `fileChangeHistory.explorerContextMenu.enabled = false` のとき、Explorer のファイル右クリックに `Show File AI Change History` が表示されない
 - History / Pinned のセッション右クリックで `Custom Title...` が表示され、QuickPick から設定 / 消去を選べる
 - カスタムタイトル未設定のセッションでは QuickPick に消去アクションが出ない
-- チャット履歴ビューアのピン留めボタン右にある pencil アイコンから、同じ QuickPick でカスタムタイトルを設定 / 消去できる
-- チャット履歴ビューアからカスタムタイトルを設定 / 消去した後、タブタイトルと History / Pinned / Search の表示が更新される
+- セッションビューのピン留めボタン右にある pencil アイコンから、同じ QuickPick でカスタムタイトルを設定 / 消去できる
+- セッションビューからカスタムタイトルを設定 / 消去した後、タブタイトルと History / Pinned / Search の表示が更新される
 - History / Pinned のプロジェクトノード右クリックで `Project Alias...` が表示され、QuickPick から設定 / 消去を選べる
 - CWD なしプロジェクトには `Project Alias...` が表示されない
 - プロジェクト別名は History / Pinned / Search / Status の表示に反映されるが、検索 hit 対象にはならない
@@ -1583,7 +1925,7 @@ npm run package
 - 拡大レンズ内へポインタを移しても tooltip が二重表示されない
 - 拡大レンズ内で user だけが並ばず、通常 item / しおり / 現在位置も確認できる
 - `chat.performanceMode = auto` で大きい履歴が `simplified` として表示される
-- チャットヘッダーのパフォーマンスモードボタンで、この画面だけ `auto` / `normal` / `simplified` を切り替えられる
+- セッションビューのヘッダーにあるパフォーマンスモードボタンで、この画面だけ `auto` / `normal` / `simplified` を切り替えられる
 - `simplified` では diff entry を開くまで重い diff 本文が描画されない
 - 長い履歴のタブを切り替えて戻っても、本文領域の一瞬の縮小表示が restore cover で見えにくい
 - Codex のみ有効 / Claude のみ有効 / 両方有効で履歴が正しく出る
@@ -1606,9 +1948,9 @@ npm run package
 - `History` の More Actions から、開始日時 / 最終メッセージ日時 / 名前の昇順 / 降順を切り替えられ、現在値には `（現在）` が表示される
 - Date Basis と日付系 sort 軸が異なる場合、History / Pinned の session row は sort 軸の日時を表示し、tooltip は Date Basis 側の日時を補足する。`titleOnly` は Date Basis 側のみ、`compact` / `full` は両方の日時を表示する
 - `History` の More Actions では、ソースが 1 種類だけ有効な場合に source 選択が表示されず、ソースが `Claude Code` の場合に archive 表示 group が表示されない
-- `History` のプロジェクト表示を `一覧表示` / `プロジェクト別表示` で切り替えられ、対象範囲を `すべて` / `現在のプロジェクトグループ` で切り替えられる
+- `History`のプロジェクト表示を`一覧表示` / `プロジェクト別表示`で切り替えられ、対象範囲を`すべて` / `現在のプロジェクトグループ`で切り替えられる。Reload後も対象範囲のアイコン、More Actionsの現在値、実際の`ProjectSelection`が一致する
 - `History` の `プロジェクト別表示` で、`セッション一覧` と `日付別` の階層がそれぞれ期待どおりになる
-- `History` の絞り込み解除は、非絞り込み時に disabled 表示になり、日付 / プロジェクト CWD / ソース / アーカイブ表示 / タグを解除して、プロジェクト表示と対象範囲は解除しない
+- `History`の絞り込み解除は、対象範囲以外が非絞り込みならdisabled表示になり、日付 / 明示project selection / ソース / アーカイブ表示 / タグを解除して、プロジェクト表示と対象範囲は解除しない。対象範囲がcurrent groupなら裏付けselectionも維持する
 - `Pinned` のプロジェクト表示を `一覧表示` / `プロジェクト別表示` で切り替えられ、対象範囲を `すべて` / `現在のプロジェクトグループ` で切り替えられる。History のプロジェクト表示には影響しない
 - `Pinned` の日付 / プロジェクト / ソース / アーカイブ表示 / タグ絞り込みが期待どおり動き、History / Search 側の絞り込みに影響しない
 - `Pinned` のソース切替を `all` / `codex` / `claude` で切り替えられ、History 側のソース切替に影響しない
@@ -1618,7 +1960,7 @@ npm run package
 - `Pinned` のプロジェクト tooltip は、表示順に応じた代表日時を `ピン留め日時` / `セッション日時` として表示する
 - `Pinned` の絞り込み解除は日付 / プロジェクト / ソース / アーカイブ表示 / タグを解除し、プロジェクト表示、対象範囲、表示順は維持する
 - `History` の再読み込み、`Pinned` の再読み込み、`Search` の `Rerun Search` が、それぞれセッションのエクスポートのすぐ左に表示される
-- History / Pinned の右クリックから QuickPick 経由でカスタムタイトルを設定 / 消去でき、History / Pinned / チャット Webview タイトルへ反映される
+- History / Pinned の右クリックから QuickPick 経由でカスタムタイトルを設定 / 消去でき、History / Pinned / セッション Webview タイトルへ反映される
 - カスタムタイトルがあるセッションの詳細ツールチップにオリジナルタイトルが表示される
 - 121 文字以上のカスタムタイトル入力ではエラーになり、保存されない
 - History / Pinned のプロジェクトノード右クリックからプロジェクト別名を設定 / 消去でき、Project 見出し、session description、tooltip、filter 表示、Status、Search scope / session 表示へ反映される
@@ -1635,13 +1977,13 @@ npm run package
 - `preview.tooltipMode` を `full` / `compact` / `titleOnly` で切り替えると、ツリー項目ツールチップの表示量が変わる
 - `full` / `compact` のツールチップでは、カスタムタイトルがなくても履歴ペイン表示と同じタイトルが表示される
 - 履歴の自動更新設定が有効なとき、履歴ファイル作成 / 変更 / 削除で History が自動更新される
-- 履歴の自動更新設定が有効なとき、チャットヘッダーに自動更新ボタンが表示される
-- 新規チャットタブ、または再利用タブで別セッションへ切り替えたチャットタブは、自動更新が `off` で始まる
-- 同じセッションの既存チャットタブを再表示した場合、自動更新モードが維持される
-- チャットタブの自動更新ボタンで `off` / `preserve` / `follow` が循環し、ボタン色と tooltip が切り替わる
-- 自動更新オンのチャットタブが開いているとき、History view が非表示でも対象チャットタブが自動更新される
-- 自動更新オンのチャットタブが裏タブでも、VS Code ウィンドウがフォーカス中なら更新される
-- History view が非表示かつ自動更新オンのチャットタブが開いていないとき、自動更新は保留される
+- 履歴の自動更新設定が有効なとき、セッションビューのヘッダーに自動更新ボタンが表示される
+- 新規セッションタブ、または再利用タブで別セッションへ切り替えたタブは、自動更新が `off` で始まる
+- 同じセッションの既存タブを再表示した場合、自動更新モードが維持される
+- セッションタブの自動更新ボタンで `off` / `preserve` / `follow` が循環し、ボタン色と tooltip が切り替わる
+- 自動更新オンのセッションタブが開いているとき、History view が非表示でも対象タブが自動更新される
+- 自動更新オンのセッションタブが裏タブでも、VS Code ウィンドウがフォーカス中なら更新される
+- History view が非表示かつ自動更新オンのセッションタブが開いていないとき、自動更新は保留される
 - VS Code ウィンドウが非フォーカスのとき、自動更新は保留され、フォーカス復帰時に 1 回だけ反映される
 - 起動直後の初回履歴ロード中、History に読み込み中ノードが表示され、ロード完了後に実データまたは空状態案内へ切り替わる
 - 起動直後の初回履歴ロード中、Pinned に読み込み中ノードが表示され、ロード完了後に実データ、欠損ピン、またはドロップ案内へ切り替わる
@@ -1663,14 +2005,14 @@ npm run package
 - Codex の `custom_tool_call` に patch / diff 本文が含まれる場合、対象ファイルパスは検索にヒットし、diff 本文の具体行は検索にヒットしない
 - `toolCallsAndOutputs` でも Codex の `custom_tool_call_output` の stdout / stderr 全文や diff 本文は検索インデックスへ入らない
 - `search.indexToolContent` 変更時に検索インデックス再作成の通知が出て、`Rebuild Search Index` で検索インデックスだけ再作成できる
-- `Rebuild Cache` 実行前に確認が出て、履歴キャッシュと検索インデックスが再作成される
+- `Rebuild Cache` 実行前に確認が出て、履歴キャッシュ、検索インデックス、Session Analysis Index が同じ履歴集合から順番に再作成される。開始時snapshotが完了時にもcurrentであり、再作成全体が成功した場合だけ、開いている History Insights と Branch Navigation へ再作成結果が反映される
 - 破損した `cache.v9.json` がある状態で起動 / refresh すると、parse error として削除され、履歴キャッシュが再生成される
 - 破損した `search-index.v2.json` がある状態で検索すると、parse error として削除され、検索インデックスが再構築される
 - `Delete` 実行後に `undo-delete` / `deleted` の扱いと `Undo Last Action` が整合する
-- `Delete` 後に該当チャットパネルが閉じ、存在しないセッションを開こうとしてもゴーストパネルが残らない
+- `Delete` 後に該当セッションパネルが閉じ、存在しないセッションを開こうとしてもゴーストパネルが残らない
 - Undo 付き通知のボタンと Undo 完了メッセージが `ui.language` に応じて表示される
 - `Empty Trash` 実行後に Status のゴミ箱件数が 0 になり、旧世代キャッシュも削除される
-- `Empty Trash` 実行後も現行の `cache.v9.json` / `search-index.v2.json` は削除されず、旧世代の `cache.v*.json` / `search-index.v*.json` と 1 時間以上古い `*.tmp-*.json` だけが削除される
+- `Empty Trash` 実行後も現行の `cache.v9.json` / `search-index.v2.json` / `session-analysis-index.v1.json` は削除されず、旧世代の `cache.v*.json` / `search-index.v*.json` / `session-analysis-index.v*.json` と 1 時間以上古い `*.tmp-*.json` だけが削除される
 - Control ビューと Command Palette に `Debug Info (Copy)` が出ない
 - `debug.logging.enabled` を `true` にすると OutputChannel に履歴 refresh / 検索インデックスの診断ログが出る
 - 診断ログにセッションパス、セッションID、メッセージ本文が含まれない
@@ -1679,20 +2021,20 @@ npm run package
 - Import / Export が両ソースで正しく動く
 - Markdown transcript にローカルパスが含まれるため、共有前確認が必要なことを案内できている
 - `history.dateBasis` を `started` / `lastActivity` で切り替えると履歴ツリーの日付グループが正しく変わる
-- `chat.openPosition = top` のとき、移動先指定のないチャット表示が先頭から開く
+- `chat.openPosition = top` のとき、移動先指定のないセッションタイムライン表示が先頭から開く
 - `chat.openPosition = lastMessage` のとき、同じセッションを開き直すと最後に見ていたメッセージ付近へ戻る
-- `chat.openPosition = latest` のとき、移動先指定のないチャット表示が最新の描画済み visual target から開く。折りたたみ中の turn は勝手に展開されない
+- `chat.openPosition = latest` のとき、移動先指定のないセッションタイムライン表示が最新の描画済み visual target から開く。折りたたみ中の turn は勝手に展開されない
 - 保存位置がない場合、または保存位置が現在の詳細表示設定で表示される先頭メッセージの場合は、タグ / メモカードが見えるスクロール最上部から開く
 - `chat.openPosition = lastMessage` で tool / usage / diff など本文メッセージが画面内にない位置を最後に見ていた位置として保存した場合、開き直し時は直前の描画済み本文メッセージ付近、直前がなければ先頭へ戻る
 - `chat.openPosition = lastMessage` で保存済みの本文メッセージが現在の表示条件で描画されない場合、直前の描画済み本文メッセージへ戻り、直前がなければ先頭から開く
 - ツリー選択で同じセッションの `session` タブが開いている場合、そのタブがアクティブになり、`reusable` タブは差し替わらない
 - ツリー選択で同じセッションの `reusable` タブだけが開いている場合、そのタブがアクティブになる
-- 別タブ表示中に、既に選択されている履歴行を再クリックしても、同じセッションの既存チャットタブがアクティブになる
-- メニューからチャットを開くと、未オープンのセッションは `session` タブとして開く
-- メニューからチャットを開くと、同じセッションの `session` / `reusable` タブが既にあれば既存タブがアクティブになる
+- 別タブ表示中に、既に選択されている履歴行を再クリックしても、同じセッションの既存タブがアクティブになる
+- メニューからセッションを開くと、未オープンのセッションは `session` タブとして開く
+- メニューからセッションを開くと、同じセッションの `session` / `reusable` タブが既にあれば既存タブがアクティブになる
 - `reusable` タブに表示中のセッションをメニューから開いた後、別履歴をツリー選択すると新しい `reusable` タブが使われ、昇格済みタブは差し替わらない
 - `session` タブとして開いたセッションをツリー選択しても、`reusable` タブへ降格しない
-- チャット表示で `toolDisplayMode` を `detailsOnly` / `compactCards` で切り替えるとツール行の表示が変わる
+- セッションタイムライン表示で `toolDisplayMode` を `detailsOnly` / `compactCards` で切り替えるとツール行の表示が変わる
 - `userLongMessageFolding` / `assistantLongMessageFolding` が `off` / `auto` / `always` で期待どおり折りたたみ動作する
 - `Show details` ON 時は長文メッセージが常に全文表示になる
 - `Show details` OFF 時は usage 行が表示されない
@@ -1724,7 +2066,7 @@ npm run package
 - `A, B, A` のように同じ `turnId` が非連続に描画されても安定した run key により DOM id / `aria-controls` が衝突せず、collapse / expand が例外なく動く
 - live running 中だけ running anchored chip が表示され、完了 / 中断 / rollback / stale 化後には消える
 - running chip の `実行中` は `開始` / `完了` と同系統の pill として表示され、`経過 N` は `最終活動 ...` と同じ muted meta text 系の見た目になる
-- running chip の経過時間は `startedAtIso` からの差分として 1 秒程度で更新され、最終活動時刻は `updatedAtIso` が変わらない限り進まない
+- running chip の経過時間は `startedAtIso` からの差分として 1 秒程度で更新され、1時間以上でも秒まで表示される。最終活動時刻は `updatedAtIso` が変わらない限り進まない
 - running chip の `startedAtIso` が未来時刻で一時的に `経過` を表示できない場合でも、timer が停止せず、時計が追いついた後に reload なしで `経過` が表示される
 - running chip の経過時間更新で timeline 全体の再描画、scroll 位置の変化、anchored / fallback 判定のちらつきが起きない
 - `live` mode の running anchored chip は最後の意味ある表示カードの直後に、turn rail 基準の独立 anchored row として左寄せ表示され、card 内部や sticky user header 内に入らない
@@ -1743,7 +2085,7 @@ npm run package
 - `updatedAtIso` / `lastItemIndex` / `itemCount` 変化時だけ border glint が 1 回出て、枠全体が常時回転して見えない
 - `prefers-reduced-motion: reduce` では running chip の pulse / flash / border glint と running marker dot pulse が止まり、静的な running 表示として読める
 - 次の user card の上端が sticky 表示領域に到達した時点で、sticky user header が次の user に切り替わる
-- チャットのスクロールバーが固定ヘッダーの横ではなく、ヘッダー下のスクロール領域から始まる
+- セッションビューのスクロールバーが固定ヘッダーの横ではなく、ヘッダー下のスクロール領域から始まる
 - Codex / Claude の画像付きセッションで、対応画像がサムネイル表示される
 - Claude の PDF document が document card として表示され、本文に混ざらない
 - Claude の text document が text document card として表示され、preview action icon から card 内 full-width preview を開閉できる
@@ -1820,8 +2162,8 @@ npm run package
 - Webview 内検索の幅をドラッグで狭めた状態でウィンドウ幅を 860px 以下に縮めても、検索パネルが現在幅より広がらず、リサイズハンドルで幅を変更できる
 - 極端に狭い viewport でも検索パネルが画面外にはみ出さず、検索 input / close button を操作できる
 - 未入力・一致なし時ともにカウントが `0/0` と表示される
-- チャットヘッダーの先頭・末尾ボタンで、実際に表示されている最初 / 最後の visual target へスクロールできる。先頭ボタンは上端余白を残して先頭 user card の sticky user header が不要に表示されない。末尾ボタンは折りたたみ中の turn を勝手に展開しない
-- 自動更新 `follow` で最新 turn の最後が patch group のとき、同じ turn 内の直前の非 patch group カードへ追従し、チャット末尾ボタンでは最後の描画済み diff / patch group card へ移動できる。live running marker / completed end marker が表示されている場合は、`follow` もそれらを優先できる
+- セッションビューのヘッダーにある先頭・末尾ボタンで、実際に表示されている最初 / 最後の visual target へスクロールできる。先頭ボタンは上端余白を残して先頭 user card の sticky user header が不要に表示されない。末尾ボタンは折りたたみ中の turn を勝手に展開しない
+- 自動更新 `follow` で最新 turn の最後が patch group のとき、同じ turn 内の直前の非 patch group カードへ追従し、セッションタイムライン末尾ボタンでは最後の描画済み diff / patch group card へ移動できる。live running marker / completed end marker が表示されている場合は、`follow` もそれらを優先できる
 - 末尾スクロール / `follow` 後も最後の card / marker が Webview 下端に貼り付かず、通常 card / diff card と running / completed / collapsed marker のそれぞれで小さな下端余白が残る
 - 自動更新 `follow` が pending のカードアンカー復元や reload 後のレイアウト更新に上書きされず、追従後の位置が最後に見ていた位置として保存される
 - `Show details` OFF のとき、描画されていない詳細カードへ先頭 / 末尾スクロールしない

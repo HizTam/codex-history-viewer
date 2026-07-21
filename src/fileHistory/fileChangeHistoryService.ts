@@ -17,12 +17,13 @@ import {
 } from "../services/bookmarkIdentity";
 import {
   detectClaudeMaterializedMessageRole,
+  extractClaudeLocalCommandOutputContent,
   extractClaudeRequestInterruptionContent,
   isCodexTurnAbortedContent,
 } from "../chat/chatAttachments";
 import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/projectPathMapper";
-import type { SearchIndexService } from "../services/searchIndexService";
+import type { SearchIndexReadSnapshot } from "../services/searchIndexService";
 import type { HistoryIndex, SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { formatYmdHmsInTimeZone, toYmdInTimeZone, ymdToString } from "../utils/dateUtils";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
@@ -151,11 +152,11 @@ export class FileChangeHistoryService {
 
   public buildCandidates(params: {
     index: HistoryIndex;
-    searchIndexService: SearchIndexService;
+    searchIndexSnapshot: SearchIndexReadSnapshot;
     target: FileChangeHistoryTarget;
     config: CodexHistoryViewerConfig;
   }): FileChangeHistoryCandidate[] {
-    const { index, searchIndexService, target, config } = params;
+    const { index, searchIndexSnapshot, target, config } = params;
     const candidates: FileChangeHistoryCandidate[] = [];
     const projectPathMappings = this.getProjectPathMappings(target);
 
@@ -164,8 +165,10 @@ export class FileChangeHistoryService {
       if (!isSessionAllowedForWorkspace(session, target.workspaceRoot, projectPathMappings)) continue;
 
       // Search index hits are ranking hints; raw session parsing is the source of truth.
-      const hintScore = scoreFileChangeHints(searchIndexService, session, target, projectPathMappings);
-      const fallbackScore = hintScore > 0 ? 0 : scoreSearchMessages(searchIndexService, session, target, projectPathMappings);
+      const hintScore = scoreFileChangeHints(searchIndexSnapshot, session, target, projectPathMappings);
+      const fallbackScore = hintScore > 0
+        ? 0
+        : scoreSearchMessages(searchIndexSnapshot, session, target, projectPathMappings);
       const matchScore = Math.max(hintScore, fallbackScore);
       candidates.push({ session, matchScore });
     }
@@ -399,6 +402,7 @@ async function parseClaudeSession(
 
       const rawContent = getClaudeMessageContent(obj);
       if (role === "user" && extractClaudeRequestInterruptionContent(rawContent)) continue;
+      if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) continue;
       const parsed = parseClaudeMessageContent(rawContent);
       if (normalizeWhitespace(parsed.messageText)) messageIndex += 1;
       const timestampIso = resolveClaudeDiffTimestamp(obj, session);
@@ -957,12 +961,12 @@ function toHistoryCard(
 }
 
 function scoreFileChangeHints(
-  searchIndexService: SearchIndexService,
+  searchIndexSnapshot: SearchIndexReadSnapshot,
   session: SessionSummary,
   target: FileChangeHistoryTarget,
   projectPathMappings: readonly ProjectPathMapping[],
 ): number {
-  const hints = searchIndexService.getFileChangeHints(session.cacheKey) ?? [];
+  const hints = searchIndexSnapshot.getFileChangeHints(session.cacheKey) ?? [];
   let score = 0;
   for (const hint of hints) {
     for (const hintPath of hint.paths) {
@@ -974,12 +978,12 @@ function scoreFileChangeHints(
 }
 
 function scoreSearchMessages(
-  searchIndexService: SearchIndexService,
+  searchIndexSnapshot: SearchIndexReadSnapshot,
   session: SessionSummary,
   target: FileChangeHistoryTarget,
   projectPathMappings: readonly ProjectPathMapping[],
 ): number {
-  const messages = searchIndexService.getMessages(session.cacheKey) ?? [];
+  const messages = searchIndexSnapshot.getMessages(session.cacheKey) ?? [];
   const needles = buildSearchNeedles(target, projectPathMappings);
   for (const message of messages) {
     if (message.source === "message") continue;

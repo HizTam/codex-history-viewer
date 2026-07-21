@@ -9,8 +9,11 @@ import type { ChatAttachment } from "../chat/chatTypes";
 import {
   buildAttachmentSummaryLines,
   detectClaudeMaterializedMessageRole,
+  extractClaudeLocalCommandOutputContent,
   extractClaudeMessageContent,
+  extractCodexCompactUserText,
   extractCodexMessageContent,
+  isCodexProtocolContextContent,
 } from "../chat/chatAttachments";
 
 type ResumeRole = "user" | "assistant";
@@ -146,19 +149,22 @@ async function collectCodexResumeMessage(
   const role = obj?.payload?.role;
   if (role !== "user" && role !== "assistant" && role !== "developer") return true;
 
-  const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false });
+  const content = obj?.payload?.content;
+  if (role === "user" && isCodexProtocolContextContent(content)) return true;
+
+  const extracted = await extractCodexMessageContent(content, undefined, { enabled: false });
   const textNormalized = normalizeWhitespace(extracted.text);
   const attachmentSummary = buildResumeAttachmentSummary(extracted.attachments);
   const combinedText = combineResumeText(attachmentSummary, textNormalized);
   if (!combinedText) return true;
 
   if (role === "user") {
-    const compactUserText = extractCompactUserText(textNormalized);
+    const compactUserText = extractCodexCompactUserText(content, textNormalized);
     const requestText =
       compactUserText ?? extractTaskSectionText(textNormalized) ?? extractUserRequestText(textNormalized) ?? textNormalized;
     const isContext = !compactUserText && extracted.attachments.length === 0;
     if (isContext && !includeContext) return true;
-    if (textNormalized) setTask(requestText);
+    if (!isContext && textNormalized) setTask(requestText);
     pushRecent(
       recent,
       {
@@ -201,7 +207,9 @@ async function collectClaudeResumeMessage(
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
-  const extracted = await extractClaudeMessageContent(getClaudeMessageContent(obj), undefined, { enabled: false }, { role });
+  const rawContent = getClaudeMessageContent(obj);
+  if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) return true;
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role });
   const textNormalized = normalizeWhitespace(extracted.text);
   const attachmentSummary = buildResumeAttachmentSummary(extracted.attachments);
   const combinedText = combineResumeText(attachmentSummary, textNormalized);

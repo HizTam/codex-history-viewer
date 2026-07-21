@@ -43,7 +43,11 @@ import {
   sessionDateLabelKeyForAxis,
   type SessionDateAxis,
 } from "./sessionTooltipUtils";
-import { matchProjectByCanonicalKey } from "../services/projectPathMapper";
+import {
+  matchProjectSelection,
+  projectSelectionFromCwds,
+  type ProjectSelection,
+} from "../types/projectSelection";
 import {
   appendAssociatedSourceLines,
   buildAssociatedSources,
@@ -51,6 +55,18 @@ import {
   buildProjectGroupTreeNodes,
   type ProjectGroupTreeBuildContext,
 } from "./projectGroupTreeBuilder";
+import {
+  dateScopeToHistoryInsightsDateRange,
+  historyInsightsDateRangeToDateScope,
+  matchesHistoryDateScope,
+} from "../insights/historyInsightsDateRange";
+import type {
+  HistoryInsightsCondition,
+  HistoryInsightsDateRange,
+  HistoryInsightsSnapshot,
+} from "../insights/historyInsightsTypes";
+import { CodexAgentRunsService } from "../agents/codexAgentRunsService";
+import { SessionIconResolver } from "../ui/sessionIconResolver";
 
 export type HistoryViewMode = "date" | "latest";
 export type HistorySortOrder =
@@ -93,21 +109,21 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private viewMode: HistoryViewMode;
   private filter: DateScope;
   private projectCwd: string | null;
-  private projectCwdKey: string | null = null;
   private projectScopeCwd: string | null;
-  private projectScopeCwdKey: string | null = null;
+  private projectSelection: ProjectSelection;
   private projectGrouped: boolean;
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
   private archiveLocationFilter: ArchiveLocationFilter;
   private sortOrder: HistorySortOrder;
   private initialLoadComplete = false;
-  private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
-  private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly codexAgentRuns: CodexAgentRunsService;
+  private readonly sessionIconResolver: SessionIconResolver;
   private readonly canonicalProjectKeyCache = new Map<string, string>();
   private filteredSessionsCache: SessionSummary[] | null = null;
   private sortedSessionsCache: SessionSummary[] | null = null;
   private projectSessionsByRelocationKey = new Map<string, SessionSummary[]>();
+  private insightsSnapshotGeneration = 0;
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   public readonly onDidChangeTreeData = this.emitter.event;
 
@@ -126,7 +142,9 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
     archiveLocationFilter: ArchiveLocationFilter,
-    extensionUri: vscode.Uri,
+    codexAgentRunsOrExtensionUri: CodexAgentRunsService | vscode.Uri,
+    sessionIconResolverOrProjectSelection?: SessionIconResolver | ProjectSelection,
+    projectSelection?: ProjectSelection,
   ) {
     this.historyService = historyService;
     this.pinStore = pinStore;
@@ -143,21 +161,24 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
     this.archiveLocationFilter = archiveLocationFilter;
-    this.codexIconPath = {
-      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
-      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-codex.svg"),
-    };
-    this.claudeIconPath = {
-      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-claude.svg"),
-      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-claude.svg"),
-    };
-    this.recomputeProjectFilterKeys();
+    if (isCodexAgentRunsService(codexAgentRunsOrExtensionUri)) {
+      this.codexAgentRuns = codexAgentRunsOrExtensionUri;
+      this.sessionIconResolver = sessionIconResolverOrProjectSelection as SessionIconResolver;
+    } else {
+      this.codexAgentRuns = new CodexAgentRunsService(historyService);
+      this.sessionIconResolver = new SessionIconResolver(codexAgentRunsOrExtensionUri);
+      projectSelection = sessionIconResolverOrProjectSelection as ProjectSelection | undefined;
+    }
+    this.projectSelection = projectSelection ?? projectSelectionFromCwds(
+      this.projectCwd,
+      this.projectScopeCwd,
+      (cwd) => this.getCanonicalProjectKey(cwd),
+    );
   }
 
   public refresh(): void {
     this.canonicalProjectKeyCache.clear();
     this.clearSessionDerivedCaches();
-    this.recomputeProjectFilterKeys();
     this.emitter.fire();
   }
 
@@ -192,7 +213,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
     this.canonicalProjectKeyCache.clear();
     this.clearSessionDerivedCaches();
-    this.recomputeProjectFilterKeys();
+    this.recomputeProjectSelection();
   }
 
   public setProjectScopeFilter(projectScopeCwd: string | null): void {
@@ -200,7 +221,17 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       typeof projectScopeCwd === "string" && projectScopeCwd.trim().length > 0 ? projectScopeCwd.trim() : null;
     this.canonicalProjectKeyCache.clear();
     this.clearSessionDerivedCaches();
-    this.recomputeProjectFilterKeys();
+    this.recomputeProjectSelection();
+  }
+
+  public setProjectSelection(projectSelection: ProjectSelection): void {
+    this.projectSelection = projectSelection;
+    this.projectCwd = projectSelection.kind === "groups" && projectSelection.groups.length === 1
+      ? projectSelection.groups[0]?.representativeCwd ?? null
+      : null;
+    this.projectScopeCwd = null;
+    this.canonicalProjectKeyCache.clear();
+    this.clearSessionDerivedCaches();
   }
 
   public setProjectGrouped(projectGrouped: boolean): void {
@@ -237,62 +268,140 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.setTagFilter(tagFilter);
   }
 
+  public setFilterState(
+    filter: DateScope,
+    projects: ProjectSelection,
+    sourceFilter: SessionSourceFilter,
+    tagFilter: readonly string[],
+    archiveLocationFilter: ArchiveLocationFilter,
+  ): void {
+    this.setFilter(filter);
+    this.setProjectSelection(projects);
+    this.setSourceFilter(sourceFilter);
+    this.setTagFilter(tagFilter);
+    this.setArchiveLocationFilter(archiveLocationFilter);
+  }
+
+  public createInsightsSnapshot(
+    dateTimeSettingsKey: string,
+    override?: HistoryInsightsDateRange | HistoryInsightsCondition,
+  ): HistoryInsightsSnapshot {
+    const config = getConfig();
+    const condition = isHistoryInsightsConditionOverride(override)
+      ? {
+          date: override.date,
+          dateRange: dateScopeToHistoryInsightsDateRange(override.date),
+          projects: override.projects,
+          source: normalizeSourceFilter(override.source),
+          tags: normalizeTagFilter(override.tags),
+          archiveLocation: override.archiveLocation,
+        }
+      : {
+          date: override ? historyInsightsDateRangeToDateScope(override) : this.filter,
+          dateRange: override ?? dateScopeToHistoryInsightsDateRange(this.filter),
+          projects: this.projectSelection,
+          source: this.sourceFilter,
+          tags: this.tagFilter,
+          archiveLocation: this.archiveLocationFilter,
+        };
+    const sessions = this.historyService.getIndex().sessions.filter(
+      (session) =>
+        matchesArchiveLocation(session, condition.archiveLocation) &&
+        matchProjectSelection(session.meta?.cwd, condition.projects, (cwd) => this.getCanonicalProjectKey(cwd)) &&
+        matchesSourceFilter(session, condition.source) &&
+        matchesTagFilter(session, condition.tags, this.annotationStore) &&
+        matchesHistoryDateScope(session.localDate, condition.date),
+    );
+    const references = sessions.map((session) => {
+      const cwd = getSessionCwd(session);
+      const projectKey = cwd ? this.getRelocationProjectKey(cwd) : "";
+      const displayCwd = this.getProjectDisplayCwd(cwd);
+      const projectLabel = this.projectAliasStore.getAliasByCwd(displayCwd) ?? buildProjectLabel(displayCwd);
+      return {
+        cacheKey: session.cacheKey,
+        identityKey: session.identityKey,
+        bucketLocalDate: session.localDate,
+        source: session.source,
+        projectKey,
+        projectLabel,
+      };
+    });
+    const sourceLabel =
+      condition.source === "codex"
+        ? t("history.filter.source.codex")
+        : condition.source === "claude"
+          ? t("history.filter.source.claude")
+          : t("history.filter.source.all");
+    const chips = [
+      t("historyInsights.filter.source", sourceLabel),
+      t("historyInsights.filter.date", formatInsightsDateRangeLabel(condition.dateRange)),
+      t("historyInsights.filter.location", t(`archiveLocation.${condition.archiveLocation}`)),
+    ];
+    const formatProject = (cwd: string): string => {
+      const displayCwd = this.getProjectDisplayCwd(cwd);
+      return this.projectAliasStore.getAliasByCwd(displayCwd) ?? buildProjectLabel(displayCwd);
+    };
+    if (condition.projects.kind === "none") chips.push(t("historyInsights.filter.project", t("historyInsights.filterProjectsNone")));
+    if (condition.projects.kind === "groups") {
+      const projectLabel = condition.projects.groups.length === 1
+        ? formatProject(condition.projects.groups[0]!.representativeCwd)
+        : t("historyInsights.filterProjectGroupCount", condition.projects.groups.length);
+      chips.push(t("historyInsights.filter.project", projectLabel));
+    }
+    if (condition.tags.length > 0) chips.push(t("historyInsights.filter.tags", condition.tags.map((tag) => `#${tag}`).join(", ")));
+    this.insightsSnapshotGeneration += 1;
+    return {
+      id: `history-${Date.now().toString(36)}-${this.insightsSnapshotGeneration.toString(36)}`,
+      createdAtIso: new Date().toISOString(),
+      generation: this.insightsSnapshotGeneration,
+      dateBasis: config.historyDateBasis,
+      dateTimeSettingsKey,
+      references,
+      descriptor: {
+        date: condition.date,
+        dateRange: condition.dateRange,
+        source: condition.source,
+        projects: condition.projects,
+        tags: condition.tags.slice(),
+        archiveLocation: condition.archiveLocation,
+        viewMode: this.viewMode,
+        sortOrder: this.sortOrder,
+        projectGrouped: this.projectGrouped,
+        chips,
+      },
+    };
+  }
+
   private matchesProject(session: SessionSummary): boolean {
-    return matchProjectByCanonicalKey(session.meta?.cwd, {
-      projectKey: this.projectCwdKey,
-      projectScopeKey: this.projectScopeCwdKey,
-    }, (cwd) => this.getCanonicalProjectKey(cwd));
+    return matchProjectSelection(session.meta?.cwd, this.projectSelection, (cwd) => this.getCanonicalProjectKey(cwd));
   }
 
   private matchesTags(session: SessionSummary): boolean {
-    if (this.tagFilter.length === 0) return true;
-    const ann = this.annotationStore.get(session.fsPath);
-    if (!ann || ann.tags.length === 0) return false;
-    const tagKeys = new Set(ann.tags.map((tag) => normalizeTagKey(tag)));
-    return this.tagFilter.some((tag) => tagKeys.has(normalizeTagKey(tag)));
+    return matchesTagFilter(session, this.tagFilter, this.annotationStore);
   }
 
   private matchesDateFilter(session: SessionSummary): boolean {
-    const filter = this.filter;
-    switch (filter.kind) {
-      case "all":
-        return true;
-      case "year":
-        return session.localDate.startsWith(`${filter.yyyy}-`);
-      case "month":
-        return session.localDate.startsWith(`${filter.ym}-`);
-      case "day":
-        return session.localDate === filter.ymd;
-      default:
-        return false;
-    }
+    return matchesHistoryDateScope(session.localDate, this.filter);
   }
 
   private matchesSession(session: SessionSummary): boolean {
     return (
-      this.matchesArchiveVisibility(session) &&
-      this.matchesDateFilter(session) &&
-      this.matchesProject(session) &&
-      this.matchesSource(session) &&
-      this.matchesTags(session)
+      this.codexAgentRuns.isHistorySessionVisible(session) &&
+      this.matchesSessionWithoutDate(session) &&
+      this.matchesDateFilter(session)
     );
   }
 
+  private matchesSessionWithoutDate(session: SessionSummary): boolean {
+    return this.matchesArchiveVisibility(session) && this.matchesProject(session) && this.matchesSource(session) && this.matchesTags(session);
+  }
+
   private matchesSource(session: SessionSummary): boolean {
-    if (this.sourceFilter === "all") return true;
-    return session.source === this.sourceFilter;
+    return matchesSourceFilter(session, this.sourceFilter);
   }
 
   private matchesArchiveVisibility(session: SessionSummary): boolean {
-    switch (this.archiveLocationFilter) {
-      case "all":
-        return true;
-      case "archivedOnly":
-        return session.source === "codex" && session.storage.archiveState === "archived";
-      case "activeOnly":
-      default:
-        return session.storage.archiveState !== "archived";
-    }
+    return matchesArchiveLocation(session, this.archiveLocationFilter);
   }
 
   private buildNoHistoryNodes(): HistoryEmptyNode[] {
@@ -421,13 +530,31 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const annotation = this.annotationStore.get(session.fsPath);
     const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(session));
     const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
-    item.description = buildSessionDescription(session, annotation?.tags ?? [], projectAlias, projectDisplayCwd);
-    item.contextValue = toTreeItemContextValue(node);
+    const config = getConfig();
+    const agentPresentation = config.agentRunsEnabled && session.source === "codex"
+      ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent"))
+      : undefined;
+    item.description = buildSessionDescription(
+      session,
+      annotation?.tags ?? [],
+      projectAlias,
+      projectDisplayCwd,
+      agentPresentation,
+    );
+    item.contextValue = toTreeItemContextValue(
+      node,
+      agentPresentation?.relation,
+      Boolean(agentPresentation?.parentSession),
+    );
     // Show source-specific icons (Codex/Claude) in the list row.
-    item.iconPath = this.resolveSourceIconPath(session.source);
+    item.iconPath = this.sessionIconResolver.resolve(
+      session,
+      config.agentRunsEnabled && this.codexAgentRuns.isPresentationEnabled(),
+      agentPresentation?.relation,
+    );
 
     // Clicking the title opens the reusable viewer or a session tab depending on the preview setting.
-    const previewOnSelection = getConfig().previewOpenOnSelection;
+    const previewOnSelection = config.previewOpenOnSelection;
     item.command = {
       command: previewOnSelection ? "codexHistoryViewer.openSessionReusable" : "codexHistoryViewer.openSession",
       title: "",
@@ -439,11 +566,12 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       annotation: annotation ? { tags: annotation.tags, note: annotation.note } : null,
       label,
       description: typeof item.description === "string" ? item.description : undefined,
-      mode: getConfig().previewTooltipMode,
+      mode: config.previewTooltipMode,
       projectAlias,
       projectDisplayCwd,
       primaryDateTime: this.getSessionTooltipDateTime(session, dateAxis),
       primaryDateLabelKey: this.getSessionTooltipDateLabelKey(dateAxis),
+      agentPresentation,
     });
     return item;
   }
@@ -481,10 +609,6 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   private getDateBasisAxis(): SessionDateAxis {
     return getConfig().historyDateBasis === "lastActivity" ? "lastActivity" : "started";
-  }
-
-  private resolveSourceIconPath(source: SessionSummary["source"]): { light: vscode.Uri; dark: vscode.Uri } {
-    return source === "claude" ? this.claudeIconPath : this.codexIconPath;
   }
 
   private getFilteredSessions(): SessionSummary[] {
@@ -641,9 +765,12 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     return canonical;
   }
 
-  private recomputeProjectFilterKeys(): void {
-    this.projectCwdKey = this.projectCwd ? this.getCanonicalProjectKey(this.projectCwd) : null;
-    this.projectScopeCwdKey = this.projectScopeCwd ? this.getCanonicalProjectKey(this.projectScopeCwd) : null;
+  private recomputeProjectSelection(): void {
+    this.projectSelection = projectSelectionFromCwds(
+      this.projectCwd,
+      this.projectScopeCwd,
+      (cwd) => this.getCanonicalProjectKey(cwd),
+    );
   }
 
   private getRelocationProjectKey(cwd: string): string {
@@ -710,6 +837,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       const filter = this.filter;
       switch (filter.kind) {
         case "all":
+        case "range":
           return uniqueDateParts(sessions, "year").map((year) => new ProjectYearNode(element.key, year));
         case "year":
           return uniqueDateParts(sessions, "month").map((month) => new ProjectMonthNode(element.key, filter.yyyy, month));
@@ -825,10 +953,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const shouldFilterSessions =
       this.archiveLocationFilter !== "all" ||
       this.filter.kind !== "all" ||
-      !!this.projectCwd ||
-      !!this.projectScopeCwd ||
+      this.projectSelection.kind !== "all" ||
       this.sourceFilter !== "all" ||
-      this.tagFilter.length > 0;
+      this.tagFilter.length > 0 ||
+      this.codexAgentRuns.isPresentationEnabled();
     if (this.projectGrouped) {
       return this.buildProjectChildren(element, shouldFilterSessions);
     }
@@ -841,7 +969,8 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     if (!element) {
       const filter = this.filter;
       switch (filter.kind) {
-        case "all": {
+        case "all":
+        case "range": {
           const years = Array.from(idx.byY.keys()).sort((a, b) => (a < b ? 1 : -1));
           if (!shouldFilterSessions) return years.map((y) => new YearNode(y));
 
@@ -959,6 +1088,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 }
 
+function isCodexAgentRunsService(value: CodexAgentRunsService | vscode.Uri): value is CodexAgentRunsService {
+  return typeof (value as CodexAgentRunsService).getPresentation === "function";
+}
+
 function normalizeTagFilter(values: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -983,6 +1116,15 @@ function normalizeSourceFilter(value: SessionSourceFilter): SessionSourceFilter 
 
 function normalizeHistoryViewMode(value: HistoryViewMode): HistoryViewMode {
   return value === "latest" ? "latest" : "date";
+}
+
+function formatInsightsDateRangeLabel(range: HistoryInsightsDateRange): string {
+  if (!range.from && !range.to) return t("history.filter.all");
+  return t(
+    "historyInsights.filter.dateRangeValue",
+    range.from ?? t("historyInsights.filter.openStart"),
+    range.to ?? t("historyInsights.filter.openEnd"),
+  );
 }
 
 function normalizeHistorySortOrder(value: HistorySortOrder): HistorySortOrder {
@@ -1056,6 +1198,36 @@ function compareLabels(left: string, right: string): number {
 
 function compareStableSessionPath(left: SessionSummary, right: SessionSummary): number {
   return left.fsPath.localeCompare(right.fsPath);
+}
+
+function isHistoryInsightsConditionOverride(
+  value: HistoryInsightsDateRange | HistoryInsightsCondition | undefined,
+): value is HistoryInsightsCondition {
+  return Boolean(value && typeof value === "object" && "date" in value && "projects" in value);
+}
+
+function matchesSourceFilter(session: SessionSummary, source: SessionSourceFilter): boolean {
+  return source === "all" || session.source === source;
+}
+
+function matchesArchiveLocation(session: SessionSummary, archiveLocation: ArchiveLocationFilter): boolean {
+  if (archiveLocation === "all") return true;
+  if (archiveLocation === "archivedOnly") {
+    return session.source === "codex" && session.storage.archiveState === "archived";
+  }
+  return session.storage.archiveState !== "archived";
+}
+
+function matchesTagFilter(
+  session: SessionSummary,
+  tags: readonly string[],
+  annotationStore: SessionAnnotationStore,
+): boolean {
+  if (tags.length === 0) return true;
+  const annotation = annotationStore.get(session.fsPath);
+  if (!annotation || annotation.tags.length === 0) return false;
+  const annotationKeys = new Set(annotation.tags.map((tag) => normalizeTagKey(tag)));
+  return tags.some((tag) => annotationKeys.has(normalizeTagKey(tag)));
 }
 
 function getProjectParentKey(parentAssociation: ProjectParentAssociation | null): string | null {
@@ -1136,7 +1308,7 @@ function getSessionCwd(session: SessionSummary): string | null {
   return cwd.length > 0 ? cwd : null;
 }
 
-function buildProjectLabel(cwd: string | null): string {
+export function buildProjectLabel(cwd: string | null): string {
   if (!cwd) return t("tree.project.noCwd");
   const normalized = cwd.replace(/[\\/]+/g, path.sep);
   const base = path.basename(path.normalize(normalized)).trim();

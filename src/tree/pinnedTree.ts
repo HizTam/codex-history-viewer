@@ -12,7 +12,7 @@ import {
   getSessionDisplayDateSortKey,
   getSessionLastActivitySortKey,
 } from "../sessions/sessionSortKeys";
-import type { DateScope } from "../types/dateScope";
+import { matchesDateScope, type DateScope } from "../types/dateScope";
 import {
   HistoryEmptyNode,
   MissingPinnedNode,
@@ -48,6 +48,8 @@ import {
   compareProjectTreeNodes,
   type ProjectGroupTreeBuildContext,
 } from "./projectGroupTreeBuilder";
+import { CodexAgentRunsService } from "../agents/codexAgentRunsService";
+import { SessionIconResolver } from "../ui/sessionIconResolver";
 
 export type PinnedSortMode =
   | "pinnedAtDesc"
@@ -98,8 +100,8 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   private projectScopeCwdKey: string | null = null;
   private projectGrouped: boolean;
   private sortMode: PinnedSortMode;
-  private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
-  private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly codexAgentRuns: CodexAgentRunsService;
+  private readonly sessionIconResolver: SessionIconResolver;
   private readonly canonicalProjectKeyCache = new Map<string, string>();
   private visibleEntriesCache: PinnedVisibleEntry[] | null = null;
   private projectEntriesByRelocationKey = new Map<string, PinnedVisibleEntry[]>();
@@ -121,7 +123,8 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     projectScopeCwd: string | null,
     projectGrouped: boolean,
     sortMode: PinnedSortMode,
-    extensionUri: vscode.Uri,
+    codexAgentRunsOrExtensionUri: CodexAgentRunsService | vscode.Uri,
+    sessionIconResolver?: SessionIconResolver,
   ) {
     this.historyService = historyService;
     this.pinStore = pinStore;
@@ -137,14 +140,13 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       typeof projectScopeCwd === "string" && projectScopeCwd.trim().length > 0 ? projectScopeCwd.trim() : null;
     this.projectGrouped = projectGrouped;
     this.sortMode = normalizePinnedSortMode(sortMode);
-    this.codexIconPath = {
-      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
-      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-codex.svg"),
-    };
-    this.claudeIconPath = {
-      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-claude.svg"),
-      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-claude.svg"),
-    };
+    if (isCodexAgentRunsService(codexAgentRunsOrExtensionUri)) {
+      this.codexAgentRuns = codexAgentRunsOrExtensionUri;
+      this.sessionIconResolver = sessionIconResolver!;
+    } else {
+      this.codexAgentRuns = new CodexAgentRunsService(historyService);
+      this.sessionIconResolver = new SessionIconResolver(codexAgentRunsOrExtensionUri);
+    }
     this.recomputeProjectFilterKeys();
   }
 
@@ -237,19 +239,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   }
 
   private matchesDateFilter(session: SessionSummary): boolean {
-    const filter = this.filter;
-    switch (filter.kind) {
-      case "all":
-        return true;
-      case "year":
-        return session.localDate.startsWith(`${filter.yyyy}-`);
-      case "month":
-        return session.localDate.startsWith(`${filter.ym}-`);
-      case "day":
-        return session.localDate === filter.ymd;
-      default:
-        return false;
-    }
+    return matchesDateScope(session.localDate, this.filter);
   }
 
   private matchesArchiveVisibility(session: SessionSummary): boolean {
@@ -312,16 +302,34 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(element.session));
       const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
       const dateAxis = getSessionDateAxisForPinnedSortMode(this.sortMode);
+      const config = getConfig();
+      const agentPresentation = config.agentRunsEnabled && element.session.source === "codex"
+        ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"))
+        : undefined;
       const item = new vscode.TreeItem(
         `${formatSessionDateTimeForAxis(element.session, dateAxis)} ${shortTitle}`,
       );
-      item.description = buildSessionDescription(element.session, annotation?.tags ?? [], projectAlias, projectDisplayCwd);
-      item.contextValue = toTreeItemContextValue(element);
+      item.description = buildSessionDescription(
+        element.session,
+        annotation?.tags ?? [],
+        projectAlias,
+        projectDisplayCwd,
+        agentPresentation,
+      );
+      item.contextValue = toTreeItemContextValue(
+        element,
+        agentPresentation?.relation,
+        Boolean(agentPresentation?.parentSession),
+      );
       // Show source-specific icons (Codex/Claude) in the list row.
-      item.iconPath = this.resolveSourceIconPath(element.session.source);
+      item.iconPath = this.sessionIconResolver.resolve(
+        element.session,
+        config.agentRunsEnabled && this.codexAgentRuns.isPresentationEnabled(),
+        agentPresentation?.relation,
+      );
 
       // Clicking the title opens the reusable viewer or a session tab depending on the preview setting.
-      const previewOnSelection = getConfig().previewOpenOnSelection;
+      const previewOnSelection = config.previewOpenOnSelection;
       item.command = {
         command: previewOnSelection ? "codexHistoryViewer.openSessionReusable" : "codexHistoryViewer.openSession",
         title: "",
@@ -333,11 +341,12 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         annotation: annotation ? { tags: annotation.tags, note: annotation.note } : null,
         label: String(item.label ?? ""),
         description: typeof item.description === "string" ? item.description : undefined,
-        mode: getConfig().previewTooltipMode,
+        mode: config.previewTooltipMode,
         projectAlias,
         projectDisplayCwd,
         primaryDateTime: getPinnedSessionTooltipDateTime(element.session, dateAxis),
         primaryDateLabelKey: getPinnedSessionTooltipDateLabelKey(dateAxis),
+        agentPresentation,
       });
       return item;
     }
@@ -598,10 +607,10 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     return lines.join("\n");
   }
 
-  private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {
-    return source === "claude" ? this.claudeIconPath : this.codexIconPath;
-  }
+}
 
+function isCodexAgentRunsService(value: CodexAgentRunsService | vscode.Uri): value is CodexAgentRunsService {
+  return typeof (value as CodexAgentRunsService).getPresentation === "function";
 }
 
 function normalizePinnedSortMode(value: unknown): PinnedSortMode {

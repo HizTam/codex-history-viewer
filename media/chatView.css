@@ -216,10 +216,43 @@ body.restoreCoverActive #restoreCover {
   line-height: 0;
 }
 
+#toolbar #btnBranchMap,
+#toolbar #btnAgentRuns {
+  position: relative;
+  overflow: visible;
+}
+
+#toolbar .toolbarRelationCountBadge {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border: 1px solid var(--chv-bg);
+  border-radius: 999px;
+  background: var(--vscode-badge-background, var(--vscode-button-background));
+  color: var(--vscode-badge-foreground, var(--vscode-button-foreground));
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 12px;
+  pointer-events: none;
+}
+
 #toolbar .toolbarIconBtn svg {
   width: 16px;
   height: 16px;
   fill: currentColor;
+}
+
+body.vscode-high-contrast #toolbar .toolbarRelationCountBadge,
+body.vscode-high-contrast-light #toolbar .toolbarRelationCountBadge {
+  border-color: var(--vscode-contrastBorder, var(--chv-border));
 }
 
 #toolbar button:hover {
@@ -295,6 +328,14 @@ body.restoreCoverActive #restoreCover {
 }
 
 #btnAutoRefresh[hidden] {
+  display: none !important;
+}
+
+#btnBranchMap[hidden] {
+  display: none !important;
+}
+
+#btnAgentRuns[hidden] {
   display: none !important;
 }
 
@@ -1704,6 +1745,1510 @@ button.runningTurnChip:focus-visible {
   }
 }
 
+/* Branch Navigation is intentionally scoped to explicit controls. */
+.branchMessageWrapper {
+  display: grid;
+  grid-template-areas:
+    "rail"
+    "card";
+  width: fit-content;
+  max-width: min(900px, 92%);
+  min-width: 0;
+}
+
+.branchMessageWrapper:has(.bubble-wide) {
+  width: 100%;
+  max-width: 100%;
+}
+
+.branchMessageWrapper > .bubble {
+  grid-area: card;
+  width: 100%;
+  max-width: 100%;
+}
+
+.branchActionRail {
+  grid-area: rail;
+  justify-self: end;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 2px;
+  border: 1px solid var(--chv-border);
+  border-radius: 999px;
+  padding: 1px 3px;
+  background: color-mix(in srgb, var(--chv-bg) 82%, var(--chv-accent) 18%);
+  touch-action: pan-y;
+}
+
+.branchActionRail:focus-visible,
+.branchIconButton:focus-visible,
+.branchChoiceOption:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.branchIconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 4px;
+  padding: 4px;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.branchIconButton:hover:not(:disabled) {
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.branchIconButton:disabled {
+  cursor: wait;
+  opacity: .45;
+}
+
+.branchIconButton svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.branchControlPosition {
+  min-width: 92px;
+  text-align: center;
+  color: var(--chv-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.branchControlPositionButton {
+  min-height: 24px;
+  border: 0;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-family: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.branchControlPositionButton:hover:not(:disabled) {
+  color: var(--chv-fg);
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.branchControlPositionButton:disabled {
+  cursor: wait;
+  opacity: .45;
+}
+
+.branchChoiceMenu {
+  position: absolute;
+  top: calc(100% + 5px);
+  right: 0;
+  z-index: 120;
+  display: grid;
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(440px, 70vh);
+  overflow: auto;
+  border: 1px solid var(--vscode-menu-border, var(--chv-border));
+  border-radius: 7px;
+  padding: 4px;
+  background: var(--vscode-menu-background, var(--chv-bg));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .3);
+}
+
+.branchChoiceMenu-portal {
+  position: fixed;
+  top: auto;
+  right: auto;
+}
+
+.branchChoiceList {
+  width: min(480px, calc(100vw - 32px));
+  gap: 7px;
+}
+
+.branchChoiceGroup {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 78%, transparent);
+  border-radius: 7px;
+  background: var(--vscode-menu-background, var(--chv-bg));
+}
+
+.branchChoiceContext {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px 7px;
+  border-bottom: 1px solid color-mix(in srgb, var(--chv-border) 72%, transparent);
+  background: var(
+    --vscode-sideBarSectionHeader-background,
+    color-mix(in srgb, var(--vscode-menu-background, var(--chv-bg)) 94%, var(--chv-muted) 6%)
+  );
+  cursor: default;
+}
+
+.branchChoiceContextHeading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.branchChoiceNumber {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  min-height: 19px;
+  border: 1px solid color-mix(in srgb, var(--chv-muted) 48%, var(--chv-border));
+  border-radius: 999px;
+  padding: 0 7px;
+  color: var(--chv-muted);
+  background: color-mix(in srgb, var(--vscode-menu-background, var(--chv-bg)) 88%, transparent);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.branchChoiceContextMeta {
+  overflow: hidden;
+  color: var(--chv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.branchChoiceContextPreview {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.branchChoiceOptions {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  padding: 5px 5px 6px 20px;
+}
+
+.branchChoiceOptions::before {
+  position: absolute;
+  top: 0;
+  bottom: 10px;
+  left: 10px;
+  width: 1px;
+  background: color-mix(in srgb, var(--chv-muted) 42%, transparent);
+  content: "";
+}
+
+.branchChoiceOption {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 6px 7px;
+  color: var(--vscode-menu-foreground, var(--chv-fg));
+  font-family: inherit;
+  text-align: left;
+  background: transparent;
+  cursor: default;
+}
+
+.branchChoiceOption::before {
+  position: absolute;
+  top: 50%;
+  left: -10px;
+  width: 9px;
+  height: 1px;
+  background: color-mix(in srgb, var(--chv-muted) 42%, transparent);
+  content: "";
+}
+
+.branchChoiceOption[data-interactive="true"] {
+  border-color: color-mix(in srgb, var(--chv-border) 58%, transparent);
+  background: color-mix(in srgb, var(--vscode-menu-background, var(--chv-bg)) 95%, var(--chv-fg) 5%);
+  cursor: pointer;
+}
+
+.branchChoiceOption[data-current="true"] {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder, var(--chv-accent)) 44%, var(--chv-border));
+  box-shadow: inset 3px 0 0 var(--vscode-focusBorder, var(--chv-accent));
+  background: color-mix(in srgb, var(--vscode-menu-selectionBackground, var(--chv-accent)) 15%, transparent);
+}
+
+.branchChoiceOption[data-interactive="true"]:hover {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder, var(--chv-accent)) 55%, var(--chv-border));
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+}
+
+.branchChoiceOptionContent {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.branchChoiceTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.branchChoiceOptionHeading,
+.branchChoiceFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.branchChoiceCurrent,
+.branchChoiceOrdinal {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder, var(--chv-accent)) 52%, var(--chv-border));
+  border-radius: 999px;
+  padding: 0 6px;
+  color: var(--chv-muted);
+  font-size: 9.5px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.branchChoiceCurrent {
+  color: var(--vscode-focusBorder, var(--chv-accent));
+}
+
+.branchChoiceMeta {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--chv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10px;
+}
+
+.branchChoiceAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder, var(--chv-accent)) 38%, var(--chv-border));
+  border-radius: 5px;
+  color: var(--vscode-focusBorder, var(--chv-accent));
+  background: color-mix(in srgb, var(--vscode-menu-background, var(--chv-bg)) 86%, var(--chv-accent) 14%);
+}
+
+.branchChoiceAction svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
+.branchChoiceOption[data-interactive="true"]:hover .branchChoiceAction,
+.branchChoiceOption[data-interactive="true"]:focus-visible .branchChoiceAction {
+  border-color: currentColor;
+  background: color-mix(in srgb, var(--vscode-menu-selectionBackground, var(--chv-accent)) 58%, transparent);
+}
+
+.branchChoiceStatuses {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--chv-muted);
+}
+
+.branchChoiceStatus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+
+.branchChoiceStatus svg {
+  width: 13px;
+  height: 13px;
+  fill: currentColor;
+}
+
+.branchChoicePartial {
+  margin: 0;
+  padding: 6px 9px;
+  color: var(--chv-muted);
+  font-size: 11px;
+}
+
+.branchChoicePreview {
+  color: var(--vscode-menu-foreground, var(--chv-fg));
+  font-family: inherit;
+  text-align: left;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.branchChoicePreview .branchChoiceContext {
+  cursor: default;
+}
+
+.branchChoicePreview:hover {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder, var(--chv-accent)) 62%, var(--chv-border));
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .36);
+}
+
+body.vscode-high-contrast .branchChoiceGroup,
+body.vscode-high-contrast-light .branchChoiceGroup,
+body.vscode-high-contrast .branchChoicePreview,
+body.vscode-high-contrast-light .branchChoicePreview,
+body.vscode-high-contrast .branchChoiceOption[data-interactive="true"],
+body.vscode-high-contrast-light .branchChoiceOption[data-interactive="true"],
+body.vscode-high-contrast .branchChoiceAction,
+body.vscode-high-contrast-light .branchChoiceAction {
+  border-color: var(--vscode-contrastBorder, var(--chv-border));
+}
+
+body.vscode-high-contrast .branchChoiceContext,
+body.vscode-high-contrast-light .branchChoiceContext {
+  border-bottom-color: var(--vscode-contrastBorder, var(--chv-border));
+}
+
+#toolbar #btnBranchMap[data-pending="true"] {
+  opacity: .72;
+}
+
+#toolbar #btnAgentRuns[data-pending="true"] {
+  opacity: .72;
+}
+
+#toolbar #btnAgentRuns[data-unavailable="true"] {
+  cursor: pointer;
+  opacity: .55;
+  color: var(--chv-muted);
+  border-color: var(--chv-border);
+  background: transparent;
+}
+
+#toolbar #btnAgentRuns[data-unavailable="true"]:hover {
+  opacity: .72;
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 34%, var(--chv-border));
+}
+
+#agentRunsOverlayRoot[hidden] {
+  display: none;
+}
+
+#agentRunsOverlayRoot {
+  position: fixed;
+  inset: 0;
+  z-index: 102;
+  display: flex;
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--vscode-editor-background) 34%, transparent);
+}
+
+.agentRunsOverlaySurface {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  box-sizing: border-box;
+  width: min(var(--chv-agent-runs-overlay-width, min(62vw, 1100px)), calc(100vw - 16px));
+  min-width: min(480px, calc(100vw - 16px));
+  height: 100%;
+  border-left: 1px solid var(--chv-border);
+  background: var(--vscode-editor-background);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, .28);
+}
+
+.agentRunsOverlaySurface.entering {
+  animation: agentRunsOverlayEnter 160ms ease-out;
+}
+
+.agentRunsOverlayResizeHandle {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 12px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.agentRunsOverlayResizeHandle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: color-mix(in srgb, var(--vscode-focusBorder) 38%, var(--chv-border));
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.agentRunsOverlayResizeHandle:hover::after,
+body.agentRunsOverlayResizing .agentRunsOverlayResizeHandle::after {
+  opacity: 1;
+}
+
+body.agentRunsOverlayResizing,
+body.agentRunsOverlayResizing * {
+  cursor: ew-resize !important;
+  user-select: none !important;
+}
+
+body.agentRunsOverlayResizing .agentRunsOverlaySurface {
+  will-change: width;
+}
+
+.agentRunsOverlayHeader {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--chv-toolbar-height, 44px);
+  border-bottom: 1px solid var(--chv-border);
+  padding: 7px 10px 7px 14px;
+  background: var(--vscode-editor-background);
+}
+
+.agentRunsOverlayHeading {
+  min-width: 0;
+}
+
+.agentRunsOverlayHeading h2 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.agentRunsOverlaySummary,
+.agentRunsOverlayWarning {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.agentRunsOverlaySummary {
+  color: var(--chv-muted);
+}
+
+.agentRunsOverlayWarning {
+  color: var(--vscode-inputValidation-warningForeground, var(--chv-fg));
+}
+
+.agentRunsOverlayActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.agentRunsIconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 5px;
+  color: var(--chv-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.agentRunsIconButton:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 34%, var(--chv-border));
+  color: var(--chv-fg);
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.agentRunsIconButton:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.agentRunsIconButton:disabled {
+  opacity: .4;
+  cursor: default;
+}
+
+.agentRunsIconButton svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.agentRunsTreeNodeMarker svg {
+  width: 16px;
+  height: 16px;
+  overflow: visible;
+}
+
+.agentRunsSourceIconDisc,
+.agentRunsSourceIconSatellite {
+  fill: color-mix(
+    in srgb,
+    currentColor 12%,
+    var(--vscode-editorWidget-background, var(--vscode-editor-background))
+  );
+  stroke: currentColor;
+}
+
+.agentRunsSourceIconGlyph {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agentRunsTreeViewport {
+  --agent-runs-route-current: var(--vscode-charts-blue, var(--vscode-focusBorder));
+  --agent-runs-route-alternate: var(--vscode-charts-orange, #d18616);
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--vscode-focusBorder) 3%, transparent), transparent 44%),
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--chv-border) 44%, transparent) 1px, transparent 0) 0 0 / 20px 20px,
+    var(--vscode-editor-background);
+}
+
+body.vscode-dark .agentRunsTreeViewport,
+body.vscode-high-contrast .agentRunsTreeViewport {
+  --agent-runs-route-current: color-mix(in srgb, var(--vscode-charts-blue, var(--vscode-focusBorder)) 86%, var(--vscode-editor-foreground));
+  --agent-runs-route-alternate: color-mix(in srgb, var(--vscode-charts-orange, #d18616) 86%, var(--vscode-editor-foreground));
+}
+
+body.vscode-light .agentRunsTreeViewport,
+body.vscode-high-contrast-light .agentRunsTreeViewport {
+  --agent-runs-route-current: color-mix(in srgb, var(--vscode-charts-blue, var(--vscode-focusBorder)) 78%, var(--vscode-editor-foreground));
+  --agent-runs-route-alternate: color-mix(in srgb, var(--vscode-charts-orange, #d18616) 78%, var(--vscode-editor-foreground));
+}
+
+.agentRunsTreeViewport:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.agentRunsTreeStage {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100%;
+  padding: 20px 18px 28px;
+}
+
+.agentRunsTreeConnectors,
+.agentRunsTreeNodeLayer {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.agentRunsTreeConnectors {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.agentRunsTreeNodeLayer {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.agentRunsTreeConnector {
+  fill: none;
+  stroke: var(--agent-runs-route-alternate);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.agentRunsTreeConnector.currentPath {
+  stroke: var(--agent-runs-route-current);
+  stroke-width: 3;
+}
+
+.agentRunsTreeNode {
+  position: relative;
+  box-sizing: border-box;
+  width: calc(100% - min(var(--agent-runs-node-indent, 0px), 34%));
+  min-width: 0;
+  margin-left: min(var(--agent-runs-node-indent, 0px), 34%);
+  border: 1px solid var(--chv-border);
+  border-left: 4px solid var(--agent-runs-route-alternate);
+  border-radius: 8px;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--vscode-editorWidget-background, var(--vscode-editor-background)) 96%, var(--chv-fg) 4%), var(--vscode-editorWidget-background, var(--vscode-editor-background)) 58%),
+    var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .18), inset 0 1px 0 color-mix(in srgb, var(--chv-fg) 5%, transparent);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.agentRunsTreeNode.currentPath:not(.current) {
+  border-left-width: 5px;
+  border-left-color: var(--agent-runs-route-current);
+}
+
+.agentRunsTreeNode.alternatePath {
+  border-left-color: var(--agent-runs-route-alternate);
+}
+
+.agentRunsTreeNode.current {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 82%, var(--chv-border));
+  border-left-color: var(--agent-runs-route-current);
+  box-shadow: 0 7px 22px color-mix(in srgb, var(--vscode-focusBorder) 20%, transparent), inset 0 1px 0 color-mix(in srgb, var(--chv-fg) 8%, transparent);
+}
+
+.agentRunsTreeNode:not(.unavailable):not(.omitted):hover,
+.agentRunsTreeNode:not(.unavailable):not(.omitted):focus-within {
+  border-top-color: color-mix(in srgb, var(--vscode-focusBorder) 46%, var(--chv-border));
+  border-right-color: color-mix(in srgb, var(--vscode-focusBorder) 46%, var(--chv-border));
+  border-bottom-color: color-mix(in srgb, var(--vscode-focusBorder) 46%, var(--chv-border));
+  box-shadow: 0 7px 20px rgba(0, 0, 0, .26), inset 0 1px 0 color-mix(in srgb, var(--chv-fg) 7%, transparent);
+}
+
+.agentRunsTreeNode.current:hover,
+.agentRunsTreeNode.current:focus-within {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 88%, var(--chv-border));
+  border-left-color: var(--agent-runs-route-current);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--vscode-focusBorder) 25%, transparent), inset 0 1px 0 color-mix(in srgb, var(--chv-fg) 9%, transparent);
+}
+
+.agentRunsTreeNode:has(.agentRunsTreeNodeOpen:active),
+.agentRunsTreeNode:has(.agentRunsTreeNodePin:active) {
+  border-top-color: var(--vscode-focusBorder);
+  border-right-color: var(--vscode-focusBorder);
+  border-bottom-color: var(--vscode-focusBorder);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .2), inset 0 1px 0 color-mix(in srgb, var(--chv-fg) 6%, transparent);
+}
+
+.agentRunsTreeNode.unavailable {
+  border-style: dashed;
+  border-left-width: 1px;
+  color: var(--chv-muted);
+}
+
+.agentRunsTreeNode.omitted {
+  min-height: 64px;
+  border-style: dashed;
+  border-left-width: 1px;
+  border-left-color: var(--chv-border);
+  color: var(--chv-muted);
+  background: color-mix(in srgb, var(--vscode-editorWidget-background, var(--vscode-editor-background)) 84%, transparent);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .12);
+}
+
+.agentRunsTreeNode.located {
+  animation: agentRunsLocateCurrent 820ms ease-out;
+}
+
+.agentRunsTreeNodePrimary {
+  display: grid;
+  gap: 5px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  border-radius: 7px;
+  padding: 9px 11px 10px;
+  color: var(--chv-fg);
+  text-align: left;
+  background: transparent;
+  font: inherit;
+}
+
+.agentRunsTreeNodePrimary:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.agentRunsTreeNodePrimary[aria-disabled="true"] {
+  cursor: default;
+}
+
+.agentRunsTreeNode.navigable:hover .agentRunsTreeNodePrimary,
+.agentRunsTreeNode.navigable:focus-within .agentRunsTreeNodePrimary {
+  background: color-mix(in srgb, var(--vscode-list-hoverBackground) 72%, transparent);
+}
+
+.agentRunsTreeNodeTop {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  min-height: 22px;
+  min-width: 0;
+}
+
+.agentRunsTreeNodeMarker {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--agent-runs-route-alternate);
+}
+
+.agentRunsTreeNodeMarker.subagent {
+  border: 1px solid color-mix(in srgb, currentColor 68%, var(--chv-border));
+  border-radius: 50%;
+}
+
+.agentRunsTreeNodeMarker.subagent svg {
+  width: 16px;
+  height: 16px;
+}
+
+.agentRunsTreeNode.currentPath .agentRunsTreeNodeMarker {
+  color: var(--agent-runs-route-current);
+}
+
+.agentRunsTreeNodeRole {
+  min-width: 0;
+  max-width: 42%;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 78%, transparent);
+  border-radius: 999px;
+  padding: 1px 5px;
+  color: color-mix(in srgb, var(--chv-fg) 78%, var(--chv-muted));
+  background: color-mix(in srgb, var(--vscode-badge-background, var(--chv-tool-bg)) 34%, transparent);
+  font-size: 9px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentRunsTreeNodeCurrent {
+  border: 1px solid color-mix(in srgb, var(--agent-runs-route-current) 58%, var(--chv-border));
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: var(--agent-runs-route-current);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.agentRunsTreeNodeTitle,
+.agentRunsTreeNodeSessionTitle,
+.agentRunsTreeNodeDateValue {
+  overflow-wrap: anywhere;
+}
+
+.agentRunsTreeNodeTitle {
+  color: var(--chv-fg);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.agentRunsTreeNodeTop > .agentRunsTreeNodeTitle {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.agentRunsTreeNodeSessionTitle {
+  display: block;
+  color: color-mix(in srgb, var(--chv-fg) 82%, var(--chv-muted));
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.agentRunsTreeNodeDates {
+  display: grid;
+  gap: 2px;
+  color: var(--chv-muted);
+  font-size: 10px;
+}
+
+.agentRunsTreeNodeDateRow {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+
+.agentRunsTreeNodeDateLabel {
+  color: var(--chv-muted);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.agentRunsTreeNodeDateValue {
+  color: color-mix(in srgb, var(--chv-fg) 78%, var(--chv-muted));
+  font-variant-numeric: tabular-nums;
+}
+
+.agentRunsTreeNodeBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.agentRunsTreeNodeBadge {
+  border: 1px solid color-mix(in srgb, var(--chv-border) 78%, transparent);
+  border-radius: 999px;
+  padding: 1px 6px;
+  color: var(--chv-muted);
+  background: color-mix(in srgb, var(--vscode-badge-background, var(--chv-tool-bg)) 42%, transparent);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.agentRunsTreeNodeActions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.agentRunsTreeNodeOpen,
+.agentRunsTreeNodePin {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 4px;
+  color: var(--chv-muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.agentRunsTreeNodeOpen:hover,
+.agentRunsTreeNodePin:hover {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 46%, var(--chv-border));
+  color: var(--chv-fg);
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.agentRunsTreeNode.navigable:hover .agentRunsTreeNodeOpen,
+.agentRunsTreeNode.navigable:focus-within .agentRunsTreeNodeOpen,
+.agentRunsTreeNode.pinnable:hover .agentRunsTreeNodePin:not([aria-pressed="true"]),
+.agentRunsTreeNode.pinnable:focus-within .agentRunsTreeNodePin:not([aria-pressed="true"]) {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 38%, var(--chv-border));
+  color: var(--chv-fg);
+  background: color-mix(in srgb, var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground)) 74%, transparent);
+}
+
+.agentRunsTreeNodeOpen:active,
+.agentRunsTreeNodePin:active {
+  border-color: var(--vscode-focusBorder);
+  color: var(--vscode-button-foreground, var(--chv-fg));
+  background: var(--vscode-button-background, var(--vscode-list-activeSelectionBackground));
+  transform: translateY(1px);
+}
+
+.agentRunsTreeNodeOpen:focus-visible,
+.agentRunsTreeNodePin:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.agentRunsTreeNodePin[aria-pressed="true"]:not(:active) {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 58%, var(--chv-border));
+  color: var(--vscode-button-foreground, var(--chv-fg));
+  background: color-mix(in srgb, var(--vscode-button-background, var(--vscode-list-activeSelectionBackground)) 76%, transparent);
+}
+
+.agentRunsTreeNodePin:disabled {
+  cursor: wait;
+  opacity: .7;
+}
+
+.agentRunsTreeNodeActionIcon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+}
+
+.agentRunsTreeNodeActionIcon svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+body.vscode-high-contrast .agentRunsOverlaySurface,
+body.vscode-high-contrast-light .agentRunsOverlaySurface,
+body.vscode-high-contrast .agentRunsTreeNode,
+body.vscode-high-contrast-light .agentRunsTreeNode {
+  border-color: var(--vscode-contrastBorder, var(--chv-border));
+}
+
+body.vscode-high-contrast .agentRunsTreeNode.currentPath,
+body.vscode-high-contrast-light .agentRunsTreeNode.currentPath,
+body.vscode-high-contrast .agentRunsTreeNode.current,
+body.vscode-high-contrast-light .agentRunsTreeNode.current {
+  border-left-color: var(--agent-runs-route-current);
+}
+
+body.vscode-high-contrast .agentRunsTreeNode.alternatePath,
+body.vscode-high-contrast-light .agentRunsTreeNode.alternatePath {
+  border-left-color: var(--agent-runs-route-alternate);
+}
+
+body.vscode-high-contrast .agentRunsTreeNodeOpen,
+body.vscode-high-contrast-light .agentRunsTreeNodeOpen,
+body.vscode-high-contrast .agentRunsTreeNodePin,
+body.vscode-high-contrast-light .agentRunsTreeNodePin {
+  border-color: var(--vscode-contrastBorder, var(--chv-border));
+}
+
+body.vscode-high-contrast .agentRunsTreeNode:not(.unavailable):not(.omitted):hover,
+body.vscode-high-contrast-light .agentRunsTreeNode:not(.unavailable):not(.omitted):hover,
+body.vscode-high-contrast .agentRunsTreeNode:not(.unavailable):not(.omitted):focus-within,
+body.vscode-high-contrast-light .agentRunsTreeNode:not(.unavailable):not(.omitted):focus-within {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+@keyframes agentRunsOverlayEnter {
+  from { transform: translateX(18px); opacity: .85; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes agentRunsLocateCurrent {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--vscode-focusBorder) 58%, transparent); }
+  45% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent), 0 8px 24px rgba(0, 0, 0, .26); }
+  100% { box-shadow: 0 0 0 0 transparent, 0 7px 22px color-mix(in srgb, var(--vscode-focusBorder) 20%, transparent); }
+}
+
+@media (max-width: 760px) {
+  .agentRunsOverlaySurface {
+    width: 100vw;
+    min-width: 0;
+  }
+
+  .agentRunsOverlayResizeHandle {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agentRunsOverlaySurface,
+  .agentRunsTreeNode.located {
+    animation: none;
+  }
+
+  .agentRunsTreeNode {
+    transition: none;
+  }
+}
+
+#toolbar #btnBranchMap[data-unavailable="true"] {
+  cursor: pointer;
+  opacity: .55;
+  color: var(--chv-muted);
+  border-color: var(--chv-border);
+  background: transparent;
+}
+
+#toolbar #btnBranchMap[data-unavailable="true"]:hover {
+  opacity: .72;
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 34%, var(--chv-border));
+}
+
+#branchOverlayRoot[hidden] {
+  display: none;
+}
+
+#branchOverlayRoot {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--vscode-editor-background) 34%, transparent);
+}
+
+.branchOverlaySurface {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  box-sizing: border-box;
+  width: min(var(--chv-branch-overlay-width, min(62vw, 1100px)), calc(100vw - 16px));
+  min-width: min(480px, calc(100vw - 16px));
+  height: 100%;
+  border-left: 1px solid var(--chv-border);
+  background: var(--vscode-editor-background);
+  box-shadow: -12px 0 32px rgba(0, 0, 0, .28);
+}
+
+.branchOverlaySurface.entering {
+  animation: branchOverlayEnter 160ms ease-out;
+}
+
+.branchOverlayResizeHandle {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 12px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.branchOverlayResizeHandle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: color-mix(in srgb, var(--vscode-focusBorder) 38%, var(--chv-border));
+  opacity: 0;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.branchOverlayResizeHandle:hover::after,
+body.branchOverlayResizing .branchOverlayResizeHandle::after {
+  opacity: 1;
+}
+
+body.branchOverlayResizing,
+body.branchOverlayResizing * {
+  cursor: ew-resize !important;
+  user-select: none !important;
+}
+
+body.branchOverlayResizing .branchOverlaySurface {
+  will-change: width;
+}
+
+.branchOverlayHeader {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--chv-toolbar-height, 44px);
+  border-bottom: 1px solid var(--chv-border);
+  padding: 7px 10px 7px 14px;
+  background: var(--vscode-editor-background);
+}
+
+.branchOverlayHeading {
+  min-width: 0;
+}
+
+.branchOverlayHeading h2 {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.branchOverlaySummary,
+.branchOverlayWarning {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.branchOverlaySummary {
+  color: var(--chv-muted);
+}
+
+.branchOverlayWarning {
+  color: var(--vscode-inputValidation-warningForeground, var(--chv-fg));
+}
+
+.branchOverlayActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.branchTreeViewport {
+  --branch-tree-route-current: var(--vscode-charts-blue, var(--vscode-focusBorder));
+  --branch-tree-route-alternate: var(--vscode-charts-orange, var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground)));
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  touch-action: none;
+  cursor: grab;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--vscode-focusBorder) 3%, transparent), transparent 44%),
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--chv-border) 44%, transparent) 1px, transparent 0) 0 0 / 20px 20px,
+    var(--vscode-editor-background);
+}
+
+body.vscode-dark .branchTreeViewport,
+body.vscode-high-contrast .branchTreeViewport {
+  --branch-tree-route-current: color-mix(in srgb, var(--vscode-charts-blue, var(--vscode-focusBorder)) 86%, var(--vscode-editor-foreground));
+  --branch-tree-route-alternate: color-mix(in srgb, var(--vscode-charts-orange, var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground))) 84%, var(--vscode-editor-foreground));
+}
+
+body.vscode-light .branchTreeViewport,
+body.vscode-high-contrast-light .branchTreeViewport {
+  --branch-tree-route-current: color-mix(in srgb, var(--vscode-charts-blue, var(--vscode-focusBorder)) 78%, var(--vscode-editor-foreground));
+  --branch-tree-route-alternate: color-mix(in srgb, var(--vscode-charts-orange, var(--vscode-editorWarning-foreground, var(--vscode-descriptionForeground))) 76%, var(--vscode-editor-foreground));
+}
+
+.branchTreeViewport.panning,
+.branchTreeViewport.panning * {
+  cursor: grabbing !important;
+  user-select: none !important;
+}
+
+.branchTreeViewport:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.branchTreeScaler {
+  position: relative;
+  min-width: 100%;
+  min-height: 100%;
+}
+
+.branchTreeStage {
+  position: relative;
+  transform-origin: 0 0;
+}
+
+.branchTreeConnectors,
+.branchTreeNodeLayer {
+  position: absolute;
+  inset: 0;
+}
+
+.branchTreeConnectors {
+  overflow: visible;
+  pointer-events: none;
+}
+
+.branchTreeConnector {
+  fill: none;
+  stroke: var(--branch-tree-route-alternate);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.branchTreeConnector.current {
+  stroke: var(--branch-tree-route-current);
+  stroke-width: 3;
+}
+
+.branchTreeJunction {
+  fill: var(--branch-tree-route-alternate);
+  stroke: var(--vscode-editor-background);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.branchTreeJunction.current {
+  fill: var(--branch-tree-route-current);
+}
+
+.branchTreeNode {
+  position: absolute;
+  box-sizing: border-box;
+  width: 260px;
+  min-height: 78px;
+  border: 1px solid var(--chv-border);
+  border-left: 4px solid color-mix(in srgb, var(--vscode-descriptionForeground) 80%, var(--chv-border));
+  border-radius: 10px;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--vscode-editorWidget-background, var(--vscode-editor-background)) 96%, var(--chv-fg) 4%), var(--vscode-editorWidget-background, var(--vscode-editor-background)) 58%),
+    var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  box-shadow: 0 5px 16px rgba(0, 0, 0, .22), inset 0 1px 0 color-mix(in srgb, var(--chv-fg) 5%, transparent);
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.branchTreeNode:hover {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 34%, var(--chv-border));
+  box-shadow: 0 7px 20px rgba(0, 0, 0, .26), inset 0 1px 0 color-mix(in srgb, var(--chv-fg) 7%, transparent);
+}
+
+.branchTreeNode.currentPath:not(.current) {
+  border-left-color: var(--branch-tree-route-current);
+}
+
+.branchTreeNode.current {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 82%, var(--chv-border));
+  border-left-color: var(--branch-tree-route-current);
+  box-shadow: 0 7px 22px color-mix(in srgb, var(--vscode-focusBorder) 20%, transparent), inset 0 1px 0 color-mix(in srgb, var(--chv-fg) 8%, transparent);
+}
+
+.branchTreeNode.located {
+  animation: branchLocateCurrent 820ms ease-out;
+}
+
+.branchTreeNode-collapsed {
+  min-height: 54px;
+  border-style: dashed;
+  border-left-width: 1px;
+  background: color-mix(in srgb, var(--vscode-editorWidget-background, var(--vscode-editor-background)) 84%, transparent);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .12);
+}
+
+.branchTreeNodePrimary {
+  display: grid;
+  gap: 5px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: inherit;
+  border: 0;
+  border-radius: 9px;
+  padding: 11px 76px 11px 12px;
+  color: var(--chv-fg);
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+
+.branchTreeNodePrimary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--vscode-list-hoverBackground) 72%, transparent);
+}
+
+.branchTreeNodePrimary:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.branchTreeNode-collapsed .branchTreeNodePrimary {
+  padding-right: 12px;
+}
+
+.branchTreeNode-collapsed .branchTreeNodePrimary:disabled {
+  cursor: wait;
+  opacity: .55;
+}
+
+.branchTreeNodePrimary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.branchTreeNodeBadges {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  min-height: 20px;
+}
+
+.branchTreeNodeMarker,
+.branchTreeNodeState {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 20px;
+  overflow: hidden;
+  border: 1px solid var(--chv-border);
+  border-radius: 999px;
+  padding: 0 7px;
+  color: var(--chv-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.branchTreeNodeState {
+  border-color: var(--branch-tree-route-current);
+  color: var(--chv-fg);
+  background: color-mix(in srgb, var(--vscode-focusBorder) 15%, transparent);
+  font-weight: 600;
+}
+
+.branchTreeNode.currentPath .branchTreeNodeMarker {
+  border-color: color-mix(in srgb, var(--branch-tree-route-current) 54%, var(--chv-border));
+}
+
+.branchTreeNodeAnchor,
+.branchTreeNodeBefore {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  color: var(--chv-muted);
+  text-overflow: clip;
+  white-space: normal;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+.branchTreeNodePreview {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  white-space: pre-wrap;
+  color: color-mix(in srgb, var(--chv-fg) 94%, var(--chv-muted));
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.branchTreeNode.previewExpanded .branchTreeNodePreview {
+  display: block;
+  max-height: min(44vh, 420px);
+  overflow: auto;
+}
+
+.branchTreeNodeActions {
+  position: absolute;
+  z-index: 2;
+  top: 7px;
+  right: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 82%, transparent);
+  border-radius: 6px;
+  padding: 1px;
+  background: color-mix(in srgb, var(--vscode-editorWidget-background, var(--vscode-editor-background)) 92%, transparent);
+  box-shadow: 0 2px 7px rgba(0, 0, 0, .14);
+}
+
+.branchTreeNodeActions .branchIconButton {
+  width: 23px;
+  height: 23px;
+  padding: 4px;
+}
+
+.branchTreeNavigateButton {
+  color: color-mix(in srgb, var(--vscode-focusBorder) 76%, var(--chv-fg));
+}
+
+.branchTreePreviewButton {
+  position: static;
+}
+
+.branchTreePreviewButton[hidden] {
+  display: none;
+}
+
+.branchOverlayState {
+  margin: 24px auto;
+  padding: 0 16px;
+  color: var(--chv-muted);
+  text-align: center;
+}
+
+#scrollRoot.branchEnterPrevious {
+  animation: branchEnterPrevious 180ms ease-out;
+}
+
+#scrollRoot.branchEnterNext {
+  animation: branchEnterNext 180ms ease-out;
+}
+
+#scrollRoot.branchEnterDirect {
+  animation: branchEnterDirect 140ms ease-out;
+}
+
+@keyframes branchOverlayEnter {
+  from { transform: translateX(18px); opacity: .85; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes branchEnterPrevious {
+  from { transform: translateX(-18px); opacity: .72; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes branchEnterNext {
+  from { transform: translateX(18px); opacity: .72; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes branchEnterDirect {
+  from { opacity: .72; }
+  to { opacity: 1; }
+}
+
+@keyframes branchLocateCurrent {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--vscode-focusBorder) 58%, transparent); }
+  45% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--vscode-focusBorder) 22%, transparent), 0 8px 24px rgba(0, 0, 0, .26); }
+  100% { box-shadow: 0 0 0 0 transparent, 0 7px 22px color-mix(in srgb, var(--vscode-focusBorder) 20%, transparent); }
+}
+
+@media (max-width: 760px) {
+  .branchOverlaySurface {
+    width: 100vw;
+    min-width: 0;
+  }
+
+  .branchOverlayResizeHandle {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .branchOverlaySurface,
+  .branchTreeNode.located,
+  #scrollRoot.branchEnterPrevious,
+  #scrollRoot.branchEnterNext,
+  #scrollRoot.branchEnterDirect {
+    animation: none;
+  }
+
+  .branchTreeNode {
+    transition: none;
+  }
+}
+
 @media (max-width: 640px) {
   .runningTurnAnchorRow {
     padding-inline: 0;
@@ -1763,6 +3308,78 @@ button.runningTurnChip:focus-visible {
 
 .row.systemEvent {
   justify-content: flex-start;
+}
+
+.row.protocolContext {
+  justify-content: flex-start;
+}
+
+.protocolContextCard {
+  width: min(720px, 92%);
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 82%, transparent);
+  border-left: 3px solid color-mix(in srgb, var(--chv-accent) 58%, var(--chv-border) 42%);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--chv-tool-bg) 78%, var(--chv-assistant-bg) 22%);
+  color: var(--chv-muted);
+  overflow: hidden;
+}
+
+.protocolContextSummary {
+  padding: 9px 10px;
+  color: var(--chv-fg);
+  cursor: pointer;
+  user-select: none;
+}
+
+.protocolContextSummaryText {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  max-width: calc(100% - 12px);
+  vertical-align: top;
+}
+
+.protocolContextTitle {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.protocolContextDescription {
+  color: var(--chv-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.protocolContextDetails[open] .protocolContextSummary {
+  border-bottom: 1px solid color-mix(in srgb, var(--chv-border) 78%, transparent);
+}
+
+.protocolContextBody {
+  max-height: min(55vh, 520px);
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--chv-code-bg) 82%, transparent);
+  color: var(--chv-fg);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.protocolContextActions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 8px 8px;
+}
+
+.protocolContextDetails:not([open]) + .protocolContextActions {
+  display: none;
 }
 
 .bubble {
@@ -2707,36 +4324,8 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
   background: color-mix(in srgb, var(--chv-code-bg) 70%, var(--chv-bg) 30%);
 }
 
-.messageAttachmentCard-pdf {
-  --chv-attachment-accent: var(--vscode-charts-red, #d73a49);
-}
-
-.messageAttachmentCard-word {
-  --chv-attachment-accent: var(--vscode-charts-blue, #2f6fda);
-}
-
-.messageAttachmentCard-excel {
-  --chv-attachment-accent: var(--vscode-charts-green, #2f8a53);
-}
-
-.messageAttachmentCard-powerpoint {
-  --chv-attachment-accent: var(--vscode-charts-orange, #c2642d);
-}
-
-.messageAttachmentCard-text {
-  --chv-attachment-accent: var(--vscode-charts-blue, #1f8a8a);
-}
-
-.messageAttachmentCard-code {
-  --chv-attachment-accent: var(--vscode-charts-purple, #7b61c8);
-}
-
-.messageAttachmentCard-archive {
-  --chv-attachment-accent: var(--vscode-charts-yellow, #9a7b17);
-}
-
-.messageAttachmentCard-image {
-  --chv-attachment-accent: var(--vscode-charts-purple, #b04f8f);
+.messageAttachmentCard.fileKind {
+  --chv-attachment-accent: var(--chv-file-kind-accent, var(--chv-accent));
 }
 
 .messageAttachmentCard-selection {
@@ -2765,50 +4354,6 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
   line-height: 1.25;
   text-align: center;
   white-space: nowrap;
-}
-
-.messageAttachmentBadgeIcon {
-  position: relative;
-  flex: 0 0 auto;
-  width: 9px;
-  height: 11px;
-  border: 1px solid currentColor;
-  border-radius: 2px;
-  opacity: 0.82;
-}
-
-.messageAttachmentBadgeIcon::after {
-  content: "";
-  position: absolute;
-  top: -1px;
-  right: -1px;
-  width: 5px;
-  height: 5px;
-  border-bottom: 1px solid currentColor;
-  border-left: 1px solid currentColor;
-  background: var(--chv-bg);
-}
-
-.messageAttachmentCard-code .messageAttachmentBadgeIcon::before {
-  content: "";
-  position: absolute;
-  top: 5px;
-  left: 2px;
-  width: 5px;
-  height: 3px;
-  border-top: 1px solid currentColor;
-  border-bottom: 1px solid currentColor;
-}
-
-.messageAttachmentCard-archive .messageAttachmentBadgeIcon::before {
-  content: "";
-  position: absolute;
-  top: 3px;
-  left: 2px;
-  width: 5px;
-  height: 1px;
-  border-top: 1px solid currentColor;
-  border-bottom: 1px solid currentColor;
 }
 
 .messageAttachmentCard-selection .messageAttachmentBadgeIcon {
@@ -3519,6 +5064,54 @@ body.vscode-high-contrast-light .imagePreviewOverlay {
   min-width: 0;
   font-size: 11px;
   line-height: 1.35;
+}
+
+.systemEventSummary-expandable {
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.systemEventSummary-expandable::-webkit-details-marker {
+  display: none;
+}
+
+.systemEventDisclosure {
+  display: inline-flex;
+  width: 12px;
+  justify-content: center;
+  color: var(--chv-muted);
+  font-size: 15px;
+  line-height: 1;
+  transform: rotate(0deg);
+  transition: transform 120ms ease;
+}
+
+.systemEventCard-localCommandOutput[open] .systemEventDisclosure {
+  transform: rotate(90deg);
+}
+
+.systemEventCard-localCommandOutput {
+  border-left-color: color-mix(in srgb, var(--vscode-textLink-foreground) 62%, var(--chv-border) 38%);
+}
+
+.systemEventCard-localCommandOutput .systemEventBadge {
+  border-color: color-mix(in srgb, var(--vscode-textLink-foreground) 48%, var(--chv-border) 52%);
+  background: color-mix(in srgb, var(--vscode-textLink-foreground) 10%, transparent);
+}
+
+.systemEventOutput {
+  max-height: 280px;
+  margin: 7px 0 0;
+  padding: 7px 8px;
+  overflow: auto;
+  border-top: 1px solid color-mix(in srgb, var(--chv-border) 70%, transparent 30%);
+  color: var(--chv-fg);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, 12px);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .systemEventBadge {

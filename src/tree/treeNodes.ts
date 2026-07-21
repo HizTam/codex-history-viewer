@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { t } from "../i18n";
+import type { CodexAgentRelationKind } from "../agents/codexAgentRunsTypes";
 
 // Node definitions used by TreeDataProviders.
 
@@ -253,14 +254,14 @@ export interface SessionPageSearchSeed {
 export class SearchRootNode {
   public readonly kind = "searchRoot";
   public readonly query: string;
-  public readonly scopeKind: "all" | "year" | "month" | "day";
+  public readonly scopeKind: "all" | "year" | "month" | "day" | "range";
   public readonly scopeValue?: string;
   public readonly totalHits: number;
   public readonly pageSearchSeed?: SessionPageSearchSeed;
 
   constructor(params: {
     query: string;
-    scopeKind: "all" | "year" | "month" | "day";
+    scopeKind: "all" | "year" | "month" | "day" | "range";
     scopeValue?: string;
     totalHits: number;
     pageSearchSeed?: SessionPageSearchSeed;
@@ -322,7 +323,11 @@ export function isSessionNode(element: unknown): element is SessionNode | Search
   return !!maybe.session && typeof maybe.session.fsPath === "string";
 }
 
-export function toTreeItemContextValue(node: TreeNode): string {
+export function toTreeItemContextValue(
+  node: TreeNode,
+  agentRelation: CodexAgentRelationKind = "none",
+  agentParentAvailable = false,
+): string {
   // Centralize contextValue strings used by package.json menus/viewItem conditions.
   switch (node.kind) {
     case "year":
@@ -342,10 +347,13 @@ export function toTreeItemContextValue(node: TreeNode): string {
     case "projectDay":
       return "codexHistoryViewer.projectDay";
     case "session":
-      return withCustomTitleMarker(
+      return withCustomTitleMarker(withCodexAgentMarker(
         node.pinned
           ? `codexHistoryViewer.sessionPinned.${node.session.source}`
           : `codexHistoryViewer.session.${node.session.source}`,
+        agentRelation,
+        agentParentAvailable,
+      ),
         node.session,
       );
     case "missingPinned":
@@ -355,7 +363,14 @@ export function toTreeItemContextValue(node: TreeNode): string {
     case "searchRoot":
       return "codexHistoryViewer.searchRoot";
     case "searchSession":
-      return withCustomTitleMarker(`codexHistoryViewer.searchSession.${node.session.source}`, node.session);
+      return withCustomTitleMarker(
+        withCodexAgentMarker(
+          `codexHistoryViewer.searchSession.${node.session.source}`,
+          agentRelation,
+          agentParentAvailable,
+        ),
+        node.session,
+      );
     case "searchHit":
       return withCustomTitleMarker(`codexHistoryViewer.searchHit.${node.session.source}`, node.session);
     case "searchHelp":
@@ -365,6 +380,18 @@ export function toTreeItemContextValue(node: TreeNode): string {
     default:
       return "codexHistoryViewer.unknown";
   }
+}
+
+function withCodexAgentMarker(
+  base: string,
+  relation: CodexAgentRelationKind,
+  parentAvailable: boolean,
+): string {
+  const markers: string[] = [];
+  if (relation === "child" || relation === "both") markers.push("codexAgentChild");
+  if (relation === "parent" || relation === "both") markers.push("codexAgentParent");
+  if (parentAvailable) markers.push("codexAgentParentAvailable");
+  return markers.length > 0 ? `${base}.${markers.join(".")}` : base;
 }
 
 function withCustomTitleMarker(base: string, session: SessionSummary): string {

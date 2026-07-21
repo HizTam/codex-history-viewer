@@ -4,19 +4,32 @@ import type { ArchiveLocationFilter, HistoryIndex, SessionSourceFilter, SessionS
 import { t } from "../i18n";
 import { safeDisplayPath, singleLineSnippet } from "../utils/textUtils";
 import { SearchRootNode, SearchSessionNode, type SearchHit } from "../tree/treeNodes";
-import { getDateScopeValue, sanitizeDateScope, type DateScope } from "../types/dateScope";
-import { type IndexedSearchRole, SearchIndexService } from "./searchIndexService";
+import {
+  getDateScopeValue,
+  matchesDateScope,
+  sanitizeDateScope,
+  type DateScope,
+} from "../types/dateScope";
+import {
+  type IndexedSearchRole,
+  type SearchIndexReadSnapshot,
+  SearchIndexService,
+} from "./searchIndexService";
 import type { SessionAnnotationStore } from "./sessionAnnotationStore";
 import { matchProjectByCanonicalKey, resolveCanonicalProjectKey } from "./projectPathMapper";
+import {
+  matchProjectSelection,
+  type ProjectSelection,
+} from "../types/projectSelection";
 
 type SearchMode = "plain" | "exact" | "regex";
 
-interface LocatedMatch {
+export interface LocatedMatch {
   hitAt: number;
   hitLen: number;
 }
 
-interface CompiledSearchQuery {
+export interface CompiledSearchQuery {
   mode: SearchMode;
   displayQuery: string;
   locate: (text: string) => LocatedMatch | null;
@@ -45,6 +58,70 @@ export interface SearchFlowResult {
   request: SearchRequest;
 }
 
+export interface HistorySearchRefreshState {
+  readonly queue: Promise<void>;
+}
+
+export interface HistorySearchIndexSnapshot {
+  readonly config: CodexHistoryViewerConfig;
+  readonly index: HistoryIndex;
+  readonly sessions: readonly SessionSummary[];
+}
+
+export interface HistorySearchScopeSnapshot {
+  readonly date: DateScope;
+  readonly projects: ProjectSelection;
+  readonly source: SessionSourceFilter;
+  readonly tags: readonly string[];
+  readonly archiveLocation: ArchiveLocationFilter;
+  readonly defaultRoleFilter: readonly IndexedSearchRole[];
+  readonly searchHistoryProjectKey: string;
+}
+
+export function createHistorySearchScopeSnapshot(params: HistorySearchScopeSnapshot): HistorySearchScopeSnapshot {
+  return Object.freeze({
+    date: freezeDateScope(sanitizeDateScope(params.date)),
+    projects: freezeProjectSelection(params.projects),
+    source: sanitizeSessionSourceFilter(params.source),
+    tags: Object.freeze(sanitizeTagFilter(params.tags)),
+    archiveLocation: params.archiveLocation,
+    defaultRoleFilter: Object.freeze(Array.from(sanitizeRoleFilter(params.defaultRoleFilter))),
+    searchHistoryProjectKey: params.searchHistoryProjectKey,
+  });
+}
+
+export async function waitForCurrentHistorySearchIndex(params: {
+  refreshState: HistorySearchRefreshState;
+  config: CodexHistoryViewerConfig;
+  historyService: {
+    getIndex: () => HistoryIndex;
+    isCurrentIndexForConfig: (config: CodexHistoryViewerConfig) => boolean;
+  };
+  isRequestCurrent: () => boolean;
+}): Promise<HistorySearchIndexSnapshot | null> {
+  const config: CodexHistoryViewerConfig = Object.freeze({ ...params.config });
+  const captureCompatibleSnapshot = (): HistorySearchIndexSnapshot | null => {
+    if (!params.isRequestCurrent() || !params.historyService.isCurrentIndexForConfig(config)) return null;
+    const index = params.historyService.getIndex();
+    return Object.freeze({
+      config,
+      index,
+      sessions: Object.freeze(Array.from(index.sessions)),
+    });
+  };
+
+  const currentSnapshot = captureCompatibleSnapshot();
+  if (currentSnapshot) return currentSnapshot;
+
+  // Wait only for the refresh captured by the caller before its first await.
+  try {
+    await params.refreshState.queue;
+  } catch {
+    // A refresh may publish a compatible index before a later post-refresh step fails.
+  }
+  return captureCompatibleSnapshot();
+}
+
 // Runs search using user input or a preset request.
 export async function runSearchFlow(
   index: HistoryIndex,
@@ -61,11 +138,16 @@ export async function runSearchFlow(
     archiveLocationFilter?: ArchiveLocationFilter;
     includeArchivedSessions?: boolean;
     projectScopeCwd?: string | null;
+    projectSelection?: ProjectSelection;
     getProjectDisplayName?: (projectCwd: string) => string;
     getCanonicalProjectKey?: (projectCwd: string) => string | null;
+    isRequestCurrent?: () => boolean;
+    sessionInventory?: readonly SessionSummary[];
   },
 ): Promise<SearchFlowResult | null> {
-  if (index.sessions.length === 0) {
+  if (options?.isRequestCurrent && !options.isRequestCurrent()) return null;
+  const sessionInventory = options?.sessionInventory ?? Object.freeze(Array.from(index.sessions));
+  if (sessionInventory.length === 0) {
     void vscode.window.showInformationMessage(t("app.noSessionsFound"));
     return null;
   }
@@ -97,6 +179,7 @@ export async function runSearchFlow(
     queryInput = entered.trim();
     roleFilter = sanitizeRoleFilter(options?.defaultRoleFilter ?? ["user", "assistant"]);
   }
+  if (options?.isRequestCurrent && !options.isRequestCurrent()) return null;
 
   const compiled = compileSearchQuery(queryInput, effectiveCaseSensitive);
   if (!compiled) {
@@ -110,10 +193,16 @@ export async function runSearchFlow(
     typeof rawProjectScopeCwd === "string" && rawProjectScopeCwd.trim().length > 0 ? rawProjectScopeCwd.trim() : null;
   const projectKey = project ? resolveCanonicalProjectKey(project, options?.getCanonicalProjectKey) : null;
   const projectScopeKey = projectScope ? resolveCanonicalProjectKey(projectScope, options?.getCanonicalProjectKey) : null;
-  const candidates = index.sessions.filter(
+  const candidates = sessionInventory.filter(
     (s) =>
       matchScope(s, effectiveScope) &&
-      matchProjectByCanonicalKey(s.meta?.cwd, { projectKey, projectScopeKey }, options?.getCanonicalProjectKey) &&
+      (options?.projectSelection
+        ? matchProjectSelection(
+            s.meta?.cwd,
+            options.projectSelection,
+            (cwd) => resolveCanonicalProjectKey(cwd, options?.getCanonicalProjectKey),
+          )
+        : matchProjectByCanonicalKey(s.meta?.cwd, { projectKey, projectScopeKey }, options?.getCanonicalProjectKey)) &&
       matchSource(s, effectiveSourceFilter) &&
       matchArchiveLocation(s, archiveLocationFilter) &&
       matchAnnotationTags(s, tagFilter, annotationStore),
@@ -123,9 +212,11 @@ export async function runSearchFlow(
     { location: vscode.ProgressLocation.Notification, title: t("app.searching"), cancellable: true },
     async (progress, token) => {
       try {
+        const effectiveToken = createSearchCancellationToken(token, options?.isRequestCurrent);
         // Synchronize index delta before searching, and remove index entries for deleted files.
-        await searchIndexService.ensureUpToDate({
+        const searchIndexSnapshot = await searchIndexService.ensureUpToDate({
           index,
+          sessionInventory,
           codexSessionsRoot: config.sessionsRoot,
           codexArchivedSessionsRoot: config.codexArchivedSessionsRoot,
           claudeSessionsRoot: config.claudeSessionsRoot,
@@ -133,16 +224,17 @@ export async function runSearchFlow(
           includeCodexArchived: config.enableCodexArchivedSessions,
           includeClaude: config.enableClaudeSource,
           indexToolContent: config.searchIndexToolContent,
-          token,
+          token: effectiveToken,
           progress,
         });
+        if (effectiveToken.isCancellationRequested) return null;
         return await searchSessions({
           sessions: candidates,
           compiled,
           maxResults: config.searchMaxResults,
-          token,
+          token: effectiveToken,
           progress,
-          searchIndexService,
+          searchIndexSnapshot,
           annotationStore,
           roleFilter,
         });
@@ -154,12 +246,21 @@ export async function runSearchFlow(
   );
 
   if (!results) return null;
+  if (options?.isRequestCurrent && !options.isRequestCurrent()) return null;
 
   const scopeParts: string[] = [];
   const datePart = effectiveScope.kind === "all" ? t("search.filter.all") : getDateScopeValue(effectiveScope);
   if (datePart) scopeParts.push(datePart);
-  if (projectScope) scopeParts.push(t("history.project.scope.summary.currentGroup"));
-  if (project) scopeParts.push(t("history.filter.projectLabel", options?.getProjectDisplayName?.(project) ?? safeDisplayPath(project, 50)));
+  if (options?.projectSelection?.kind === "none") scopeParts.push(t("historyInsights.filterProjectsNone"));
+  if (options?.projectSelection?.kind === "groups") {
+    const groups = options.projectSelection.groups;
+    scopeParts.push(groups.length === 1
+      ? t("history.filter.projectLabel", options?.getProjectDisplayName?.(groups[0]!.representativeCwd) ?? safeDisplayPath(groups[0]!.representativeCwd, 50))
+      : t("historyInsights.filterProjectGroupCount", groups.length));
+  } else if (!options?.projectSelection) {
+    if (projectScope) scopeParts.push(t("history.project.scope.summary.currentGroup"));
+    if (project) scopeParts.push(t("history.filter.projectLabel", options?.getProjectDisplayName?.(project) ?? safeDisplayPath(project, 50)));
+  }
   if (effectiveSourceFilter !== "all") {
     scopeParts.push(t("history.filter.sourceLabel", getSourceFilterLabel(effectiveSourceFilter)));
   }
@@ -197,6 +298,39 @@ export async function runSearchFlow(
   };
 }
 
+function createSearchCancellationToken(
+  token: vscode.CancellationToken,
+  isRequestCurrent?: () => boolean,
+): vscode.CancellationToken {
+  if (!isRequestCurrent) return token;
+  return {
+    get isCancellationRequested(): boolean {
+      return token.isCancellationRequested || !isRequestCurrent();
+    },
+    onCancellationRequested: token.onCancellationRequested,
+  };
+}
+
+function freezeProjectSelection(selection: ProjectSelection): ProjectSelection {
+  if (selection.kind === "all") return Object.freeze({ kind: "all" });
+  if (selection.kind === "none") return Object.freeze({ kind: "none" });
+  return Object.freeze({
+    kind: "groups" as const,
+    groups: Object.freeze(
+      selection.groups.map((group) =>
+        Object.freeze({
+          canonicalGroupKey: group.canonicalGroupKey,
+          representativeCwd: group.representativeCwd,
+        }),
+      ),
+    ),
+  });
+}
+
+function freezeDateScope(scope: DateScope): DateScope {
+  return Object.freeze({ ...scope }) as DateScope;
+}
+
 function resolveFirstPageSearchMessageIndex(hits: readonly SearchHit[]): number | undefined {
   return hits.find((hit) => hit.role === "user" || hit.role === "assistant")?.messageIndex;
 }
@@ -219,19 +353,7 @@ function isDefaultRoleFilter(roleFilter: ReadonlySet<IndexedSearchRole>): boolea
 }
 
 function matchScope(session: SessionSummary, scope: DateScope): boolean {
-  const ymd = session.localDate;
-  switch (scope.kind) {
-    case "all":
-      return true;
-    case "year":
-      return ymd.startsWith(`${scope.yyyy}-`);
-    case "month":
-      return ymd.startsWith(`${scope.ym}-`);
-    case "day":
-      return ymd === scope.ymd;
-    default:
-      return true;
-  }
+  return matchesDateScope(session.localDate, scope);
 }
 
 function matchSource(session: SessionSummary, sourceFilter: SessionSourceFilter): boolean {
@@ -269,11 +391,11 @@ async function searchSessions(params: {
   maxResults: number;
   token: vscode.CancellationToken;
   progress: vscode.Progress<{ message?: string; increment?: number }>;
-  searchIndexService: SearchIndexService;
+  searchIndexSnapshot: SearchIndexReadSnapshot;
   annotationStore: SessionAnnotationStore;
   roleFilter: ReadonlySet<IndexedSearchRole>;
 }): Promise<{ totalHits: number; sessions: Array<{ session: SessionSummary; hits: SearchHit[] }> } | null> {
-  const { sessions, compiled, maxResults, token, progress, searchIndexService, annotationStore, roleFilter } = params;
+  const { sessions, compiled, maxResults, token, progress, searchIndexSnapshot, annotationStore, roleFilter } = params;
 
   const bySession = new Map<string, { session: SessionSummary; hits: SearchHit[] }>();
   let totalHits = 0;
@@ -295,7 +417,7 @@ async function searchSessions(params: {
     });
     if (totalHits >= maxResults) continue;
 
-    const messages = searchIndexService.getMessages(s.cacheKey);
+    const messages = searchIndexSnapshot.getMessages(s.cacheKey);
     if (messages && messages.length > 0) {
       for (const m of messages) {
         if (token.isCancellationRequested) return null;
@@ -430,7 +552,7 @@ function buildAround(text: string, hitAt: number, needleLen: number): string {
   return `${head}${text.slice(start, end)}${tail}`;
 }
 
-function compileSearchQuery(rawInput: string, caseSensitive: boolean): CompiledSearchQuery | null {
+export function compileSearchQuery(rawInput: string, caseSensitive: boolean): CompiledSearchQuery | null {
   // Keep this grammar in sync with media/pageSearchCore.js.
   const raw = rawInput.trim();
   if (!raw) return null;

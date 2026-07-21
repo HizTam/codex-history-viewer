@@ -18,8 +18,9 @@ import {
   type BookmarkTargetKind,
 } from "../services/bookmarkStore";
 import type { ChatOpenPositionStore } from "../services/chatOpenPositionStore";
-import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
+import type { SessionSummary } from "../sessions/sessionTypes";
 import { buildSessionSummary } from "../sessions/sessionSummary";
+import { isSessionProtocolContextTitle } from "../sessions/sessionTitleResolver";
 import { elapsedMs, formatDebugFields, nowMs, safeDebugBasename, sanitizeDebugError } from "../services/debugLogUtils";
 import { normalizeCacheKey, normalizeProjectKey } from "../utils/fsUtils";
 import { collectLocalLinkBaseDirs, openLinkedFileInEditor, resolveLocalFileLinkTarget } from "../utils/localFileLinks";
@@ -47,6 +48,30 @@ import type {
 } from "./chatTypes";
 import type { SessionPageSearchSeed } from "../tree/treeNodes";
 import type { FileChangeHistoryRevealTarget } from "../fileHistory/fileChangeHistoryTypes";
+import {
+  buildClaudeBranchChoicePage,
+  buildClaudeBranchOverlayPage,
+  buildClaudeChatBranchNavigationModel,
+  isClaudeBranchTargetInActiveLineage,
+  type ClaudeBranchNavigationService,
+  type ClaudeBranchNavigationSnapshot,
+} from "../branchMap/claudeBranchNavigationService";
+import {
+  buildCodexForkBranchChoicePage,
+  buildCodexForkBranchOverlayPage,
+  buildCodexForkChatBranchNavigationModel,
+  CodexForkNavigationSupersededError,
+  isCodexForkTargetInActiveLineage,
+  type CodexForkNavigationService,
+} from "../branchMap/codexForkNavigationService";
+import type { CodexForkNavigationSnapshot } from "../branchMap/codexForkNavigationTypes";
+import type { CodexAgentRunsService } from "../agents/codexAgentRunsService";
+import type {
+  CodexAgentComponent,
+  CodexAgentRunsWebviewModel,
+  CodexAgentRunsWebviewNode,
+} from "../agents/codexAgentRunsTypes";
+import type { SessionIconResolver } from "../ui/sessionIconResolver";
 
 type SaveableChatImage = {
   src: string;
@@ -75,7 +100,7 @@ type ChatBookmarkState = {
 };
 
 type MissingSessionHandler = (fsPath: string) => Promise<void> | void;
-export type ChatPanelKind = "reusable" | "session";
+export type ChatPanelKind = "reusable" | "session" | "branch";
 export type ChatWebviewAutoRefreshMode = "off" | "preserve" | "follow";
 type ChatPanelState = {
   fsPath: string;
@@ -107,6 +132,46 @@ type ChatPanelRestoreState = {
   detailMode?: ChatSessionDetailMode;
   pathMode?: ChatWebviewPathMode;
 };
+type CodexAgentRunsPanelSnapshot = {
+  generation: number;
+  currentIdentityKey: string;
+  relationKey: string;
+  navigationTargetByNodeId: ReadonlyMap<string, string>;
+  pinTargetByNodeId: ReadonlyMap<string, string>;
+  targets: ReadonlyMap<string, SessionSummary>;
+  pinTargets: ReadonlyMap<string, SessionSummary>;
+};
+type BranchNavigationSnapshot = ClaudeBranchNavigationSnapshot | CodexForkNavigationSnapshot;
+type BranchSwitchRequest = {
+  state: ChatPanelState;
+  snapshot: BranchNavigationSnapshot;
+  generation: number;
+  historyGeneration: number;
+  requestSequence: number;
+};
+type ChatSessionDataOptions = {
+  restoreScrollY?: number;
+  restoreSelectedMessageIndex?: number;
+  preserveUiState?: boolean;
+  autoScrollToBottom?: boolean;
+  detailMode?: ChatSessionDetailMode;
+  stateOverride?: ChatPanelState;
+  branchGeneration?: number;
+  transitionDirection?: "previous" | "next" | "direct";
+  suppressOpenError?: boolean;
+  commitStateTransition?: () => boolean;
+  validatePreparedState?: () => Promise<boolean>;
+  isRequestCurrent?: () => boolean;
+  supersedeTransition?: boolean;
+};
+type ChatSessionDataRequest = {
+  sequence: number;
+  transition: boolean;
+};
+type ChatSessionDataTransitionReservation = {
+  sequence: number;
+  protectedState: ChatPanelState | undefined;
+};
 const DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE: ChatWebviewAutoRefreshMode = "off";
 const DEFAULT_CHAT_SESSION_DETAIL_MODE: ChatSessionDetailMode = "summary";
 const LIVE_RUNNING_STALE_MS = 30 * 60 * 1000;
@@ -121,22 +186,48 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly bookmarkStore: BookmarkStore;
   private readonly openPositionStore: ChatOpenPositionStore;
   private readonly searchHistoryStore: SearchHistoryStore;
+  private readonly branchNavigation: ClaudeBranchNavigationService;
+  private readonly codexForkNavigation: CodexForkNavigationService;
+  private readonly codexAgentRuns: CodexAgentRunsService;
+  private readonly sessionIconResolver: SessionIconResolver;
   private readonly onMissingSession?: MissingSessionHandler;
   private readonly logger?: DebugLogger;
-  private readonly codexPanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
-  private readonly claudePanelIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly autoRefreshConsumerVisibilityEmitter = new vscode.EventEmitter<void>();
   private readonly bookmarkSubscription: vscode.Disposable;
+  private readonly annotationSubscription: vscode.Disposable;
+  private readonly pinSubscription: vscode.Disposable;
   private searchHistoryPeerRefresh: (() => void) | undefined;
 
   private reusablePanel: vscode.WebviewPanel | null = null;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
+  private readonly branchPanels = new Set<vscode.WebviewPanel>();
+  private readonly branchPanelRegistration = new WeakSet<vscode.WebviewPanel>();
   private readonly stateByPanel = new WeakMap<vscode.WebviewPanel, ChatPanelState>();
   private readonly bookmarkTargetsByPanel = new WeakMap<vscode.WebviewPanel, Map<string, BookmarkTarget>>();
   private readonly readyByPanel = new WeakMap<vscode.WebviewPanel, boolean>();
   private readonly imageDataByPanel = new WeakMap<vscode.WebviewPanel, Map<string, SaveableChatImage>>();
   private readonly documentDataByPanel = new WeakMap<vscode.WebviewPanel, Map<string, SaveableChatDocument>>();
   private readonly patchEntryDetailRequestsByPanel = new WeakMap<vscode.WebviewPanel, Set<string>>();
+  private readonly branchSnapshotByPanel = new WeakMap<vscode.WebviewPanel, BranchNavigationSnapshot>();
+  private readonly branchGenerationByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly branchHistoryGenerationByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly branchSwitchSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly branchSwitchClaimedSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly branchCancellationByPanel = new WeakMap<vscode.WebviewPanel, vscode.CancellationTokenSource>();
+  private readonly codexAgentRunsSnapshotByPanel = new WeakMap<vscode.WebviewPanel, CodexAgentRunsPanelSnapshot>();
+  private readonly codexAgentRunsGenerationByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly codexAgentRunNavigationSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly codexAgentRunNavigationClaimedSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly codexAgentRunPinSequenceByPanel = new WeakMap<vscode.WebviewPanel, Map<string, number>>();
+  private readonly codexAgentRunPinRevisionByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly userMessageIndexesByPanel = new WeakMap<vscode.WebviewPanel, Set<number>>();
+  private readonly titleRefreshSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly sessionDataRequestSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly sessionDataTransitionByPanel =
+    new WeakMap<vscode.WebviewPanel, ChatSessionDataTransitionReservation>();
+  private readonly sessionDataCommitSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private reusableOpenGeneration = 0;
+  private codexAgentRunsLoading = false;
   public readonly onDidChangeAutoRefreshConsumerVisibility = this.autoRefreshConsumerVisibilityEmitter.event;
 
   constructor(
@@ -148,6 +239,10 @@ export class ChatPanelManager implements vscode.Disposable {
     bookmarkStore: BookmarkStore,
     openPositionStore: ChatOpenPositionStore,
     searchHistoryStore: SearchHistoryStore,
+    branchNavigation: ClaudeBranchNavigationService,
+    codexForkNavigation: CodexForkNavigationService,
+    codexAgentRuns: CodexAgentRunsService,
+    sessionIconResolver: SessionIconResolver,
     onMissingSession?: MissingSessionHandler,
     logger?: DebugLogger,
   ) {
@@ -159,23 +254,31 @@ export class ChatPanelManager implements vscode.Disposable {
     this.bookmarkStore = bookmarkStore;
     this.openPositionStore = openPositionStore;
     this.searchHistoryStore = searchHistoryStore;
+    this.branchNavigation = branchNavigation;
+    this.codexForkNavigation = codexForkNavigation;
+    this.codexAgentRuns = codexAgentRuns;
+    this.sessionIconResolver = sessionIconResolver;
     this.onMissingSession = onMissingSession;
     this.logger = logger;
-    this.codexPanelIconPath = {
-      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-codex.svg"),
-      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-codex.svg"),
-    };
-    this.claudePanelIconPath = {
-      light: vscode.Uri.joinPath(extensionUri, "resources", "icons", "light", "source-claude.svg"),
-      dark: vscode.Uri.joinPath(extensionUri, "resources", "icons", "dark", "source-claude.svg"),
-    };
     this.bookmarkSubscription = this.bookmarkStore.onDidChange(() => {
       this.refreshBookmarkState();
+      this.invalidateClaudeBranchNavigation();
+      this.refreshCodexAgentRuns();
+    });
+    this.annotationSubscription = this.annotationStore.onDidChange(() => {
+      this.invalidateClaudeBranchNavigation();
+      this.refreshCodexAgentRuns();
+    });
+    this.pinSubscription = this.pinStore.onDidChange(() => {
+      this.refreshPinState();
     });
   }
 
   public dispose(): void {
+    for (const panel of this.getOpenPanels()) this.cancelBranchNavigation(panel);
     this.bookmarkSubscription.dispose();
+    this.annotationSubscription.dispose();
+    this.pinSubscription.dispose();
     this.autoRefreshConsumerVisibilityEmitter.dispose();
   }
 
@@ -220,8 +323,7 @@ export class ChatPanelManager implements vscode.Disposable {
       });
     };
 
-    if (this.reusablePanel) send(this.reusablePanel);
-    for (const panel of this.panelsByKey.values()) send(panel);
+    for (const panel of this.getOpenPanels()) send(panel);
   }
 
   private refreshBookmarkState(): void {
@@ -229,8 +331,7 @@ export class ChatPanelManager implements vscode.Disposable {
       if (!this.readyByPanel.get(panel)) return;
       void this.sendBookmarkState(panel);
     };
-    if (this.reusablePanel) send(this.reusablePanel);
-    for (const panel of this.panelsByKey.values()) send(panel);
+    for (const panel of this.getOpenPanels()) send(panel);
   }
 
   private async sendBookmarkState(panel: vscode.WebviewPanel): Promise<void> {
@@ -249,8 +350,7 @@ export class ChatPanelManager implements vscode.Disposable {
       void this.sendSessionData(panel);
     };
 
-    if (this.reusablePanel) refresh(this.reusablePanel);
-    for (const panel of this.panelsByKey.values()) refresh(panel);
+    for (const panel of this.getOpenPanels()) refresh(panel);
   }
 
   public refreshProjectAssociations(): void {
@@ -259,22 +359,21 @@ export class ChatPanelManager implements vscode.Disposable {
       void this.sendSessionData(panel, { preserveUiState: true });
     };
 
-    if (this.reusablePanel) refresh(this.reusablePanel);
-    for (const panel of this.panelsByKey.values()) refresh(panel);
+    for (const panel of this.getOpenPanels()) refresh(panel);
   }
 
   public refreshTitles(): void {
     const update = (panel: vscode.WebviewPanel): void => {
+      this.nextTitleRefreshSequence(panel);
       const state = this.stateByPanel.get(panel);
       if (!state) return;
       const session = this.historyService.findByFsPath(state.fsPath);
       if (!session) return;
       panel.title = buildPanelTitle(session);
-      panel.iconPath = this.resolveSourceIconPath(session.source);
+      panel.iconPath = this.resolveSessionIconPath(session);
     };
 
-    if (this.reusablePanel) update(this.reusablePanel);
-    for (const panel of this.panelsByKey.values()) update(panel);
+    for (const panel of this.getOpenPanels()) update(panel);
   }
 
   public hasOpenAutoRefreshConsumer(): boolean {
@@ -328,6 +427,7 @@ export class ChatPanelManager implements vscode.Disposable {
       const state = this.stateByPanel.get(panel);
       if (!state) continue;
       if (await this.ensureSessionFileAvailable(state.fsPath)) continue;
+      if (this.stateByPanel.get(panel) !== state) continue;
       await this.handleMissingSession(panel, state.fsPath, { showMessage: false, notify: false });
     }
   }
@@ -341,24 +441,35 @@ export class ChatPanelManager implements vscode.Disposable {
       pageSearchSeed?: SessionPageSearchSeed;
       viewColumn?: vscode.ViewColumn;
       preserveFocus?: boolean;
+      isRequestCurrent?: () => boolean;
     },
   ): Promise<void> {
-    if (!(await this.ensureSessionFileAvailable(session.fsPath))) {
+    const reusableOpenGeneration = options.kind === "reusable"
+      ? ++this.reusableOpenGeneration
+      : undefined;
+    const isRequestCurrent = (): boolean =>
+      (reusableOpenGeneration === undefined || this.reusableOpenGeneration === reusableOpenGeneration) &&
+      (!options.isRequestCurrent || options.isRequestCurrent());
+    const sessionFileAvailable = await this.ensureSessionFileAvailable(session.fsPath);
+    if (!isRequestCurrent()) return;
+    if (!sessionFileAvailable) {
       await this.handleMissingSession(null, session.fsPath);
       return;
     }
 
     const key = normalizeCacheKey(session.fsPath);
-    const panel = options.kind === "reusable" ? this.getOrCreateReusablePanel() : this.getOrCreatePanelForKey(key);
+    const panel = options.kind === "reusable"
+      ? this.getOrCreateReusablePanel()
+      : options.kind === "branch"
+        ? this.createBranchPanel()
+        : this.getOrCreatePanelForKey(key);
     const prevState = this.stateByPanel.get(panel);
     const isSameSession = !!prevState && normalizeCacheKey(prevState.fsPath) === key;
     if (!isSameSession) {
-      this.imageDataByPanel.delete(panel);
-      this.documentDataByPanel.delete(panel);
-      this.patchEntryDetailRequestsByPanel.delete(panel);
+      this.clearSessionBoundPanelData(panel);
     }
 
-    this.stateByPanel.set(panel, {
+    const nextState: ChatPanelState = {
       fsPath: session.fsPath,
       revealMessageIndex: options.revealMessageIndex,
       revealTarget: options.revealTarget,
@@ -371,15 +482,19 @@ export class ChatPanelManager implements vscode.Disposable {
       pathMode: isSameSession ? prevState.pathMode : undefined,
       pathModeEnabled: isSameSession ? prevState.pathModeEnabled : undefined,
       pendingAutoRefresh: false,
-    });
+    };
+    this.stateByPanel.set(panel, nextState);
     panel.title = buildPanelTitle(session);
-    panel.iconPath = this.resolveSourceIconPath(session.source);
+    panel.iconPath = this.resolveSessionIconPath(session);
     panel.reveal(options.viewColumn ?? panel.viewColumn, options.preserveFocus ?? options.kind === "reusable");
     this.notifyAutoRefreshConsumerVisibilityChanged();
 
     // If the webview is already ready, update immediately on selection changes.
     if (this.readyByPanel.get(panel)) {
-      await this.sendSessionData(panel);
+      await this.sendSessionData(panel, {
+        isRequestCurrent,
+        supersedeTransition: true,
+      });
     }
   }
 
@@ -391,32 +506,47 @@ export class ChatPanelManager implements vscode.Disposable {
       promoteReusable?: boolean;
       revealTarget?: FileChangeHistoryRevealTarget;
       pageSearchSeed?: SessionPageSearchSeed;
+      isRequestCurrent?: () => boolean;
     } = {},
   ): Promise<boolean> {
+    if (options.isRequestCurrent && !options.isRequestCurrent()) return false;
     const existing = this.findExistingSessionPanel(fsPath);
     if (!existing) return false;
     const { panel } = existing;
     const state = this.stateByPanel.get(panel);
     if (!state) return false;
-    if (!(await this.ensurePanelSessionFile(panel, state.fsPath))) return false;
+    if (existing.kind === "reusable") this.reusableOpenGeneration += 1;
+    const sessionFileAvailable = await this.ensureSessionFileAvailable(state.fsPath);
+    if (options.isRequestCurrent && !options.isRequestCurrent()) return false;
+    if (this.stateByPanel.get(panel) !== state) return false;
+    if (!sessionFileAvailable) {
+      await this.handleMissingSession(panel, state.fsPath);
+      return false;
+    }
 
     const nextKind = existing.kind === "reusable" && options.promoteReusable === true ? "session" : state.kind;
     if (state.kind === "reusable" && nextKind === "session") {
       this.promoteReusablePanelToSession(panel, state.fsPath);
     }
 
-    this.stateByPanel.set(panel, {
+    const nextState: ChatPanelState = {
       ...state,
       revealMessageIndex,
       revealTarget: options.revealTarget,
       pageSearchSeed: sanitizePageSearchSeed(options.pageSearchSeed),
       kind: nextKind,
       pendingAutoRefresh: false,
-    });
+    };
+    this.stateByPanel.set(panel, nextState);
     panel.reveal(panel.viewColumn, options.preserveFocus === true);
     this.notifyAutoRefreshConsumerVisibilityChanged();
     if (this.readyByPanel.get(panel)) {
-      await this.sendSessionData(panel);
+      if (!(await this.sendSessionData(panel, {
+        isRequestCurrent: options.isRequestCurrent,
+        supersedeTransition: true,
+      }))) {
+        return false;
+      }
     }
     return true;
   }
@@ -471,6 +601,12 @@ export class ChatPanelManager implements vscode.Disposable {
     return panel;
   }
 
+  private createBranchPanel(): vscode.WebviewPanel {
+    const panel = this.createPanel({ kind: "branch" });
+    this.registerBranchPanel(panel);
+    return panel;
+  }
+
   private findExistingSessionPanel(fsPath: string): ExistingChatPanel | null {
     const key = normalizeCacheKey(fsPath);
     const sessionPanel = this.panelsByKey.get(key);
@@ -484,9 +620,46 @@ export class ChatPanelManager implements vscode.Disposable {
     return null;
   }
 
+  private registerBranchPanel(panel: vscode.WebviewPanel): void {
+    this.branchPanels.add(panel);
+    if (this.branchPanelRegistration.has(panel)) return;
+    this.branchPanelRegistration.add(panel);
+    panel.onDidDispose(() => {
+      this.branchPanels.delete(panel);
+      this.cancelBranchNavigation(panel);
+      this.clearSessionBoundPanelData(panel);
+    });
+  }
+
+  private transitionPanelToBranch(panel: vscode.WebviewPanel, previousFsPath?: string): void {
+    if (this.reusablePanel === panel) {
+      this.reusablePanel = null;
+      this.reusableOpenGeneration += 1;
+    }
+    if (previousFsPath) {
+      const key = normalizeCacheKey(previousFsPath);
+      if (this.panelsByKey.get(key) === panel) this.panelsByKey.delete(key);
+    }
+    this.registerBranchPanel(panel);
+  }
+
+  private clearSessionBoundPanelData(panel: vscode.WebviewPanel): void {
+    this.imageDataByPanel.delete(panel);
+    this.documentDataByPanel.delete(panel);
+    this.patchEntryDetailRequestsByPanel.delete(panel);
+    this.bookmarkTargetsByPanel.delete(panel);
+    this.userMessageIndexesByPanel.delete(panel);
+    this.branchHistoryGenerationByPanel.delete(panel);
+    this.nextCodexAgentRunsGeneration(panel);
+    this.codexAgentRunsSnapshotByPanel.delete(panel);
+    this.codexAgentRunPinSequenceByPanel.delete(panel);
+    this.codexAgentRunPinRevisionByPanel.delete(panel);
+  }
+
   private promoteReusablePanelToSession(panel: vscode.WebviewPanel, fsPath: string): void {
     if (this.reusablePanel === panel) {
       this.reusablePanel = null;
+      this.reusableOpenGeneration += 1;
     }
     const key = normalizeCacheKey(fsPath);
     this.panelsByKey.set(key, panel);
@@ -533,8 +706,10 @@ export class ChatPanelManager implements vscode.Disposable {
     panel.webview.html = this.buildHtml(panel.webview);
     this.readyByPanel.set(panel, false);
 
-    panel.webview.onDidReceiveMessage(async (msg) => {
-      await this.handleMessage(panel, msg);
+    panel.webview.onDidReceiveMessage((msg) => {
+      void this.handleMessage(panel, msg).catch((error) => {
+        this.logger?.debug(`chat.message failed error=${sanitizeDebugError(error)}`);
+      });
     });
     panel.onDidChangeViewState(() => {
       void panel.webview.postMessage({ type: "viewState", visible: panel.visible });
@@ -545,6 +720,18 @@ export class ChatPanelManager implements vscode.Disposable {
       this.notifyAutoRefreshConsumerVisibilityChanged();
     });
     panel.onDidDispose(() => {
+      this.cancelBranchNavigation(panel);
+      this.stateByPanel.delete(panel);
+      this.readyByPanel.delete(panel);
+      this.branchSnapshotByPanel.delete(panel);
+      this.branchGenerationByPanel.delete(panel);
+      this.branchHistoryGenerationByPanel.delete(panel);
+      this.codexAgentRunsSnapshotByPanel.delete(panel);
+      this.codexAgentRunsGenerationByPanel.delete(panel);
+      this.titleRefreshSequenceByPanel.delete(panel);
+      this.sessionDataRequestSequenceByPanel.delete(panel);
+      this.sessionDataTransitionByPanel.delete(panel);
+      this.sessionDataCommitSequenceByPanel.delete(panel);
       this.notifyAutoRefreshConsumerVisibilityChanged();
     });
   }
@@ -554,6 +741,7 @@ export class ChatPanelManager implements vscode.Disposable {
     panel.onDidDispose(() => {
       if (this.reusablePanel === panel) {
         this.reusablePanel = null;
+        this.reusableOpenGeneration += 1;
       }
     });
   }
@@ -587,7 +775,7 @@ export class ChatPanelManager implements vscode.Disposable {
         return;
       }
       this.registerReusablePanel(panel);
-    } else {
+    } else if (restored.kind === "session") {
       const key = normalizeCacheKey(restored.fsPath);
       const existing = this.panelsByKey.get(key);
       if (existing && existing !== panel) {
@@ -595,6 +783,8 @@ export class ChatPanelManager implements vscode.Disposable {
         return;
       }
       this.registerSessionPanel(key, panel);
+    } else {
+      this.registerBranchPanel(panel);
     }
 
     this.initializePanel(panel);
@@ -613,7 +803,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const session = this.historyService.findByFsPath(restored.fsPath);
     if (session) {
       panel.title = buildPanelTitle(session);
-      panel.iconPath = this.resolveSourceIconPath(session.source);
+      panel.iconPath = this.resolveSessionIconPath(session);
     }
     this.notifyAutoRefreshConsumerVisibilityChanged();
   }
@@ -625,6 +815,9 @@ export class ChatPanelManager implements vscode.Disposable {
     );
     const sharedTimeGuideJsUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "media", "sharedTimeGuide.js"),
+    );
+    const sharedFileKindCssUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "sharedFileKind.css"),
     );
     const cssUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "chatView.css"));
     const pageSearchCoreUri = webview.asWebviewUri(
@@ -661,6 +854,7 @@ export class ChatPanelManager implements vscode.Disposable {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="${katexCssUri}">
   <link rel="stylesheet" href="${sharedTimeGuideCssUri}">
+  <link rel="stylesheet" href="${sharedFileKindCssUri}">
   <link rel="stylesheet" href="${cssUri}">
   <title>Codex History Viewer</title>
 </head>
@@ -679,6 +873,8 @@ export class ChatPanelManager implements vscode.Disposable {
     <button id="btnPageSearch" type="button" class="toolbarIconBtn"></button>
     <button id="btnPerformanceMode" type="button" class="toolbarIconBtn"></button>
     <button id="btnAutoRefresh" type="button" class="toolbarIconBtn" hidden></button>
+    <button id="btnAgentRuns" type="button" class="toolbarIconBtn" hidden></button>
+    <button id="btnBranchMap" type="button" class="toolbarIconBtn" hidden></button>
     <button id="btnReload" type="button" class="toolbarIconBtn"></button>
   </div>
   <div id="pageSearchBar" hidden>
@@ -707,6 +903,8 @@ export class ChatPanelManager implements vscode.Disposable {
     <div id="timeline"></div>
   </div>
   <div id="restoreCover" aria-hidden="true" hidden></div>
+  <div id="branchOverlayRoot" hidden></div>
+  <div id="agentRunsOverlayRoot" hidden></div>
   <script nonce="${nonce}" src="${markdownItUri}"></script>
   <script nonce="${nonce}" src="${katexJsUri}"></script>
   <script nonce="${nonce}" src="${shikiBundleUri}"></script>
@@ -722,12 +920,33 @@ export class ChatPanelManager implements vscode.Disposable {
     if (!state) return;
 
     const type = typeof msg?.type === "string" ? msg.type : "";
+    const requestSequence = sanitizePositiveSequence(msg?.requestId);
+    if (type === "ready") {
+      this.branchSwitchSequenceByPanel.delete(panel);
+      this.branchSwitchClaimedSequenceByPanel.delete(panel);
+      this.codexAgentRunNavigationSequenceByPanel.delete(panel);
+      this.codexAgentRunNavigationClaimedSequenceByPanel.delete(panel);
+      this.codexAgentRunPinSequenceByPanel.delete(panel);
+    } else if (
+      type === "switchClaudeBranch" &&
+      requestSequence > (this.branchSwitchSequenceByPanel.get(panel) ?? 0)
+    ) {
+      this.branchSwitchSequenceByPanel.set(panel, requestSequence);
+    } else if (
+      type === "openCodexAgentRun" &&
+      requestSequence > (this.codexAgentRunNavigationSequenceByPanel.get(panel) ?? 0)
+    ) {
+      this.codexAgentRunNavigationSequenceByPanel.set(panel, requestSequence);
+    }
     if (
       type !== "ready" &&
       type !== "copy" &&
       type !== "debug" &&
       type !== "rememberOpenPosition" &&
-      !(await this.ensurePanelSessionFile(panel, state.fsPath))
+      type !== "switchClaudeBranch" &&
+      type !== "openCodexAgentRun" &&
+      type !== "toggleCodexAgentRunPin" &&
+      !(await this.ensurePanelSessionFile(panel, state))
     ) {
       return;
     }
@@ -745,14 +964,6 @@ export class ChatPanelManager implements vscode.Disposable {
           restoreSelectedMessageIndex: restoreState?.restoreTopMessageIndex,
           preserveUiState: shouldRestorePosition,
         });
-        const latest = this.stateByPanel.get(panel);
-        if (latest) {
-          this.stateByPanel.set(panel, {
-            ...latest,
-            restoreScrollY: undefined,
-            restoreTopMessageIndex: undefined,
-          });
-        }
         return;
       }
       case "openMarkdown": {
@@ -854,6 +1065,10 @@ export class ChatPanelManager implements vscode.Disposable {
         );
         const activeFsPath = typeof result?.activeFsPath === "string" ? result.activeFsPath : "";
         if (activeFsPath) {
+          if (this.stateByPanel.get(panel) !== state) return;
+          if (normalizeCacheKey(activeFsPath) !== normalizeCacheKey(state.fsPath)) {
+            this.clearSessionBoundPanelData(panel);
+          }
           this.stateByPanel.set(panel, {
             ...state,
             fsPath: activeFsPath,
@@ -863,16 +1078,23 @@ export class ChatPanelManager implements vscode.Disposable {
             pathMode: undefined,
             pathModeEnabled: undefined,
           });
-          await this.sendSessionData(panel, { preserveUiState: false });
+          await this.sendSessionData(panel, {
+            preserveUiState: false,
+            supersedeTransition: true,
+          });
         }
         return;
       }
       case "togglePin": {
-        const commandId = this.pinStore.isPinned(state.fsPath)
+        const session = this.historyService.findByFsPath(state.fsPath);
+        const commandId = session && isSessionPinned(this.pinStore, session)
           ? "codexHistoryViewer.unpinSession"
           : "codexHistoryViewer.pinSession";
-        await vscode.commands.executeCommand(commandId, { fsPath: state.fsPath });
-        await this.sendSessionData(panel);
+        await vscode.commands.executeCommand(commandId, {
+          fsPath: state.fsPath,
+          ...(session ? { identityKey: session.identityKey } : {}),
+        });
+        this.publishCurrentSessionPinState(panel);
         return;
       }
       case "toggleBookmark": {
@@ -975,24 +1197,1411 @@ export class ChatPanelManager implements vscode.Disposable {
         await this.sendSessionData(panel);
         return;
       }
+      case "switchClaudeBranch": {
+        await this.handleClaudeBranchSwitch(panel, msg, requestSequence);
+        return;
+      }
+      case "requestClaudeBranchTreePage": {
+        this.handleClaudeBranchOverlayPageRequest(panel, msg);
+        return;
+      }
+      case "requestClaudeBranchTreeChoicePage": {
+        this.handleClaudeBranchChoicePageRequest(panel, msg);
+        return;
+      }
+      case "openCodexAgentRun": {
+        await this.handleOpenCodexAgentRun(panel, msg, requestSequence);
+        return;
+      }
+      case "toggleCodexAgentRunPin": {
+        await this.handleToggleCodexAgentRunPin(panel, msg, requestSequence);
+        return;
+      }
       default:
         return;
     }
   }
 
+  public refreshBranchNavigation(): void {
+    const config = getConfig();
+    if (!config.branchNavigationEnabled) {
+      this.branchNavigation.clearSnapshots();
+      this.codexForkNavigation.clearCache();
+    }
+    for (const panel of this.getOpenPanels()) {
+      this.cancelBranchNavigation(panel);
+      if (!this.readyByPanel.get(panel)) continue;
+      this.scheduleBranchNavigation(panel);
+    }
+  }
+
+  public refreshClaudeBranchNavigation(): void {
+    this.refreshBranchNavigation();
+  }
+
+  public invalidateBranchNavigation(): void {
+    this.branchNavigation.clearSnapshots();
+    this.codexForkNavigation.clearCache();
+    for (const panel of this.getOpenPanels()) {
+      this.branchSnapshotByPanel.delete(panel);
+      this.branchHistoryGenerationByPanel.delete(panel);
+    }
+    this.refreshBranchNavigation();
+  }
+
+  public invalidateClaudeBranchNavigation(): void {
+    this.branchNavigation.clearSnapshots();
+    for (const panel of this.getOpenPanels()) {
+      this.branchSnapshotByPanel.delete(panel);
+      this.branchHistoryGenerationByPanel.delete(panel);
+    }
+    this.refreshBranchNavigation();
+  }
+
+  public setCodexAgentRunsLoading(loading: boolean): void {
+    if (this.codexAgentRunsLoading === loading) return;
+    this.codexAgentRunsLoading = loading;
+    this.refreshCodexAgentRuns();
+  }
+
+  public refreshCodexAgentRuns(): void {
+    if (!getConfig().agentRunsEnabled) this.codexAgentRuns.invalidate();
+    for (const panel of this.getOpenPanels()) {
+      const state = this.stateByPanel.get(panel);
+      const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+      if (session) panel.iconPath = this.resolveSessionIconPath(session);
+      if (this.readyByPanel.get(panel)) this.publishCodexAgentRuns(panel);
+    }
+  }
+
+  public handleCodexAgentRunsLoadFailure(): void {
+    for (const panel of this.getOpenPanels()) {
+      const state = this.stateByPanel.get(panel);
+      const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+      if (session) panel.iconPath = this.resolveSessionIconPath(session);
+      if (!this.readyByPanel.get(panel)) continue;
+      const generation = this.nextCodexAgentRunsGeneration(panel);
+      this.codexAgentRunsSnapshotByPanel.delete(panel);
+      this.codexAgentRunPinSequenceByPanel.delete(panel);
+      this.codexAgentRunPinRevisionByPanel.delete(panel);
+      this.postCodexAgentRunsMessage(panel, {
+        type: "setCodexAgentRunsState",
+        version: 1,
+        generation,
+        state: "disabled",
+      }, "loadFailure");
+    }
+  }
+
+  private refreshPinState(): void {
+    for (const panel of this.getOpenPanels()) {
+      this.publishCurrentSessionPinState(panel);
+      this.publishCodexAgentRunPinState(panel);
+    }
+  }
+
+  private publishCurrentSessionPinState(panel: vscode.WebviewPanel): void {
+    const state = this.stateByPanel.get(panel);
+    if (!state || !this.readyByPanel.get(panel)) return;
+    const session = this.historyService.findByFsPath(state.fsPath);
+    void panel.webview.postMessage({
+      type: "pinState",
+      isPinned: session ? isSessionPinned(this.pinStore, session) : this.pinStore.isPinned(state.fsPath),
+    });
+  }
+
+  private publishCodexAgentRunPinState(panel: vscode.WebviewPanel): void {
+    const snapshot = this.codexAgentRunsSnapshotByPanel.get(panel);
+    if (!snapshot || !this.readyByPanel.get(panel)) return;
+    const pinRevision = (this.codexAgentRunPinRevisionByPanel.get(panel) ?? 0) + 1;
+    this.codexAgentRunPinRevisionByPanel.set(panel, pinRevision);
+    const pinnedSessions = buildPinnedSessionLookup(this.pinStore);
+    const states = Array.from(snapshot.pinTargets, ([target, session]) => ({
+      target,
+      isPinned: isSessionPinnedInLookup(pinnedSessions, session),
+    }));
+    this.postCodexAgentRunsMessage(panel, {
+      type: "setCodexAgentRunPinState",
+      version: 1,
+      generation: snapshot.generation,
+      pinRevision,
+      states,
+    }, "pinState");
+  }
+
+  public async openCodexAgentParent(session: SessionSummary): Promise<void> {
+    if (!getConfig().agentRunsEnabled) {
+      void vscode.window.showInformationMessage(t("codexAgentRuns.disabled"));
+      return;
+    }
+    const parent = session.source === "codex" ? this.codexAgentRuns.getParentSession(session) : undefined;
+    if (!parent) {
+      void vscode.window.showInformationMessage(t("codexAgentRuns.parentUnavailable"));
+      return;
+    }
+    if (await this.revealExistingSessionPanel(parent.fsPath, undefined, { preserveFocus: false })) return;
+    await this.openSession(parent, { kind: "session", preserveFocus: false });
+  }
+
+  private publishCodexAgentRuns(panel: vscode.WebviewPanel): void {
+    const state = this.stateByPanel.get(panel);
+    const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+    const config = getConfig();
+    if (!config.agentRunsEnabled || !session || session.source !== "codex") {
+      const generation = this.nextCodexAgentRunsGeneration(panel);
+      this.codexAgentRunsSnapshotByPanel.delete(panel);
+      this.codexAgentRunPinSequenceByPanel.delete(panel);
+      this.codexAgentRunPinRevisionByPanel.delete(panel);
+      this.postCodexAgentRunsMessage(panel, {
+        type: "setCodexAgentRunsState",
+        version: 1,
+        generation,
+        state: "disabled",
+      }, "disabled");
+      return;
+    }
+    if (this.codexAgentRunsLoading) {
+      const generation = this.nextCodexAgentRunsGeneration(panel);
+      this.codexAgentRunsSnapshotByPanel.delete(panel);
+      this.codexAgentRunPinSequenceByPanel.delete(panel);
+      this.codexAgentRunPinRevisionByPanel.delete(panel);
+      this.postCodexAgentRunsMessage(panel, {
+        type: "setCodexAgentRunsState",
+        version: 1,
+        generation,
+        state: "loading",
+      }, "loading");
+      return;
+    }
+    if (!this.codexAgentRuns.isPresentationEnabled()) return;
+
+    const component = this.codexAgentRuns.buildComponent(session, t("codexAgentRuns.subagent"));
+    if (!hasAgentRunsRelation(component)) {
+      const generation = this.nextCodexAgentRunsGeneration(panel);
+      this.codexAgentRunsSnapshotByPanel.delete(panel);
+      this.codexAgentRunPinSequenceByPanel.delete(panel);
+      this.codexAgentRunPinRevisionByPanel.delete(panel);
+      this.postCodexAgentRunsMessage(panel, {
+        type: "setCodexAgentRunsState",
+        version: 1,
+        generation,
+        state: "empty",
+        i18n: this.buildI18n(),
+      }, "empty");
+      return;
+    }
+
+    const relationKey = buildCodexAgentRunsRelationKey(component, session.identityKey);
+    const previousSnapshot = this.codexAgentRunsSnapshotByPanel.get(panel);
+    const reusesRelation = Boolean(
+      previousSnapshot &&
+      previousSnapshot.currentIdentityKey === session.identityKey &&
+      previousSnapshot.relationKey === relationKey,
+    );
+    const generation = reusesRelation
+      ? previousSnapshot!.generation
+      : this.nextCodexAgentRunsGeneration(panel);
+    const targets = new Map<string, SessionSummary>();
+    const pinTargets = new Map<string, SessionSummary>();
+    const navigationTargetByNodeId = new Map<string, string>();
+    const pinTargetByNodeId = new Map<string, string>();
+    const pinnedSessions = buildPinnedSessionLookup(this.pinStore);
+    const bookmarkedSessions = new Set(this.bookmarkStore.getAll().map((entry) => entry.sessionCacheKey));
+    const nodes: CodexAgentRunsWebviewNode[] = component.nodes.map((node, index) => {
+      const target = node.session && !node.isCurrent
+        ? (reusesRelation ? previousSnapshot?.navigationTargetByNodeId.get(node.id) : undefined) ??
+          `agent-run-${generation}-${index}`
+        : undefined;
+      if (target && node.session) {
+        targets.set(target, node.session);
+        navigationTargetByNodeId.set(node.id, target);
+      }
+      const actionTarget = node.session
+        ? (reusesRelation ? previousSnapshot?.pinTargetByNodeId.get(node.id) : undefined) ??
+          `agent-pin-${generation}-${index}`
+        : undefined;
+      if (actionTarget && node.session) {
+        pinTargets.set(actionTarget, node.session);
+        pinTargetByNodeId.set(node.id, actionTarget);
+      }
+      const annotation = node.session ? this.annotationStore.get(node.session.fsPath) : null;
+      const titleIsCustom = Boolean(node.session?.customTitle);
+      const titleFallback = node.unavailableParent
+        ? t("codexAgentRuns.parentUnavailable")
+        : t("codexAgentRuns.untitled");
+      const sanitizedTitle = sanitizeAgentRunWebviewText(node.session?.displayTitle, titleFallback);
+      const title = !titleIsCustom && isSessionProtocolContextTitle(sanitizedTitle)
+        ? titleFallback
+        : sanitizedTitle;
+      return {
+        id: node.id,
+        ...(node.parentId ? { parentId: node.parentId } : {}),
+        ...(target ? { navigationTarget: target } : {}),
+        ...(actionTarget ? { actionTarget } : {}),
+        title,
+        titleIsCustom,
+        taskLabel: node.isSubagent ? node.taskLabel : "",
+        agentRole: node.isSubagent ? node.agentRole : "",
+        started: node.session ? formatAgentRunDateTime(node.session.startedLocalDate, node.session.startedTimeLabel) : "",
+        lastActivity: node.session
+          ? formatAgentRunDateTime(node.session.lastActivityLocalDate, node.session.lastActivityTimeLabel)
+          : "",
+        directChildCount: Math.max(0, Math.min(1_000_000, node.directChildCount)),
+        isCurrent: node.isCurrent,
+        isSubagent: node.isSubagent,
+        unavailableParent: node.unavailableParent,
+        isPinned: Boolean(node.session && isSessionPinnedInLookup(pinnedSessions, node.session)),
+        isBookmarked: Boolean(node.session && bookmarkedSessions.has(node.session.cacheKey)),
+        hasTags: Boolean(annotation?.tags.length),
+        hasNote: Boolean(annotation?.note.trim()),
+      };
+    });
+    const model: CodexAgentRunsWebviewModel = {
+      sessionCount: component.sessionCount,
+      agentCount: component.agentCount,
+      relationPartial: component.relationPartial,
+      omittedCount: component.omittedCount,
+      pinRevision: reusesRelation ? this.codexAgentRunPinRevisionByPanel.get(panel) ?? 0 : 0,
+      nodes,
+    };
+    if (reusesRelation && previousSnapshot) {
+      previousSnapshot.navigationTargetByNodeId = navigationTargetByNodeId;
+      previousSnapshot.pinTargetByNodeId = pinTargetByNodeId;
+      previousSnapshot.targets = targets;
+      previousSnapshot.pinTargets = pinTargets;
+    } else {
+      this.codexAgentRunPinRevisionByPanel.set(panel, 0);
+      this.codexAgentRunPinSequenceByPanel.delete(panel);
+      this.codexAgentRunsSnapshotByPanel.set(panel, {
+        generation,
+        currentIdentityKey: session.identityKey,
+        relationKey,
+        navigationTargetByNodeId,
+        pinTargetByNodeId,
+        targets,
+        pinTargets,
+      });
+    }
+    this.postCodexAgentRunsMessage(panel, {
+      type: "setCodexAgentRunsState",
+      version: 1,
+      generation,
+      state: "ready",
+      model,
+      i18n: this.buildI18n(),
+    }, "ready");
+  }
+
+  private postCodexAgentRunsMessage(
+    panel: vscode.WebviewPanel,
+    message: Record<string, unknown>,
+    scope: string,
+  ): void {
+    let delivery: PromiseLike<boolean>;
+    try {
+      delivery = panel.webview.postMessage(message);
+    } catch (error) {
+      this.logger?.debug(`codexAgentRuns.${scope} delivery failed error=${sanitizeDebugError(error)}`);
+      return;
+    }
+    void Promise.resolve(delivery).catch((error) => {
+      this.logger?.debug(`codexAgentRuns.${scope} delivery failed error=${sanitizeDebugError(error)}`);
+    });
+  }
+
+  private nextCodexAgentRunsGeneration(panel: vscode.WebviewPanel): number {
+    const generation = (this.codexAgentRunsGenerationByPanel.get(panel) ?? 0) + 1;
+    this.codexAgentRunsGenerationByPanel.set(panel, generation);
+    return generation;
+  }
+
+  private async handleOpenCodexAgentRun(
+    panel: vscode.WebviewPanel,
+    msg: any,
+    requestSequence: number,
+  ): Promise<void> {
+    if (!getConfig().agentRunsEnabled) {
+      void vscode.window.showInformationMessage(t("codexAgentRuns.disabled"));
+      return;
+    }
+    if (!this.codexAgentRuns.isPresentationEnabled()) {
+      void vscode.window.showErrorMessage(t("codexAgentRuns.navigationUnavailable"));
+      return;
+    }
+    const generation = Number(msg?.generation);
+    const target = typeof msg?.target === "string" && msg.target.length <= 128 ? msg.target : "";
+    const snapshot = this.codexAgentRunsSnapshotByPanel.get(panel);
+    if (!snapshot || !Number.isSafeInteger(generation) || generation !== snapshot.generation || !target) {
+      void vscode.window.showErrorMessage(t("codexAgentRuns.navigationUnavailable"));
+      return;
+    }
+    const state = this.stateByPanel.get(panel);
+    if (!state) {
+      void vscode.window.showErrorMessage(t("codexAgentRuns.navigationUnavailable"));
+      return;
+    }
+    const currentSession = this.historyService.findByFsPath(state.fsPath);
+    if (!currentSession || currentSession.identityKey !== snapshot.currentIdentityKey) {
+      void vscode.window.showErrorMessage(t("codexAgentRuns.navigationUnavailable"));
+      return;
+    }
+    const session = snapshot.targets.get(target);
+    if (!session || session.source !== "codex" || session.identityKey === snapshot.currentIdentityKey) {
+      void vscode.window.showErrorMessage(t("codexAgentRuns.navigationUnavailable"));
+      return;
+    }
+    if (
+      requestSequence < 1 ||
+      this.codexAgentRunNavigationSequenceByPanel.get(panel) !== requestSequence ||
+      requestSequence <= (this.codexAgentRunNavigationClaimedSequenceByPanel.get(panel) ?? 0)
+    ) {
+      return;
+    }
+    this.codexAgentRunNavigationClaimedSequenceByPanel.set(panel, requestSequence);
+    const showUnavailableIfLatest = (): void => {
+      if (this.codexAgentRunNavigationSequenceByPanel.get(panel) === requestSequence) {
+        void vscode.window.showErrorMessage(t("codexAgentRuns.navigationUnavailable"));
+      }
+    };
+    const [sourceFileAvailable, sessionFileAvailable] = await Promise.all([
+      this.ensureSessionFileAvailable(state.fsPath),
+      this.ensureSessionFileAvailable(session.fsPath),
+    ]);
+    if (!this.isCurrentCodexAgentRunNavigation(
+      panel,
+      state,
+      snapshot,
+      generation,
+      target,
+      session,
+      requestSequence,
+    )) {
+      showUnavailableIfLatest();
+      return;
+    }
+    if (!sourceFileAvailable) {
+      await this.handleMissingSession(panel, state.fsPath);
+      return;
+    }
+    if (!sessionFileAvailable) {
+      void vscode.window.showErrorMessage(t("codexAgentRuns.sessionMissing"));
+      try {
+        await this.onMissingSession?.(session.fsPath);
+      } catch (error) {
+        this.logger?.debug(`codexAgentRuns missing-session refresh failed error=${sanitizeDebugError(error)}`);
+      }
+      return;
+    }
+    const isRequestCurrent = () =>
+      this.isCurrentCodexAgentRunNavigation(
+        panel,
+        state,
+        snapshot,
+        generation,
+        target,
+        session,
+        requestSequence,
+      );
+    if (
+      await this.revealExistingSessionPanel(
+        session.fsPath,
+        undefined,
+        { preserveFocus: false, isRequestCurrent },
+      )
+    ) {
+      return;
+    }
+    if (!isRequestCurrent()) {
+      showUnavailableIfLatest();
+      return;
+    }
+    await this.openSession(session, { kind: "session", preserveFocus: false, isRequestCurrent });
+  }
+
+  private async handleToggleCodexAgentRunPin(
+    panel: vscode.WebviewPanel,
+    msg: any,
+    requestSequence: number,
+  ): Promise<void> {
+    const generation = Number(msg?.generation);
+    const target = typeof msg?.target === "string" && msg.target.length <= 128 ? msg.target : "";
+    const desiredPinned = typeof msg?.desiredPinned === "boolean" ? msg.desiredPinned : undefined;
+    const snapshot = this.codexAgentRunsSnapshotByPanel.get(panel);
+    const state = this.stateByPanel.get(panel);
+    const session = target ? snapshot?.pinTargets.get(target) : undefined;
+    if (
+      !getConfig().agentRunsEnabled ||
+      !this.codexAgentRuns.isPresentationEnabled() ||
+      !snapshot ||
+      !state ||
+      !session ||
+      session.source !== "codex" ||
+      !Number.isSafeInteger(generation) ||
+      generation !== snapshot.generation ||
+      desiredPinned === undefined ||
+      requestSequence < 1
+    ) {
+      this.postCodexAgentRunPinResult(panel, generation, target, requestSequence, false);
+      if (snapshot && this.readyByPanel.get(panel)) this.publishCodexAgentRuns(panel);
+      return;
+    }
+
+    const requests = this.codexAgentRunPinSequenceByPanel.get(panel) ?? new Map<string, number>();
+    const latestRequest = requests.get(target) ?? 0;
+    if (requestSequence <= latestRequest) {
+      this.postCodexAgentRunPinResult(
+        panel,
+        generation,
+        target,
+        requestSequence,
+        false,
+        isSessionPinned(this.pinStore, session),
+      );
+      return;
+    }
+    requests.set(target, requestSequence);
+    this.codexAgentRunPinSequenceByPanel.set(panel, requests);
+
+    const [sourceFileAvailable, targetFileAvailable] = await Promise.all([
+      this.ensureSessionFileAvailable(state.fsPath),
+      this.ensureSessionFileAvailable(session.fsPath),
+    ]);
+    if (!this.isCurrentCodexAgentRunPinRequest(
+      panel,
+      state,
+      snapshot,
+      generation,
+      target,
+      session,
+      requestSequence,
+    )) {
+      this.postCodexAgentRunPinResult(panel, generation, target, requestSequence, false);
+      return;
+    }
+    if (!sourceFileAvailable) {
+      this.postCodexAgentRunPinResult(panel, generation, target, requestSequence, false);
+      await this.handleMissingSession(panel, state.fsPath);
+      return;
+    }
+    if (!targetFileAvailable) {
+      this.postCodexAgentRunPinResult(panel, generation, target, requestSequence, false);
+      void vscode.window.showErrorMessage(t("codexAgentRuns.sessionMissing"));
+      try {
+        await this.onMissingSession?.(session.fsPath);
+      } catch (error) {
+        this.logger?.debug(`codexAgentRuns pin missing-session refresh failed error=${sanitizeDebugError(error)}`);
+      }
+      return;
+    }
+
+    const pinnedBefore = isSessionPinned(this.pinStore, session);
+    try {
+      if (pinnedBefore !== desiredPinned) {
+        await vscode.commands.executeCommand(
+          desiredPinned ? "codexHistoryViewer.pinSession" : "codexHistoryViewer.unpinSession",
+          { fsPath: session.fsPath, identityKey: session.identityKey },
+        );
+      }
+      const isPinned = isSessionPinned(this.pinStore, session);
+      if (pinnedBefore === desiredPinned || isPinned !== desiredPinned) {
+        this.publishCodexAgentRunPinState(panel);
+      }
+      this.postCodexAgentRunPinResult(
+        panel,
+        generation,
+        target,
+        requestSequence,
+        isPinned === desiredPinned,
+        isPinned,
+      );
+      if (isPinned !== desiredPinned) {
+        void vscode.window.showErrorMessage(t("codexAgentRuns.pinFailed"));
+      }
+    } catch (error) {
+      this.logger?.debug(`codexAgentRuns pin update failed error=${sanitizeDebugError(error)}`);
+      this.publishCodexAgentRunPinState(panel);
+      this.postCodexAgentRunPinResult(
+        panel,
+        generation,
+        target,
+        requestSequence,
+        false,
+        isSessionPinned(this.pinStore, session),
+      );
+      void vscode.window.showErrorMessage(t("codexAgentRuns.pinFailed"));
+    }
+  }
+
+  private isCurrentCodexAgentRunPinRequest(
+    panel: vscode.WebviewPanel,
+    requestState: ChatPanelState,
+    requestSnapshot: CodexAgentRunsPanelSnapshot,
+    generation: number,
+    target: string,
+    session: SessionSummary,
+    requestSequence: number,
+  ): boolean {
+    const snapshot = this.codexAgentRunsSnapshotByPanel.get(panel);
+    const state = this.stateByPanel.get(panel);
+    const currentSession = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+    return Boolean(
+      this.codexAgentRuns.isPresentationEnabled() &&
+      snapshot === requestSnapshot &&
+      snapshot.generation === generation &&
+      isSameCodexAgentRunTarget(snapshot.pinTargets.get(target), session) &&
+      this.codexAgentRunPinSequenceByPanel.get(panel)?.get(target) === requestSequence &&
+      state &&
+      normalizeCacheKey(state.fsPath) === normalizeCacheKey(requestState.fsPath) &&
+      currentSession?.identityKey === snapshot.currentIdentityKey,
+    );
+  }
+
+  private postCodexAgentRunPinResult(
+    panel: vscode.WebviewPanel,
+    generation: number,
+    target: string,
+    requestId: number,
+    success: boolean,
+    isPinned?: boolean,
+  ): void {
+    this.postCodexAgentRunsMessage(panel, {
+      type: "codexAgentRunPinResult",
+      version: 1,
+      generation,
+      target,
+      requestId,
+      success,
+      ...(isPinned !== undefined ? { isPinned } : {}),
+    }, "pinResult");
+  }
+
+  private isCurrentCodexAgentRunNavigation(
+    panel: vscode.WebviewPanel,
+    requestState: ChatPanelState,
+    requestSnapshot: CodexAgentRunsPanelSnapshot,
+    generation: number,
+    target: string,
+    session: SessionSummary,
+    requestSequence: number,
+  ): boolean {
+    const snapshot = this.codexAgentRunsSnapshotByPanel.get(panel);
+    const state = this.stateByPanel.get(panel);
+    const currentSession = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+    return Boolean(
+      this.codexAgentRuns.isPresentationEnabled() &&
+      snapshot === requestSnapshot &&
+      snapshot.generation === generation &&
+      isSameCodexAgentRunTarget(snapshot.targets.get(target), session) &&
+      this.codexAgentRunNavigationSequenceByPanel.get(panel) === requestSequence &&
+      state &&
+      normalizeCacheKey(state.fsPath) === normalizeCacheKey(requestState.fsPath) &&
+      currentSession?.identityKey === snapshot.currentIdentityKey,
+    );
+  }
+
+  private scheduleBranchNavigation(
+    panel: vscode.WebviewPanel,
+    codexSupersededRetryCount = 0,
+  ): void {
+    const state = this.stateByPanel.get(panel);
+    const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+    this.cancelBranchNavigation(panel);
+    const generation = (this.branchGenerationByPanel.get(panel) ?? 0) + 1;
+    this.branchGenerationByPanel.set(panel, generation);
+    this.branchSnapshotByPanel.delete(panel);
+    this.branchHistoryGenerationByPanel.delete(panel);
+    const historyGeneration = this.historyService.getIndexGeneration();
+    const config = getConfig();
+    const enabled =
+      Boolean(session && (session.source === "claude" || session.source === "codex")) &&
+      config.branchNavigationEnabled;
+    if (!state || !session || !enabled) {
+      this.branchSnapshotByPanel.delete(panel);
+      this.branchHistoryGenerationByPanel.delete(panel);
+      void panel.webview.postMessage({ type: "branchNavigationDisabled", generation });
+      return;
+    }
+
+    const cancellation = new vscode.CancellationTokenSource();
+    this.branchCancellationByPanel.set(panel, cancellation);
+    void panel.webview.postMessage({ type: "branchNavigationPending", generation });
+    if (session.source === "codex") {
+      void this.codexForkNavigation.load(session, {
+        shouldContinue: () =>
+          this.isCurrentBranchPanelRequest(
+            panel,
+            state.fsPath,
+            generation,
+            cancellation,
+          ),
+      }).then((snapshot) => {
+        const snapshotHistoryGeneration = snapshot.indexGeneration;
+        if (
+          !this.isCurrentBranchRequest(
+            panel,
+            state.fsPath,
+            generation,
+            snapshotHistoryGeneration,
+            cancellation,
+          )
+        ) {
+          return;
+        }
+        this.publishBranchNavigation(
+          panel,
+          snapshot,
+          generation,
+          false,
+          snapshotHistoryGeneration,
+        );
+      }).catch((error) => {
+        if (
+          !this.isCurrentBranchPanelRequest(
+            panel,
+            state.fsPath,
+            generation,
+            cancellation,
+          )
+        ) {
+          return;
+        }
+        if (
+          error instanceof CodexForkNavigationSupersededError &&
+          codexSupersededRetryCount < 1
+        ) {
+          this.scheduleBranchNavigation(panel, codexSupersededRetryCount + 1);
+          return;
+        }
+        this.logger?.debug(
+          formatDebugFields("codexFork navigation failed", {
+            session: safeDebugBasename(state.fsPath),
+            error: sanitizeDebugError(error),
+          }),
+        );
+        void panel.webview.postMessage({
+          type: "branchNavigationError",
+          generation,
+          message: t("codexForks.loadFailed"),
+        });
+      }).finally(() => {
+        if (this.branchCancellationByPanel.get(panel) === cancellation) {
+          this.branchCancellationByPanel.delete(panel);
+        }
+        cancellation.dispose();
+      });
+      return;
+    }
+
+    void this.branchNavigation.load(session, {
+      token: cancellation.token,
+      onStoredSnapshot: (snapshot) => {
+        if (
+          !this.isCurrentBranchRequest(
+            panel,
+            state.fsPath,
+            generation,
+            historyGeneration,
+            cancellation,
+          )
+        ) {
+          return;
+        }
+        this.publishBranchNavigation(panel, snapshot, generation, true, historyGeneration);
+      },
+    }).then((snapshot) => {
+      if (
+        !this.isCurrentBranchRequest(
+          panel,
+          state.fsPath,
+          generation,
+          historyGeneration,
+          cancellation,
+        )
+      ) {
+        return;
+      }
+      this.publishBranchNavigation(panel, snapshot, generation, false, historyGeneration);
+    }).catch((error) => {
+      if (
+        !this.isCurrentBranchRequest(
+          panel,
+          state.fsPath,
+          generation,
+          historyGeneration,
+          cancellation,
+        )
+      ) {
+        return;
+      }
+      this.logger?.debug(
+        formatDebugFields("claudeBranch navigation failed", {
+          session: safeDebugBasename(state.fsPath),
+          error: sanitizeDebugError(error),
+        }),
+      );
+      void panel.webview.postMessage({
+        type: "branchNavigationError",
+        generation,
+        message: t("claudeBranches.loadFailed"),
+      });
+    }).finally(() => {
+      if (this.branchCancellationByPanel.get(panel) === cancellation) {
+        this.branchCancellationByPanel.delete(panel);
+      }
+      cancellation.dispose();
+    });
+  }
+
+  private publishBranchNavigation(
+    panel: vscode.WebviewPanel,
+    snapshot: BranchNavigationSnapshot,
+    generation: number,
+    checkingLatest: boolean,
+    historyGeneration = this.branchHistoryGenerationByPanel.get(panel),
+  ): void {
+    const state = this.stateByPanel.get(panel);
+    if (!state) return;
+    const activeSession = this.historyService.findByFsPath(state.fsPath);
+    if (
+      !getConfig().branchNavigationEnabled ||
+      this.branchGenerationByPanel.get(panel) !== generation ||
+      historyGeneration === undefined ||
+      this.historyService.getIndexGeneration() !== historyGeneration ||
+      !activeSession ||
+      (isCodexForkNavigationSnapshot(snapshot)
+        ? activeSession.source !== "codex"
+        : activeSession.source !== "claude")
+    ) {
+      return;
+    }
+    const activeSessionCacheKey = activeSession.cacheKey;
+    const navigation = isCodexForkNavigationSnapshot(snapshot)
+      ? buildCodexForkChatBranchNavigationModel(
+          snapshot,
+          activeSessionCacheKey,
+          generation,
+          this.userMessageIndexesByPanel.get(panel),
+          state.revealMessageIndex,
+        )
+      : buildClaudeChatBranchNavigationModel(
+          snapshot,
+          activeSessionCacheKey,
+          generation,
+          this.userMessageIndexesByPanel.get(panel),
+          state.revealMessageIndex,
+        );
+    const i18n = this.buildI18n();
+    if (isCodexForkNavigationSnapshot(snapshot)) {
+      i18n.branchSwitchFailed = t("codexForks.switchFailed");
+      i18n.branchNone = t("codexForks.none");
+      i18n.branchLoadFailed = t("codexForks.loadFailed");
+    }
+    this.branchSnapshotByPanel.set(panel, snapshot);
+    this.branchHistoryGenerationByPanel.set(panel, historyGeneration);
+    void panel.webview.postMessage({
+      type: "branchNavigation",
+      navigation,
+      checkingLatest,
+      i18n,
+    });
+  }
+
+  private handleClaudeBranchOverlayPageRequest(panel: vscode.WebviewPanel, msg: any): void {
+    const snapshot = this.branchSnapshotByPanel.get(panel);
+    const state = this.stateByPanel.get(panel);
+    const generation = sanitizeBranchGeneration(msg?.generation);
+    if (
+      !getConfig().branchNavigationEnabled ||
+      !snapshot ||
+      !state ||
+      generation !== this.branchGenerationByPanel.get(panel) ||
+      this.branchHistoryGenerationByPanel.get(panel) !== this.historyService.getIndexGeneration()
+    ) {
+      return;
+    }
+    const session = this.historyService.findByFsPath(state.fsPath);
+    if (
+      !session ||
+      (isCodexForkNavigationSnapshot(snapshot)
+        ? session.source !== "codex"
+        : session.source !== "claude")
+    ) {
+      return;
+    }
+    const cursor = sanitizeBranchCursor(msg?.cursor);
+    const focusGroupId = sanitizeBranchModelId(msg?.groupId);
+    if (!cursor && !focusGroupId) {
+      void panel.webview.postMessage({ type: "branchTreePageError", generation });
+      return;
+    }
+    const options = {
+      ...(cursor ? { cursor } : {}),
+      ...(focusGroupId ? { focusGroupId } : {}),
+      activeChatMessageIndex: state.revealMessageIndex,
+    };
+    const overlay = isCodexForkNavigationSnapshot(snapshot)
+      ? buildCodexForkBranchOverlayPage(snapshot, session.cacheKey, generation, options)
+      : buildClaudeBranchOverlayPage(snapshot, session.cacheKey, generation, options);
+    void panel.webview.postMessage({ type: "branchTreePage", generation, overlay });
+  }
+
+  private handleClaudeBranchChoicePageRequest(panel: vscode.WebviewPanel, msg: any): void {
+    const snapshot = this.branchSnapshotByPanel.get(panel);
+    const state = this.stateByPanel.get(panel);
+    const generation = sanitizeBranchGeneration(msg?.generation);
+    if (
+      !getConfig().branchNavigationEnabled ||
+      !snapshot ||
+      !state ||
+      generation !== this.branchGenerationByPanel.get(panel) ||
+      this.branchHistoryGenerationByPanel.get(panel) !== this.historyService.getIndexGeneration()
+    ) {
+      return;
+    }
+    const session = this.historyService.findByFsPath(state.fsPath);
+    if (
+      !session ||
+      (isCodexForkNavigationSnapshot(snapshot)
+        ? session.source !== "codex"
+        : session.source !== "claude")
+    ) {
+      return;
+    }
+    const groupId = sanitizeBranchModelId(msg?.groupId);
+    const cursor = sanitizeBranchCursor(msg?.cursor);
+    if (!groupId || !cursor) {
+      void panel.webview.postMessage({ type: "branchTreePageError", generation });
+      return;
+    }
+    const group = isCodexForkNavigationSnapshot(snapshot)
+      ? buildCodexForkBranchChoicePage(
+          snapshot,
+          session.cacheKey,
+          groupId,
+          cursor,
+          state.revealMessageIndex,
+        )
+      : buildClaudeBranchChoicePage(
+          snapshot,
+          session.cacheKey,
+          groupId,
+          cursor,
+          state.revealMessageIndex,
+        );
+    if (!group) {
+      void panel.webview.postMessage({ type: "branchTreePageError", generation });
+      return;
+    }
+    void panel.webview.postMessage({ type: "branchTreeChoicePage", generation, group });
+  }
+
+  private isCurrentBranchRequest(
+    panel: vscode.WebviewPanel,
+    fsPath: string,
+    generation: number,
+    historyGeneration: number,
+    cancellation: vscode.CancellationTokenSource,
+  ): boolean {
+    return (
+      this.isCurrentBranchPanelRequest(panel, fsPath, generation, cancellation) &&
+      this.historyService.getIndexGeneration() === historyGeneration
+    );
+  }
+
+  private isCurrentBranchPanelRequest(
+    panel: vscode.WebviewPanel,
+    fsPath: string,
+    generation: number,
+    cancellation: vscode.CancellationTokenSource,
+  ): boolean {
+    const state = this.stateByPanel.get(panel);
+    const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+    return Boolean(
+      state &&
+      session &&
+      (session.source === "claude" || session.source === "codex") &&
+      getConfig().branchNavigationEnabled &&
+      !cancellation.token.isCancellationRequested &&
+      this.branchGenerationByPanel.get(panel) === generation &&
+      normalizeCacheKey(state.fsPath) === normalizeCacheKey(fsPath),
+    );
+  }
+
+  private cancelBranchNavigation(panel: vscode.WebviewPanel): void {
+    const cancellation = this.branchCancellationByPanel.get(panel);
+    cancellation?.cancel();
+    cancellation?.dispose();
+    this.branchCancellationByPanel.delete(panel);
+  }
+
+  private async handleClaudeBranchSwitch(
+    panel: vscode.WebviewPanel,
+    msg: any,
+    requestSequence: number,
+  ): Promise<void> {
+    const snapshot = this.branchSnapshotByPanel.get(panel);
+    const state = this.stateByPanel.get(panel);
+    const activeSource = state ? this.historyService.findByFsPath(state.fsPath)?.source : undefined;
+    const fail = (
+      message = t(activeSource === "codex" ? "codexForks.switchFailed" : "claudeBranches.switchFailed"),
+    ): void => {
+      if (this.branchSwitchSequenceByPanel.get(panel) !== requestSequence) return;
+      void panel.webview.postMessage({
+        type: "branchSwitchFailed",
+        requestId: requestSequence,
+        message,
+      });
+    };
+    if (!snapshot || !state) {
+      fail();
+      return;
+    }
+    const historyGeneration = this.branchHistoryGenerationByPanel.get(panel);
+    if (
+      historyGeneration === undefined ||
+      historyGeneration !== this.historyService.getIndexGeneration()
+    ) {
+      fail();
+      return;
+    }
+    if (isCodexForkNavigationSnapshot(snapshot)) {
+      await this.handleCodexForkSwitch(
+        panel,
+        msg,
+        requestSequence,
+        state,
+        snapshot,
+        historyGeneration,
+      );
+      return;
+    }
+    if (!getConfig().branchNavigationEnabled) {
+      fail();
+      return;
+    }
+    const claudeSnapshot = snapshot as ClaudeBranchNavigationSnapshot;
+    const generation = sanitizeBranchGeneration(msg?.generation);
+    if (generation !== this.branchGenerationByPanel.get(panel)) {
+      fail();
+      return;
+    }
+    const groupId = sanitizeBranchModelId(msg?.groupId);
+    const choiceId = sanitizeBranchModelId(msg?.choiceId);
+    const occurrenceId = sanitizeBranchOccurrenceId(msg?.occurrenceId);
+    const group = claudeSnapshot.model.groups.find((candidate) => candidate.id === groupId);
+    const choice = group?.choices.find((candidate) => candidate.id === choiceId);
+    if (!group || !choice) {
+      fail();
+      return;
+    }
+    const targetOccurrenceId = occurrenceId || (choice.occurrenceIds.length === 1 ? choice.occurrenceIds[0]! : "");
+    const activeSession = this.historyService.findByFsPath(state.fsPath);
+    if (
+      !targetOccurrenceId ||
+      !choice.occurrenceIds.includes(targetOccurrenceId) ||
+      !activeSession ||
+      activeSession.source !== "claude" ||
+      !isClaudeBranchTargetInActiveLineage(
+        claudeSnapshot,
+        activeSession.cacheKey,
+        groupId,
+        choiceId,
+        targetOccurrenceId,
+        state.revealMessageIndex,
+      )
+    ) {
+      fail();
+      return;
+    }
+    const occurrence = claudeSnapshot.occurrenceById.get(targetOccurrenceId);
+    if (!occurrence || occurrence.chatMessageIndex < 1) {
+      fail();
+      return;
+    }
+    const targetKind =
+      msg?.targetKind === "historyFirst" ||
+      msg?.targetKind === "preBranch" ||
+      msg?.targetKind === "historyEnd"
+        ? msg.targetKind
+        : "branchStart";
+    const entry = claudeSnapshot.entryByCacheKey.get(occurrence.sessionCacheKey);
+    const targetAnchor =
+      targetKind === "historyFirst"
+        ? entry?.claudeMessageBounds?.first
+        : targetKind === "preBranch"
+          ? occurrence.previousVisibleMessage
+          : targetKind === "historyEnd"
+            ? entry?.claudeMessageBounds?.last
+            : occurrence;
+    const revealMessageIndex = targetAnchor?.chatMessageIndex;
+    if (typeof revealMessageIndex !== "number" || !Number.isSafeInteger(revealMessageIndex) || revealMessageIndex < 1) {
+      fail();
+      return;
+    }
+    const direction = msg?.direction === "previous" ? "previous" : msg?.direction === "next" ? "next" : "direct";
+    const session = this.historyService.getIndex().byCacheKey.get(occurrence.sessionCacheKey) ??
+      this.historyService.getIndex().byIdentityKey.get(occurrence.sessionIdentityKey);
+    if (
+      requestSequence < 1 ||
+      this.branchSwitchSequenceByPanel.get(panel) !== requestSequence ||
+      requestSequence <= (this.branchSwitchClaimedSequenceByPanel.get(panel) ?? 0)
+    ) {
+      return;
+    }
+    this.branchSwitchClaimedSequenceByPanel.set(panel, requestSequence);
+    if (!session || session.source !== "claude") {
+      fail(t("claudeBranches.sessionMissing"));
+      return;
+    }
+    const request: BranchSwitchRequest = {
+      state,
+      snapshot: claudeSnapshot,
+      generation,
+      historyGeneration,
+      requestSequence,
+    };
+    const sourceFileAvailable = await this.ensureSessionFileAvailable(state.fsPath);
+    if (!this.isCurrentClaudeBranchSwitchRequest(panel, request)) {
+      this.cancelClaudeBranchSwitchIfLatest(panel, request);
+      return;
+    }
+    if (!sourceFileAvailable) {
+      await this.handleMissingSession(panel, state.fsPath);
+      return;
+    }
+    if (normalizeCacheKey(session.fsPath) === normalizeCacheKey(state.fsPath)) {
+      this.stateByPanel.set(panel, { ...state, revealMessageIndex });
+      this.publishBranchNavigation(panel, claudeSnapshot, generation, false);
+      void panel.webview.postMessage({
+        type: "branchSwitchSucceeded",
+        requestId: requestSequence,
+        messageIndex: revealMessageIndex,
+      });
+      return;
+    }
+    const switched = await this.switchBranchPanelToSession(
+      panel,
+      session,
+      revealMessageIndex,
+      direction,
+      request,
+    );
+    if (switched) {
+      void panel.webview.postMessage({
+        type: "branchSwitchSucceeded",
+        requestId: requestSequence,
+        messageIndex: revealMessageIndex,
+      });
+    }
+  }
+
+  private async handleCodexForkSwitch(
+    panel: vscode.WebviewPanel,
+    msg: any,
+    requestSequence: number,
+    state: ChatPanelState,
+    snapshot: CodexForkNavigationSnapshot,
+    historyGeneration: number,
+  ): Promise<void> {
+    const fail = (message = t("codexForks.switchFailed")): void => {
+      if (this.branchSwitchSequenceByPanel.get(panel) !== requestSequence) return;
+      void panel.webview.postMessage({
+        type: "branchSwitchFailed",
+        requestId: requestSequence,
+        message,
+      });
+    };
+    if (!getConfig().branchNavigationEnabled) {
+      fail();
+      return;
+    }
+    const generation = sanitizeBranchGeneration(msg?.generation);
+    if (generation !== this.branchGenerationByPanel.get(panel)) {
+      fail();
+      return;
+    }
+    const groupId = sanitizeBranchModelId(msg?.groupId);
+    const choiceId = sanitizeBranchModelId(msg?.choiceId);
+    const occurrenceId = sanitizeBranchOccurrenceId(msg?.occurrenceId);
+    const group = snapshot.groups.find((candidate) => candidate.id === groupId);
+    const choice = group?.choices.find((candidate) => candidate.id === choiceId);
+    const targetOccurrenceId = occurrenceId || choice?.occurrence.id || "";
+    const activeSession = this.historyService.findByFsPath(state.fsPath);
+    if (
+      !group ||
+      !choice ||
+      targetOccurrenceId !== choice.occurrence.id ||
+      !activeSession ||
+      activeSession.source !== "codex" ||
+      !isCodexForkTargetInActiveLineage(
+        snapshot,
+        activeSession.cacheKey,
+        groupId,
+        choiceId,
+        targetOccurrenceId,
+        state.revealMessageIndex,
+      )
+    ) {
+      fail();
+      return;
+    }
+    const targetKind =
+      msg?.targetKind === "historyFirst" ||
+      msg?.targetKind === "preBranch" ||
+      msg?.targetKind === "historyEnd"
+        ? msg.targetKind
+        : "branchStart";
+    const targetAnchor =
+      targetKind === "historyFirst"
+        ? choice.occurrence.historyFirst
+        : targetKind === "preBranch"
+          ? choice.occurrence.preBranch
+          : targetKind === "historyEnd"
+            ? choice.occurrence.historyEnd
+            : choice.occurrence.branchStart;
+    const revealMessageIndex = targetAnchor?.chatMessageIndex;
+    if (
+      typeof revealMessageIndex !== "number" ||
+      !Number.isSafeInteger(revealMessageIndex) ||
+      revealMessageIndex < 1
+    ) {
+      fail();
+      return;
+    }
+    if (
+      requestSequence < 1 ||
+      this.branchSwitchSequenceByPanel.get(panel) !== requestSequence ||
+      requestSequence <= (this.branchSwitchClaimedSequenceByPanel.get(panel) ?? 0)
+    ) {
+      return;
+    }
+    this.branchSwitchClaimedSequenceByPanel.set(panel, requestSequence);
+    const request: BranchSwitchRequest = {
+      state,
+      snapshot,
+      generation,
+      historyGeneration,
+      requestSequence,
+    };
+    const [sourceFileAvailable, resolved] = await Promise.all([
+      this.ensureSessionFileAvailable(state.fsPath),
+      this.codexForkNavigation.validateTarget(
+        snapshot,
+        activeSession.cacheKey,
+        groupId,
+        choiceId,
+        targetOccurrenceId,
+        state.revealMessageIndex,
+      ),
+    ]);
+    if (!this.isCurrentClaudeBranchSwitchRequest(panel, request)) {
+      this.cancelClaudeBranchSwitchIfLatest(panel, request);
+      return;
+    }
+    if (!sourceFileAvailable) {
+      await this.handleMissingSession(panel, state.fsPath);
+      return;
+    }
+    if (!resolved || resolved.session.source !== "codex") {
+      fail();
+      return;
+    }
+    const direction =
+      msg?.direction === "previous" ? "previous" : msg?.direction === "next" ? "next" : "direct";
+    const validateResolvedTarget = async (): Promise<boolean> => {
+      const revalidated = await this.codexForkNavigation.validateTarget(
+        snapshot,
+        activeSession.cacheKey,
+        groupId,
+        choiceId,
+        targetOccurrenceId,
+        state.revealMessageIndex,
+      );
+      return Boolean(
+        revalidated &&
+        revalidated.session.cacheKey === resolved.session.cacheKey &&
+        revalidated.session.identityKey === resolved.session.identityKey &&
+        normalizeCacheKey(revalidated.session.fsPath) === normalizeCacheKey(resolved.session.fsPath),
+      );
+    };
+    if (normalizeCacheKey(resolved.session.fsPath) === normalizeCacheKey(state.fsPath)) {
+      const targetStillValid = await validateResolvedTarget();
+      if (!this.isCurrentClaudeBranchSwitchRequest(panel, request)) {
+        this.cancelClaudeBranchSwitchIfLatest(panel, request);
+        return;
+      }
+      if (!targetStillValid) {
+        fail();
+        return;
+      }
+      this.stateByPanel.set(panel, { ...state, revealMessageIndex });
+      this.publishBranchNavigation(panel, snapshot, generation, false);
+      void panel.webview.postMessage({
+        type: "branchSwitchSucceeded",
+        requestId: requestSequence,
+        messageIndex: revealMessageIndex,
+      });
+      return;
+    }
+    const switched = await this.switchBranchPanelToSession(
+      panel,
+      resolved.session,
+      revealMessageIndex,
+      direction,
+      request,
+      validateResolvedTarget,
+    );
+    if (switched) {
+      void panel.webview.postMessage({
+        type: "branchSwitchSucceeded",
+        requestId: requestSequence,
+        messageIndex: revealMessageIndex,
+      });
+    }
+  }
+
+  private async switchBranchPanelToSession(
+    panel: vscode.WebviewPanel,
+    session: SessionSummary,
+    revealMessageIndex: number,
+    direction: "previous" | "next" | "direct",
+    request: BranchSwitchRequest,
+    validatePreparedState?: () => Promise<boolean>,
+  ): Promise<boolean> {
+    if (!this.isCurrentClaudeBranchSwitchRequest(panel, request)) {
+      this.cancelClaudeBranchSwitchIfLatest(panel, request);
+      return false;
+    }
+    const sessionFileAvailable = await this.ensureSessionFileAvailable(session.fsPath);
+    if (!this.isCurrentClaudeBranchSwitchRequest(panel, request)) {
+      this.cancelClaudeBranchSwitchIfLatest(panel, request);
+      return false;
+    }
+    if (!sessionFileAvailable) {
+      void panel.webview.postMessage({
+        type: "branchSwitchFailed",
+        requestId: request.requestSequence,
+        message: t(
+          isCodexForkNavigationSnapshot(request.snapshot)
+            ? "codexForks.sessionMissing"
+            : "claudeBranches.sessionMissing",
+        ),
+      });
+      return false;
+    }
+    const candidate: ChatPanelState = {
+      fsPath: session.fsPath,
+      revealMessageIndex,
+      kind: "branch",
+      autoRefreshMode: DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE,
+      pendingAutoRefresh: false,
+    };
+    void panel.webview.postMessage({
+      type: "branchSwitchPending",
+      requestId: request.requestSequence,
+      generation: request.generation,
+      direction,
+    });
+    const sent = await this.sendSessionData(panel, {
+      stateOverride: candidate,
+      branchGeneration: request.generation,
+      transitionDirection: direction,
+      suppressOpenError: true,
+      validatePreparedState,
+      commitStateTransition: () => {
+        if (!this.isCurrentClaudeBranchSwitchRequest(panel, request)) return false;
+        this.transitionPanelToBranch(panel, request.state.fsPath);
+        this.cancelBranchNavigation(panel);
+        this.branchSnapshotByPanel.delete(panel);
+        this.branchHistoryGenerationByPanel.delete(panel);
+        return true;
+      },
+    });
+    if (!sent) {
+      if (this.isCurrentClaudeBranchSwitchRequest(panel, request)) {
+        void panel.webview.postMessage({
+          type: "branchSwitchFailed",
+          requestId: request.requestSequence,
+          message: t(
+            isCodexForkNavigationSnapshot(request.snapshot)
+              ? "codexForks.switchFailed"
+              : "claudeBranches.switchFailed",
+          ),
+        });
+      } else {
+        this.cancelClaudeBranchSwitchIfLatest(panel, request);
+      }
+      return false;
+    }
+    panel.title = buildPanelTitle(session);
+    panel.iconPath = this.resolveSessionIconPath(session);
+    this.notifyAutoRefreshConsumerVisibilityChanged();
+    return true;
+  }
+
+  private cancelClaudeBranchSwitchIfLatest(
+    panel: vscode.WebviewPanel,
+    request: BranchSwitchRequest,
+  ): void {
+    if (this.branchSwitchSequenceByPanel.get(panel) !== request.requestSequence) return;
+    void panel.webview.postMessage({
+      type: "branchSwitchCancelled",
+      requestId: request.requestSequence,
+    });
+  }
+
+  private isCurrentClaudeBranchSwitchRequest(
+    panel: vscode.WebviewPanel,
+    request: BranchSwitchRequest,
+  ): boolean {
+    return (
+      this.stateByPanel.get(panel) === request.state &&
+      this.branchSnapshotByPanel.get(panel) === request.snapshot &&
+      this.branchGenerationByPanel.get(panel) === request.generation &&
+      this.branchHistoryGenerationByPanel.get(panel) === request.historyGeneration &&
+      this.historyService.getIndexGeneration() === request.historyGeneration &&
+      this.branchSwitchSequenceByPanel.get(panel) === request.requestSequence
+    );
+  }
+
   private async sendSessionData(
     panel: vscode.WebviewPanel,
-    options?: {
-      restoreScrollY?: number;
-      restoreSelectedMessageIndex?: number;
-      preserveUiState?: boolean;
-      autoScrollToBottom?: boolean;
-      detailMode?: ChatSessionDetailMode;
-    },
+    options?: ChatSessionDataOptions,
   ): Promise<boolean> {
-    const state = this.stateByPanel.get(panel);
+    const currentState = this.stateByPanel.get(panel);
+    const state = options?.stateOverride ?? currentState;
     if (!state) return false;
-    if (!(await this.ensurePanelSessionFile(panel, state.fsPath))) return false;
+    const request = this.beginSessionDataRequest(
+      panel,
+      options?.stateOverride !== undefined,
+      currentState,
+      options?.supersedeTransition === true,
+    );
+    if (!request) return false;
+    try {
+      return await this.sendSessionDataForRequest(panel, currentState, state, request, options);
+    } finally {
+      this.completeSessionDataRequest(panel, request);
+    }
+  }
+
+  private async sendSessionDataForRequest(
+    panel: vscode.WebviewPanel,
+    currentState: ChatPanelState | undefined,
+    state: ChatPanelState,
+    request: ChatSessionDataRequest,
+    options?: ChatSessionDataOptions,
+  ): Promise<boolean> {
+    const isCurrent = (): boolean =>
+      this.isSessionDataRequestCurrent(panel, request, currentState, options);
+    const sessionFileAvailable = await this.ensureSessionFileAvailable(state.fsPath);
+    if (!isCurrent()) return false;
+    if (!sessionFileAvailable) {
+      if (!options?.stateOverride && currentState) {
+        await this.handleMissingSession(panel, currentState.fsPath);
+      }
+      return false;
+    }
 
     const config = getConfig();
     const detailMode = resolveSessionDetailMode(options?.detailMode, state);
@@ -1016,8 +2625,16 @@ export class ChatPanelManager implements vscode.Disposable {
       });
       buildMs = elapsedMs(buildStartedAt);
     } catch (error) {
-      if (!(await this.ensurePanelSessionFile(panel, state.fsPath))) return false;
-      void vscode.window.showErrorMessage(t("app.openSessionFailed"));
+      if (!isCurrent()) return false;
+      if (!options?.stateOverride && currentState) {
+        const stillAvailable = await this.ensureSessionFileAvailable(currentState.fsPath);
+        if (!isCurrent()) return false;
+        if (!stillAvailable) {
+          await this.handleMissingSession(panel, currentState.fsPath);
+          return false;
+        }
+      }
+      if (!options?.suppressOpenError) void vscode.window.showErrorMessage(t("app.openSessionFailed"));
       this.logger?.debug(
         formatDebugFields("chatSession send fail", {
           session: safeDebugBasename(state.fsPath),
@@ -1028,6 +2645,7 @@ export class ChatPanelManager implements vscode.Disposable {
       );
       return false;
     }
+    if (!isCurrent()) return false;
 
     const sessionCwd = typeof model.meta?.cwd === "string" ? model.meta.cwd : undefined;
     const sessionDisplayCwd = sessionCwd ? (this.projectAssociationStore.getDisplayCwd(sessionCwd) ?? sessionCwd) : undefined;
@@ -1044,15 +2662,31 @@ export class ChatPanelManager implements vscode.Disposable {
       detailMode,
       pathMode: pathModeState.mode,
       pathModeEnabled: pathModeState.enabled,
+      restoreScrollY: undefined,
+      restoreTopMessageIndex: undefined,
     };
-    this.stateByPanel.set(panel, nextState);
     const summary = this.historyService.findByFsPath(nextState.fsPath);
     if (config.chatTurnTimelineMode === "live") {
       model = await this.withLiveRunningTurnStatus(model, nextState, panel, summary, config);
+      if (!isCurrent()) return false;
     }
     const statsStartedAt = nowMs();
     const performanceStats = await buildChatPerformanceStats(nextState.fsPath, model);
     statsMs = elapsedMs(statsStartedAt);
+    if (!isCurrent()) return false;
+    if (options?.validatePreparedState && !await options.validatePreparedState()) return false;
+    if (!isCurrent()) return false;
+    if (options?.commitStateTransition && !options.commitStateTransition()) return false;
+    if (!isCurrent()) return false;
+    if (currentState && normalizeCacheKey(currentState.fsPath) !== normalizeCacheKey(nextState.fsPath)) {
+      this.clearSessionBoundPanelData(panel);
+    }
+    const committedState = nextState.pageSearchSeed
+      ? { ...nextState, pageSearchSeed: undefined }
+      : nextState;
+    this.stateByPanel.set(panel, committedState);
+    this.markSessionDataTransitionCommitted(panel, request, committedState);
+    this.sessionDataCommitSequenceByPanel.set(panel, request.sequence);
     this.imageDataByPanel.set(panel, collectSaveableImages(model));
     this.documentDataByPanel.set(panel, collectSaveableDocuments(model));
     const annotation = this.annotationStore.get(nextState.fsPath);
@@ -1078,7 +2712,17 @@ export class ChatPanelManager implements vscode.Disposable {
           }
         : {}),
     };
-    void panel.webview.postMessage({
+    this.userMessageIndexesByPanel.set(
+      panel,
+      new Set(
+        webviewModel.items.flatMap((item) =>
+          item.type === "message" && item.role === "user" && typeof item.messageIndex === "number"
+            ? [item.messageIndex]
+            : [],
+        ),
+      ),
+    );
+    const delivery = panel.webview.postMessage({
       type: "sessionData",
       model: {
         ...webviewModel,
@@ -1095,7 +2739,10 @@ export class ChatPanelManager implements vscode.Disposable {
       autoScrollToBottom: options?.autoScrollToBottom === true,
       panelKind: nextState.kind,
       isPreview: nextState.kind === "reusable",
-      isPinned: this.pinStore.isPinned(nextState.fsPath),
+      isPinned: (() => {
+        const session = this.historyService.findByFsPath(nextState.fsPath);
+        return session ? isSessionPinned(this.pinStore, session) : this.pinStore.isPinned(nextState.fsPath);
+      })(),
       bookmarks: bookmarkState.bookmarkKeys,
       i18n: this.buildI18n(),
       dateTime,
@@ -1119,13 +2766,9 @@ export class ChatPanelManager implements vscode.Disposable {
       imageSettings: this.buildImageSettings(config),
       detailMode,
       detailsLoaded: detailMode === "full",
+      transitionDirection: options?.transitionDirection,
+      codexAgentRunsGenerationBoundary: this.codexAgentRunsGenerationByPanel.get(panel) ?? 0,
     });
-    if (nextState.pageSearchSeed) {
-      this.stateByPanel.set(panel, {
-        ...nextState,
-        pageSearchSeed: undefined,
-      });
-    }
     this.logger?.debug(
       formatDebugFields("chatSession send done", {
         session: safeDebugBasename(nextState.fsPath),
@@ -1142,7 +2785,89 @@ export class ChatPanelManager implements vscode.Disposable {
         fileSizeBytes: performanceStats.fileSizeBytes,
       }),
     );
-    return true;
+    this.scheduleBranchNavigation(panel);
+    this.publishCodexAgentRuns(panel);
+    const delivered = await delivery;
+    if (!delivered || this.sessionDataCommitSequenceByPanel.get(panel) !== request.sequence) return false;
+    const latestState = this.stateByPanel.get(panel);
+    return Boolean(
+      latestState &&
+      latestState.kind === committedState.kind &&
+      normalizeCacheKey(latestState.fsPath) === normalizeCacheKey(committedState.fsPath),
+    );
+  }
+
+  private beginSessionDataRequest(
+    panel: vscode.WebviewPanel,
+    transition: boolean,
+    startingState: ChatPanelState | undefined,
+    supersedeTransition = false,
+  ): ChatSessionDataRequest | null {
+    const activeTransition = this.sessionDataTransitionByPanel.get(panel);
+    if (
+      !transition &&
+      activeTransition &&
+      !supersedeTransition &&
+      isSameChatPanelSession(this.stateByPanel.get(panel), activeTransition.protectedState)
+    ) {
+      return null;
+    }
+    const sequence = (this.sessionDataRequestSequenceByPanel.get(panel) ?? 0) + 1;
+    this.sessionDataRequestSequenceByPanel.set(panel, sequence);
+    if (transition) {
+      this.sessionDataTransitionByPanel.set(panel, { sequence, protectedState: startingState });
+    } else if (activeTransition) {
+      this.sessionDataTransitionByPanel.delete(panel);
+    }
+    return { sequence, transition };
+  }
+
+  private isSessionDataRequestCurrent(
+    panel: vscode.WebviewPanel,
+    request: ChatSessionDataRequest,
+    startingState: ChatPanelState | undefined,
+    options: ChatSessionDataOptions | undefined,
+  ): boolean {
+    if (this.sessionDataRequestSequenceByPanel.get(panel) !== request.sequence) return false;
+    const transitionReservation = this.sessionDataTransitionByPanel.get(panel);
+    if (
+      request.transition
+        ? transitionReservation?.sequence !== request.sequence
+        : transitionReservation !== undefined
+    ) {
+      return false;
+    }
+    if (startingState ? this.stateByPanel.get(panel) !== startingState : this.stateByPanel.has(panel)) return false;
+    if (
+      typeof options?.branchGeneration === "number" &&
+      this.branchGenerationByPanel.get(panel) !== options.branchGeneration
+    ) {
+      return false;
+    }
+    return !options?.isRequestCurrent || options.isRequestCurrent();
+  }
+
+  private markSessionDataTransitionCommitted(
+    panel: vscode.WebviewPanel,
+    request: ChatSessionDataRequest,
+    committedState: ChatPanelState,
+  ): void {
+    const reservation = this.sessionDataTransitionByPanel.get(panel);
+    if (request.transition && reservation?.sequence === request.sequence) {
+      reservation.protectedState = committedState;
+    }
+  }
+
+  private completeSessionDataRequest(
+    panel: vscode.WebviewPanel,
+    request: ChatSessionDataRequest,
+  ): void {
+    if (
+      request.transition &&
+      this.sessionDataTransitionByPanel.get(panel)?.sequence === request.sequence
+    ) {
+      this.sessionDataTransitionByPanel.delete(panel);
+    }
   }
 
   private withBookmarkState(model: ChatSessionModel, sessionFsPath: string, panel: vscode.WebviewPanel): ChatBookmarkState {
@@ -1195,7 +2920,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private async loadPatchEntryDetails(panel: vscode.WebviewPanel, msg: any): Promise<void> {
     const state = this.stateByPanel.get(panel);
     if (!state) return;
-    if (!(await this.ensurePanelSessionFile(panel, state.fsPath))) return;
+    if (!(await this.ensurePanelSessionFile(panel, state))) return;
     const startedAt = nowMs();
 
     const target = sanitizePatchEntryDetailTarget(msg?.entry);
@@ -1229,6 +2954,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
     try {
       const entry = await buildChatPatchEntryDetails(state.fsPath, target);
+      if (this.stateByPanel.get(panel) !== state) return;
       if (!entry) {
         await panel.webview.postMessage({
           type: "patchEntryDetailsFailed",
@@ -1263,6 +2989,7 @@ export class ChatPanelManager implements vscode.Disposable {
         }),
       );
     } catch (error) {
+      if (this.stateByPanel.get(panel) !== state) return;
       await panel.webview.postMessage({
         type: "patchEntryDetailsFailed",
         fsPath: state.fsPath,
@@ -1538,6 +3265,8 @@ export class ChatPanelManager implements vscode.Disposable {
       memoryCitationEntryLine: t("chat.memoryCitation.entryLine"),
       memoryCitationNote: t("chat.memoryCitation.note"),
       memoryCitationRelatedSessions: t("chat.memoryCitation.relatedSessions"),
+      sessionStartContextSummary: t("chat.sessionStartContext.summary"),
+      sessionStartContextDescription: t("chat.sessionStartContext.description"),
       timeGuideDates: t("fileChangeHistory.guide.dates"),
       copied: t("chat.toast.copied"),
       restoredLastPosition: t("chat.toast.restoredLastPosition"),
@@ -1568,7 +3297,7 @@ export class ChatPanelManager implements vscode.Disposable {
       turnEnd: t("chat.turn.end"),
       turnDurationSeconds: t("chat.turn.duration.seconds"),
       turnDurationMinutesSeconds: t("chat.turn.duration.minutesSeconds"),
-      turnDurationHoursMinutes: t("chat.turn.duration.hoursMinutes"),
+      turnDurationHoursMinutesSeconds: t("chat.turn.duration.hoursMinutesSeconds"),
       turnRangeLabel: t("chat.turn.rangeLabel"),
       turnJumpToRunning: t("chat.turn.jumpToRunning"),
       turnItemCount: t("chat.turn.items"),
@@ -1625,6 +3354,8 @@ export class ChatPanelManager implements vscode.Disposable {
       systemEventInterruptedToolUseTitle: t("chat.systemEvent.interrupted.toolUseTitle"),
       systemEventInterruptedDescription: t("chat.systemEvent.interrupted.description"),
       systemEventInterruptedRolledBack: t("chat.systemEvent.interrupted.rolledBack"),
+      systemEventLocalCommandBadge: t("chat.systemEvent.localCommandOutput.badge"),
+      systemEventLocalCommandTitle: t("chat.systemEvent.localCommandOutput.title"),
       systemEventDetailReason: t("chat.systemEvent.detail.reason"),
       systemEventDetailDuration: t("chat.systemEvent.detail.duration"),
       systemEventDetailTurnId: t("chat.systemEvent.detail.turnId"),
@@ -1747,6 +3478,69 @@ export class ChatPanelManager implements vscode.Disposable {
       codeCommentLines: t("chat.codeComment.lines"),
       codeCommentUnparsedTitle: t("chat.codeComment.unparsedTitle"),
       codeCommentUnparsedEmptyBody: t("chat.codeComment.unparsedEmptyBody"),
+      branchControlLabel: t("claudeBranches.controlLabel"),
+      branchPrevious: t("claudeBranches.previous"),
+      branchNext: t("claudeBranches.next"),
+      branchPosition: t("claudeBranches.position"),
+      branchOccurrencePosition: t("claudeBranches.occurrencePosition"),
+      branchMap: t("claudeBranches.showMap"),
+      branchMapTooltip: t("claudeBranches.showMapCount"),
+      branchChooseSession: t("claudeBranches.chooseSession"),
+      branchChooseHistory: t("claudeBranches.chooseHistory"),
+      branchUnknownSession: t("claudeBranches.unknownSession"),
+      branchBookmark: t("claudeBranches.bookmark"),
+      branchTags: t("claudeBranches.tags"),
+      branchNote: t("claudeBranches.note"),
+      branchOverlaySummary: t("claudeBranches.overlaySummary"),
+      branchCloseOverlay: t("claudeBranches.closeOverlay"),
+      branchCurrent: t("claudeBranches.current"),
+      branchExpandPreview: t("claudeBranches.expandPreview"),
+      branchCollapsePreview: t("claudeBranches.collapsePreview"),
+      branchOpenInChat: t("claudeBranches.openInChat"),
+      branchOccurrencePartial: t("claudeBranches.occurrencePartial"),
+      branchPartialWarning: t("claudeBranches.partialWarning"),
+      branchShowCurrent: t("claudeBranches.showCurrent"),
+      branchUntitled: t("claudeBranches.untitled"),
+      branchHistoryStart: t("claudeBranches.historyStart"),
+      branchHistoryStartAndBefore: t("claudeBranches.historyStartAndBefore"),
+      branchFromStart: t("claudeBranches.fromStart"),
+      branchDestination: t("claudeBranches.destination"),
+      branchFit: t("claudeBranches.fit"),
+      branchZoomOut: t("claudeBranches.zoomOut"),
+      branchZoomIn: t("claudeBranches.zoomIn"),
+      branchCollapsedPoints: t("claudeBranches.collapsedPoints"),
+      branchCollapsedChoices: t("claudeBranches.collapsedChoices"),
+      branchBefore: t("claudeBranches.before"),
+      branchEnd: t("claudeBranches.end"),
+      branchRoleUser: t("claudeBranches.roleUser"),
+      branchRoleAssistant: t("claudeBranches.roleAssistant"),
+      branchSwitchFailed: t("claudeBranches.switchFailed"),
+      branchNone: t("claudeBranches.none"),
+      branchLoadFailed: t("claudeBranches.loadFailed"),
+      agentRunsTitle: t("codexAgentRuns.title"),
+      agentRunsShow: t("codexAgentRuns.show"),
+      agentRunsLoading: t("codexAgentRuns.loading"),
+      agentRunsNone: t("codexAgentRuns.none"),
+      agentRunsRelatedCount: t("codexAgentRuns.relatedCount"),
+      agentRunsSubagent: t("codexAgentRuns.subagent"),
+      agentRunsCurrent: t("codexAgentRuns.current"),
+      agentRunsStarted: t("codexAgentRuns.started"),
+      agentRunsLastActivity: t("codexAgentRuns.lastActivity"),
+      agentRunsOpenSession: t("codexAgentRuns.openSession"),
+      agentRunsPinSession: t("codexAgentRuns.pinSession"),
+      agentRunsUnpinSession: t("codexAgentRuns.unpinSession"),
+      agentRunsParentUnavailable: t("codexAgentRuns.parentUnavailable"),
+      agentRunsDirectChildren: t("codexAgentRuns.directChildren"),
+      agentRunsPartialWarning: t("codexAgentRuns.partialWarning"),
+      agentRunsOmitted: t("codexAgentRuns.omitted"),
+      agentRunsClose: t("codexAgentRuns.close"),
+      agentRunsShowFirst: t("codexAgentRuns.showFirst"),
+      agentRunsShowLast: t("codexAgentRuns.showLast"),
+      agentRunsShowCurrent: t("codexAgentRuns.showCurrent"),
+      agentRunsBookmark: t("codexAgentRuns.bookmark"),
+      agentRunsTags: t("codexAgentRuns.tags"),
+      agentRunsNote: t("codexAgentRuns.note"),
+      agentRunsOtherRun: t("codexAgentRuns.otherRun"),
     };
   }
 
@@ -1808,13 +3602,16 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private async refreshPanelTitleFromFile(panel: vscode.WebviewPanel): Promise<void> {
+    const titleRefreshSequence = this.nextTitleRefreshSequence(panel);
     const state = this.stateByPanel.get(panel);
     if (!state) return;
-    if (!(await this.ensurePanelSessionFile(panel, state.fsPath))) return;
+    if (!(await this.ensurePanelSessionFile(panel, state))) return;
+    if (!this.isTitleRefreshCurrent(panel, state, titleRefreshSequence)) return;
 
     const config = getConfig();
-    this.historyService.updateConfig(config);
-    const existingSummary = this.historyService.findByFsPath(state.fsPath);
+    const existingSummary = this.historyService.isCurrentIndexForConfig(config)
+      ? this.historyService.findByFsPath(state.fsPath)
+      : undefined;
     const summary =
       existingSummary ??
       (await buildSessionSummary({
@@ -1824,12 +3621,32 @@ export class ChatPanelManager implements vscode.Disposable {
         timeZone: this.buildDateTime().timeZone,
       }));
     if (!summary) return;
+    if (!this.isTitleRefreshCurrent(panel, state, titleRefreshSequence)) return;
 
     const displaySummary = await this.historyService.resolveDisplaySummary(
       applyPanelHistoryDateBasis(summary, config.historyDateBasis),
+      config,
     );
+    if (!this.isTitleRefreshCurrent(panel, state, titleRefreshSequence)) return;
     panel.title = buildPanelTitle(displaySummary);
-    panel.iconPath = this.resolveSourceIconPath(displaySummary.source);
+    panel.iconPath = this.resolveSessionIconPath(displaySummary);
+  }
+
+  private nextTitleRefreshSequence(panel: vscode.WebviewPanel): number {
+    const sequence = (this.titleRefreshSequenceByPanel.get(panel) ?? 0) + 1;
+    this.titleRefreshSequenceByPanel.set(panel, sequence);
+    return sequence;
+  }
+
+  private isTitleRefreshCurrent(
+    panel: vscode.WebviewPanel,
+    state: ChatPanelState,
+    sequence: number,
+  ): boolean {
+    return (
+      this.stateByPanel.get(panel) === state &&
+      this.titleRefreshSequenceByPanel.get(panel) === sequence
+    );
   }
 
   private async ensureSessionFileAvailable(fsPath: string): Promise<boolean> {
@@ -1843,9 +3660,11 @@ export class ChatPanelManager implements vscode.Disposable {
     }
   }
 
-  private async ensurePanelSessionFile(panel: vscode.WebviewPanel, fsPath: string): Promise<boolean> {
-    if (await this.ensureSessionFileAvailable(fsPath)) return true;
-    await this.handleMissingSession(panel, fsPath);
+  private async ensurePanelSessionFile(panel: vscode.WebviewPanel, state: ChatPanelState): Promise<boolean> {
+    const available = await this.ensureSessionFileAvailable(state.fsPath);
+    if (this.stateByPanel.get(panel) !== state) return false;
+    if (available) return true;
+    await this.handleMissingSession(panel, state.fsPath);
     return false;
   }
 
@@ -1868,10 +3687,11 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private getOpenPanels(): vscode.WebviewPanel[] {
-    const panels: vscode.WebviewPanel[] = [];
-    if (this.reusablePanel) panels.push(this.reusablePanel);
-    for (const panel of this.panelsByKey.values()) panels.push(panel);
-    return panels;
+    const panels = new Set<vscode.WebviewPanel>();
+    if (this.reusablePanel) panels.add(this.reusablePanel);
+    for (const panel of this.panelsByKey.values()) panels.add(panel);
+    for (const panel of this.branchPanels) panels.add(panel);
+    return Array.from(panels);
   }
 
   private disposePanel(panel: vscode.WebviewPanel): void {
@@ -1882,8 +3702,17 @@ export class ChatPanelManager implements vscode.Disposable {
     }
   }
 
-  private resolveSourceIconPath(source: SessionSource): { light: vscode.Uri; dark: vscode.Uri } {
-    return source === "claude" ? this.claudePanelIconPath : this.codexPanelIconPath;
+  private resolveSessionIconPath(session: SessionSummary): { light: vscode.Uri; dark: vscode.Uri } {
+    const agentPresentationEnabled =
+      getConfig().agentRunsEnabled && this.codexAgentRuns.isPresentationEnabled();
+    const agentRelation = agentPresentationEnabled && session.source === "codex"
+      ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent")).relation
+      : undefined;
+    return this.sessionIconResolver.resolve(
+      session,
+      agentPresentationEnabled,
+      agentRelation,
+    );
   }
 
   private notifyAutoRefreshConsumerVisibilityChanged(): void {
@@ -1896,6 +3725,73 @@ export class ChatPanelManager implements vscode.Disposable {
     this.stateByPanel.set(panel, { ...state, pendingAutoRefresh: false });
     void panel.webview.postMessage({ type: "requestReload", mode });
   }
+}
+
+function hasAgentRunsRelation(component: { nodes: readonly { unavailableParent: boolean }[] }): boolean {
+  return component.nodes.length > 1 || component.nodes.some((node) => node.unavailableParent);
+}
+
+function buildCodexAgentRunsRelationKey(component: CodexAgentComponent, currentIdentityKey: string): string {
+  return JSON.stringify({
+    currentIdentityKey,
+    sessionCount: component.sessionCount,
+    agentCount: component.agentCount,
+    relationPartial: component.relationPartial,
+    omittedCount: component.omittedCount,
+    nodes: component.nodes.map((node) => ({
+      id: node.id,
+      parentId: node.parentId ?? "",
+      isCurrent: node.isCurrent,
+      isSubagent: node.isSubagent,
+      unavailableParent: node.unavailableParent,
+    })),
+  });
+}
+
+function isSameCodexAgentRunTarget(
+  current: SessionSummary | undefined,
+  requested: SessionSummary,
+): boolean {
+  return Boolean(
+    current &&
+    current.source === "codex" &&
+    current.identityKey === requested.identityKey &&
+    normalizeCacheKey(current.fsPath) === normalizeCacheKey(requested.fsPath),
+  );
+}
+
+type PinnedSessionLookup = {
+  cacheKeys: ReadonlySet<string>;
+  identityKeys: ReadonlySet<string>;
+};
+
+function buildPinnedSessionLookup(pinStore: PinStore): PinnedSessionLookup {
+  const pins = pinStore.getAll();
+  return {
+    cacheKeys: new Set(pins.map((pin) => pin.cacheKey)),
+    identityKeys: new Set(
+      pins.map((pin) => pin.identityKey).filter((identityKey): identityKey is string => Boolean(identityKey)),
+    ),
+  };
+}
+
+function isSessionPinnedInLookup(lookup: PinnedSessionLookup, session: SessionSummary): boolean {
+  return lookup.cacheKeys.has(session.cacheKey) || lookup.identityKeys.has(session.identityKey);
+}
+
+function isSessionPinned(pinStore: PinStore, session: SessionSummary): boolean {
+  return isSessionPinnedInLookup(buildPinnedSessionLookup(pinStore), session);
+}
+
+function formatAgentRunDateTime(localDate: string | undefined, timeLabel: string | undefined): string {
+  const date = String(localDate ?? "").trim();
+  const time = String(timeLabel ?? "").trim();
+  return date && time ? `${date} ${time}` : date || time;
+}
+
+function sanitizeAgentRunWebviewText(value: unknown, fallback: string): string {
+  const text = typeof value === "string" ? value.trim() : "";
+  return text && text.length <= 320 && !/[\u0000-\u001f\u007f]/u.test(text) ? text : fallback;
 }
 
 function randomNonce(): string {
@@ -1947,6 +3843,18 @@ function resolveSessionDetailMode(
   if (requestedMode === "full" || requestedMode === "summary") return requestedMode;
   if (state.revealTarget?.kind === "patchEntry") return DEFAULT_CHAT_SESSION_DETAIL_MODE;
   return DEFAULT_CHAT_SESSION_DETAIL_MODE;
+}
+
+function isSameChatPanelSession(
+  left: ChatPanelState | undefined,
+  right: ChatPanelState | undefined,
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    left.kind === right.kind &&
+    normalizeCacheKey(left.fsPath) === normalizeCacheKey(right.fsPath),
+  );
 }
 
 function normalizeChatWebviewAutoRefreshMode(value: unknown): ChatWebviewAutoRefreshMode {
@@ -2045,6 +3953,29 @@ function sanitizePageSearchSeed(value: unknown): SessionPageSearchSeed | undefin
   };
 }
 
+function sanitizeBranchModelId(value: unknown): string {
+  const id = typeof value === "string" ? value.trim() : "";
+  return /^[a-f0-9]{24}$/u.test(id) ? id : "";
+}
+
+function sanitizeBranchOccurrenceId(value: unknown): string {
+  const id = typeof value === "string" ? value.trim() : "";
+  return /^[a-f0-9]{64}$/u.test(id) ? id : "";
+}
+
+function sanitizeBranchCursor(value: unknown): string {
+  const cursor = typeof value === "string" ? value.trim() : "";
+  return /^(g|c)\.[0-9a-z]+\.[a-f0-9]{24}$/u.test(cursor) && cursor.length <= 256 ? cursor : "";
+}
+
+function sanitizeBranchGeneration(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : -1;
+}
+
+function sanitizePositiveSequence(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : -1;
+}
+
 function sanitizeChatPanelRestoreState(value: unknown): ChatPanelRestoreState | null {
   const source = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
   const restore = source.restore && typeof source.restore === "object" ? (source.restore as Record<string, unknown>) : source;
@@ -2052,7 +3983,7 @@ function sanitizeChatPanelRestoreState(value: unknown): ChatPanelRestoreState | 
 
   const fsPath = typeof restore.fsPath === "string" ? restore.fsPath.trim() : "";
   if (!fsPath || fsPath.length > 4096) return null;
-  if (restore.kind !== "session" && restore.kind !== "reusable") return null;
+  if (restore.kind !== "session" && restore.kind !== "reusable" && restore.kind !== "branch") return null;
   const kind: ChatPanelKind = restore.kind;
   const revealMessageIndex =
     typeof restore.revealMessageIndex === "number" && Number.isFinite(restore.revealMessageIndex)
@@ -2568,6 +4499,12 @@ async function openFileWithVsCodeOpenCommand(fsPath: string): Promise<boolean> {
 
 function formatError(error: unknown): string {
   return error instanceof Error && error.message ? error.message : String(error ?? "Unknown error");
+}
+
+function isCodexForkNavigationSnapshot(
+  snapshot: BranchNavigationSnapshot,
+): snapshot is CodexForkNavigationSnapshot {
+  return "source" in snapshot && snapshot.source === "codex";
 }
 
 function buildPanelTitle(session: SessionSummary): string {

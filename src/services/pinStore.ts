@@ -27,11 +27,19 @@ export interface PinReconcileResult {
 
 const PINS_KEY = "codexHistoryViewer.pins.v1";
 
-export class PinStore {
+export class PinStore implements vscode.Disposable {
   private readonly memento: vscode.Memento;
+  private readonly onDidChangeEmitter = new vscode.EventEmitter<void>();
+  private mutationQueue: Promise<void> = Promise.resolve();
+
+  public readonly onDidChange = this.onDidChangeEmitter.event;
 
   constructor(memento: vscode.Memento) {
     this.memento = memento;
+  }
+
+  public dispose(): void {
+    this.onDidChangeEmitter.dispose();
   }
 
   private normalizeFsPaths(fsPaths: readonly string[]): Array<{ fsPath: string; cacheKey: string }> {
@@ -112,91 +120,106 @@ export class PinStore {
     const normalized = this.normalizeFsPaths(fsPaths);
     if (normalized.length === 0) return { pinned: 0, skipped: 0 };
 
-    const pins = this.getAll();
-    const existing = new Set(pins.map((p) => p.cacheKey));
+    return this.enqueueMutation(async () => {
+      const pins = this.getAll();
+      const existing = new Set(pins.map((p) => p.cacheKey));
 
-    const base = Date.now();
-    const toAdd: PinEntry[] = [];
-    for (let i = 0; i < normalized.length; i += 1) {
-      const n = normalized[i]!;
-      if (existing.has(n.cacheKey)) continue;
-      toAdd.push({ fsPath: n.fsPath, cacheKey: n.cacheKey, pinnedAt: base + i });
-    }
+      const base = Date.now();
+      const toAdd: PinEntry[] = [];
+      for (let i = 0; i < normalized.length; i += 1) {
+        const n = normalized[i]!;
+        if (existing.has(n.cacheKey)) continue;
+        toAdd.push({ fsPath: n.fsPath, cacheKey: n.cacheKey, pinnedAt: base + i });
+      }
 
-    if (toAdd.length > 0) {
-      await this.memento.update(PINS_KEY, [...pins, ...toAdd]);
-    }
+      if (toAdd.length > 0) {
+        await this.memento.update(PINS_KEY, [...pins, ...toAdd]);
+        this.onDidChangeEmitter.fire();
+      }
 
-    return { pinned: toAdd.length, skipped: normalized.length - toAdd.length };
+      return { pinned: toAdd.length, skipped: normalized.length - toAdd.length };
+    });
   }
 
-  public async pinSessions(sessions: readonly SessionSummary[]): Promise<{ pinned: number; skipped: number }> {
+  public async pinSessions(
+    sessions: readonly SessionSummary[],
+  ): Promise<{ pinned: number; skipped: number; added: PinEntry[] }> {
     const normalized = this.normalizeSessions(sessions);
-    if (normalized.length === 0) return { pinned: 0, skipped: 0 };
+    if (normalized.length === 0) return { pinned: 0, skipped: 0, added: [] };
 
-    const pins = this.getAll();
-    const existing = new Set(pins.map((p) => p.cacheKey));
-    const base = Date.now();
-    const toAdd: PinEntry[] = [];
-    for (let i = 0; i < normalized.length; i += 1) {
-      const n = normalized[i]!;
-      if (existing.has(n.cacheKey)) continue;
-      toAdd.push({ ...n, pinnedAt: base + i });
-    }
+    return this.enqueueMutation(async () => {
+      const pins = this.getAll();
+      const existing = new Set(pins.map((p) => p.cacheKey));
+      const base = Date.now();
+      const toAdd: PinEntry[] = [];
+      for (let i = 0; i < normalized.length; i += 1) {
+        const n = normalized[i]!;
+        if (existing.has(n.cacheKey)) continue;
+        toAdd.push({ ...n, pinnedAt: base + i });
+      }
 
-    if (toAdd.length > 0) {
-      await this.memento.update(PINS_KEY, compactPins([...pins, ...toAdd]));
-    }
+      if (toAdd.length > 0) {
+        await this.memento.update(PINS_KEY, compactPins([...pins, ...toAdd]));
+        this.onDidChangeEmitter.fire();
+      }
 
-    return { pinned: toAdd.length, skipped: normalized.length - toAdd.length };
+      return {
+        pinned: toAdd.length,
+        skipped: normalized.length - toAdd.length,
+        added: toAdd.map((entry) => ({ ...entry })),
+      };
+    });
   }
 
   public async reconcile(index: HistoryIndex): Promise<PinReconcileResult> {
-    const pins = this.getAll();
-    if (pins.length === 0) return { updated: 0, moves: [] };
+    return this.enqueueMutation(async () => {
+      const pins = this.getAll();
+      if (pins.length === 0) return { updated: 0, moves: [] };
 
-    let updated = 0;
-    const moves: Array<{ oldFsPath: string; newFsPath: string }> = [];
-    const next: PinEntry[] = [];
+      let updated = 0;
+      const moves: Array<{ oldFsPath: string; newFsPath: string }> = [];
+      const next: PinEntry[] = [];
 
-    for (const pin of pins) {
-      const current = index.byCacheKey.get(pin.cacheKey);
-      const identityKeys = pin.identityKey ? [pin.identityKey] : resolveFallbackIdentityKeys(pin);
-      const target = current ?? findByIdentityKeys(index, identityKeys);
-      if (!target) {
-        next.push(pin);
-        continue;
+      for (const pin of pins) {
+        const current = index.byCacheKey.get(pin.cacheKey);
+        const identityKeys = pin.identityKey ? [pin.identityKey] : resolveFallbackIdentityKeys(pin);
+        const target = current ?? findByIdentityKeys(index, identityKeys);
+        if (!target) {
+          next.push(pin);
+          continue;
+        }
+
+        const patched: PinEntry = {
+          fsPath: target.fsPath,
+          cacheKey: target.cacheKey,
+          identityKey: target.identityKey,
+          source: target.source,
+          archiveState: target.storage.archiveState,
+          rootKind: target.storage.rootKind,
+          pinnedAt: pin.pinnedAt,
+        };
+        if (
+          patched.fsPath !== pin.fsPath ||
+          patched.cacheKey !== pin.cacheKey ||
+          patched.identityKey !== pin.identityKey ||
+          patched.source !== pin.source ||
+          patched.archiveState !== pin.archiveState ||
+          patched.rootKind !== pin.rootKind
+        ) {
+          updated += 1;
+          if (patched.fsPath !== pin.fsPath) moves.push({ oldFsPath: pin.fsPath, newFsPath: patched.fsPath });
+        }
+        next.push(patched);
       }
 
-      const patched: PinEntry = {
-        fsPath: target.fsPath,
-        cacheKey: target.cacheKey,
-        identityKey: target.identityKey,
-        source: target.source,
-        archiveState: target.storage.archiveState,
-        rootKind: target.storage.rootKind,
-        pinnedAt: pin.pinnedAt,
-      };
-      if (
-        patched.fsPath !== pin.fsPath ||
-        patched.cacheKey !== pin.cacheKey ||
-        patched.identityKey !== pin.identityKey ||
-        patched.source !== pin.source ||
-        patched.archiveState !== pin.archiveState ||
-        patched.rootKind !== pin.rootKind
-      ) {
-        updated += 1;
-        if (patched.fsPath !== pin.fsPath) moves.push({ oldFsPath: pin.fsPath, newFsPath: patched.fsPath });
+      const compacted = compactPins(next);
+      if (updated > 0 || compacted.length !== pins.length) {
+        await this.memento.update(PINS_KEY, compacted);
+        this.onDidChangeEmitter.fire();
       }
-      next.push(patched);
-    }
 
-    const compacted = compactPins(next);
-    if (updated > 0 || compacted.length !== pins.length) {
-      await this.memento.update(PINS_KEY, compacted);
-    }
-
-    return { updated, moves };
+      return { updated, moves };
+    });
   }
 
   public async unpin(fsPath: string): Promise<void> {
@@ -206,7 +229,13 @@ export class PinStore {
   public async restore(entries: readonly PinEntry[]): Promise<void> {
     const toRestore = compactPins(entries);
     if (toRestore.length === 0) return;
-    await this.memento.update(PINS_KEY, compactPins([...this.getAll(), ...toRestore]));
+    await this.enqueueMutation(async () => {
+      const current = this.getAll();
+      const next = compactPins([...current, ...toRestore]);
+      if (arePinsEqual(current, next)) return;
+      await this.memento.update(PINS_KEY, next);
+      this.onDidChangeEmitter.fire();
+    });
   }
 
   public async unpinMany(fsPaths: readonly string[]): Promise<{ unpinned: number; skipped: number }> {
@@ -214,18 +243,30 @@ export class PinStore {
     const normalized = this.normalizeFsPaths(fsPaths);
     if (normalized.length === 0) return { unpinned: 0, skipped: 0 };
 
-    const removeKeys = new Set(normalized.map((n) => n.cacheKey));
-    const pins = this.getAll();
-    const beforeKeys = new Set(pins.map((p) => p.cacheKey));
+    return this.enqueueMutation(async () => {
+      const removeKeys = new Set(normalized.map((n) => n.cacheKey));
+      const pins = this.getAll();
+      const beforeKeys = new Set(pins.map((p) => p.cacheKey));
 
-    const nextPins = pins.filter((p) => !removeKeys.has(p.cacheKey));
-    const removedKeysCount = Array.from(removeKeys.values()).filter((k) => beforeKeys.has(k)).length;
+      const nextPins = pins.filter((p) => !removeKeys.has(p.cacheKey));
+      const removedKeysCount = Array.from(removeKeys.values()).filter((k) => beforeKeys.has(k)).length;
 
-    if (removedKeysCount > 0) {
-      await this.memento.update(PINS_KEY, nextPins);
-    }
+      if (removedKeysCount > 0) {
+        await this.memento.update(PINS_KEY, nextPins);
+        this.onDidChangeEmitter.fire();
+      }
 
-    return { unpinned: removedKeysCount, skipped: normalized.length - removedKeysCount };
+      return { unpinned: removedKeysCount, skipped: normalized.length - removedKeysCount };
+    });
+  }
+
+  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.mutationQueue.then(operation, operation);
+    this.mutationQueue = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
   }
 }
 
@@ -279,4 +320,21 @@ function compactPins(pins: readonly PinEntry[]): PinEntry[] {
     byKey.set(cacheKey, { ...pin, fsPath, cacheKey });
   }
   return Array.from(byKey.values()).sort((a, b) => a.pinnedAt - b.pinnedAt);
+}
+
+function arePinsEqual(left: readonly PinEntry[], right: readonly PinEntry[]): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      entry.fsPath === other.fsPath &&
+      entry.cacheKey === other.cacheKey &&
+      entry.identityKey === other.identityKey &&
+      entry.source === other.source &&
+      entry.archiveState === other.archiveState &&
+      entry.rootKind === other.rootKind &&
+      entry.pinnedAt === other.pinnedAt
+    );
+  });
 }

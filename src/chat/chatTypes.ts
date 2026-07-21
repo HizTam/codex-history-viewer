@@ -1,5 +1,6 @@
 // Data model for the chat-like webview.
 import type { ChatToolPresentation } from "../tools/toolTypes";
+import type { FilePresentationKind } from "../utils/fileKind";
 
 export type ChatRole = "developer" | "user" | "assistant";
 export type ChatWebviewPathMode = "recorded" | "relocated";
@@ -28,6 +29,7 @@ export interface ChatSessionLocation {
 
 export type ChatTimelineItem =
   | ChatMessageItem
+  | ChatProtocolContextItem
   | ChatToolItem
   | ChatSystemEventItem
   | ChatUsageItem
@@ -67,16 +69,7 @@ export type ChatImageAttachmentStatus = ChatAttachmentStatus;
 export type ChatImageAttachmentReason = "unsupported" | "missing" | "tooLarge" | "invalid" | "remote" | "disabled";
 export type ChatDocumentAttachmentReason = "unsupported" | "missing" | "tooLarge" | "invalid" | "disabled";
 export type ChatDocumentKind = "pdf" | "text" | "generic";
-export type ChatFileKind =
-  | "pdf"
-  | "word"
-  | "excel"
-  | "powerpoint"
-  | "text"
-  | "code"
-  | "archive"
-  | "image"
-  | "generic";
+export type ChatFileKind = FilePresentationKind;
 
 export type ChatAttachment =
   | ChatImageAttachment
@@ -221,6 +214,15 @@ export interface ChatMessageItem {
   isBookmarked?: boolean;
 }
 
+export interface ChatProtocolContextItem {
+  type: "protocolContext";
+  source: "codex";
+  kind: "sessionStart";
+  messageIndex: number;
+  timestampIso?: string;
+  text: string;
+}
+
 export interface ChatToolItem {
   type: "tool";
   messageIndex?: number;
@@ -244,7 +246,7 @@ export interface ChatToolExecution {
   error?: string;
 }
 
-export type ChatSystemEventKind = "requestInterrupted";
+export type ChatSystemEventKind = "requestInterrupted" | "localCommandOutput";
 export type ChatSystemEventScope = "request" | "toolUse";
 
 export interface ChatSystemEventItem {
@@ -258,7 +260,17 @@ export interface ChatSystemEventItem {
   turnId?: string;
   rolledBack?: boolean;
   rolledBackTurns?: number;
+  output?: string;
 }
+
+export type ChatTokenUsageField =
+  | "inputTokens"
+  | "cachedInputTokens"
+  | "cacheReadInputTokens"
+  | "cacheCreationInputTokens"
+  | "outputTokens"
+  | "reasoningOutputTokens"
+  | "totalTokens";
 
 export interface ChatTokenUsage {
   inputTokens?: number;
@@ -268,6 +280,7 @@ export interface ChatTokenUsage {
   outputTokens?: number;
   reasoningOutputTokens?: number;
   totalTokens?: number;
+  invalidFields?: ChatTokenUsageField[];
 }
 
 export interface ChatUsageItem {
@@ -295,6 +308,16 @@ export interface ChatRateLimit {
   resetsInSeconds?: number;
 }
 
+export type ChatRateLimitInvalidField =
+  | "primary.usedPercent"
+  | "primary.windowMinutes"
+  | "primary.resetsAt"
+  | "primary.resetsInSeconds"
+  | "secondary.usedPercent"
+  | "secondary.windowMinutes"
+  | "secondary.resetsAt"
+  | "secondary.resetsInSeconds";
+
 export interface ChatRateLimits {
   primary?: ChatRateLimit;
   secondary?: ChatRateLimit;
@@ -302,6 +325,7 @@ export interface ChatRateLimits {
   limitName?: string;
   planType?: string;
   reachedType?: string;
+  invalidFields?: ChatRateLimitInvalidField[];
 }
 
 export interface ChatEnvironmentItem {
