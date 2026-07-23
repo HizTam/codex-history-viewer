@@ -52,7 +52,7 @@
   "cmd.cyclePinnedSourceFilter": "Cycle Pinned Source Filter (Codex + Claude Code -> Codex -> Claude Code)",
   "cmd.clearHistorySourceFilter": "Show All Sources",
   "cmd.openFileChangeHistory": "Show File AI Change History",
-  "cmd.openSession": "Open Session in New Tab",
+  "cmd.openSession": "Open Session in Dedicated Tab",
   "cmd.openSessionMarkdown": "Open Session as Markdown",
   "cmd.resumeSessionInCodex": "Resume in OpenAI Codex",
   "cmd.resumeSessionInClaude": "Resume in Claude Code",

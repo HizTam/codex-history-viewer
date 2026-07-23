@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.8.1] - 2026-07-23
+
+### Changed
+
+- Renamed **Open Session in New Tab** to **Open Session in Dedicated Tab** to clarify that the session remains assigned to that tab. Dedicated tabs now use a filled source icon so they can be distinguished from the reusable session tab in both light and dark themes.
+
+### Fixed
+
+- Fixed an issue where selecting a session already open in a dedicated tab could also open it in the reusable tab, resulting in the same session appearing in two tabs.
+
 ## [2.8.0] - 2026-07-21
 
 ### Added

@@ -785,8 +785,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await vscode.commands.executeCommand("codexHistoryViewer.searchView.focus");
       },
       openSession: async (session) => {
-        if (await chatPanels.revealExistingSessionPanel(session.fsPath, undefined, { promoteReusable: true })) return;
-        await chatPanels.openSession(session, { kind: "session" });
+        await chatPanels.openSessionPreferExisting(session, {
+          fallbackKind: "session",
+          promoteReusable: true,
+        });
       },
     },
     context.workspaceState,
@@ -2239,8 +2241,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!isSessionNode(element)) return;
     const pageSearchSeed = resolvePageSearchSeed(element);
     const reveal = resolveRevealIndex(element, pageSearchSeed);
-    if (await chatPanels.revealExistingSessionPanel(element.session.fsPath, reveal, { preserveFocus: true, pageSearchSeed })) return;
-    await chatPanels.openSession(element.session, { kind: "reusable", revealMessageIndex: reveal, pageSearchSeed });
+    await chatPanels.openSessionPreferExisting(element.session, {
+      fallbackKind: "reusable",
+      revealMessageIndex: reveal,
+      pageSearchSeed,
+      preserveFocus: true,
+    });
   };
 
   // Open a reusable session tab on selection (if enabled).
@@ -4590,10 +4596,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (!session) return;
         const reveal = resolveRevealIndexFromArgs(elementOrArgs);
         const pageSearchSeed = resolvePageSearchSeed(elementOrArgs);
-        if (await chatPanels.revealExistingSessionPanel(session.fsPath, reveal, { promoteReusable: true, pageSearchSeed })) {
-          return;
-        }
-        await chatPanels.openSession(session, { kind: "session", revealMessageIndex: reveal, pageSearchSeed });
+        await chatPanels.openSessionPreferExisting(session, {
+          fallbackKind: "session",
+          promoteReusable: true,
+          revealMessageIndex: reveal,
+          pageSearchSeed,
+        });
         return;
       }
 
@@ -4609,16 +4617,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const choice = await vscode.window.showWarningMessage(msg, { modal: true }, "OK");
         if (choice !== "OK") return;
         for (const it of limited) {
-          if (
-            await chatPanels.revealExistingSessionPanel(it.session.fsPath, it.revealMessageIndex, {
-              promoteReusable: true,
-              pageSearchSeed: it.pageSearchSeed,
-            })
-          ) {
-            continue;
-          }
-          await chatPanels.openSession(it.session, {
-            kind: "session",
+          await chatPanels.openSessionPreferExisting(it.session, {
+            fallbackKind: "session",
+            promoteReusable: true,
             revealMessageIndex: it.revealMessageIndex,
             pageSearchSeed: it.pageSearchSeed,
           });
@@ -4628,16 +4629,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       if (openTargets.length === 1) {
         const it = openTargets[0]!;
-        if (
-          await chatPanels.revealExistingSessionPanel(it.session.fsPath, it.revealMessageIndex, {
-            promoteReusable: true,
-            pageSearchSeed: it.pageSearchSeed,
-          })
-        ) {
-          return;
-        }
-        await chatPanels.openSession(it.session, {
-          kind: "session",
+        await chatPanels.openSessionPreferExisting(it.session, {
+          fallbackKind: "session",
+          promoteReusable: true,
           revealMessageIndex: it.revealMessageIndex,
           pageSearchSeed: it.pageSearchSeed,
         });
@@ -4648,10 +4642,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!session) return;
       const pageSearchSeed = resolvePageSearchSeed(elementOrArgs);
       const reveal = resolveRevealIndex(elementOrArgs, pageSearchSeed);
-      if (await chatPanels.revealExistingSessionPanel(session.fsPath, reveal, { promoteReusable: true, pageSearchSeed })) {
-        return;
-      }
-      await chatPanels.openSession(session, { kind: "session", revealMessageIndex: reveal, pageSearchSeed });
+      await chatPanels.openSessionPreferExisting(session, {
+        fallbackKind: "session",
+        promoteReusable: true,
+        revealMessageIndex: reveal,
+        pageSearchSeed,
+      });
     }),
   );
 

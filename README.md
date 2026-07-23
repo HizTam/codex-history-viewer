@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions.
 
-Latest release: **2.8.0** (2026-07-21).
+Latest release: **2.8.1** (2026-07-23).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -41,7 +41,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 2. Use **Control** for global actions such as settings, import, rebuild cache, empty trash, and search defaults.
 3. Browse sessions under **History** and switch between date-grouped/session-list layouts, List/Project display, All/Current Project Group scope, and saved sort preferences.
 4. Use **Show History Insights** from the History header when you want an aggregate view of the current History target.
-5. Select a session to open the reusable session tab. Use **Open Session in New Tab** for a dedicated tab, or **Open Session as Markdown** for a transcript document.
+5. Select a session to open the reusable session tab. Use **Open Session in Dedicated Tab** to keep a session assigned to its own tab, or **Open Session as Markdown** for a transcript document.
 6. Use **Pinned** for saved sessions with its own date, project, source, archive, tag, and saved sort controls.
 7. Run **Search...** and refine with roles, query syntax, search history, saved searches, and the current History filters.
 8. Use context menus or the session viewer's header actions to edit tags/notes and run bulk tag operations when needed.
@@ -231,12 +231,10 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.8.0
+## What's New in 2.8.1
 
-- Added History Insights for sessions matching the current History filters, with overview metrics, an activity heatmap, breakdowns by source, model, project, and tool, the most active sessions, frequently changed files, usage details covering input caching and reasoning, message composition, turn states, and changed file types, plus data quality information.
-- Added Agent Runs, which currently supports Codex sessions only. It omits sub-agent sessions with an available parent from History while keeping them reachable through the parent session's Agent Runs panel, Search, and explicit Pinned entries, and shows parent, sibling, and descendant relationships in a right-side tree within the session view. Sub-agent sessions whose parent cannot be resolved safely remain visible in History. (Experimental; disabled by default.)
-- Added Branch Navigation for switching between locally forked Codex session histories—including histories created with **Fork locally** or **Continue in new task**—and Claude Code histories created with **Fork conversation** within their respective session views. The route tree shows shared history, Fork points, and the start and end of each route. Codex Forks created in a new worktree are not supported. (Experimental; disabled by default.)
-- Session runtime context and local-command output are shown as collapsed cards instead of raw user messages.
+- Fixed an issue where selecting a session already open in a dedicated tab could also open it in the reusable tab, resulting in the same session appearing in two tabs.
+- Renamed **Open Session in New Tab** to **Open Session in Dedicated Tab** and added a filled source icon for dedicated tabs, making them easier to distinguish from the reusable session tab in both light and dark themes.
 
 ## Changelog
 

@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-07-21
-- 対象バージョン: 2.8.0
+- 最終更新: 2026-07-23
+- 対象バージョン: 2.8.1
 
 ## 1. 概要
 
@@ -119,7 +119,7 @@
 
 ### 3.2 セッション操作
 
-- `Open Session in New Tab`: Webview のセッションビューとして別タブに表示
+- `Open Session in Dedicated Tab`: Webview のセッションビューとして専用タブに表示
 - `Custom Title...`: QuickPick からカスタムタイトルの設定 / 消去を選択する
 - `Project Alias...`: History / Pinned のプロジェクトノード右クリックから、プロジェクト別名の設定 / 消去を選択する
 - `Project Association...`: History / Pinned のプロジェクトノード右クリックから、別プロジェクトへの関連付け、関連付けモード変更、解除を選択する
@@ -1069,8 +1069,11 @@
   - archived Codex session では `Resume in Codex` の代わりに `Move to Codex History` を表示する
   - `restoreArchivedSession` message を受け取り、復元成功後は同じ Webview panel を通常 session で開き直す
   - archived Codex セッションビューからの restore message は `lastMessage` 時に現在見えている `revealMessageIndex` を渡し、復元後 panel で明示 reveal する
-  - `ChatPanelManager` はツリー選択用の `reusable` タブと、明示的に開いた `session` タブを区別する
+  - `ChatPanelManager` はツリー選択用の一時 `reusable` タブと、明示的に開いた専用 `session` タブを区別する
   - 既存タブ検索では `session` タブを優先し、なければ同じセッションを表示中の `reusable` タブを使う
+  - `openSessionPreferExisting` はファイル確認後に既存タブの最終検索、fallback の選択、registry / state 更新、reveal を await なしで確定し、呼び出し側へ fallback 判断を分散させない
+  - ツリー選択の `reusableOpenGeneration` は既存タブ検索を含む要求全体を latest-wins で保護し、stale、missing、session data 配信失敗を別タブ作成の理由にしない
+  - 専用 `session` タブは Codex / Claude / Codex subagent の既存形状と Light / Dark の2色を維持した反転配色iconを使い、一時 `reusable` / `branch` タブは従来iconを使う。`reusable`から`session`への昇格、serializer復元、title refresh、Agent Runs refreshでも現在のkindからiconを再解決する
   - `ChatPanelManager` は `ChatOpenPositionStore` を使い、明示的な移動先がない場合だけ最後に見えていたメッセージ付近を復元する
   - `ChatPanelManager` は保存可能な画像をパネル単位で保持し、Webview からの保存要求時に `showSaveDialog` 経由で書き出す
   - `ChatPanelManager` は保存可能な embedded document をパネル単位で保持し、Webview からの `saveAttachment` 要求時に `showSaveDialog` 経由で書き出す
@@ -2028,8 +2031,9 @@ npm run package
 - `chat.openPosition = lastMessage` で tool / usage / diff など本文メッセージが画面内にない位置を最後に見ていた位置として保存した場合、開き直し時は直前の描画済み本文メッセージ付近、直前がなければ先頭へ戻る
 - `chat.openPosition = lastMessage` で保存済みの本文メッセージが現在の表示条件で描画されない場合、直前の描画済み本文メッセージへ戻り、直前がなければ先頭から開く
 - ツリー選択で同じセッションの `session` タブが開いている場合、そのタブがアクティブになり、`reusable` タブは差し替わらない
+- ツリーの selection event と TreeItem command が同じセッションを重複要求し、ファイル確認がどちらの順で完了しても、既存 `session` タブだけがアクティブになり、別セッションの `reusable` タブは変更されない
 - ツリー選択で同じセッションの `reusable` タブだけが開いている場合、そのタブがアクティブになる
-- 別タブ表示中に、既に選択されている履歴行を再クリックしても、同じセッションの既存タブがアクティブになる
+- 専用タブ表示中に、既に選択されている履歴行を再クリックしても、同じセッションの既存タブがアクティブになる
 - メニューからセッションを開くと、未オープンのセッションは `session` タブとして開く
 - メニューからセッションを開くと、同じセッションの `session` / `reusable` タブが既にあれば既存タブがアクティブになる
 - `reusable` タブに表示中のセッションをメニューから開いた後、別履歴をツリー選択すると新しい `reusable` タブが使われ、昇格済みタブは差し替わらない

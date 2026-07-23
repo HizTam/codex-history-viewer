@@ -86,7 +86,7 @@ Notes:
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
-| Open Session in New Tab | `codexHistoryViewer.openSession` | Opens a selected session in its own session tab, or activates an existing matching session tab. |
+| Open Session in Dedicated Tab | `codexHistoryViewer.openSession` | Opens a selected session in a dedicated tab that is not replaced by later tree selections, or activates an existing matching session tab. |
 | Open Session as Markdown | `codexHistoryViewer.openSessionMarkdown` | Opens a selected session as a Markdown transcript document. |
 | Copy Quick Prompt | `codexHistoryViewer.copyResumePrompt` | Copies a compact resume prompt from the selected session view. |
 | Resume in OpenAI Codex | `codexHistoryViewer.resumeSessionInCodex` | Sends the selected Codex session to the OpenAI Codex extension. |

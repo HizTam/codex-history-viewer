@@ -30,7 +30,7 @@
   "cmd.clearPinnedProjectMode": "ピン留めプロジェクト絞り込みを解除",
   "cmd.togglePinnedProjectDisplay": "ピン留めのプロジェクト表示を切り替え",
   "cmd.togglePinnedProjectScope": "ピン留めの現在のプロジェクトグループ表示を切り替え",
-  "cmd.openSession": "セッションを別タブで開く",
+  "cmd.openSession": "セッションを専用タブで開く",
   "cmd.openSessionMarkdown": "セッションを Markdown で開く",
   "cmd.resumeSessionInCodex": "OpenAI Codex で再開",
   "cmd.handoffToCodex": "OpenAI Codex に引き継ぐ",

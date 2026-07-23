@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.8.0",
+  "version": "2.8.1",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -533,11 +533,11 @@
       },
       {
         "command": "codexHistoryViewer.ui.ja.openSession",
-        "title": "セッションを別タブで開く"
+        "title": "セッションを専用タブで開く"
       },
       {
         "command": "codexHistoryViewer.ui.en.openSession",
-        "title": "Open Session in New Tab"
+        "title": "Open Session in Dedicated Tab"
       },
       {
         "command": "codexHistoryViewer.ui.ja.openSessionMarkdown",

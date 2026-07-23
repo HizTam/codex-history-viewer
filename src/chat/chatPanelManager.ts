@@ -119,7 +119,15 @@ type ChatPanelState = {
   pendingAutoRefresh: boolean;
 };
 type SearchHistoryWebviewCandidate = SearchHistoryEntry & { key: string };
-type ExistingChatPanel = { panel: vscode.WebviewPanel; kind: ChatPanelKind };
+type ExistingChatPanel = { panel: vscode.WebviewPanel; kind: "reusable" | "session" };
+type SessionPanelOpenOptions = {
+  revealMessageIndex?: number;
+  revealTarget?: FileChangeHistoryRevealTarget;
+  pageSearchSeed?: SessionPageSearchSeed;
+  viewColumn?: vscode.ViewColumn;
+  preserveFocus?: boolean;
+  isRequestCurrent?: () => boolean;
+};
 type ChatPanelRestoreState = {
   version: 1;
   kind: ChatPanelKind;
@@ -370,7 +378,7 @@ export class ChatPanelManager implements vscode.Disposable {
       const session = this.historyService.findByFsPath(state.fsPath);
       if (!session) return;
       panel.title = buildPanelTitle(session);
-      panel.iconPath = this.resolveSessionIconPath(session);
+      panel.iconPath = this.resolveSessionIconPath(session, state.kind);
     };
 
     for (const panel of this.getOpenPanels()) update(panel);
@@ -434,15 +442,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
   public async openSession(
     session: SessionSummary,
-    options: {
-      kind: ChatPanelKind;
-      revealMessageIndex?: number;
-      revealTarget?: FileChangeHistoryRevealTarget;
-      pageSearchSeed?: SessionPageSearchSeed;
-      viewColumn?: vscode.ViewColumn;
-      preserveFocus?: boolean;
-      isRequestCurrent?: () => boolean;
-    },
+    options: SessionPanelOpenOptions & { kind: ChatPanelKind },
   ): Promise<void> {
     const reusableOpenGeneration = options.kind === "reusable"
       ? ++this.reusableOpenGeneration
@@ -463,31 +463,7 @@ export class ChatPanelManager implements vscode.Disposable {
       : options.kind === "branch"
         ? this.createBranchPanel()
         : this.getOrCreatePanelForKey(key);
-    const prevState = this.stateByPanel.get(panel);
-    const isSameSession = !!prevState && normalizeCacheKey(prevState.fsPath) === key;
-    if (!isSameSession) {
-      this.clearSessionBoundPanelData(panel);
-    }
-
-    const nextState: ChatPanelState = {
-      fsPath: session.fsPath,
-      revealMessageIndex: options.revealMessageIndex,
-      revealTarget: options.revealTarget,
-      pageSearchSeed: sanitizePageSearchSeed(options.pageSearchSeed),
-      sessionCwd: isSameSession ? prevState?.sessionCwd : undefined,
-      sessionDisplayCwd: isSameSession ? prevState?.sessionDisplayCwd : undefined,
-      kind: options.kind,
-      autoRefreshMode: isSameSession ? prevState.autoRefreshMode : DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE,
-      detailMode: isSameSession ? prevState.detailMode : undefined,
-      pathMode: isSameSession ? prevState.pathMode : undefined,
-      pathModeEnabled: isSameSession ? prevState.pathModeEnabled : undefined,
-      pendingAutoRefresh: false,
-    };
-    this.stateByPanel.set(panel, nextState);
-    panel.title = buildPanelTitle(session);
-    panel.iconPath = this.resolveSessionIconPath(session);
-    panel.reveal(options.viewColumn ?? panel.viewColumn, options.preserveFocus ?? options.kind === "reusable");
-    this.notifyAutoRefreshConsumerVisibilityChanged();
+    this.commitSessionPanel(panel, session, options);
 
     // If the webview is already ready, update immediately on selection changes.
     if (this.readyByPanel.get(panel)) {
@@ -498,57 +474,86 @@ export class ChatPanelManager implements vscode.Disposable {
     }
   }
 
-  public async revealExistingSessionPanel(
-    fsPath: string,
-    revealMessageIndex?: number,
-    options: {
-      preserveFocus?: boolean;
+  public async openSessionPreferExisting(
+    session: SessionSummary,
+    options: SessionPanelOpenOptions & {
+      fallbackKind: "reusable" | "session";
       promoteReusable?: boolean;
-      revealTarget?: FileChangeHistoryRevealTarget;
-      pageSearchSeed?: SessionPageSearchSeed;
-      isRequestCurrent?: () => boolean;
-    } = {},
-  ): Promise<boolean> {
-    if (options.isRequestCurrent && !options.isRequestCurrent()) return false;
-    const existing = this.findExistingSessionPanel(fsPath);
-    if (!existing) return false;
-    const { panel } = existing;
-    const state = this.stateByPanel.get(panel);
-    if (!state) return false;
-    if (existing.kind === "reusable") this.reusableOpenGeneration += 1;
-    const sessionFileAvailable = await this.ensureSessionFileAvailable(state.fsPath);
-    if (options.isRequestCurrent && !options.isRequestCurrent()) return false;
-    if (this.stateByPanel.get(panel) !== state) return false;
+    },
+  ): Promise<void> {
+    const reusableOpenGeneration = options.fallbackKind === "reusable"
+      ? ++this.reusableOpenGeneration
+      : undefined;
+    const isRequestCurrent = (): boolean =>
+      (reusableOpenGeneration === undefined || this.reusableOpenGeneration === reusableOpenGeneration) &&
+      (!options.isRequestCurrent || options.isRequestCurrent());
+    if (!isRequestCurrent()) return;
+
+    const sessionFileAvailable = await this.ensureSessionFileAvailable(session.fsPath);
+    if (!isRequestCurrent()) return;
     if (!sessionFileAvailable) {
-      await this.handleMissingSession(panel, state.fsPath);
-      return false;
+      const matching = this.findExistingSessionPanel(session.fsPath);
+      const matchingState = matching ? this.stateByPanel.get(matching.panel) : undefined;
+      const matchingPanel =
+        matching && matchingState && normalizeCacheKey(matchingState.fsPath) === normalizeCacheKey(session.fsPath)
+          ? matching.panel
+          : null;
+      await this.handleMissingSession(matchingPanel, session.fsPath);
+      return;
     }
 
-    const nextKind = existing.kind === "reusable" && options.promoteReusable === true ? "session" : state.kind;
-    if (state.kind === "reusable" && nextKind === "session") {
-      this.promoteReusablePanelToSession(panel, state.fsPath);
-    }
+    const key = normalizeCacheKey(session.fsPath);
+    const existing = this.findExistingSessionPanel(session.fsPath);
+    let panel: vscode.WebviewPanel;
+    let kind: "reusable" | "session";
 
-    const nextState: ChatPanelState = {
-      ...state,
-      revealMessageIndex,
-      revealTarget: options.revealTarget,
-      pageSearchSeed: sanitizePageSearchSeed(options.pageSearchSeed),
-      kind: nextKind,
-      pendingAutoRefresh: false,
-    };
-    this.stateByPanel.set(panel, nextState);
-    panel.reveal(panel.viewColumn, options.preserveFocus === true);
-    this.notifyAutoRefreshConsumerVisibilityChanged();
-    if (this.readyByPanel.get(panel)) {
-      if (!(await this.sendSessionData(panel, {
-        isRequestCurrent: options.isRequestCurrent,
-        supersedeTransition: true,
-      }))) {
-        return false;
+    if (existing) {
+      const state = this.stateByPanel.get(existing.panel);
+      if (
+        !state ||
+        state.kind !== existing.kind ||
+        normalizeCacheKey(state.fsPath) !== key
+      ) {
+        return;
       }
+      panel = existing.panel;
+      kind = existing.kind;
+      if (kind === "reusable" && options.fallbackKind === "session") {
+        if (options.promoteReusable === true) {
+          this.promoteReusablePanelToSession(panel, state.fsPath);
+          kind = "session";
+        } else {
+          this.reusableOpenGeneration += 1;
+        }
+      }
+    } else if (options.fallbackKind === "reusable") {
+      if (this.reusablePanel) {
+        const reusableState = this.stateByPanel.get(this.reusablePanel);
+        if (!reusableState || reusableState.kind !== "reusable") return;
+        panel = this.reusablePanel;
+      } else {
+        panel = this.getOrCreateReusablePanel();
+      }
+      kind = "reusable";
+    } else {
+      panel = this.getOrCreatePanelForKey(key);
+      const registeredState = this.stateByPanel.get(panel);
+      if (
+        registeredState &&
+        (registeredState.kind !== "session" || normalizeCacheKey(registeredState.fsPath) !== key)
+      ) {
+        return;
+      }
+      kind = "session";
     }
-    return true;
+
+    this.commitSessionPanel(panel, session, { ...options, kind });
+    if (this.readyByPanel.get(panel)) {
+      await this.sendSessionData(panel, {
+        isRequestCurrent,
+        supersedeTransition: true,
+      });
+    }
   }
 
   public async openSessionByFsPath(
@@ -618,6 +623,42 @@ export class ChatPanelManager implements vscode.Disposable {
     }
 
     return null;
+  }
+
+  private commitSessionPanel(
+    panel: vscode.WebviewPanel,
+    session: SessionSummary,
+    options: SessionPanelOpenOptions & { kind: ChatPanelKind },
+  ): void {
+    const key = normalizeCacheKey(session.fsPath);
+    const prevState = this.stateByPanel.get(panel);
+    const isSameSession = !!prevState && normalizeCacheKey(prevState.fsPath) === key;
+    if (!isSameSession) {
+      this.clearSessionBoundPanelData(panel);
+    }
+
+    const nextState: ChatPanelState = {
+      fsPath: session.fsPath,
+      revealMessageIndex: options.revealMessageIndex,
+      revealTarget: options.revealTarget,
+      pageSearchSeed: sanitizePageSearchSeed(options.pageSearchSeed),
+      sessionCwd: isSameSession ? prevState?.sessionCwd : undefined,
+      sessionDisplayCwd: isSameSession ? prevState?.sessionDisplayCwd : undefined,
+      kind: options.kind,
+      autoRefreshMode: isSameSession ? prevState.autoRefreshMode : DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE,
+      detailMode: isSameSession ? prevState.detailMode : undefined,
+      pathMode: isSameSession ? prevState.pathMode : undefined,
+      pathModeEnabled: isSameSession ? prevState.pathModeEnabled : undefined,
+      pendingAutoRefresh: false,
+    };
+    this.stateByPanel.set(panel, nextState);
+    panel.title = buildPanelTitle(session);
+    panel.iconPath = this.resolveSessionIconPath(session, nextState.kind);
+    panel.reveal(
+      options.viewColumn ?? panel.viewColumn,
+      options.preserveFocus ?? options.kind === "reusable",
+    );
+    this.notifyAutoRefreshConsumerVisibilityChanged();
   }
 
   private registerBranchPanel(panel: vscode.WebviewPanel): void {
@@ -803,7 +844,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const session = this.historyService.findByFsPath(restored.fsPath);
     if (session) {
       panel.title = buildPanelTitle(session);
-      panel.iconPath = this.resolveSessionIconPath(session);
+      panel.iconPath = this.resolveSessionIconPath(session, restored.kind);
     }
     this.notifyAutoRefreshConsumerVisibilityChanged();
   }
@@ -1269,7 +1310,7 @@ export class ChatPanelManager implements vscode.Disposable {
     for (const panel of this.getOpenPanels()) {
       const state = this.stateByPanel.get(panel);
       const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
-      if (session) panel.iconPath = this.resolveSessionIconPath(session);
+      if (session && state) panel.iconPath = this.resolveSessionIconPath(session, state.kind);
       if (this.readyByPanel.get(panel)) this.publishCodexAgentRuns(panel);
     }
   }
@@ -1278,7 +1319,7 @@ export class ChatPanelManager implements vscode.Disposable {
     for (const panel of this.getOpenPanels()) {
       const state = this.stateByPanel.get(panel);
       const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
-      if (session) panel.iconPath = this.resolveSessionIconPath(session);
+      if (session && state) panel.iconPath = this.resolveSessionIconPath(session, state.kind);
       if (!this.readyByPanel.get(panel)) continue;
       const generation = this.nextCodexAgentRunsGeneration(panel);
       this.codexAgentRunsSnapshotByPanel.delete(panel);
@@ -1339,8 +1380,10 @@ export class ChatPanelManager implements vscode.Disposable {
       void vscode.window.showInformationMessage(t("codexAgentRuns.parentUnavailable"));
       return;
     }
-    if (await this.revealExistingSessionPanel(parent.fsPath, undefined, { preserveFocus: false })) return;
-    await this.openSession(parent, { kind: "session", preserveFocus: false });
+    await this.openSessionPreferExisting(parent, {
+      fallbackKind: "session",
+      preserveFocus: false,
+    });
   }
 
   private publishCodexAgentRuns(panel: vscode.WebviewPanel): void {
@@ -1602,20 +1645,11 @@ export class ChatPanelManager implements vscode.Disposable {
         session,
         requestSequence,
       );
-    if (
-      await this.revealExistingSessionPanel(
-        session.fsPath,
-        undefined,
-        { preserveFocus: false, isRequestCurrent },
-      )
-    ) {
-      return;
-    }
-    if (!isRequestCurrent()) {
-      showUnavailableIfLatest();
-      return;
-    }
-    await this.openSession(session, { kind: "session", preserveFocus: false, isRequestCurrent });
+    await this.openSessionPreferExisting(session, {
+      fallbackKind: "session",
+      preserveFocus: false,
+      isRequestCurrent,
+    });
   }
 
   private async handleToggleCodexAgentRunPin(
@@ -2534,7 +2568,7 @@ export class ChatPanelManager implements vscode.Disposable {
       return false;
     }
     panel.title = buildPanelTitle(session);
-    panel.iconPath = this.resolveSessionIconPath(session);
+    panel.iconPath = this.resolveSessionIconPath(session, "branch");
     this.notifyAutoRefreshConsumerVisibilityChanged();
     return true;
   }
@@ -3629,7 +3663,7 @@ export class ChatPanelManager implements vscode.Disposable {
     );
     if (!this.isTitleRefreshCurrent(panel, state, titleRefreshSequence)) return;
     panel.title = buildPanelTitle(displaySummary);
-    panel.iconPath = this.resolveSessionIconPath(displaySummary);
+    panel.iconPath = this.resolveSessionIconPath(displaySummary, state.kind);
   }
 
   private nextTitleRefreshSequence(panel: vscode.WebviewPanel): number {
@@ -3702,7 +3736,10 @@ export class ChatPanelManager implements vscode.Disposable {
     }
   }
 
-  private resolveSessionIconPath(session: SessionSummary): { light: vscode.Uri; dark: vscode.Uri } {
+  private resolveSessionIconPath(
+    session: SessionSummary,
+    kind: ChatPanelKind,
+  ): { light: vscode.Uri; dark: vscode.Uri } {
     const agentPresentationEnabled =
       getConfig().agentRunsEnabled && this.codexAgentRuns.isPresentationEnabled();
     const agentRelation = agentPresentationEnabled && session.source === "codex"
@@ -3712,6 +3749,7 @@ export class ChatPanelManager implements vscode.Disposable {
       session,
       agentPresentationEnabled,
       agentRelation,
+      kind === "session" ? "dedicated" : "default",
     );
   }
 

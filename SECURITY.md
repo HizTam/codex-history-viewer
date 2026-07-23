@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-07-17
+Last updated: 2026-07-23
 
 ## Supported Versions
 
@@ -32,7 +32,11 @@ Upgrade older installations to v2.8.0 or later. Do not open untrusted or unusual
 
 ## Reporting a Vulnerability
 
-Please report suspected security vulnerabilities privately through the GitHub repository's security reporting feature when available. If private reporting is unavailable, open a GitHub issue with a minimal description and avoid posting exploit details, secrets, tokens, personal data, or other sensitive information publicly.
+Please report suspected security vulnerabilities privately through [GitHub private vulnerability reporting](https://github.com/HizTam/codex-history-viewer/security/advisories/new).
+
+Do not post vulnerability details, reproduction steps, exploit code, secrets, tokens, personal data, or other sensitive information in GitHub Discussions or other public channels.
+
+For non-security bug reports, questions, and feature requests, use [GitHub Discussions](https://github.com/HizTam/codex-history-viewer/discussions).
 
 When reporting a vulnerability, include:
 
