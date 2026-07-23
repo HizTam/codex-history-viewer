@@ -23,6 +23,7 @@ tsconfig.test.json
 DEVELOPMENT.ja.md
 .private-docs/**
 AG*.md
+CL*.md
 .agents
 .claude
 .codex

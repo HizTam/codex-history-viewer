@@ -24,6 +24,7 @@ tsconfig.test.json
 # Local tooling and private documents
 .private-docs/
 AG*.md
+CL*.md
 .agents/
 .claude/
 .codex/
