@@ -496,7 +496,7 @@ function buildHandoffMarkdown(params: {
 }): string {
   const { session, context, pathRewrite } = params;
   const lines: string[] = [];
-  const sourceLabel = session.source === "claude" ? "Claude Code" : "OpenAI Codex";
+  const sourceLabel = session.source === "claude" ? "Claude Code" : "Codex";
   const currentGoal = rewriteHandoffFreeText(findLatestUserMessage(context.messages) ?? "", pathRewrite);
   const transcript = buildTranscriptExcerpt(context.messages, MAX_TRANSCRIPT_CHARS, pathRewrite);
   const diffs = buildDiffSection(context.diffBlocks, pathRewrite);

@@ -367,7 +367,7 @@
         content.appendChild(
           renderEmptyState(
             text("emptyFilterTitle", "No changes for selected sources"),
-            text("emptyFilterHint", "Turn on Codex or Claude in the header, or load more history."),
+            text("emptyFilterHint", "Turn on Codex or Claude Code in the header, or load more history."),
           ),
         );
         content.appendChild(renderLoadControls());
@@ -2451,7 +2451,7 @@
 
   function sourceCountToggle(source, count) {
     const chip = el("button", { type: "button", className: `toolbarSourceCount toolbarSourceCount-${source}` });
-    const label = source === "codex" ? "Codex" : "Claude";
+    const label = source === "codex" ? "Codex" : "Claude Code";
     const active = isSourceVisible(source);
     chip.title = `${label} ${Number(count || 0)}`;
     chip.setAttribute("aria-label", chip.title);

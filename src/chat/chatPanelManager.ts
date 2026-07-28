@@ -27,7 +27,7 @@ import { collectLocalLinkBaseDirs, openLinkedFileInEditor, resolveLocalFileLinkT
 import { buildChatPatchEntryDetails, buildChatSessionModel, type ChatPatchEntryDetailTarget } from "./chatModelBuilder";
 import { sanitizeAttachmentForChannel } from "./chatAttachments";
 import { t } from "../i18n";
-import { getConfig } from "../settings";
+import { getConfig, type ResumeMethod } from "../settings";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 import type { DebugLogger } from "../services/logger";
@@ -72,6 +72,20 @@ import type {
   CodexAgentRunsWebviewNode,
 } from "../agents/codexAgentRunsTypes";
 import type { SessionIconResolver } from "../ui/sessionIconResolver";
+import {
+  isCliResumeSessionEligible,
+  validateCliResumeSessionId,
+  type CliResumeTarget,
+} from "../cliResume/cliResumeValidation";
+import {
+  evaluateExtensionResumeAction,
+  type ResumeActionReason,
+} from "../resume/resumeSessionValidation";
+import {
+  type ResumeActionMethod,
+  type ResumeMethodStore,
+  type ResumeSource,
+} from "../services/resumeMethodStore";
 
 type SaveableChatImage = {
   src: string;
@@ -104,6 +118,8 @@ export type ChatPanelKind = "reusable" | "session" | "branch";
 export type ChatWebviewAutoRefreshMode = "off" | "preserve" | "follow";
 type ChatPanelState = {
   fsPath: string;
+  sessionId?: string;
+  sessionInfoRevision?: number;
   revealMessageIndex?: number;
   revealTarget?: FileChangeHistoryRevealTarget;
   restoreScrollY?: number;
@@ -118,6 +134,7 @@ type ChatPanelState = {
   pathModeEnabled?: boolean;
   pendingAutoRefresh: boolean;
 };
+type SessionInfoAction = "copySessionId" | "copySessionFilePath" | "revealSessionFile";
 type SearchHistoryWebviewCandidate = SearchHistoryEntry & { key: string };
 type ExistingChatPanel = { panel: vscode.WebviewPanel; kind: "reusable" | "session" };
 type SessionPanelOpenOptions = {
@@ -156,6 +173,31 @@ type BranchSwitchRequest = {
   generation: number;
   historyGeneration: number;
   requestSequence: number;
+};
+type ChatCliResumeTargetSnapshot = {
+  configuredMethod: ResumeMethod;
+  primaryMethod: ResumeActionMethod;
+  extension: ChatResumeActionSnapshot;
+  cli: ChatResumeActionSnapshot;
+};
+type ChatCliResumeSnapshot = {
+  revision: number;
+  codex: ChatCliResumeTargetSnapshot;
+  claude: ChatCliResumeTargetSnapshot;
+};
+type ChatResumeActionSnapshot = {
+  available: boolean;
+  reason: ResumeActionReason;
+};
+type ResumeActionRequestContext = {
+  revision: number;
+  origin: "split" | undefined;
+  source: ResumeSource;
+};
+type SplitResumeInvocation = {
+  revision: number;
+  source: ResumeSource;
+  sequence: number;
 };
 type ChatSessionDataOptions = {
   restoreScrollY?: number;
@@ -198,12 +240,14 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly codexForkNavigation: CodexForkNavigationService;
   private readonly codexAgentRuns: CodexAgentRunsService;
   private readonly sessionIconResolver: SessionIconResolver;
+  private readonly resumeMethodStore: ResumeMethodStore;
   private readonly onMissingSession?: MissingSessionHandler;
   private readonly logger?: DebugLogger;
   private readonly autoRefreshConsumerVisibilityEmitter = new vscode.EventEmitter<void>();
   private readonly bookmarkSubscription: vscode.Disposable;
   private readonly annotationSubscription: vscode.Disposable;
   private readonly pinSubscription: vscode.Disposable;
+  private readonly resumeMethodSubscription: vscode.Disposable;
   private searchHistoryPeerRefresh: (() => void) | undefined;
 
   private reusablePanel: vscode.WebviewPanel | null = null;
@@ -234,6 +278,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly sessionDataTransitionByPanel =
     new WeakMap<vscode.WebviewPanel, ChatSessionDataTransitionReservation>();
   private readonly sessionDataCommitSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly resumeRevisionByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private reusableOpenGeneration = 0;
   private codexAgentRunsLoading = false;
   public readonly onDidChangeAutoRefreshConsumerVisibility = this.autoRefreshConsumerVisibilityEmitter.event;
@@ -251,6 +296,7 @@ export class ChatPanelManager implements vscode.Disposable {
     codexForkNavigation: CodexForkNavigationService,
     codexAgentRuns: CodexAgentRunsService,
     sessionIconResolver: SessionIconResolver,
+    resumeMethodStore: ResumeMethodStore,
     onMissingSession?: MissingSessionHandler,
     logger?: DebugLogger,
   ) {
@@ -266,6 +312,7 @@ export class ChatPanelManager implements vscode.Disposable {
     this.codexForkNavigation = codexForkNavigation;
     this.codexAgentRuns = codexAgentRuns;
     this.sessionIconResolver = sessionIconResolver;
+    this.resumeMethodStore = resumeMethodStore;
     this.onMissingSession = onMissingSession;
     this.logger = logger;
     this.bookmarkSubscription = this.bookmarkStore.onDidChange(() => {
@@ -280,6 +327,9 @@ export class ChatPanelManager implements vscode.Disposable {
     this.pinSubscription = this.pinStore.onDidChange(() => {
       this.refreshPinState();
     });
+    this.resumeMethodSubscription = this.resumeMethodStore.onDidChange(() => {
+      this.refreshResumePresentation();
+    });
   }
 
   public dispose(): void {
@@ -287,6 +337,7 @@ export class ChatPanelManager implements vscode.Disposable {
     this.bookmarkSubscription.dispose();
     this.annotationSubscription.dispose();
     this.pinSubscription.dispose();
+    this.resumeMethodSubscription.dispose();
     this.autoRefreshConsumerVisibilityEmitter.dispose();
   }
 
@@ -359,6 +410,37 @@ export class ChatPanelManager implements vscode.Disposable {
     };
 
     for (const panel of this.getOpenPanels()) refresh(panel);
+  }
+
+  public refreshResumePresentation(): void {
+    for (const panel of this.getOpenPanels()) {
+      if (!this.readyByPanel.get(panel)) continue;
+      const revision = this.invalidateResumePresentation(panel);
+      void panel.webview.postMessage({
+        type: "resumePresentation",
+        snapshot: this.buildCliResumeSnapshot(panel, revision),
+      });
+    }
+  }
+
+  private getResumeRevision(panel: vscode.WebviewPanel): number {
+    return this.resumeRevisionByPanel.get(panel) ?? 0;
+  }
+
+  private invalidateResumePresentation(
+    panel: vscode.WebviewPanel,
+    options: { sessionDataPending?: boolean } = {},
+  ): number {
+    const revision = this.getResumeRevision(panel) + 1;
+    this.resumeRevisionByPanel.set(panel, revision);
+    if (this.readyByPanel.get(panel)) {
+      void panel.webview.postMessage({
+        type: "resumePresentationInvalidated",
+        revision,
+        sessionDataPending: options.sessionDataPending === true,
+      });
+    }
+    return revision;
   }
 
   public refreshProjectAssociations(): void {
@@ -901,7 +983,10 @@ export class ChatPanelManager implements vscode.Disposable {
 </head>
 <body>
   <div id="toolbar">
-    <button id="btnResumeInCodex" type="button"></button>
+    <div id="resumeAction" class="toolbarResumeAction" role="group" hidden>
+      <button id="btnResumeInCodex" type="button"></button>
+      <button id="btnResumeMenu" type="button" aria-haspopup="menu" aria-expanded="false" hidden></button>
+    </div>
     <button id="btnPinToggle" type="button" class="toolbarIconBtn"></button>
     <button id="btnCustomTitle" type="button" class="toolbarIconBtn"></button>
     <div id="toolbarSpacer"></div>
@@ -962,6 +1047,16 @@ export class ChatPanelManager implements vscode.Disposable {
 
     const type = typeof msg?.type === "string" ? msg.type : "";
     const requestSequence = sanitizePositiveSequence(msg?.requestId);
+    const resumeMethod: ResumeActionMethod | undefined =
+      type === "resumeInSource"
+        ? "extension"
+        : type === "resumeInCli"
+          ? "cli"
+          : undefined;
+    // Reserve valid split invocations before the first asynchronous boundary to preserve receive order.
+    const splitResumeInvocation = resumeMethod
+      ? this.reserveSplitResumeInvocation(panel, state, msg, resumeMethod)
+      : undefined;
     if (type === "ready") {
       this.branchSwitchSequenceByPanel.delete(panel);
       this.branchSwitchClaimedSequenceByPanel.delete(panel);
@@ -982,6 +1077,9 @@ export class ChatPanelManager implements vscode.Disposable {
     if (
       type !== "ready" &&
       type !== "copy" &&
+      type !== "copySessionId" &&
+      type !== "copySessionFilePath" &&
+      type !== "revealSessionFile" &&
       type !== "debug" &&
       type !== "rememberOpenPosition" &&
       type !== "switchClaudeBranch" &&
@@ -1020,6 +1118,81 @@ export class ChatPanelManager implements vscode.Disposable {
         if (!text) return;
         await vscode.env.clipboard.writeText(text);
         panel.webview.postMessage({ type: "copied" });
+        return;
+      }
+      case "copySessionId": {
+        if (!this.isCurrentSessionInfoAction(panel, state, msg)) return;
+        if (!state.sessionId) {
+          await this.postSessionInfoActionResult(
+            panel,
+            state,
+            "copySessionId",
+            false,
+            t("app.copySessionIdFailed"),
+          );
+          return;
+        }
+        try {
+          await vscode.env.clipboard.writeText(state.sessionId);
+          await this.postSessionInfoActionResult(
+            panel,
+            state,
+            "copySessionId",
+            true,
+            t("app.copySessionIdDone"),
+          );
+        } catch {
+          await this.postSessionInfoActionResult(
+            panel,
+            state,
+            "copySessionId",
+            false,
+            t("app.copySessionIdFailed"),
+          );
+        }
+        return;
+      }
+      case "copySessionFilePath": {
+        if (!this.isCurrentSessionInfoAction(panel, state, msg)) return;
+        try {
+          await vscode.env.clipboard.writeText(state.fsPath);
+          await this.postSessionInfoActionResult(
+            panel,
+            state,
+            "copySessionFilePath",
+            true,
+            t("app.copySessionFilePathDone"),
+          );
+        } catch {
+          await this.postSessionInfoActionResult(
+            panel,
+            state,
+            "copySessionFilePath",
+            false,
+            t("app.copySessionFilePathFailed"),
+          );
+        }
+        return;
+      }
+      case "revealSessionFile": {
+        if (!this.isCurrentSessionInfoAction(panel, state, msg)) return;
+        try {
+          const uri = vscode.Uri.file(state.fsPath);
+          const stat = await vscode.workspace.fs.stat(uri);
+          if (this.stateByPanel.get(panel) !== state) return;
+          if ((stat.type & vscode.FileType.File) === 0) {
+            throw new Error();
+          }
+          await vscode.commands.executeCommand("revealFileInOS", uri);
+        } catch {
+          await this.postSessionInfoActionResult(
+            panel,
+            state,
+            "revealSessionFile",
+            false,
+            t("app.revealSessionFileFailed"),
+          );
+        }
         return;
       }
       case "debug": {
@@ -1085,14 +1258,21 @@ export class ChatPanelManager implements vscode.Disposable {
         if (copied) panel.webview.postMessage({ type: "copied" });
         return;
       }
-      case "resumeInCodex":
-      case "resumeInSource": {
+      case "resumeInCodex": {
         const session = this.historyService.findByFsPath(state.fsPath);
         const commandId =
           session?.source === "claude"
             ? "codexHistoryViewer.resumeSessionInClaude"
             : "codexHistoryViewer.resumeSessionInCodex";
         await vscode.commands.executeCommand(commandId, { fsPath: state.fsPath });
+        return;
+      }
+      case "resumeInSource": {
+        await this.handleResumeAction(panel, state, msg, "extension", splitResumeInvocation);
+        return;
+      }
+      case "resumeInCli": {
+        await this.handleResumeAction(panel, state, msg, "cli", splitResumeInvocation);
         return;
       }
       case "restoreArchivedSession": {
@@ -1113,6 +1293,8 @@ export class ChatPanelManager implements vscode.Disposable {
           this.stateByPanel.set(panel, {
             ...state,
             fsPath: activeFsPath,
+            sessionId: undefined,
+            sessionInfoRevision: undefined,
             revealMessageIndex,
             sessionCwd: undefined,
             sessionDisplayCwd: undefined,
@@ -1261,6 +1443,100 @@ export class ChatPanelManager implements vscode.Disposable {
       default:
         return;
     }
+  }
+
+  private async handleResumeAction(
+    panel: vscode.WebviewPanel,
+    receivedState: ChatPanelState,
+    msg: unknown,
+    method: ResumeActionMethod,
+    splitInvocation: SplitResumeInvocation | undefined,
+  ): Promise<void> {
+    const request = this.resolveResumeActionRequest(panel, receivedState, msg, method);
+    if (!request) return;
+    const { revision, origin, source } = request;
+    const sequence =
+      origin === "split" &&
+      splitInvocation !== undefined &&
+      splitInvocation.revision === revision &&
+      splitInvocation.source === source
+        ? splitInvocation.sequence
+        : undefined;
+    if (origin === "split" && sequence === undefined) return;
+
+    const commandId =
+      method === "extension"
+        ? source === "claude"
+          ? "codexHistoryViewer.resumeSessionInClaude"
+          : "codexHistoryViewer.resumeSessionInCodex"
+        : source === "claude"
+          ? "codexHistoryViewer.resumeSessionInClaudeCli"
+          : "codexHistoryViewer.resumeSessionInCodexCli";
+    const succeeded = await vscode.commands.executeCommand<boolean>(commandId, {
+      fsPath: receivedState.fsPath,
+    });
+    if (!succeeded || sequence === undefined) return;
+
+    try {
+      await this.resumeMethodStore.recordSuccessful(source, method, sequence);
+    } catch {
+      this.logger?.debug(`resumeMethod update failed source=${source}`);
+    }
+  }
+
+  private reserveSplitResumeInvocation(
+    panel: vscode.WebviewPanel,
+    receivedState: ChatPanelState,
+    msg: unknown,
+    method: ResumeActionMethod,
+  ): SplitResumeInvocation | undefined {
+    const request = this.resolveResumeActionRequest(panel, receivedState, msg, method);
+    if (!request || request.origin !== "split") return undefined;
+    return {
+      revision: request.revision,
+      source: request.source,
+      sequence: this.resumeMethodStore.beginInvocation(request.source),
+    };
+  }
+
+  private resolveResumeActionRequest(
+    panel: vscode.WebviewPanel,
+    receivedState: ChatPanelState,
+    msg: unknown,
+    method: ResumeActionMethod,
+  ): ResumeActionRequestContext | null {
+    if (!msg || typeof msg !== "object") return null;
+    const message = msg as { resumeRevision?: unknown; origin?: unknown };
+    const revision = typeof message.resumeRevision === "number"
+      ? message.resumeRevision
+      : Number.NaN;
+    if (
+      !Number.isSafeInteger(revision) ||
+      revision <= 0 ||
+      revision !== this.getResumeRevision(panel) ||
+      this.stateByPanel.get(panel) !== receivedState
+    ) {
+      return null;
+    }
+
+    const origin = message.origin === undefined ? undefined : message.origin === "split" ? "split" : null;
+    if (origin === null) return null;
+
+    const session = this.historyService.findByFsPath(receivedState.fsPath);
+    if (!session || (session.source !== "codex" && session.source !== "claude")) return null;
+    const source: ResumeSource = session.source;
+    const config = getConfig();
+    const configuredMethod = source === "codex" ? config.resumeCodexMethod : config.resumeClaudeMethod;
+    if (origin === "split") {
+      if (configuredMethod !== "both") return null;
+    } else if (configuredMethod !== method) {
+      return null;
+    }
+
+    const snapshot = this.buildCliResumeSnapshot(panel, revision)[source];
+    const action = method === "extension" ? snapshot.extension : snapshot.cli;
+    if (!action.available) return null;
+    return { revision, origin, source };
   }
 
   public refreshBranchNavigation(): void {
@@ -2612,10 +2888,34 @@ export class ChatPanelManager implements vscode.Disposable {
       options?.supersedeTransition === true,
     );
     if (!request) return false;
+    const resumeRevision = this.invalidateResumePresentation(panel, { sessionDataPending: true });
+    let sent = false;
     try {
-      return await this.sendSessionDataForRequest(panel, currentState, state, request, options);
+      sent = await this.sendSessionDataForRequest(
+        panel,
+        currentState,
+        state,
+        request,
+        resumeRevision,
+        options,
+      );
+      return sent;
     } finally {
       this.completeSessionDataRequest(panel, request);
+      if (
+        !sent &&
+        options?.stateOverride !== undefined &&
+        currentState !== undefined &&
+        this.stateByPanel.get(panel) === currentState &&
+        this.readyByPanel.get(panel) &&
+        this.getResumeRevision(panel) === resumeRevision
+      ) {
+        void panel.webview.postMessage({
+          type: "resumePresentation",
+          snapshot: this.buildCliResumeSnapshot(panel, resumeRevision),
+          sessionDataComplete: true,
+        });
+      }
     }
   }
 
@@ -2624,6 +2924,7 @@ export class ChatPanelManager implements vscode.Disposable {
     currentState: ChatPanelState | undefined,
     state: ChatPanelState,
     request: ChatSessionDataRequest,
+    resumeRevision: number,
     options?: ChatSessionDataOptions,
   ): Promise<boolean> {
     const isCurrent = (): boolean =>
@@ -2682,6 +2983,11 @@ export class ChatPanelManager implements vscode.Disposable {
     if (!isCurrent()) return false;
 
     const sessionCwd = typeof model.meta?.cwd === "string" ? model.meta.cwd : undefined;
+    const historySource = model.meta?.historySource;
+    const sessionId =
+      historySource === "codex" || historySource === "claude"
+        ? validateCliResumeSessionId(model.meta?.id, historySource) ?? undefined
+        : undefined;
     const sessionDisplayCwd = sessionCwd ? (this.projectAssociationStore.getDisplayCwd(sessionCwd) ?? sessionCwd) : undefined;
     const pathModeState = this.resolveChatPathModeState(
       sessionCwd,
@@ -2691,6 +2997,8 @@ export class ChatPanelManager implements vscode.Disposable {
     );
     const nextState: ChatPanelState = {
       ...state,
+      sessionId,
+      sessionInfoRevision: request.sequence,
       sessionCwd,
       sessionDisplayCwd,
       detailMode,
@@ -2777,6 +3085,13 @@ export class ChatPanelManager implements vscode.Disposable {
         const session = this.historyService.findByFsPath(nextState.fsPath);
         return session ? isSessionPinned(this.pinStore, session) : this.pinStore.isPinned(nextState.fsPath);
       })(),
+      sessionInfo: {
+        revision: committedState.sessionInfoRevision,
+        ...(committedState.sessionId ? { sessionId: committedState.sessionId } : {}),
+        fileName: path.basename(committedState.fsPath),
+        filePath: committedState.fsPath,
+      },
+      cliResume: this.buildCliResumeSnapshot(panel, resumeRevision),
       bookmarks: bookmarkState.bookmarkKeys,
       i18n: this.buildI18n(),
       dateTime,
@@ -3234,6 +3549,73 @@ export class ChatPanelManager implements vscode.Disposable {
     return { mode, enabled: true };
   }
 
+  private buildCliResumeSnapshot(
+    panel: vscode.WebviewPanel,
+    revision = this.getResumeRevision(panel),
+  ): ChatCliResumeSnapshot {
+    try {
+      const state = this.stateByPanel.get(panel);
+      const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+      const config = getConfig();
+      const buildTarget = (target: CliResumeTarget): ChatCliResumeTargetSnapshot => {
+        const configuredMethod = target === "codex" ? config.resumeCodexMethod : config.resumeClaudeMethod;
+        const extension = evaluateExtensionResumeAction(session, target);
+        const cli = this.evaluateCliResumeAction(session, target);
+        const preferred = this.resumeMethodStore.get(target);
+        const other: ResumeActionMethod = preferred === "extension" ? "cli" : "extension";
+        const preferredAction = preferred === "extension" ? extension : cli;
+        const otherAction = other === "extension" ? extension : cli;
+        const primaryMethod =
+          configuredMethod === "both"
+            ? preferredAction.available || !otherAction.available
+              ? preferred
+              : other
+            : configuredMethod;
+        return {
+          configuredMethod,
+          primaryMethod,
+          extension,
+          cli,
+        };
+      };
+      return {
+        revision,
+        codex: buildTarget("codex"),
+        claude: buildTarget("claude"),
+      };
+    } catch {
+      // Resume is optional UI and must not block delivery of the session model.
+      this.logger?.debug("resume snapshot build failed");
+      const unavailable: ChatCliResumeTargetSnapshot = {
+        configuredMethod: "extension",
+        primaryMethod: "extension",
+        extension: { available: false, reason: "unknown" },
+        cli: { available: false, reason: "unknown" },
+      };
+      return {
+        revision,
+        codex: unavailable,
+        claude: unavailable,
+      };
+    }
+  }
+
+  private evaluateCliResumeAction(
+    session: SessionSummary | undefined,
+    target: CliResumeTarget,
+  ): ChatResumeActionSnapshot {
+    if (!session || session.source !== target) return { available: false, reason: "wrongSource" };
+    if (session.storage.archiveState !== "active") return { available: false, reason: "archived" };
+    if (!validateCliResumeSessionId(session.meta.id, target)) {
+      return { available: false, reason: "invalidSessionId" };
+    }
+    if (!vscode.workspace.isTrusted) return { available: false, reason: "workspaceUntrusted" };
+    return {
+      available: isCliResumeSessionEligible(session, target),
+      reason: "available",
+    };
+  }
+
   private buildI18n(): Record<string, string> {
     return {
       resumeInCodex: t("chat.button.resumeInCodex"),
@@ -3243,6 +3625,11 @@ export class ChatPanelManager implements vscode.Disposable {
       sessionLocationArchived: t("session.location.archived"),
       originalCwd: t("chat.meta.originalCwd"),
       relocatedCwd: t("chat.meta.relocatedCwd"),
+      sessionId: t("chat.meta.sessionId"),
+      sessionFile: t("chat.meta.sessionFile"),
+      copySessionIdTooltip: t("chat.tooltip.copySessionId"),
+      copySessionFilePathTooltip: t("chat.tooltip.copySessionFilePath"),
+      revealSessionFileTooltip: t("chat.tooltip.revealSessionFile"),
       pathModeRecorded: t("chat.pathMode.recorded"),
       pathModeRelocated: t("chat.pathMode.relocated"),
       pathModeRecordedTooltip: t("chat.tooltip.pathModeRecorded"),
@@ -3250,6 +3637,18 @@ export class ChatPanelManager implements vscode.Disposable {
       pathModeDisabledTooltip: t("chat.tooltip.pathModeDisabled"),
       resumeInClaude: t("chat.button.resumeInClaude"),
       resumeInClaudeTooltip: t("chat.tooltip.resumeInClaude"),
+      prepareCodexCliResume: t("chat.button.prepareCodexCliResume"),
+      prepareCodexCliResumeTooltip: t("chat.tooltip.prepareCodexCliResume"),
+      prepareClaudeCliResume: t("chat.button.prepareClaudeCliResume"),
+      prepareClaudeCliResumeTooltip: t("chat.tooltip.prepareClaudeCliResume"),
+      resumeActionsAriaLabel: t("chat.aria.resumeActions"),
+      resumeOtherMethodAriaLabel: t("chat.aria.otherResumeMethod"),
+      resumeMethodMenuAriaLabel: t("chat.menu.resumeMethod"),
+      resumeUnavailableForSessionTooltip: t("chat.tooltip.resumeUnavailableForSession"),
+      codexExtensionInvalidSessionTooltip: t("app.resumeSessionInCodexNoSessionId"),
+      claudeExtensionInvalidSessionTooltip: t("app.resumeSessionInClaudeNoSessionId"),
+      cliWorkspaceUntrustedTooltip: t("cliResume.error.workspaceUntrusted"),
+      cliInvalidSessionTooltip: t("cliResume.error.invalidSessionId"),
       pin: t("chat.button.pin"),
       unpin: t("chat.button.unpin"),
       pinTooltip: t("chat.tooltip.pin"),
@@ -3692,6 +4091,41 @@ export class ChatPanelManager implements vscode.Disposable {
     } catch {
       return false;
     }
+  }
+
+  private isCurrentSessionInfoAction(
+    panel: vscode.WebviewPanel,
+    state: ChatPanelState,
+    msg: any,
+  ): boolean {
+    const revision = sanitizePositiveSequence(msg?.revision);
+    return (
+      revision > 0 &&
+      revision === state.sessionInfoRevision &&
+      this.stateByPanel.get(panel) === state
+    );
+  }
+
+  private async postSessionInfoActionResult(
+    panel: vscode.WebviewPanel,
+    state: ChatPanelState,
+    action: SessionInfoAction,
+    ok: boolean,
+    message: string,
+  ): Promise<void> {
+    if (
+      this.stateByPanel.get(panel) !== state ||
+      !state.sessionInfoRevision
+    ) {
+      return;
+    }
+    await panel.webview.postMessage({
+      type: "sessionInfoActionResult",
+      action,
+      ok,
+      message,
+      revision: state.sessionInfoRevision,
+    });
   }
 
   private async ensurePanelSessionFile(panel: vscode.WebviewPanel, state: ChatPanelState): Promise<boolean> {

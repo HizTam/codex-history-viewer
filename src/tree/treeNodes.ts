@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { t } from "../i18n";
 import type { CodexAgentRelationKind } from "../agents/codexAgentRunsTypes";
+import { hasValidCliResumeSessionId } from "../cliResume/cliResumeValidation";
 
 // Node definitions used by TreeDataProviders.
 
@@ -347,13 +348,17 @@ export function toTreeItemContextValue(
     case "projectDay":
       return "codexHistoryViewer.projectDay";
     case "session":
-      return withCustomTitleMarker(withCodexAgentMarker(
-        node.pinned
-          ? `codexHistoryViewer.sessionPinned.${node.session.source}`
-          : `codexHistoryViewer.session.${node.session.source}`,
-        agentRelation,
-        agentParentAvailable,
-      ),
+      return withCliResumeIdMarker(
+        withCustomTitleMarker(
+          withCodexAgentMarker(
+            node.pinned
+              ? `codexHistoryViewer.sessionPinned.${node.session.source}`
+              : `codexHistoryViewer.session.${node.session.source}`,
+            agentRelation,
+            agentParentAvailable,
+          ),
+          node.session,
+        ),
         node.session,
       );
     case "missingPinned":
@@ -363,16 +368,22 @@ export function toTreeItemContextValue(
     case "searchRoot":
       return "codexHistoryViewer.searchRoot";
     case "searchSession":
-      return withCustomTitleMarker(
-        withCodexAgentMarker(
-          `codexHistoryViewer.searchSession.${node.session.source}`,
-          agentRelation,
-          agentParentAvailable,
+      return withCliResumeIdMarker(
+        withCustomTitleMarker(
+          withCodexAgentMarker(
+            `codexHistoryViewer.searchSession.${node.session.source}`,
+            agentRelation,
+            agentParentAvailable,
+          ),
+          node.session,
         ),
         node.session,
       );
     case "searchHit":
-      return withCustomTitleMarker(`codexHistoryViewer.searchHit.${node.session.source}`, node.session);
+      return withCliResumeIdMarker(
+        withCustomTitleMarker(`codexHistoryViewer.searchHit.${node.session.source}`, node.session),
+        node.session,
+      );
     case "searchHelp":
       return "codexHistoryViewer.searchHelp";
     case "historyEmpty":
@@ -397,6 +408,10 @@ function withCodexAgentMarker(
 function withCustomTitleMarker(base: string, session: SessionSummary): string {
   const archivedBase = session.storage.archiveState === "archived" ? `${base}.archived` : base;
   return session.customTitle ? `${archivedBase}.customTitle` : archivedBase;
+}
+
+function withCliResumeIdMarker(base: string, session: SessionSummary): string {
+  return hasValidCliResumeSessionId(session) ? `${base}.cliResumeIdValid` : base;
 }
 
 export function missingPinnedLabel(): string {

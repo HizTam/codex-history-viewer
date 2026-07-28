@@ -12,6 +12,7 @@ export type ChatOpenPosition = "top" | "lastMessage" | "latest";
 export type ChatPerformanceMode = "auto" | "normal" | "simplified";
 export type ChatTurnTimelineMode = "off" | "basic" | "live";
 export type ImageThumbnailSize = "small" | "medium" | "large";
+export type ResumeMethod = "extension" | "cli" | "both";
 
 export interface AutoRefreshConfig {
   enabled: boolean;
@@ -45,6 +46,8 @@ export interface CodexHistoryViewerConfig {
   searchIndexToolContent: SearchIndexToolContent;
   deleteUseTrash: boolean;
   resumeOpenTarget: "sidebar" | "panel";
+  resumeCodexMethod: ResumeMethod;
+  resumeClaudeMethod: ResumeMethod;
   historyDateBasis: HistoryDateBasis;
   historyTitleSource: HistoryTitleSource;
   autoRefresh: AutoRefreshConfig;
@@ -128,6 +131,12 @@ function parseSearchIndexToolContent(value: unknown): SearchIndexToolContent {
   return "toolCallsAndOutputs";
 }
 
+export function parseResumeMethod(value: unknown): ResumeMethod {
+  // Treat configuration JSON as untrusted and use the backward-compatible default.
+  if (value === "cli" || value === "both") return value;
+  return "extension";
+}
+
 function parseBoundedNumber(value: unknown, fallback: number, min: number, max: number): number {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(n)) return fallback;
@@ -151,6 +160,8 @@ export function getConfig(): CodexHistoryViewerConfig {
   const enabledSources = parseEnabledSources(cfg.get<unknown>("sources.enabled"));
   const resumeOpenTargetRaw = (cfg.get<string>("resume.openTarget") ?? "sidebar").trim().toLowerCase();
   const resumeOpenTarget: "sidebar" | "panel" = resumeOpenTargetRaw === "panel" ? "panel" : "sidebar";
+  const resumeCodexMethod = parseResumeMethod(cfg.get<unknown>("resume.codexMethod"));
+  const resumeClaudeMethod = parseResumeMethod(cfg.get<unknown>("resume.claudeMethod"));
   const historyDateBasisRaw = (cfg.get<string>("history.dateBasis") ?? "started").trim().toLowerCase();
   const historyDateBasis: HistoryDateBasis = historyDateBasisRaw === "lastactivity" ? "lastActivity" : "started";
   const historyTitleSourceRaw = (cfg.get<string>("history.titleSource") ?? "generated").trim().toLowerCase();
@@ -205,6 +216,8 @@ export function getConfig(): CodexHistoryViewerConfig {
     ),
     deleteUseTrash: cfg.get<boolean>("delete.useTrash") ?? true,
     resumeOpenTarget,
+    resumeCodexMethod,
+    resumeClaudeMethod,
     historyDateBasis,
     historyTitleSource,
     autoRefresh,

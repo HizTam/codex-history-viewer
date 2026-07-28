@@ -7,7 +7,9 @@
   const metaEl = document.getElementById("meta");
   const annotationEl = document.getElementById("annotation");
   const timelineEl = document.getElementById("timeline");
+  const resumeActionEl = document.getElementById("resumeAction");
   const btnResumeInCodex = document.getElementById("btnResumeInCodex");
+  const btnResumeMenu = document.getElementById("btnResumeMenu");
   const btnPinToggle = document.getElementById("btnPinToggle");
   const btnCustomTitle = document.getElementById("btnCustomTitle");
   const btnMarkdown = document.getElementById("btnMarkdown");
@@ -57,6 +59,8 @@
   const CODE_COMMENT_ATTRIBUTE_KEYS = new Set(["file", "title", "body", "start", "end", "priority"]);
   const COPY_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 1.5H6A1.5 1.5 0 0 0 4.5 3H3.75A1.75 1.75 0 0 0 2 4.75v8.5C2 14.216 2.784 15 3.75 15h8.5c.966 0 1.75-.784 1.75-1.75v-8.5C14 3.784 13.216 3 12.25 3H11.5A1.5 1.5 0 0 0 10 1.5Zm-4 1H10a.5.5 0 0 1 .5.5V3H5.5V3a.5.5 0 0 1 .5-.5ZM3.75 4h8.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-8.5a.75.75 0 0 1-.75-.75v-8.5A.75.75 0 0 1 3.75 4Z"/></svg>';
+  const REVEAL_FILE_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M1.75 2.5h4.1c.2 0 .39.08.53.22L7.66 4h4.59A1.75 1.75 0 0 1 14 5.75v.75h-1.5v-.75a.25.25 0 0 0-.25-.25H7.35a.75.75 0 0 1-.53-.22L5.54 4H1.75a.25.25 0 0 0-.25.25v7.5c0 .1.06.19.15.23L3.4 7.62A1.75 1.75 0 0 1 5.02 6.5h8.23a1.25 1.25 0 0 1 1.16 1.72l-1.9 4.75A1.75 1.75 0 0 1 10.89 14H1.75A1.75 1.75 0 0 1 0 12.25v-8A1.75 1.75 0 0 1 1.75 2.5Zm3.27 5.5a.25.25 0 0 0-.23.16L3.05 12.5h7.84a.25.25 0 0 0 .23-.16L12.86 8H5.02Z"/></svg>';
   const RELOAD_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.25a5.75 5.75 0 1 0 5.75 5.75.75.75 0 0 0-1.5 0A4.25 4.25 0 1 1 8 3.75h2.06l-.8.8a.75.75 0 0 0 1.06 1.06l2.08-2.08a.75.75 0 0 0 0-1.06L10.32.39A.75.75 0 0 0 9.26 1.45l.8.8H8Z"/></svg>';
   const SCROLL_TOP_ICON_SVG =
@@ -77,6 +81,8 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a.75.75 0 0 1 .75.75v3A.75.75 0 0 1 6.75 6h-3a.75.75 0 0 1 0-1.5h1.19L2.72 2.28a.75.75 0 1 1 1.06-1.06L6 3.44V2.75A.75.75 0 0 1 6.75 2Zm2.5 0a.75.75 0 0 1 .75.75v.69l2.22-2.22a.75.75 0 1 1 1.06 1.06L11.06 4.5h1.19a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1-.75-.75v-3A.75.75 0 0 1 9.25 2ZM3.75 10h3a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0v-.69l-2.22 2.22a.75.75 0 1 1-1.06-1.06L4.94 12H3.75a.75.75 0 0 1 0-1.5Zm5.5 0h3a.75.75 0 0 1 0 1.5h-1.19l2.22 2.22a.75.75 0 1 1-1.06 1.06L10 12.56v.69a.75.75 0 0 1-1.5 0v-3a.75.75 0 0 1 .75-.75Z"/></svg>';
   const RESUME_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.5 2.5a.75.75 0 0 1 .75.75v2.53A5.25 5.25 0 1 1 2.75 8a.75.75 0 0 1 1.5 0 3.75 3.75 0 1 0 2-3.31v2.06a.75.75 0 0 1-1.28.53L2.7 5.03a.75.75 0 0 1 0-1.06l2.27-2.25a.75.75 0 0 1 .53-.22Z"/></svg>';
+  const TERMINAL_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 2h10.5C14.216 2 15 2.784 15 3.75v8.5A1.75 1.75 0 0 1 13.25 14H2.75A1.75 1.75 0 0 1 1 12.25v-8.5C1 2.784 1.784 2 2.75 2Zm0 1A.75.75 0 0 0 2 3.75v8.5c0 .414.336.75.75.75h10.5a.75.75 0 0 0 .75-.75v-8.5a.75.75 0 0 0-.75-.75H2.75Zm1.47 2.22a.75.75 0 0 1 1.06 0l2 2a.75.75 0 0 1 0 1.06l-2 2a.75.75 0 1 1-1.06-1.06L5.69 7.75 4.22 6.28a.75.75 0 0 1 0-1.06ZM8.75 10h2.5a.75.75 0 0 1 0 1.5h-2.5a.75.75 0 0 1 0-1.5Z"/></svg>';
   const PIN_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.25 1.5a.75.75 0 0 0-.53 1.28L5.94 4v2.38L3.72 8.6a.75.75 0 0 0 .53 1.28h3v4.37a.75.75 0 0 0 1.5 0V9.88h3a.75.75 0 0 0 .53-1.28L10.06 6.38V4l1.22-1.22a.75.75 0 0 0-.53-1.28h-5.5Z"/></svg>';
   const BOOKMARK_ICON_SVG =
@@ -239,6 +245,13 @@
   let model = null;
   /** @type {any} */
   let i18n = {};
+  /** @type {any} */
+  let resumeSnapshot = null;
+  let resumeRevision = 0;
+  let resumePresentationPending = false;
+  let resumeSessionDataPending = false;
+  /** @type {{ revision: number, sessionId?: string, fileName: string, filePath: string } | null} */
+  let sessionInfoSnapshot = null;
   /** @type {{ timeZone?: string }} */
   let dateTime = {};
   let toolDisplayMode = "detailsOnly";
@@ -481,8 +494,8 @@
     }
   });
 
-  // Initial button labels (overwritten after receiving sessionData).
-  setToolbarButtonWithIcon(btnResumeInCodex, "Resume in Codex", RESUME_ICON_SVG);
+  // Resume UI remains hidden until the host supplies localized session data.
+  setResumeActionHidden(true);
   setToolbarIconButton(btnPinToggle, PIN_ICON_SVG, "Pin");
   setToolbarIconButton(btnCustomTitle, CUSTOM_TITLE_ICON_SVG, "Custom title");
   setToolbarIconButton(btnMarkdown, MARKDOWN_ICON_SVG, "Markdown");
@@ -503,18 +516,17 @@
   setToolbarIconButton(btnPageSearchNext, NAV_DOWN_ICON_SVG, "Next match");
   setToolbarIconButton(btnPageSearchClose, CLOSE_ICON_SVG, "Close search");
 
-  btnResumeInCodex.addEventListener("click", () => {
-    if (!isArchivedCodexSession()) {
-      vscode.postMessage({ type: "resumeInSource" });
-      return;
-    }
-    persistCurrentChatOpenPosition({ immediate: true });
-    const revealMessageIndex = chatOpenPosition === "lastMessage" ? findTopVisibleMessageIndex() : null;
-    vscode.postMessage({
-      type: "restoreArchivedSession",
-      revealMessageIndex: typeof revealMessageIndex === "number" ? revealMessageIndex : undefined,
+  if (btnResumeInCodex instanceof HTMLElement) {
+    btnResumeInCodex.addEventListener("click", handleResumePrimaryClick);
+  }
+  if (btnResumeMenu instanceof HTMLButtonElement) {
+    btnResumeMenu.addEventListener("click", toggleResumeMethodMenu);
+    btnResumeMenu.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      showResumeMethodMenu();
     });
-  });
+  }
   btnPinToggle.addEventListener("click", () => {
     vscode.postMessage({ type: "togglePin" });
   });
@@ -794,6 +806,14 @@
       updateToolbar();
       return;
     }
+    if (msg.type === "resumePresentationInvalidated") {
+      applyResumePresentationInvalidationSafely(msg);
+      return;
+    }
+    if (msg.type === "resumePresentation") {
+      applyResumeSnapshotSafely(msg.snapshot, { sessionDataComplete: msg.sessionDataComplete === true });
+      return;
+    }
     if (msg.type === "branchNavigationDisabled") {
       const timelineChanged = branchGroupByAnchor.size > 0;
       const generation = Number(msg.generation);
@@ -1035,6 +1055,8 @@
       model = incomingModel;
       bumpPageSearchContentRevision();
       i18n = msg.i18n || {};
+      sessionInfoSnapshot = normalizeSessionInfoSnapshot(msg.sessionInfo);
+      applyResumeSnapshotSafely(msg.cliResume, { fromSessionData: true, update: false });
       dateTime = msg.dateTime || {};
       panelKind = normalizePanelKind(msg.panelKind, msg.isPreview);
       chatOpenPosition = normalizeChatOpenPosition(msg.chatOpenPosition);
@@ -1266,6 +1288,31 @@
       showToast(i18n.copied || "Copied.", { key: "copied" });
       return;
     }
+    if (msg.type === "sessionInfoActionResult") {
+      const revision = Number(msg.revision);
+      if (
+        !sessionInfoSnapshot ||
+        !Number.isSafeInteger(revision) ||
+        revision !== sessionInfoSnapshot.revision
+      ) {
+        return;
+      }
+      const action = typeof msg.action === "string" ? msg.action : "";
+      if (
+        action !== "copySessionId" &&
+        action !== "copySessionFilePath" &&
+        action !== "revealSessionFile"
+      ) {
+        return;
+      }
+      const message = typeof msg.message === "string" ? msg.message.trim() : "";
+      if (message) {
+        showToast(message, {
+          key: `sessionInfo:${action}`,
+        });
+      }
+      return;
+    }
     if (msg.type === "imageData") {
       handleImageDataMessage(msg);
       return;
@@ -1312,6 +1359,12 @@
     const text = typeof value === "string" ? value.trim() : "";
     if (text && !looksLikeMojibake(text)) return text;
     return fallback;
+  }
+
+  function getRequiredResumeUiText(value) {
+    const text = typeof value === "string" ? value.trim() : "";
+    if (text && !looksLikeMojibake(text)) return text;
+    throw new Error();
   }
 
   function normalizeTurnTimelineMode(value) {
@@ -1371,23 +1424,462 @@
     );
   }
 
+  function normalizeResumeActionSnapshot(value) {
+    if (!value || typeof value !== "object") return null;
+    const reasons = new Set([
+      "available",
+      "wrongSource",
+      "archived",
+      "invalidSessionId",
+      "workspaceUntrusted",
+      "unknown",
+    ]);
+    if (typeof value.available !== "boolean" || !reasons.has(value.reason)) return null;
+    if (value.available !== (value.reason === "available")) return null;
+    return {
+      available: value.available,
+      reason: value.reason,
+    };
+  }
+
+  function normalizeResumeTargetSnapshot(value) {
+    if (!value || typeof value !== "object") return null;
+    const configuredMethod =
+      value.configuredMethod === "extension" || value.configuredMethod === "cli" || value.configuredMethod === "both"
+        ? value.configuredMethod
+        : null;
+    const primaryMethod =
+      value.primaryMethod === "extension" || value.primaryMethod === "cli"
+        ? value.primaryMethod
+        : null;
+    const extension = normalizeResumeActionSnapshot(value.extension);
+    const cli = normalizeResumeActionSnapshot(value.cli);
+    if (!configuredMethod || !primaryMethod || !extension || !cli) return null;
+    return {
+      configuredMethod,
+      primaryMethod,
+      extension,
+      cli,
+    };
+  }
+
+  function normalizeResumeSnapshot(value) {
+    if (!value || typeof value !== "object") return null;
+    const revision = Number(value.revision);
+    const codex = normalizeResumeTargetSnapshot(value.codex);
+    const claude = normalizeResumeTargetSnapshot(value.claude);
+    if (!Number.isSafeInteger(revision) || revision <= 0 || !codex || !claude) return null;
+    return {
+      revision,
+      codex,
+      claude,
+    };
+  }
+
+  function applyResumePresentationInvalidation(message) {
+    const revision = Number(message?.revision);
+    if (!Number.isSafeInteger(revision) || revision <= resumeRevision) return;
+    resumeRevision = revision;
+    resumePresentationPending = true;
+    resumeSessionDataPending = resumeSessionDataPending || message?.sessionDataPending === true;
+    if (resumeSessionDataPending) resumeSnapshot = null;
+    closeResumeMethodMenu();
+    updateResumeToolbarSafely();
+  }
+
+  function applyResumePresentationInvalidationSafely(message) {
+    try {
+      applyResumePresentationInvalidation(message);
+    } catch {
+      resumeSnapshot = null;
+      resumePresentationPending = true;
+      resumeSessionDataPending = true;
+      try {
+        closeResumeMethodMenu();
+      } catch {
+        // Resume menu cleanup is best-effort and must not block the session view.
+      }
+      try {
+        setResumeActionHidden(true);
+      } catch {
+        // Resume presentation is optional and fails closed.
+      }
+      scheduleResumeToolbarCompactModeSafely();
+    }
+  }
+
+  function applyResumeSnapshot(value, options = {}) {
+    const normalized = normalizeResumeSnapshot(value);
+    if (!normalized) {
+      if (options.fromSessionData === true && (resumeSessionDataPending || resumeRevision === 0)) {
+        resumeSnapshot = null;
+        resumePresentationPending = false;
+        resumeSessionDataPending = false;
+        closeResumeMethodMenu();
+      }
+      if (options.update !== false) updateResumeToolbarSafely();
+      return false;
+    }
+    if (normalized.revision < resumeRevision) {
+      if (options.fromSessionData === true || options.sessionDataComplete === true) {
+        resumeSessionDataPending = false;
+        resumePresentationPending = false;
+        closeResumeMethodMenu();
+      }
+      if (options.update !== false) updateResumeToolbarSafely();
+      return false;
+    }
+    resumeRevision = normalized.revision;
+    resumeSnapshot = normalized;
+    resumePresentationPending = false;
+    if (options.fromSessionData === true || options.sessionDataComplete === true) {
+      resumeSessionDataPending = false;
+    }
+    closeResumeMethodMenu();
+    if (options.update !== false) updateResumeToolbarSafely();
+    return true;
+  }
+
+  function applyResumeSnapshotSafely(value, options = {}) {
+    try {
+      return applyResumeSnapshot(value, options);
+    } catch {
+      resumeSnapshot = null;
+      resumePresentationPending = false;
+      if (options.fromSessionData === true || options.sessionDataComplete === true) {
+        resumeSessionDataPending = false;
+      }
+      try {
+        closeResumeMethodMenu();
+      } catch {
+        // Resume menu cleanup is best-effort and must not block the session view.
+      }
+      try {
+        setResumeActionHidden(true);
+      } catch {
+        // Resume presentation is optional and fails closed.
+      }
+      scheduleResumeToolbarCompactModeSafely();
+      return false;
+    }
+  }
+
+  function getCurrentResumeSource() {
+    const source = model?.meta?.historySource;
+    return source === "codex" || source === "claude" ? source : null;
+  }
+
+  function getResumeMethodPresentation(source, method) {
+    const extension = method === "extension";
+    if (source === "claude") {
+      return extension
+        ? {
+            label: getRequiredResumeUiText(i18n.resumeInClaude),
+            tooltip: getRequiredResumeUiText(i18n.resumeInClaudeTooltip),
+            icon: RESUME_ICON_SVG,
+          }
+        : {
+            label: getRequiredResumeUiText(i18n.prepareClaudeCliResume),
+            tooltip: getRequiredResumeUiText(i18n.prepareClaudeCliResumeTooltip),
+            icon: TERMINAL_ICON_SVG,
+          };
+    }
+    return extension
+      ? {
+          label: getRequiredResumeUiText(i18n.resumeInCodex),
+          tooltip: getRequiredResumeUiText(i18n.resumeInCodexTooltip),
+          icon: RESUME_ICON_SVG,
+        }
+      : {
+          label: getRequiredResumeUiText(i18n.prepareCodexCliResume),
+          tooltip: getRequiredResumeUiText(i18n.prepareCodexCliResumeTooltip),
+          icon: TERMINAL_ICON_SVG,
+        };
+  }
+
+  function getResumeUnavailableTooltip(action, source, method) {
+    if (resumePresentationPending) {
+      return getRequiredResumeUiText(i18n.resumeUnavailableForSessionTooltip);
+    }
+    if (action?.reason === "workspaceUntrusted" && method === "cli") {
+      return getRequiredResumeUiText(i18n.cliWorkspaceUntrustedTooltip);
+    }
+    if (action?.reason === "invalidSessionId") {
+      if (method === "cli") {
+        return getRequiredResumeUiText(i18n.cliInvalidSessionTooltip);
+      }
+      return source === "claude"
+        ? getRequiredResumeUiText(i18n.claudeExtensionInvalidSessionTooltip)
+        : getRequiredResumeUiText(i18n.codexExtensionInvalidSessionTooltip);
+    }
+    return getRequiredResumeUiText(i18n.resumeUnavailableForSessionTooltip);
+  }
+
+  function setResumeActionHidden(hidden) {
+    if (resumeActionEl instanceof HTMLElement) resumeActionEl.hidden = hidden;
+    if (!(resumeActionEl instanceof HTMLElement) && btnResumeInCodex instanceof HTMLElement) {
+      btnResumeInCodex.hidden = hidden;
+    }
+    if (hidden && btnResumeMenu instanceof HTMLElement) btnResumeMenu.hidden = true;
+  }
+
+  function scheduleResumeToolbarCompactModeSafely() {
+    try {
+      scheduleToolbarCompactMode();
+    } catch {
+      // Compact layout refresh is best-effort and must not block the session view.
+    }
+  }
+
+  function updateResumeToolbarSafely() {
+    try {
+      updateResumeToolbar();
+    } catch {
+      try {
+        closeResumeMethodMenu();
+      } catch {
+        // Resume menu cleanup is best-effort and must not block the session view.
+      }
+      try {
+        setResumeActionHidden(true);
+      } catch {
+        // Resume presentation is optional and fails closed.
+      }
+    }
+    scheduleResumeToolbarCompactModeSafely();
+  }
+
+  function updateResumeToolbar() {
+    const source = getCurrentResumeSource();
+    const archivedCodexSession = isArchivedCodexSession();
+    if (!source || resumeSessionDataPending) {
+      setResumeActionHidden(true);
+      return;
+    }
+
+    if (archivedCodexSession) {
+      const label = getRequiredResumeUiText(i18n.restoreArchived);
+      const tooltip = getRequiredResumeUiText(i18n.restoreArchivedTooltip);
+      setResumeActionHidden(false);
+      if (resumeActionEl instanceof HTMLElement) {
+        resumeActionEl.dataset.split = "false";
+        resumeActionEl.setAttribute("aria-label", getRequiredResumeUiText(i18n.resumeActionsAriaLabel));
+      }
+      if (btnResumeInCodex instanceof HTMLButtonElement) {
+        btnResumeInCodex.hidden = false;
+        btnResumeInCodex.disabled = false;
+        btnResumeInCodex.removeAttribute("aria-disabled");
+        btnResumeInCodex.dataset.resumeMethod = "restore";
+        setToolbarButtonWithIcon(btnResumeInCodex, label, CARD_RESTORE_ICON_SVG);
+        btnResumeInCodex.title = tooltip;
+        btnResumeInCodex.setAttribute("aria-label", tooltip);
+      }
+      if (btnResumeMenu instanceof HTMLButtonElement) {
+        btnResumeMenu.hidden = true;
+        btnResumeMenu.setAttribute("aria-expanded", "false");
+      }
+      closeResumeMethodMenu();
+      return;
+    }
+
+    const target = resumeSnapshot?.[source];
+    if (
+      !target ||
+      resumeRevision <= 0 ||
+      (
+        target.extension.reason === target.cli.reason &&
+        (target.extension.reason === "wrongSource" || target.extension.reason === "unknown")
+      )
+    ) {
+      setResumeActionHidden(true);
+      return;
+    }
+
+    const configuredMethod = target.configuredMethod;
+    const split = configuredMethod === "both";
+    const primaryMethod = split ? target.primaryMethod : configuredMethod;
+    const primaryAction = target[primaryMethod];
+    const primaryPresentation = getResumeMethodPresentation(source, primaryMethod);
+    const primaryAvailable = primaryAction.available && !resumePresentationPending;
+    const primaryTooltip = primaryAvailable
+      ? primaryPresentation.tooltip
+      : getResumeUnavailableTooltip(primaryAction, source, primaryMethod);
+    if (split) {
+      for (const method of ["extension", "cli"]) {
+        getResumeMethodPresentation(source, method);
+        if (!target[method].available || resumePresentationPending) {
+          getResumeUnavailableTooltip(target[method], source, method);
+        }
+      }
+    }
+
+    setResumeActionHidden(false);
+    if (resumeActionEl instanceof HTMLElement) {
+      resumeActionEl.dataset.split = split ? "true" : "false";
+      resumeActionEl.setAttribute("aria-label", getRequiredResumeUiText(i18n.resumeActionsAriaLabel));
+    }
+    if (btnResumeInCodex instanceof HTMLButtonElement) {
+      btnResumeInCodex.hidden = false;
+      btnResumeInCodex.disabled = !primaryAvailable;
+      btnResumeInCodex.setAttribute("aria-disabled", primaryAvailable ? "false" : "true");
+      btnResumeInCodex.dataset.resumeMethod = primaryMethod;
+      setToolbarButtonWithIcon(
+        btnResumeInCodex,
+        primaryPresentation.label,
+        primaryPresentation.icon,
+      );
+      btnResumeInCodex.title = primaryTooltip;
+      btnResumeInCodex.setAttribute("aria-label", primaryTooltip);
+    }
+
+    if (btnResumeMenu instanceof HTMLButtonElement) {
+      btnResumeMenu.hidden = !split;
+      btnResumeMenu.disabled = resumePresentationPending;
+      if (split) {
+        const menuLabel = getRequiredResumeUiText(i18n.resumeOtherMethodAriaLabel);
+        getRequiredResumeUiText(i18n.resumeMethodMenuAriaLabel);
+        setToolbarIconButton(btnResumeMenu, NAV_DOWN_ICON_SVG, menuLabel);
+        btnResumeMenu.setAttribute("aria-haspopup", "menu");
+        btnResumeMenu.setAttribute(
+          "aria-expanded",
+          branchChoiceMenuEl?.dataset.menuKind === "resume" ? "true" : "false",
+        );
+      } else {
+        btnResumeMenu.setAttribute("aria-expanded", "false");
+        closeResumeMethodMenu();
+      }
+    }
+  }
+
+  function handleResumePrimaryClick() {
+    if (isArchivedCodexSession()) {
+      persistCurrentChatOpenPosition({ immediate: true });
+      const revealMessageIndex = chatOpenPosition === "lastMessage" ? findTopVisibleMessageIndex() : null;
+      vscode.postMessage({
+        type: "restoreArchivedSession",
+        revealMessageIndex: typeof revealMessageIndex === "number" ? revealMessageIndex : undefined,
+      });
+      return;
+    }
+    const source = getCurrentResumeSource();
+    const target = source ? resumeSnapshot?.[source] : null;
+    if (!source || !target || resumePresentationPending || resumeSessionDataPending) return;
+    const method = target.configuredMethod === "both" ? target.primaryMethod : target.configuredMethod;
+    invokeResumeMethod(source, target, method);
+  }
+
+  function invokeResumeMethod(source, target, method) {
+    if (
+      (source !== "codex" && source !== "claude") ||
+      !target ||
+      (method !== "extension" && method !== "cli") ||
+      resumePresentationPending ||
+      resumeSessionDataPending ||
+      resumeSnapshot?.revision !== resumeRevision ||
+      resumeSnapshot?.[source] !== target ||
+      !target[method]?.available
+    ) {
+      return;
+    }
+    const split = target.configuredMethod === "both";
+    if (!split && target.configuredMethod !== method) return;
+    vscode.postMessage({
+      type: method === "extension" ? "resumeInSource" : "resumeInCli",
+      resumeRevision,
+      ...(split ? { origin: "split" } : {}),
+    });
+  }
+
+  function toggleResumeMethodMenu() {
+    if (branchChoiceMenuEl?.dataset.menuKind === "resume") {
+      closeBranchOccurrenceMenu();
+      return;
+    }
+    showResumeMethodMenu();
+  }
+
+  function showResumeMethodMenu() {
+    const source = getCurrentResumeSource();
+    const target = source ? resumeSnapshot?.[source] : null;
+    if (
+      !source ||
+      !target ||
+      target.configuredMethod !== "both" ||
+      resumePresentationPending ||
+      resumeSessionDataPending ||
+      !(btnResumeMenu instanceof HTMLButtonElement)
+    ) {
+      return;
+    }
+
+    closeBranchOccurrenceMenu();
+    const menu = el("div", {
+      id: "resumeMethodMenu",
+      className: "branchChoiceMenu branchChoiceMenu-portal resumeMethodMenu",
+    });
+    menu.dataset.menuKind = "resume";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute(
+      "aria-label",
+      getRequiredResumeUiText(i18n.resumeMethodMenuAriaLabel),
+    );
+
+    const options = [];
+    for (const method of ["extension", "cli"]) {
+      const action = target[method];
+      const presentation = getResumeMethodPresentation(source, method);
+      const available = action.available;
+      const tooltip = available
+        ? presentation.tooltip
+        : getResumeUnavailableTooltip(action, source, method);
+      const option = el("button", {
+        className: "branchChoiceOption resumeMethodMenuItem",
+        type: "button",
+        tabIndex: -1,
+      });
+      option.dataset.interactive = available ? "true" : "false";
+      option.dataset.menuNavigable = "true";
+      option.setAttribute("role", "menuitem");
+      option.setAttribute("aria-disabled", available ? "false" : "true");
+      option.setAttribute("aria-label", available ? presentation.label : `${presentation.label}: ${tooltip}`);
+      option.title = tooltip;
+      const icon = el("span", { className: "resumeMethodMenuIcon" });
+      icon.innerHTML = presentation.icon;
+      const label = el("span", { className: "resumeMethodMenuLabel" });
+      label.textContent = presentation.label;
+      option.append(icon, label);
+      option.addEventListener("click", () => {
+        if (!available) return;
+        closeBranchOccurrenceMenuAndRestoreFocus();
+        invokeResumeMethod(source, target, method);
+      });
+      menu.appendChild(option);
+      options.push(option);
+    }
+    document.body.appendChild(menu);
+    branchChoiceMenuEl = menu;
+    branchChoiceMenuReturnFocus = btnResumeMenu;
+    btnResumeMenu.setAttribute("aria-expanded", "true");
+    addBranchChoiceViewportListeners();
+    menu.addEventListener("keydown", handleBranchChoiceMenuKeydown);
+    requestAnimationFrame(() => {
+      if (branchChoiceMenuEl !== menu) return;
+      positionBranchChoicePortal(menu, btnResumeMenu);
+      options[0]?.focus();
+    });
+    setTimeout(() => {
+      if (branchChoiceMenuEl === menu) document.addEventListener("pointerdown", handleBranchChoiceOutside);
+    }, 0);
+  }
+
+  function closeResumeMethodMenu() {
+    if (branchChoiceMenuEl?.dataset.menuKind === "resume") closeBranchOccurrenceMenu();
+  }
+
   function updateToolbar() {
     const isClaudeSession = !!(model && model.meta && model.meta.historySource === "claude");
     const isCodexSession = !!(model && model.meta && model.meta.historySource === "codex");
-    const archivedCodexSession = isArchivedCodexSession();
-    const resumeLabel = archivedCodexSession
-      ? i18n.restoreArchived || "Move to Codex History"
-      : isClaudeSession
-      ? i18n.resumeInClaude || "Resume in Claude Code"
-      : i18n.resumeInCodex || "Resume in Codex";
-    const resumeTooltip = archivedCodexSession
-      ? i18n.restoreArchivedTooltip || resumeLabel
-      : isClaudeSession
-      ? i18n.resumeInClaudeTooltip || resumeLabel
-      : i18n.resumeInCodexTooltip || resumeLabel;
-    setToolbarButtonWithIcon(btnResumeInCodex, resumeLabel, archivedCodexSession ? CARD_RESTORE_ICON_SVG : RESUME_ICON_SVG);
-    btnResumeInCodex.title = resumeTooltip;
-    btnResumeInCodex.setAttribute("aria-label", resumeTooltip);
+    updateResumeToolbarSafely();
 
     const pinLabel = isPinned ? i18n.unpin || "Unpin" : i18n.pin || "Pin";
     const pinTooltip = isPinned
@@ -1757,6 +2249,7 @@
       role: "menu",
       ariaLabel: getSafeUiText(i18n.branchChooseSession, "Choose a session occurrence"),
     });
+    menu.dataset.menuKind = "branch";
     const firstOccurrence = choice.occurrences[0];
     if (firstOccurrence?.branchStart) {
       const choicePosition = formatTemplate(
@@ -1817,6 +2310,7 @@
       role: "menu",
       ariaLabel: getSafeUiText(i18n.branchChooseHistory, "Choose a history"),
     });
+    menu.dataset.menuKind = "branch";
     const orderedChoices = group.choices.slice().sort((left, right) => left.choiceIndex - right.choiceIndex);
     for (const choice of orderedChoices) {
       if (!Array.isArray(choice.occurrences) || choice.occurrences.length === 0) continue;
@@ -1993,15 +2487,66 @@
       closeBranchOccurrenceMenuAndRestoreFocus();
       return;
     }
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const resumeMenu = branchChoiceMenuEl?.dataset.menuKind === "resume";
+    if (resumeMenu && event.key === "Tab") {
+      event.preventDefault();
+      const anchor = branchChoiceMenuReturnFocus;
+      const backwards = event.shiftKey;
+      closeBranchOccurrenceMenu();
+      focusAdjacentToolbarControl(anchor, backwards);
+      return;
+    }
+    if (
+      resumeMenu &&
+      (event.key === "Enter" || event.key === " ") &&
+      document.activeElement?.getAttribute?.("aria-disabled") === "true"
+    ) {
+      event.preventDefault();
+      return;
+    }
+    const navigationKeys = resumeMenu
+      ? new Set(["ArrowDown", "ArrowUp", "Home", "End"])
+      : new Set(["ArrowDown", "ArrowUp"]);
+    if (!navigationKeys.has(event.key)) return;
     const menuItems = Array.from(
-      branchChoiceMenuEl?.querySelectorAll('[role="menuitem"][data-interactive="true"]') || [],
+      branchChoiceMenuEl?.querySelectorAll(
+        resumeMenu
+          ? '[role="menuitem"][data-menu-navigable="true"]'
+          : '[role="menuitem"][data-interactive="true"]',
+      ) || [],
     );
     if (menuItems.length === 0) return;
     event.preventDefault();
     const currentIndex = menuItems.indexOf(document.activeElement);
+    if (event.key === "Home") {
+      menuItems[0]?.focus();
+      return;
+    }
+    if (event.key === "End") {
+      menuItems[menuItems.length - 1]?.focus();
+      return;
+    }
     const offset = event.key === "ArrowDown" ? 1 : -1;
     menuItems[(currentIndex + offset + menuItems.length) % menuItems.length]?.focus();
+  }
+
+  function focusAdjacentToolbarControl(anchor, backwards) {
+    if (!(toolbarEl instanceof HTMLElement)) {
+      if (anchor instanceof HTMLElement && anchor.isConnected) anchor.focus();
+      return;
+    }
+    const controls = Array.from(toolbarEl.querySelectorAll("button")).filter((button) => {
+      if (!(button instanceof HTMLButtonElement) || button.hidden || button.disabled) return false;
+      return button.getClientRects().length > 0;
+    });
+    const anchorIndex = controls.indexOf(anchor);
+    const targetIndex = anchorIndex + (backwards ? -1 : 1);
+    const target = controls[targetIndex];
+    if (target instanceof HTMLElement) {
+      target.focus();
+    } else if (anchor instanceof HTMLElement && anchor.isConnected) {
+      anchor.focus();
+    }
   }
 
   function attachBranchChoicePreview(button, group, choiceIndex, direction) {
@@ -2167,6 +2712,13 @@
   }
 
   function handleBranchChoiceOutside(event) {
+    if (
+      branchChoiceMenuEl?.dataset.menuKind === "resume" &&
+      branchChoiceMenuReturnFocus instanceof HTMLElement &&
+      branchChoiceMenuReturnFocus.contains(event.target)
+    ) {
+      return;
+    }
     if (branchChoiceMenuEl instanceof HTMLElement && !branchChoiceMenuEl.contains(event.target)) {
       closeBranchOccurrenceMenu();
     }
@@ -2179,12 +2731,17 @@
   }
 
   function closeBranchOccurrenceMenu() {
+    const resumeMenu = branchChoiceMenuEl?.dataset.menuKind === "resume";
+    const returnFocus = branchChoiceMenuReturnFocus;
     closeBranchChoicePreview();
     document.removeEventListener("pointerdown", handleBranchChoiceOutside);
     removeBranchChoiceViewportListeners();
     if (branchChoiceMenuEl instanceof HTMLElement) branchChoiceMenuEl.remove();
     branchChoiceMenuEl = null;
     branchChoiceMenuReturnFocus = null;
+    if (resumeMenu && returnFocus instanceof HTMLElement) {
+      returnFocus.setAttribute("aria-expanded", "false");
+    }
   }
 
   function updateBranchControlDisabledState() {
@@ -7135,6 +7692,91 @@
     if (cwd) metaLines.push(`CWD: ${cwd}`);
   }
 
+  function renderSessionMetadata(metaLines) {
+    if (!(metaEl instanceof HTMLElement)) return;
+    if (metaLines.length > 0) {
+      const overview = el("div", { className: "sessionMetaOverview" });
+      overview.textContent = metaLines.join(" | ");
+      metaEl.appendChild(overview);
+    }
+
+    const snapshot = sessionInfoSnapshot;
+    if (!snapshot) return;
+    if (snapshot.sessionId) {
+      appendSessionInfoRow({
+        label: i18n.sessionId,
+        value: snapshot.sessionId,
+        title: snapshot.sessionId,
+        actions: [
+          {
+            type: "copySessionId",
+            label: i18n.copySessionIdTooltip,
+            icon: COPY_ICON_SVG,
+          },
+        ],
+        snapshot,
+      });
+    }
+    appendSessionInfoRow({
+      label: i18n.sessionFile,
+      value: snapshot.fileName,
+      title: snapshot.filePath,
+      actions: [
+        {
+          type: "copySessionFilePath",
+          label: i18n.copySessionFilePathTooltip,
+          icon: COPY_ICON_SVG,
+        },
+        {
+          type: "revealSessionFile",
+          label: i18n.revealSessionFileTooltip,
+          icon: REVEAL_FILE_ICON_SVG,
+        },
+      ],
+      snapshot,
+    });
+  }
+
+  function appendSessionInfoRow(options) {
+    const label = typeof options?.label === "string" ? options.label.trim() : "";
+    const value = typeof options?.value === "string" ? options.value : "";
+    const title = typeof options?.title === "string" ? options.title : "";
+    const snapshot = options?.snapshot;
+    if (!label || !value || !snapshot || !(metaEl instanceof HTMLElement)) return;
+
+    const row = el("div", { className: "sessionInfoRow" });
+    const labelEl = el("span", { className: "sessionInfoLabel" });
+    labelEl.textContent = `${label}:`;
+    row.appendChild(labelEl);
+
+    const valueEl = el("span", { className: "sessionInfoValue" });
+    valueEl.textContent = value;
+    if (title) valueEl.title = title;
+    row.appendChild(valueEl);
+
+    const actionsEl = el("span", { className: "sessionInfoActions" });
+    for (const action of Array.isArray(options.actions) ? options.actions : []) {
+      const actionLabel = typeof action?.label === "string" ? action.label.trim() : "";
+      if (!actionLabel) continue;
+      const button = el("button", {
+        type: "button",
+        className: "sessionInfoActionButton",
+        title: actionLabel,
+      });
+      button.setAttribute("aria-label", actionLabel);
+      button.innerHTML = action.icon;
+      button.addEventListener("click", () => {
+        vscode.postMessage({
+          type: action.type,
+          revision: snapshot.revision,
+        });
+      });
+      actionsEl.appendChild(button);
+    }
+    if (actionsEl.childElementCount > 0) row.appendChild(actionsEl);
+    metaEl.appendChild(row);
+  }
+
   function requestRenderAfterCurrent(callback) {
     if (typeof callback === "function") renderAfterCurrentCallbacks.push(callback);
     if (renderAfterCurrentFrame) return;
@@ -7216,7 +7858,7 @@
     if (model.sessionLocation && model.sessionLocation.archiveState === "archived") {
       metaLines.push(i18n.sessionLocationArchived || "Archived");
     }
-    if (metaLines.length > 0) metaEl.textContent = metaLines.join(" | ");
+    renderSessionMetadata(metaLines);
 
     const items = Array.isArray(model.items) ? model.items : [];
     // Build navigation metadata between messages before rendering.
@@ -13415,6 +14057,32 @@
     const e = document.createElement(tag);
     if (props) Object.assign(e, props);
     return e;
+  }
+
+  function normalizeSessionInfoSnapshot(value) {
+    if (!value || typeof value !== "object") return null;
+    const revision = Number(value.revision);
+    const sessionId = typeof value.sessionId === "string" ? value.sessionId : "";
+    const fileName = typeof value.fileName === "string" ? value.fileName : "";
+    const filePath = typeof value.filePath === "string" ? value.filePath : "";
+    if (
+      !Number.isSafeInteger(revision) ||
+      revision <= 0 ||
+      !fileName ||
+      fileName.length > 4096 ||
+      !filePath ||
+      filePath.length > 32768 ||
+      fileName.includes("\0") ||
+      filePath.includes("\0")
+    ) {
+      return null;
+    }
+    return {
+      revision,
+      ...(sessionId && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(sessionId) ? { sessionId } : {}),
+      fileName,
+      filePath,
+    };
   }
 
   function normalizeRevealTarget(value) {

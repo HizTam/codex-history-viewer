@@ -84,21 +84,37 @@ Notes:
 
 ## Session Actions
 
+Tree context-menu targets follow these rules:
+
+| Scope | Commands | Behavior |
+| --- | --- | --- |
+| Single session | Resume actions, CLI resume-command preparation, **Handoff to Other AI**, **Session Information**, **Custom Title...** | Always operates on the explicitly right-clicked session. |
+| Multi-session | Open in a dedicated tab, open as Markdown, edit tags/note, export, pin/unpin, promote, delete | Uses the same-view multi-selection only when it contains the right-clicked row; otherwise operates on that row alone. Codex and Claude Code sessions can be mixed. |
+| Validated Codex multi-session | Move to Archive, Move to Codex History | Uses the same target rule as other multi-session actions, but rejects the whole selection unless every target is a Codex session in the required archive state. |
+
+Menu availability is based on the right-clicked row. Selections from History, Pinned, and Search are never combined.
+Opening multiple sessions requires confirmation and opens at most the first 10 unique sessions.
+
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
 | Open Session in Dedicated Tab | `codexHistoryViewer.openSession` | Opens a selected session in a dedicated tab that is not replaced by later tree selections, or activates an existing matching session tab. |
-| Open Session as Markdown | `codexHistoryViewer.openSessionMarkdown` | Opens a selected session as a Markdown transcript document. |
+| Open Session as Markdown | `codexHistoryViewer.openSessionMarkdown` | Opens selected sessions as virtual Markdown transcript documents named `<session display title>.md`. No file is created unless the user explicitly saves one. |
 | Copy Quick Prompt | `codexHistoryViewer.copyResumePrompt` | Copies a compact resume prompt from the selected session view. |
-| Resume in OpenAI Codex | `codexHistoryViewer.resumeSessionInCodex` | Sends the selected Codex session to the OpenAI Codex extension. |
-| Resume in Claude Code | `codexHistoryViewer.resumeSessionInClaude` | Opens the selected Claude session in Claude Code. |
-| Promote to Today (Copy) | `codexHistoryViewer.promoteSession` | Copies a past session into today's folder without modifying the original. |
+| Copy Session ID | `codexHistoryViewer.copySessionId` | Copies the target session's validated resume ID. Available under **Session Information**. |
+| Copy Session File Path | `codexHistoryViewer.copySessionFilePath` | Copies the target session file's full path. Available under **Session Information**. |
+| Reveal Session File | `codexHistoryViewer.revealSessionFile` | Reveals the target session file in its containing folder. Available under **Session Information**. |
+| Resume in Codex | `codexHistoryViewer.resumeSessionInCodex` | Sends the target Codex session to the Codex extension. |
+| Resume in Claude Code | `codexHistoryViewer.resumeSessionInClaude` | Opens the target Claude Code session in Claude Code. |
+| Prepare Codex CLI Resume Command | `codexHistoryViewer.resumeSessionInCodexCli` | Creates a new terminal at the target session CWD and enters `codex resume <SESSION_ID>` without pressing Enter. |
+| Prepare Claude Code CLI Resume Command | `codexHistoryViewer.resumeSessionInClaudeCli` | Creates a new terminal at the target session CWD and enters `claude --resume <SESSION_ID>` without pressing Enter. |
+| Promote to Today (Copy) | `codexHistoryViewer.promoteSession` | Copies selected non-archived sessions into today's folder without modifying the originals. |
 | Pin | `codexHistoryViewer.pinSession` | Pins selected sessions for quick access. |
 | Unpin | `codexHistoryViewer.unpinSession` | Removes selected sessions from Pinned. |
-| Delete | `codexHistoryViewer.deleteSessions` | Deletes selected session files (trash-first behavior by default). |
+| Delete | `codexHistoryViewer.deleteSessions` | Deletes the right-clicked session, or a same-view multi-selection that includes it (trash-first behavior by default). |
 | Custom Title... | `codexHistoryViewer.manageCustomTitle` | Opens the shared custom-title picker for setting or clearing a session title. |
 | Set Custom Title... | `codexHistoryViewer.setCustomTitle` | Sets an extension-local display title for the selected session. |
 | Clear Custom Title | `codexHistoryViewer.clearCustomTitle` | Removes the extension-local custom title from the selected session. |
-| Edit Session Tags/Note... | `codexHistoryViewer.editSessionAnnotation` | Edits tags and note annotation for a selected session. |
+| Edit Session Tags/Note... | `codexHistoryViewer.editSessionAnnotation` | Edits tags and note annotations for the selected sessions. Multi-session direct editing applies the same tags and note to every target. |
 
 ## Handoff Actions
 
@@ -106,11 +122,11 @@ Handoff context-menu actions are shown only when `codexHistoryViewer.handoff.ena
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
-| Handoff to OpenAI Codex | `codexHistoryViewer.handoffToCodex` | Creates or reuses a session handoff file, then opens OpenAI Codex with a prompt that points to it. |
+| Handoff to Codex | `codexHistoryViewer.handoffToCodex` | Creates or reuses a session handoff file, then opens Codex with a prompt that points to it. |
 | Handoff to Claude Code | `codexHistoryViewer.handoffToClaude` | Creates or reuses a Codex session handoff file, then opens Claude Code with a prompt that points to it. |
-| Create Handoff File | `codexHistoryViewer.createHandoffFile` | Creates or reuses the selected session's `handoff.md` without opening another agent. |
-| Copy Handoff Prompt to Clipboard | `codexHistoryViewer.copyHandoffPrompt` | Copies a prompt that tells the target agent to read the selected session's handoff file, creating it first if needed. |
-| Open Handoff File | `codexHistoryViewer.openSessionHandoff` | Opens the selected session's handoff file, with an option to create it if it does not exist. |
+| Create Handoff File | `codexHistoryViewer.createHandoffFile` | Creates or reuses the target session's `handoff.md` without opening another agent. |
+| Copy Handoff Prompt to Clipboard | `codexHistoryViewer.copyHandoffPrompt` | Copies a prompt that tells the target agent to read the target session's handoff file, creating it first if needed. |
+| Open Handoff File | `codexHistoryViewer.openSessionHandoff` | Opens the target session's handoff file, with an option to create it if it does not exist. |
 
 ## Tag Operations
 

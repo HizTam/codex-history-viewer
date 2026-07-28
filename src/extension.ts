@@ -150,6 +150,12 @@ import { normalizeCacheKey, normalizeProjectKey, pathExists } from "./utils/fsUt
 import { MementoTransactionError, updateMementoTransaction } from "./storage/mementoTransaction";
 import { CodexAgentRunsService } from "./agents/codexAgentRunsService";
 import { SessionIconResolver } from "./ui/sessionIconResolver";
+import { CliResumeProbeScheduler } from "./cliResume/cliResumeAvailability";
+import { CliResumeCwdResolver } from "./cliResume/cliResumeCwd";
+import { CliResumeService, type CliResumeTargetResolution } from "./cliResume/cliResumeService";
+import { validateCliResumeSessionId } from "./cliResume/cliResumeValidation";
+import { ResumeMethodStore } from "./services/resumeMethodStore";
+import { resolveExtensionResumeSessionId } from "./resume/resumeSessionValidation";
 
 const SEARCH_ROLE_ORDER: IndexedSearchRole[] = ["user", "assistant", "developer", "tool"];
 // Keep staged rollout internal until the feature behavior is validated with real session data.
@@ -319,6 +325,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.debug(`searchHistory legacy discard failed error=${sanitizeDebugError(error)}`);
   });
   const chatOpenPositionStore = new ChatOpenPositionStore(context.globalState);
+  const resumeMethodStore = new ResumeMethodStore(context.globalState);
   const sessionReferenceRelocator = new SessionReferenceRelocator(
     annotationStore,
     bookmarkStore,
@@ -326,6 +333,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger,
   );
   const historyService = new HistoryService(context.globalStorageUri, config, titleOverrideStore, logger);
+  const cliResumeProbeScheduler = new CliResumeProbeScheduler();
   let historyRefreshQueue: Promise<void> = Promise.resolve();
   const initialAuthoritativeHistoryRefreshSettled = createDeferred<void>();
   let authoritativeHistoryIndexConfig: CodexHistoryViewerConfig | null = null;
@@ -375,6 +383,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     codexForkNavigation,
     codexAgentRuns,
     sessionIconResolver,
+    resumeMethodStore,
     async () => {
       await vscode.commands.executeCommand("codexHistoryViewer.refresh");
     },
@@ -397,7 +406,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     chatPanels.registerSerializer(context.subscriptions);
     fileChangeHistoryPanels.registerSerializer(context.subscriptions);
   }
-  context.subscriptions.push(pinStore, bookmarkStore, annotationStore, chatPanels, fileChangeHistoryPanels);
+  context.subscriptions.push(
+    pinStore,
+    bookmarkStore,
+    annotationStore,
+    resumeMethodStore,
+    cliResumeProbeScheduler,
+    chatPanels,
+    fileChangeHistoryPanels,
+  );
+  context.subscriptions.push(
+    vscode.workspace.onDidGrantWorkspaceTrust(() => {
+      chatPanels.refreshResumePresentation();
+    }),
+  );
   let storageStats: StorageStats = {
     globalStorageBytes: 0,
     trashFileCount: 0,
@@ -440,12 +462,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceCodexEnabled", true);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceClaudeEnabled", true);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historySourceSwitchable", true);
-  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasMultiSelection", false);
-  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasMultiSessionSelection", false);
-  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.canArchiveSelection", false);
-  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.canRestoreArchivedSelection", false);
-  void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasMixedArchiveSelection", false);
-
   let historyViewMode: HistoryViewMode = sanitizeHistoryViewMode(context.workspaceState.get(HISTORY_VIEW_MODE_KEY));
   const historySortOrderRaw = context.workspaceState.get(HISTORY_SORT_ORDER_KEY);
   let historySortOrderExplicit = isHistorySortOrderValue(historySortOrderRaw);
@@ -1069,11 +1085,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   // Provide a virtual document for the session transcript.
   context.subscriptions.push(
+    transcriptProvider,
     vscode.workspace.registerTextDocumentContentProvider(transcriptProvider.scheme, transcriptProvider),
     vscode.languages.registerDocumentLinkProvider(
       { scheme: transcriptProvider.scheme },
       new TranscriptDocumentLinkProvider(transcriptProvider.scheme, projectAssociationStore),
     ),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      transcriptProvider.releaseDocument(document.uri);
+    }),
   );
 
   const URI_LIST_MIME = "text/uri-list";
@@ -2067,6 +2087,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const imagesChanged = e.affectsConfiguration("codexHistoryViewer.images");
       const branchNavigationChanged = e.affectsConfiguration("codexHistoryViewer.branchNavigation.enabled");
       const agentRunsChanged = e.affectsConfiguration("codexHistoryViewer.agentRuns.enabled");
+      const resumeMethodChanged =
+        e.affectsConfiguration("codexHistoryViewer.resume.codexMethod") ||
+        e.affectsConfiguration("codexHistoryViewer.resume.claudeMethod");
       if (
         !uiLanguageChanged &&
         !headerActionsChanged &&
@@ -2089,7 +2112,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         !longMessageFoldingChanged &&
         !imagesChanged &&
         !branchNavigationChanged &&
-        !agentRunsChanged
+        !agentRunsChanged &&
+        !resumeMethodChanged
       ) {
         return;
       }
@@ -2149,6 +2173,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void autoRefreshService?.configure(getConfig(), computeAutoRefreshConsumerVisible(), vscode.window.state.focused);
       if (uiLanguageChanged || chatTurnTimelineModeChanged || toolDisplayModeChanged || longMessageFoldingChanged || imagesChanged) chatPanels.refreshPanels();
       else chatPanels.refreshI18n();
+      if (resumeMethodChanged) chatPanels.refreshResumePresentation();
       if (branchNavigationChanged) {
         chatPanels.refreshBranchNavigation();
       }
@@ -2258,7 +2283,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const collectSessionSelection = (
     targets: readonly unknown[],
-  ): { sessions: SessionSummary[]; invalidCount: number; rawCount: number } => {
+  ): { sessions: SessionSummary[]; invalidCount: number } => {
     const byKey = new Map<string, SessionSummary>();
     let invalidCount = 0;
     for (const target of targets) {
@@ -2270,44 +2295,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const key = normalizeCacheKey(session.fsPath);
       if (!byKey.has(key)) byKey.set(key, session);
     }
-    return { sessions: Array.from(byKey.values()), invalidCount, rawCount: targets.length };
-  };
-
-  const updateArchiveSelectionContext = (selection: readonly unknown[]): void => {
-    const { sessions, invalidCount, rawCount } = collectSessionSelection(selection);
-    const hasMultiSelection = rawCount > 1;
-    const hasMultiSessionSelection = sessions.length > 1;
-    const hasInvalidSelection = invalidCount > 0;
-    const allActiveCodex =
-      hasMultiSelection &&
-      !hasInvalidSelection &&
-      sessions.length >= 1 &&
-      sessions.every((session) => session.source === "codex" && session.storage.archiveState === "active");
-    const allArchivedCodex =
-      hasMultiSelection &&
-      !hasInvalidSelection &&
-      sessions.length >= 1 &&
-      sessions.every((session) => session.source === "codex" && session.storage.archiveState === "archived");
-    const hasMixedArchiveSelection =
-      hasMultiSelection && !allActiveCodex && !allArchivedCodex && (hasInvalidSelection || sessions.length > 0);
-
-    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.hasMultiSelection", hasMultiSelection);
-    void vscode.commands.executeCommand(
-      "setContext",
-      "codexHistoryViewer.hasMultiSessionSelection",
-      hasMultiSessionSelection,
-    );
-    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.canArchiveSelection", allActiveCodex);
-    void vscode.commands.executeCommand(
-      "setContext",
-      "codexHistoryViewer.canRestoreArchivedSelection",
-      allArchivedCodex,
-    );
-    void vscode.commands.executeCommand(
-      "setContext",
-      "codexHistoryViewer.hasMixedArchiveSelection",
-      hasMixedArchiveSelection,
-    );
+    return { sessions: Array.from(byKey.values()), invalidCount };
   };
 
   // Track the last interacted view, since multiple views can be visible at the same time.
@@ -2315,21 +2303,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     pinnedView.onDidChangeSelection((e) => {
       lastSelectionSource = "pinned";
-      updateArchiveSelectionContext(e.selection);
       void tryOpenPreview(e.selection[0]);
     }),
   );
   context.subscriptions.push(
     historyView.onDidChangeSelection((e) => {
       lastSelectionSource = "history";
-      updateArchiveSelectionContext(e.selection);
       void tryOpenPreview(e.selection[0]);
     }),
   );
   context.subscriptions.push(
     searchView.onDidChangeSelection((e) => {
       lastSelectionSource = "search";
-      updateArchiveSelectionContext(e.selection);
       void tryOpenPreview(e.selection[0]);
     }),
   );
@@ -2406,18 +2391,94 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     !isSessionNode(value) &&
     typeof (value as { fsPath?: unknown }).fsPath === "string";
 
+  const validateSessionCommandFsPath = (value: unknown): string | undefined => {
+    if (
+      typeof value !== "string" ||
+      value.length === 0 ||
+      value.length > 4_096 ||
+      !path.isAbsolute(value) ||
+      /[\u0000-\u001f\u007f]/u.test(value)
+    ) {
+      return undefined;
+    }
+    return value;
+  };
+
+  const resolveUniqueSessionByFsPath = (value: unknown): SessionSummary | undefined => {
+    const fsPath = validateSessionCommandFsPath(value);
+    if (!fsPath) return undefined;
+    const key = normalizeCacheKey(fsPath);
+    const matches = historyService.getIndex().sessions.filter(
+      (session) => normalizeCacheKey(session.fsPath) === key,
+    );
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+
   const resolveSingleSessionTarget = (elementOrArgs?: unknown): SessionSummary | undefined => {
-    // Prefer an explicit fsPath argument from the webview; otherwise use the selected session.
     if (hasDirectFsPathArg(elementOrArgs)) {
-      return resolveSessionFromElementOrFsPath(historyService, elementOrArgs);
+      const fsPath = validateSessionCommandFsPath((elementOrArgs as { fsPath?: unknown }).fsPath);
+      if (!fsPath) return undefined;
+      const session = resolveSessionFromElementOrFsPath(historyService, elementOrArgs);
+      return session ? resolveUniqueSessionByFsPath(session.fsPath) : undefined;
+    }
+    if (isSessionNode(elementOrArgs)) {
+      return resolveUniqueSessionByFsPath(elementOrArgs.session.fsPath);
+    }
+    if (elementOrArgs !== undefined) return undefined;
+
+    const selection = resolveActiveSelection();
+    if (selection.length > 0) {
+      if (selection.length !== 1 || !isSessionNode(selection[0])) return undefined;
+      return resolveUniqueSessionByFsPath(selection[0].session.fsPath);
+    }
+    return resolveSessionFromElementOrActive(historyService, transcriptProvider.scheme);
+  };
+
+  const resolveSingleSessionInfoTarget = (elementOrArgs?: unknown): SessionSummary | undefined => {
+    let candidate: unknown;
+    if (elementOrArgs === undefined) {
+      const selection = resolveActiveSelection();
+      if (selection.length !== 1) return undefined;
+      candidate = selection[0];
+    } else {
+      if (!isSessionNode(elementOrArgs)) return undefined;
+      candidate = elementOrArgs;
     }
 
-    const targets = resolveTargets(elementOrArgs);
-    const openTargets = collectOpenTargets(targets);
-    if (openTargets.length > 0) return openTargets[0]!.session;
-
-    return resolveSessionFromElementOrActive(historyService, transcriptProvider.scheme, elementOrArgs);
+    if (!isSessionNode(candidate)) return undefined;
+    return resolveUniqueSessionByFsPath(candidate.session.fsPath);
   };
+
+  const resolveSingleCliResumeTarget = (elementOrArgs?: unknown): CliResumeTargetResolution => {
+    if (elementOrArgs === undefined) {
+      const selection = resolveActiveSelection();
+      if (selection.length === 0) return { status: "none" };
+      if (selection.length !== 1) return { status: "multiple" };
+      const selected = selection[0];
+      if (!isSessionNode(selected)) return { status: "invalid" };
+      const session = resolveUniqueSessionByFsPath(selected.session.fsPath);
+      return session ? { status: "resolved", session } : { status: "invalid" };
+    }
+
+    if (isSessionNode(elementOrArgs)) {
+      const session = resolveUniqueSessionByFsPath(elementOrArgs.session.fsPath);
+      return session ? { status: "resolved", session } : { status: "invalid" };
+    }
+
+    if (!elementOrArgs || typeof elementOrArgs !== "object") return { status: "invalid" };
+    const fsPath = validateSessionCommandFsPath((elementOrArgs as { fsPath?: unknown }).fsPath);
+    if (!fsPath) return { status: "invalid" };
+    const session = resolveUniqueSessionByFsPath(fsPath);
+    return session ? { status: "resolved", session } : { status: "invalid" };
+  };
+
+  const cliResumeCwdResolver = new CliResumeCwdResolver(cliResumeProbeScheduler, projectAssociationStore);
+  const cliResumeService = new CliResumeService(
+    historyService,
+    cliResumeProbeScheduler,
+    cliResumeCwdResolver,
+    resolveSingleCliResumeTarget,
+  );
 
   const resolveMoveCommandTargets = (
     elementOrArgs?: unknown,
@@ -2438,14 +2499,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const resolveCodexConversationId = (session: SessionSummary): string | null => {
-    // Reject IDs with unsafe characters because the ID is embedded into URI paths.
-    const id = typeof session.meta.id === "string" ? session.meta.id.trim() : "";
-    if (!id) return null;
-    return /^[A-Za-z0-9._:-]+$/.test(id) ? id : null;
+    return resolveExtensionResumeSessionId(session, "codex");
   };
 
   const buildCodexConversationUri = (conversationId: string): vscode.Uri =>
-    // URI format accepted by OpenAI Codex custom editor.
+    // URI format accepted by the Codex custom editor.
     vscode.Uri.from({
       scheme: OPENAI_CODEX_URI_SCHEME,
       authority: OPENAI_CODEX_URI_AUTHORITY,
@@ -2504,12 +2562,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const resolveClaudeSessionId = (session: SessionSummary): string | null => {
-    // Pass through the conversation ID from metadata and reject control characters only.
-    if (session.source !== "claude") return null;
-    const id = typeof session.meta.id === "string" ? session.meta.id.trim() : "";
-    if (!id) return null;
-    if (/[\u0000-\u001F\u007F]/.test(id)) return null;
-    return id;
+    return resolveExtensionResumeSessionId(session, "claude");
   };
 
   const openSessionInClaudeCode = async (session: SessionSummary): Promise<boolean> => {
@@ -4729,6 +4782,67 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.copySessionId", async (elementOrArgs?: unknown) => {
+      const session = resolveSingleSessionInfoTarget(elementOrArgs);
+      if (!session) {
+        void vscode.window.showErrorMessage(t("app.copySessionIdFailed"));
+        return false;
+      }
+      const sessionId = validateCliResumeSessionId(session.meta.id, session.source);
+      if (!sessionId) {
+        void vscode.window.showErrorMessage(t("app.copySessionIdFailed"));
+        return false;
+      }
+      try {
+        await vscode.env.clipboard.writeText(sessionId);
+        void vscode.window.showInformationMessage(t("app.copySessionIdDone"));
+        return true;
+      } catch {
+        void vscode.window.showErrorMessage(t("app.copySessionIdFailed"));
+        return false;
+      }
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.copySessionFilePath", async (elementOrArgs?: unknown) => {
+      const session = resolveSingleSessionInfoTarget(elementOrArgs);
+      if (!session) {
+        void vscode.window.showErrorMessage(t("app.copySessionFilePathFailed"));
+        return false;
+      }
+      try {
+        await vscode.env.clipboard.writeText(session.fsPath);
+        void vscode.window.showInformationMessage(t("app.copySessionFilePathDone"));
+        return true;
+      } catch {
+        void vscode.window.showErrorMessage(t("app.copySessionFilePathFailed"));
+        return false;
+      }
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.revealSessionFile", async (elementOrArgs?: unknown) => {
+      const session = resolveSingleSessionInfoTarget(elementOrArgs);
+      if (!session) {
+        void vscode.window.showErrorMessage(t("app.revealSessionFileFailed"));
+        return false;
+      }
+      try {
+        const uri = vscode.Uri.file(session.fsPath);
+        const stat = await vscode.workspace.fs.stat(uri);
+        if ((stat.type & vscode.FileType.File) === 0) throw new Error();
+        await vscode.commands.executeCommand("revealFileInOS", uri);
+        return true;
+      } catch {
+        void vscode.window.showErrorMessage(t("app.revealSessionFileFailed"));
+        return false;
+      }
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.resumeSessionInCodex", async (elementOrArgs?: unknown) => {
       const session = resolveSingleSessionTarget(elementOrArgs);
       if (!session) return false;
@@ -4756,6 +4870,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showInformationMessage(t("app.resumeSessionInClaudeDone"));
       return true;
     }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.resumeSessionInCodexCli", async (elementOrArgs?: unknown) =>
+      cliResumeService.prepare(elementOrArgs, "codex"),
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.resumeSessionInClaudeCli", async (elementOrArgs?: unknown) =>
+      cliResumeService.prepare(elementOrArgs, "claude"),
+    ),
   );
 
   context.subscriptions.push(
@@ -6992,7 +7118,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const viewSelection =
         element === undefined
           ? resolveActiveSelection()
-          : resolveSelectionForElement(element) ?? resolveActiveSelection();
+          : resolveSelectionForElement(element) ?? [];
       const selection =
         element === undefined
           ? viewSelection.length >= 1
@@ -7101,10 +7227,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerUiCommandAlias("codexHistoryViewer.ui.en.openSessionMarkdown", "codexHistoryViewer.openSessionMarkdown");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.copyResumePrompt", "codexHistoryViewer.copyResumePrompt");
   registerUiCommandAlias("codexHistoryViewer.ui.en.copyResumePrompt", "codexHistoryViewer.copyResumePrompt");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.copySessionId", "codexHistoryViewer.copySessionId");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.copySessionId", "codexHistoryViewer.copySessionId");
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.ja.copySessionFilePath",
+    "codexHistoryViewer.copySessionFilePath",
+  );
+  registerUiCommandAlias(
+    "codexHistoryViewer.ui.en.copySessionFilePath",
+    "codexHistoryViewer.copySessionFilePath",
+  );
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.revealSessionFile", "codexHistoryViewer.revealSessionFile");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.revealSessionFile", "codexHistoryViewer.revealSessionFile");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.resumeSessionInCodex", "codexHistoryViewer.resumeSessionInCodex");
   registerUiCommandAlias("codexHistoryViewer.ui.en.resumeSessionInCodex", "codexHistoryViewer.resumeSessionInCodex");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.resumeSessionInClaude", "codexHistoryViewer.resumeSessionInClaude");
   registerUiCommandAlias("codexHistoryViewer.ui.en.resumeSessionInClaude", "codexHistoryViewer.resumeSessionInClaude");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.resumeSessionInCodexCli", "codexHistoryViewer.resumeSessionInCodexCli");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.resumeSessionInCodexCli", "codexHistoryViewer.resumeSessionInCodexCli");
+  registerUiCommandAlias("codexHistoryViewer.ui.ja.resumeSessionInClaudeCli", "codexHistoryViewer.resumeSessionInClaudeCli");
+  registerUiCommandAlias("codexHistoryViewer.ui.en.resumeSessionInClaudeCli", "codexHistoryViewer.resumeSessionInClaudeCli");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.handoffToCodex", "codexHistoryViewer.handoffToCodex");
   registerUiCommandAlias("codexHistoryViewer.ui.en.handoffToCodex", "codexHistoryViewer.handoffToCodex");
   registerUiCommandAlias("codexHistoryViewer.ui.ja.handoffToClaude", "codexHistoryViewer.handoffToClaude");

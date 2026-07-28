@@ -169,6 +169,7 @@ body.restoreCoverActive #restoreCover {
 
 #toolbar button {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 6px;
   background: transparent;
@@ -177,6 +178,51 @@ body.restoreCoverActive #restoreCover {
   border-radius: 6px;
   padding: 4px 10px;
   cursor: pointer;
+}
+
+#toolbar .toolbarResumeAction {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  min-width: 0;
+}
+
+#toolbar .toolbarResumeAction[hidden],
+#toolbar #btnResumeMenu[hidden] {
+  display: none !important;
+}
+
+#toolbar .toolbarResumeAction[data-split="true"] #btnResumeInCodex {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+#toolbar .toolbarResumeAction[data-split="true"] #btnResumeMenu {
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+#toolbar #btnResumeMenu {
+  justify-content: center;
+  padding-inline: 6px;
+  gap: 0;
+  line-height: 0;
+}
+
+#toolbar #btnResumeMenu svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+#toolbar .toolbarResumeAction button:disabled,
+#toolbar .toolbarResumeAction button:disabled:hover {
+  cursor: default;
+  opacity: .55;
+  color: var(--chv-muted);
+  border-color: var(--chv-border);
+  background: transparent;
 }
 
 #toolbar .toolbarBtnIcon {
@@ -807,6 +853,73 @@ body.pageSearchResizing #pageSearchBar {
   padding: 10px 12px 0 12px;
   color: var(--chv-muted);
   font-size: 12px;
+  min-width: 0;
+}
+
+.sessionMetaOverview {
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.sessionInfoRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-top: 4px;
+  line-height: 1.35;
+}
+
+.sessionInfoLabel {
+  flex: none;
+  white-space: nowrap;
+}
+
+.sessionInfoValue {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--chv-fg);
+  font-family: var(--vscode-editor-font-family);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionInfoActions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.sessionInfoActionButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 3px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--chv-muted);
+  cursor: pointer;
+}
+
+.sessionInfoActionButton:hover {
+  background: var(--vscode-toolbar-hoverBackground, var(--chv-tool-bg));
+  color: var(--chv-fg);
+}
+
+.sessionInfoActionButton:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.sessionInfoActionButton svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
 }
 
 #annotation {
@@ -1866,6 +1979,47 @@ button.runningTurnChip:focus-visible {
   position: fixed;
   top: auto;
   right: auto;
+}
+
+.resumeMethodMenu {
+  width: min(320px, calc(100vw - 32px));
+  max-height: none;
+}
+
+.resumeMethodMenu .resumeMethodMenuItem {
+  grid-template-columns: auto minmax(0, 1fr);
+  justify-content: start;
+  min-height: 32px;
+}
+
+.resumeMethodMenuItem::before {
+  display: none;
+}
+
+.resumeMethodMenuItem[data-interactive="false"] {
+  opacity: .62;
+}
+
+.resumeMethodMenuIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  line-height: 0;
+}
+
+.resumeMethodMenuIcon svg {
+  width: 16px;
+  height: 16px;
+  fill: currentColor;
+}
+
+.resumeMethodMenuLabel {
+  justify-self: start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .branchChoiceList {

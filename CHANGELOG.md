@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.9.0] - 2026-07-28
+
+### Added
+
+- Added support for preparing CLI commands to resume Codex and Claude Code sessions.
+- Added separate settings for selecting the resume method for Codex and Claude Code. Each can be set to Extension, CLI, or Extension and CLI.
+- Added the session ID and session file name to the Session Viewer, with actions to copy the session ID, copy the full session file path, and reveal the file in its containing folder.
+- Added a **Session Information** submenu to the History, Pinned, and Search context menus for copying the session ID, copying the session file path, and revealing the file in its containing folder.
+
+### Changed
+
+- Updated the Session Viewer resume button to use the selected resume method.
+- Updated the History, Pinned, and Search context menus to follow the resume method settings.
+- Changed Markdown transcript tabs to use the session display title (`<session title>.md`) instead of the generic `session.md` label. Markdown export filenames are unchanged.
+- Standardized user-facing terminology to use Codex, Claude Code, and Session Viewer consistently.
+
+### Fixed
+
+- Fixed session context-menu actions after a reload so resume actions, CLI resume-command preparation, **Handoff to Other AI**, and **Session Information** work on the right-clicked session without requiring it to be selected first.
+- Fixed session deletion so it cannot use a selection from another view or an unrelated row. A multi-selection is used only when it belongs to the same view and includes the right-clicked row.
+- Fixed History, Pinned, and Search multi-selection so Codex and Claude Code sessions remain selected together when using Ctrl/Cmd or Shift, including ranges that cross source types.
+
 ## [2.8.1] - 2026-07-23
 
 ### Changed
@@ -98,7 +120,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - Reworked project display controls in the History and Pinned views so display mode and target scope can be switched independently.
-- Changed global search to follow the current History view target, including project scope, tags, Codex/Claude source, archive visibility, and date filters.
+- Changed global search to follow the current History view target, including project scope, tags, Codex/Claude Code source, archive visibility, and date filters.
 - Improved the global search input so manual search, rerunning from search history, and per-item search history deletion are available from the same QuickPick.
 - Changed saved searches to store, display, and reuse only the search query. Role filters and case sensitivity are taken from the current settings when the saved search is run. Saved searches remain shared globally instead of being separated by project, and can be removed individually from the run QuickPick with a trash button.
 - Changed the Search view so filter controls live in the History view. Search uses the current History target as its scope, does not generate results from filters alone, and only re-evaluates existing results when the History scope changes.
@@ -117,7 +139,7 @@ All notable changes to this project will be documented in this file.
 - Added project alias display across History and Pinned project headings, session descriptions, tooltips, filter summaries, Status, and Search scope/session display.
 - Added Undo support for setting and clearing project aliases.
 - Added an experimental opt-in **Restore Webview Tabs After Reload** setting to restore session and file change history Webview tabs after Reload Window or VS Code restart. It is disabled by default because VS Code can defer Webview restoration and may occasionally create duplicate tabs when the same history is opened again.
-- Added rendering for Codex code review comments as readable cards in the session Webview.
+- Added rendering for Codex code review comments as readable cards in the Session Viewer.
 
 ### Changed
 
@@ -159,13 +181,13 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added a unified session attachment model so images, Claude documents, Claude IDE file and selection references, and Codex mentioned files are represented as `attachments`.
+- Added a unified session attachment model so images, Claude Code documents, Claude Code IDE file and selection references, and Codex mentioned files are represented as `attachments`.
 - Added Claude Code document cards for PDF, text, and generic documents, including on-demand preview and Save As support without sending embedded binary payloads to the initial Webview model.
 - Added parsing for Claude Code `<ide_opened_file>` and `<ide_selection>` tags, rendering them as file reference and selection reference cards instead of raw inline tags.
 - Added parsing for Codex `# Files mentioned by the user:` blocks, rendering mentioned Word, Excel, PowerPoint, PDF, archive, text, and other files as file reference cards while keeping only the request body as message text.
 - Added compact attachment cards with file-kind badges, kind-specific icon accents, tooltip metadata for paths / MIME types / sizes, and action icons for preview, save, or open.
 - Added attachment indicators and localized attachment summaries to the session date guide so messages with images, other attachments, or mixed attachment types are visible from the timeline tooltip.
-- Added attachment metadata to the search index, including labels, paths, MIME types, file kinds, and bounded text from Claude text documents.
+- Added attachment metadata to the search index, including labels, paths, MIME types, file kinds, and bounded text from Claude Code text documents.
 
 ### Changed
 
@@ -195,7 +217,7 @@ All notable changes to this project will be documented in this file.
 - Improved initial history startup by showing a valid cached history index immediately, then refreshing local session files in the background.
 - Archived Codex sessions no longer expose Resume or Promote actions; their primary action is moving them back to Codex history.
 - Active and archived Codex context menus now show only the relevant move action, separated from custom-title actions and delete actions.
-- Session Webviews for archived Codex sessions replace **Resume in Codex** with **Move to Codex History**.
+- Session Viewers for archived Codex sessions replace **Resume in Codex** with **Move to Codex History**.
 
 ## [2.1.0] - 2026-05-19
 
@@ -234,7 +256,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- Custom title actions now use a shared QuickPick flow from tree context menus and the session viewer header.
+- Custom title actions now use a shared QuickPick flow from tree context menus and the Session Viewer header.
 - Codex `apply_patch` activity is now shown as diff cards when possible, while duplicate cards are avoided when matching `patch_apply_end` events are also present.
 - Codex diff cards now aggregate repeated updates to the same file within a single turn.
 
@@ -254,7 +276,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added extension-local custom titles for Codex and Claude sessions.
+- Added extension-local custom titles for Codex and Claude Code sessions.
 - Added session tree tooltip modes (`full`, `compact`, `titleOnly`) so users can choose between detailed metadata and a one-line title-only tooltip.
 - Added `codexHistoryViewer.search.indexToolContent` to control whether the search index stores message text only, tool calls, or tool calls plus tool outputs.
 
@@ -269,14 +291,14 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added collapsible assistant usage rows in the session viewer when **Show details** is enabled.
+- Added collapsible assistant usage rows in the Session Viewer when **Show details** is enabled.
 - Added helpful History empty-state rows for no-history and no-filter-match states.
 
 ## [1.4.1] - 2026-04-24
 
 ### Added
 
-- Added a session-tab auto-refresh button in the session viewer header, shown when the History auto-refresh setting is enabled.
+- Added a session-tab auto-refresh button in the Session Viewer header, shown when the History auto-refresh setting is enabled.
 - Added per-tab auto-refresh modes: off, preserve current view, and follow latest.
 - Added automatic refresh for open session tabs while VS Code is focused, including background editor tabs. Only affected tabs are refreshed, and new or different sessions start with auto-refresh off.
 - Added on-demand loading for session image data so large image attachments no longer need to be sent to the Webview during the initial session render.
@@ -298,13 +320,13 @@ All notable changes to this project will be documented in this file.
 - Added a History view mode switch between date-grouped history and a latest-first flat session list.
 - Added opt-in automatic history refresh for local session file changes, with debounce delay and refresh interval settings.
 - Automatic refresh is deferred while the History view is hidden or the VS Code window is not focused.
-- Added image attachment rendering in the session viewer for supported Codex / Claude image data and local image references.
+- Added image attachment rendering in the Session Viewer for supported Codex / Claude Code image data and local image references.
 - Added an option to open sessions from the top or restore near the last viewed message.
 
 ### Changed
 
 - Changed session-tab handling so session selection uses a reusable tab, while **Open Session in New Tab** keeps sessions in dedicated tabs and reuses existing matching tabs.
-- Changed the session viewer scroll area so the fixed toolbar stays outside the scrollable content.
+- Changed the Session Viewer scroll area so the fixed toolbar stays outside the scrollable content.
 - Changed the settings display order.
 
 ## [1.3.2] - 2026-04-22
@@ -331,7 +353,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added per-card full-width expansion controls in the session viewer for messages, tool cards, notes, and grouped diffs.
+- Added per-card full-width expansion controls in the Session Viewer for messages, tool cards, notes, and grouped diffs.
 - Added previous/next navigation controls to grouped diff cards.
 
 ### Changed
@@ -340,13 +362,13 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Fixed wording inconsistencies around pinned-session labels, Codex/Claude resume messages, card-width tooltips, and history reload messages.
+- Fixed wording inconsistencies around pinned-session labels, Codex/Claude Code resume messages, card-width tooltips, and history reload messages.
 
 ## [1.3.0] - 2026-04-18
 
 ### Added
 
-- Added KaTeX-based equation rendering in the session viewer for inline and block math expressions.
+- Added KaTeX-based equation rendering in the Session Viewer for inline and block math expressions.
 - Added `codexHistoryViewer.history.titleSource` to switch between generated titles and native titles when available.
 - Added native title resolution for Codex sessions from `session_index.jsonl`, plus a lightweight cache to preserve known titles for older sessions.
 
@@ -358,9 +380,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added grouped patch-based change cards in the session viewer by parsing `patch_apply_end` events from session logs.
+- Added grouped patch-based change cards in the Session Viewer by parsing `patch_apply_end` events from session logs.
 - Added collapsible side-by-side before/after diffs for patch entries, with per-hunk wrap toggles and jump-to-line actions.
-- Added a right-side in-page search sidebar for the session viewer with keyboard shortcuts, match counts, result snippets, and direct result navigation.
+- Added a right-side in-page search sidebar for the Session Viewer with keyboard shortcuts, match counts, result snippets, and direct result navigation.
 
 ### Changed
 
@@ -370,22 +392,22 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added tool-specific cards in the session viewer, with a new `codexHistoryViewer.chat.toolDisplayMode` setting (`detailsOnly` / `compactCards`).
+- Added tool-specific cards in the Session Viewer, with a new `codexHistoryViewer.chat.toolDisplayMode` setting (`detailsOnly` / `compactCards`).
 - Added independent long-message folding settings for session-viewer `user` and `assistant` messages:
   - `codexHistoryViewer.chat.userLongMessageFolding`
   - `codexHistoryViewer.chat.assistantLongMessageFolding`
-- Added session viewer toolbar quick scroll buttons to jump to the top or bottom of the session timeline.
+- Added Session Viewer toolbar quick scroll buttons to jump to the top or bottom of the session timeline.
 
 ### Changed
 
-- Session viewer tool rows are now left-aligned and use card-style presentation with icons, accents, and status emphasis.
-- Session viewer reload now preserves scroll/selection and refreshes the tab title using the active history date basis.
-- The session viewer toolbar now automatically switches label buttons to icon-only mode when the header width becomes narrow.
-- Code block copy buttons in the session viewer now use icon-only actions instead of text labels.
+- Session Viewer tool rows are now left-aligned and use card-style presentation with icons, accents, and status emphasis.
+- Session Viewer reload now preserves scroll/selection and refreshes the tab title using the active history date basis.
+- The Session Viewer toolbar now automatically switches label buttons to icon-only mode when the header width becomes narrow.
+- Code block copy buttons in the Session Viewer now use icon-only actions instead of text labels.
 
 ### Fixed
 
-- Added support for workspace-relative Markdown file links in both Claude and Codex session views.
+- Added support for workspace-relative Markdown file links in both Claude Code and Codex session views.
 - Added transcript-side local link resolution so relative Markdown file links open the source file inside VS Code.
 - Fixed session-tab title refresh when `codexHistoryViewer.history.dateBasis` is set to `lastActivity`.
 
@@ -400,7 +422,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Added syntax-highlighted fenced code blocks in the session viewer (powered by Shiki).
+- Added syntax-highlighted fenced code blocks in the Session Viewer (powered by Shiki).
 
 ## [1.1.3] - 2026-04-07
 
@@ -440,24 +462,24 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Fixed Status view source-awareness:
-  - Session counts are now shown per enabled source (`Codex` / `Claude`).
-  - Session roots are now shown per enabled source (`Codex` / `Claude`).
+  - Session counts are now shown per enabled source (`Codex` / `Claude Code`).
+  - Session roots are now shown per enabled source (`Codex` / `Claude Code`).
   - Pinned count is now aggregated only from enabled sources.
 
 ## [1.1.0] - 2026-03-05
 
 ### Added
 
-- Optional Claude history support (in addition to Codex history).
-- Session Webview tab icons now switch by session source (`Codex` / `Claude`).
+- Optional Claude Code history support (in addition to Codex history).
+- Session Viewer tab icons now switch by session source (`Codex` / `Claude Code`).
 - New source settings:
   - `codexHistoryViewer.sources.enabled`
   - `codexHistoryViewer.claude.sessionsRoot`
-- New command to continue Claude sessions:
+- New command to continue Claude Code sessions:
   - `Resume in Claude Code`
 - Source filter actions for History:
   - `Show Codex History Only`
-  - `Show Claude History Only`
+  - `Show Claude Code History Only`
   - `Show All Sources`
 
 ### Changed
@@ -467,7 +489,7 @@ All notable changes to this project will be documented in this file.
 - Pinned view now follows the active source filter consistently, including missing pinned entries.
 - README command list now uses the exact command label `Refresh All`.
 - Updated README to document:
-  - how to enable Claude from **Codex History Viewer › Sources: Enabled**
+  - how to enable Claude Code from **Codex History Viewer › Sources: Enabled**
   - when to run **Control → Maintenance → Rebuild Cache**
 
 ### Fixed
@@ -479,34 +501,34 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- New session viewer toolbar button to resume directly in OpenAI Codex:
-  - `Open in OpenAI Codex`
-- New `Pin / Unpin` toggle button next to `Open in OpenAI Codex`.
+- New Session Viewer toolbar button to resume directly in Codex:
+  - `Open in Codex`
+- New `Pin / Unpin` toggle button next to `Open in Codex`.
 
 ### Changed
 
-- Reordered session viewer primary toolbar actions to improve continuation workflow:
-  - Open in OpenAI Codex
+- Reordered Session Viewer primary toolbar actions to improve continuation workflow:
+  - Open in Codex
   - Pin / Unpin toggle
 - Moved `Open Markdown transcript` and `Copy prompt excerpt` to the right side (before `Show details`).
-- Updated localization keys for the new session viewer toolbar actions and tooltips.
+- Updated localization keys for the new Session Viewer toolbar actions and tooltips.
 
 ### Fixed
 
-- In the session viewer, local file links in Markdown now open inside VS Code instead of launching an external browser tab.
+- In the Session Viewer, local file links in Markdown now open inside VS Code instead of launching an external browser tab.
 
 ## [1.0.0] - 2026-03-02
 
 ### Added
 
-- New `codexHistoryViewer.resume.openTarget` setting to control where `Resume in OpenAI Codex (VS Code Extension)` opens:
+- New `codexHistoryViewer.resume.openTarget` setting to control where **Resume in Codex** opens:
   - `sidebar` (default)
   - `panel`
 
 ### Changed
 
 - Promoted the extension version to **1.0.0** as the first stable release.
-- Default resume behavior now explicitly targets the OpenAI Codex sidebar.
+- Default resume behavior now explicitly targets the Codex sidebar.
 - Updated README and configuration docs to match the 1.0.0 behavior and defaults.
 
 ### Fixed
@@ -565,7 +587,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Copy Prompt Excerpt support for continuing a selected session in the official OpenAI Codex VS Code extension.
+- Copy Prompt Excerpt support for continuing a selected session in the official Codex VS Code extension.
 - New session management commands in both Japanese and English.
 - A new utility for resolving date/time settings (UI language + time zone).
 
@@ -594,7 +616,7 @@ All notable changes to this project will be documented in this file.
 
 - Initial release.
 - Views: **Pinned**, **History**, and **Search**.
-- Session viewer (Webview) with Markdown rendering, copy actions, and **Open Session as Markdown**.
+- Session Viewer with Markdown rendering, copy actions, and **Open Session as Markdown**.
 - Full-text search across sessions (cancellable, configurable max results, optional case sensitivity).
 - Session management: promote (copy to today), pin/unpin, and safe deletion (trash/recycle bin with fallback quarantine).
 - Multi-select support for open/pin/promote/delete and drag & drop pinning.

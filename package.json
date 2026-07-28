@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.8.1",
+  "version": "2.9.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -404,6 +404,21 @@
         "category": "%cmd.category%"
       },
       {
+        "command": "codexHistoryViewer.copySessionId",
+        "title": "%cmd.copySessionId%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.copySessionFilePath",
+        "title": "%cmd.copySessionFilePath%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.revealSessionFile",
+        "title": "%cmd.revealSessionFile%",
+        "category": "%cmd.category%"
+      },
+      {
         "command": "codexHistoryViewer.copyStatusPath",
         "title": "%cmd.copyStatusPath%",
         "category": "%cmd.category%",
@@ -412,6 +427,11 @@
       {
         "command": "codexHistoryViewer.resumeSessionInCodex",
         "title": "%cmd.resumeSessionInCodex%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.resumeSessionInCodexCli",
+        "title": "%cmd.resumeSessionInCodexCli%",
         "category": "%cmd.category%"
       },
       {
@@ -556,12 +576,42 @@
         "title": "Copy Quick Prompt"
       },
       {
+        "command": "codexHistoryViewer.ui.ja.copySessionId",
+        "title": "セッションIDをコピー",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.copySessionId",
+        "title": "Copy Session ID",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.copySessionFilePath",
+        "title": "セッションファイルのパスをコピー",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.copySessionFilePath",
+        "title": "Copy Session File Path",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.revealSessionFile",
+        "title": "セッションファイルの場所を開く",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.revealSessionFile",
+        "title": "Reveal Session File",
+        "icon": "$(folder-opened)"
+      },
+      {
         "command": "codexHistoryViewer.ui.ja.resumeSessionInCodex",
-        "title": "OpenAI Codex で再開"
+        "title": "Codex で再開"
       },
       {
         "command": "codexHistoryViewer.ui.en.resumeSessionInCodex",
-        "title": "Resume in OpenAI Codex"
+        "title": "Resume in Codex"
       },
       {
         "command": "codexHistoryViewer.ui.ja.resumeSessionInClaude",
@@ -572,12 +622,32 @@
         "title": "Resume in Claude Code"
       },
       {
+        "command": "codexHistoryViewer.ui.ja.resumeSessionInCodexCli",
+        "title": "Codex CLI の再開コマンドを準備",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.resumeSessionInCodexCli",
+        "title": "Prepare Codex CLI Resume Command",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.resumeSessionInClaudeCli",
+        "title": "Claude Code CLI の再開コマンドを準備",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.resumeSessionInClaudeCli",
+        "title": "Prepare Claude Code CLI Resume Command",
+        "icon": "$(terminal)"
+      },
+      {
         "command": "codexHistoryViewer.ui.ja.handoffToCodex",
-        "title": "OpenAI Codex に引き継ぐ"
+        "title": "Codex に引き継ぐ"
       },
       {
         "command": "codexHistoryViewer.ui.en.handoffToCodex",
-        "title": "Handoff to OpenAI Codex"
+        "title": "Handoff to Codex"
       },
       {
         "command": "codexHistoryViewer.ui.ja.handoffToClaude",
@@ -1581,6 +1651,11 @@
         "category": "%cmd.category%"
       },
       {
+        "command": "codexHistoryViewer.resumeSessionInClaudeCli",
+        "title": "%cmd.resumeSessionInClaudeCli%",
+        "category": "%cmd.category%"
+      },
+      {
         "command": "codexHistoryViewer.filterHistorySourceCodex",
         "title": "%cmd.filterHistorySourceCodex%",
         "category": "%cmd.category%",
@@ -2105,6 +2180,14 @@
       {
         "id": "codexHistoryViewer.handoffSubmenu.en",
         "label": "Handoff to Other AI"
+      },
+      {
+        "id": "codexHistoryViewer.sessionInfoSubmenu.ja",
+        "label": "セッション情報"
+      },
+      {
+        "id": "codexHistoryViewer.sessionInfoSubmenu.en",
+        "label": "Session Information"
       }
     ],
     "menus": {
@@ -2165,6 +2248,42 @@
           "when": "false"
         },
         {
+          "command": "codexHistoryViewer.copySessionId",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.copySessionFilePath",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.revealSessionFile",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.copySessionId",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.copySessionId",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.copySessionFilePath",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.copySessionFilePath",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.revealSessionFile",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.revealSessionFile",
+          "when": "false"
+        },
+        {
           "command": "codexHistoryViewer.ui.ja.resumeSessionInCodex",
           "when": "false"
         },
@@ -2178,6 +2297,30 @@
         },
         {
           "command": "codexHistoryViewer.ui.en.resumeSessionInClaude",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.resumeSessionInCodexCli",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.resumeSessionInClaudeCli",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.resumeSessionInCodexCli",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.resumeSessionInCodexCli",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.resumeSessionInClaudeCli",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.resumeSessionInClaudeCli",
           "when": "false"
         },
         {
@@ -3337,47 +3480,81 @@
           "when": "false"
         }
       ],
+      "codexHistoryViewer.sessionInfoSubmenu.ja": [
+        {
+          "command": "codexHistoryViewer.ui.ja.copySessionId",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?\\.cliResumeIdValid$/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.copySessionFilePath",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.revealSessionFile",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/",
+          "group": "navigation@3"
+        }
+      ],
+      "codexHistoryViewer.sessionInfoSubmenu.en": [
+        {
+          "command": "codexHistoryViewer.ui.en.copySessionId",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?\\.cliResumeIdValid$/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.copySessionFilePath",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.revealSessionFile",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/",
+          "group": "navigation@3"
+        }
+      ],
       "codexHistoryViewer.handoffSubmenu.ja": [
         {
           "command": "codexHistoryViewer.ui.ja.handoffToClaude",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.codexToClaudeHandoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.codexToClaudeHandoffEnabled",
           "group": "navigation@1"
         },
         {
           "command": "codexHistoryViewer.ui.ja.createHandoffFile",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@2"
         },
         {
           "command": "codexHistoryViewer.ui.ja.copyHandoffPrompt",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@3"
         },
         {
           "command": "codexHistoryViewer.ui.ja.openSessionHandoff",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@4"
         }
       ],
       "codexHistoryViewer.handoffSubmenu.en": [
         {
           "command": "codexHistoryViewer.ui.en.handoffToClaude",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.codexToClaudeHandoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.codexToClaudeHandoffEnabled",
           "group": "navigation@1"
         },
         {
           "command": "codexHistoryViewer.ui.en.createHandoffFile",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@2"
         },
         {
           "command": "codexHistoryViewer.ui.en.copyHandoffPrompt",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@3"
         },
         {
           "command": "codexHistoryViewer.ui.en.openSessionHandoff",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@4"
         }
       ],
@@ -4406,122 +4583,142 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.openSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@1"
         },
         {
           "command": "codexHistoryViewer.ui.en.openSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@1"
         },
         {
           "command": "codexHistoryViewer.ui.ja.openSessionMarkdown",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@2"
         },
         {
           "command": "codexHistoryViewer.ui.en.openSessionMarkdown",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@2"
         },
         {
+          "submenu": "codexHistoryViewer.sessionInfoSubmenu.ja",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@3"
+        },
+        {
+          "submenu": "codexHistoryViewer.sessionInfoSubmenu.en",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@3"
+        },
+        {
           "submenu": "codexHistoryViewer.handoffSubmenu.ja",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@0.5"
         },
         {
           "submenu": "codexHistoryViewer.handoffSubmenu.en",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.handoffEnabled && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@0.5"
         },
         {
           "command": "codexHistoryViewer.ui.ja.resumeSessionInCodex",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && config.codexHistoryViewer.resume.codexMethod != 'cli' && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@0"
         },
         {
           "command": "codexHistoryViewer.ui.en.resumeSessionInCodex",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && config.codexHistoryViewer.resume.codexMethod != 'cli' && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@0"
         },
         {
+          "command": "codexHistoryViewer.ui.ja.resumeSessionInCodexCli",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?\\.cliResumeIdValid$/ && isWorkspaceTrusted && (config.codexHistoryViewer.resume.codexMethod == 'cli' || config.codexHistoryViewer.resume.codexMethod == 'both') && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@0.1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.resumeSessionInCodexCli",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?\\.cliResumeIdValid$/ && isWorkspaceTrusted && (config.codexHistoryViewer.resume.codexMethod == 'cli' || config.codexHistoryViewer.resume.codexMethod == 'both') && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@0.1"
+        },
+        {
           "command": "codexHistoryViewer.ui.ja.restoreArchivedSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?\\.archived(?:\\.customTitle)?$/ && !codexHistoryViewer.hasMixedArchiveSelection && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?\\.archived(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang == 'ja'",
           "group": "1_archive@1"
         },
         {
           "command": "codexHistoryViewer.ui.en.restoreArchivedSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?\\.archived(?:\\.customTitle)?$/ && !codexHistoryViewer.hasMixedArchiveSelection && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?\\.archived(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang != 'ja'",
           "group": "1_archive@1"
         },
         {
           "command": "codexHistoryViewer.ui.ja.archiveSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.codexArchivedSessionsEnabled && !codexHistoryViewer.hasMixedArchiveSelection && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.uiLang == 'ja'",
           "group": "1_archive@1"
         },
         {
           "command": "codexHistoryViewer.ui.en.archiveSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.codexArchivedSessionsEnabled && !codexHistoryViewer.hasMixedArchiveSelection && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.codexArchivedSessionsEnabled && codexHistoryViewer.uiLang != 'ja'",
           "group": "1_archive@1"
         },
         {
           "command": "codexHistoryViewer.ui.ja.promoteSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang == 'ja'",
           "group": "1_actions"
         },
         {
           "command": "codexHistoryViewer.ui.en.promoteSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang != 'ja'",
           "group": "1_actions"
         },
         {
           "command": "codexHistoryViewer.ui.ja.pinSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.session\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.session\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang == 'ja'",
           "group": "1_actions"
         },
         {
           "command": "codexHistoryViewer.ui.en.pinSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.session\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.session\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang != 'ja'",
           "group": "1_actions"
         },
         {
           "command": "codexHistoryViewer.ui.ja.unpinSession",
-          "when": "(viewItem =~ /^codexHistoryViewer\\.sessionPinned\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang == 'ja'",
+          "when": "(viewItem =~ /^codexHistoryViewer\\.sessionPinned\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang == 'ja'",
           "group": "1_actions"
         },
         {
           "command": "codexHistoryViewer.ui.en.unpinSession",
-          "when": "(viewItem =~ /^codexHistoryViewer\\.sessionPinned\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang != 'ja'",
+          "when": "(viewItem =~ /^codexHistoryViewer\\.sessionPinned\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang != 'ja'",
           "group": "1_actions"
         },
         {
           "command": "codexHistoryViewer.ui.ja.pinSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.session\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.session\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang == 'ja'",
           "group": "inline"
         },
         {
           "command": "codexHistoryViewer.ui.en.pinSession",
-          "when": "viewItem =~ /^codexHistoryViewer\\.session\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.session\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang != 'ja'",
           "group": "inline"
         },
         {
           "command": "codexHistoryViewer.ui.ja.unpinSession",
-          "when": "(viewItem =~ /^codexHistoryViewer\\.sessionPinned\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang == 'ja'",
+          "when": "(viewItem =~ /^codexHistoryViewer\\.sessionPinned\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang == 'ja'",
           "group": "inline"
         },
         {
           "command": "codexHistoryViewer.ui.en.unpinSession",
-          "when": "(viewItem =~ /^codexHistoryViewer\\.sessionPinned\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang != 'ja'",
+          "when": "(viewItem =~ /^codexHistoryViewer\\.sessionPinned\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ || viewItem == codexHistoryViewer.sessionMissing) && codexHistoryViewer.uiLang != 'ja'",
           "group": "inline"
         },
         {
           "command": "codexHistoryViewer.ui.ja.deleteSessions",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang == 'ja'",
           "group": "2_actions"
         },
         {
           "command": "codexHistoryViewer.ui.en.deleteSessions",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang != 'ja'",
           "group": "2_actions"
         },
         {
@@ -4536,22 +4733,22 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.exportSessions",
-          "when": "(viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ || viewItem == codexHistoryViewer.day || viewItem == codexHistoryViewer.month || viewItem == codexHistoryViewer.year) && codexHistoryViewer.uiLang == 'ja'",
+          "when": "(viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ || viewItem == codexHistoryViewer.day || viewItem == codexHistoryViewer.month || viewItem == codexHistoryViewer.year) && codexHistoryViewer.uiLang == 'ja'",
           "group": "1_actions"
         },
         {
           "command": "codexHistoryViewer.ui.en.exportSessions",
-          "when": "(viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ || viewItem == codexHistoryViewer.day || viewItem == codexHistoryViewer.month || viewItem == codexHistoryViewer.year) && codexHistoryViewer.uiLang != 'ja'",
+          "when": "(viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ || viewItem == codexHistoryViewer.day || viewItem == codexHistoryViewer.month || viewItem == codexHistoryViewer.year) && codexHistoryViewer.uiLang != 'ja'",
           "group": "1_actions"
         },
         {
           "command": "codexHistoryViewer.ui.ja.manageCustomTitle",
-          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView) && viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView) && viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang == 'ja'",
           "group": "1_actions@6"
         },
         {
           "command": "codexHistoryViewer.ui.en.manageCustomTitle",
-          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView) && viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang != 'ja'",
+          "when": "(view == codexHistoryViewer.historyView || view == codexHistoryViewer.pinnedView) && viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang != 'ja'",
           "group": "1_actions@6"
         },
         {
@@ -4586,12 +4783,12 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.editSessionAnnotation",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang == 'ja'",
           "group": "1_actions"
         },
         {
           "command": "codexHistoryViewer.ui.en.editSessionAnnotation",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.archived)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.uiLang != 'ja'",
           "group": "1_actions"
         },
         {
@@ -4606,13 +4803,23 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.resumeSessionInClaude",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.claude(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang == 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.claude(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && config.codexHistoryViewer.resume.claudeMethod != 'cli' && codexHistoryViewer.uiLang == 'ja'",
           "group": "navigation@0"
         },
         {
           "command": "codexHistoryViewer.ui.en.resumeSessionInClaude",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.claude(?:\\.customTitle)?$/ && codexHistoryViewer.uiLang != 'ja'",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.claude(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && config.codexHistoryViewer.resume.claudeMethod != 'cli' && codexHistoryViewer.uiLang != 'ja'",
           "group": "navigation@0"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.resumeSessionInClaudeCli",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.claude(?:\\.customTitle)?\\.cliResumeIdValid$/ && isWorkspaceTrusted && (config.codexHistoryViewer.resume.claudeMethod == 'cli' || config.codexHistoryViewer.resume.claudeMethod == 'both') && codexHistoryViewer.uiLang == 'ja'",
+          "group": "navigation@0.1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.resumeSessionInClaudeCli",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.claude(?:\\.customTitle)?\\.cliResumeIdValid$/ && isWorkspaceTrusted && (config.codexHistoryViewer.resume.claudeMethod == 'cli' || config.codexHistoryViewer.resume.claudeMethod == 'both') && codexHistoryViewer.uiLang != 'ja'",
+          "group": "navigation@0.1"
         },
         {
           "command": "codexHistoryViewer.copyStatusPath",
@@ -5061,6 +5268,50 @@
           "description": "%cfg.resumeOpenTarget%",
           "scope": "application",
           "order": 120
+        },
+        "codexHistoryViewer.resume.codexMethod": {
+          "type": "string",
+          "default": "extension",
+          "enum": [
+            "extension",
+            "cli",
+            "both"
+          ],
+          "enumItemLabels": [
+            "%cfg.resumeMethod.labelExtension%",
+            "%cfg.resumeMethod.labelCli%",
+            "%cfg.resumeMethod.labelBoth%"
+          ],
+          "enumDescriptions": [
+            "%cfg.resumeMethod.enumExtension%",
+            "%cfg.resumeMethod.enumCli%",
+            "%cfg.resumeMethod.enumBoth%"
+          ],
+          "description": "%cfg.resumeCodexMethod%",
+          "scope": "application",
+          "order": 121
+        },
+        "codexHistoryViewer.resume.claudeMethod": {
+          "type": "string",
+          "default": "extension",
+          "enum": [
+            "extension",
+            "cli",
+            "both"
+          ],
+          "enumItemLabels": [
+            "%cfg.resumeMethod.labelExtension%",
+            "%cfg.resumeMethod.labelCli%",
+            "%cfg.resumeMethod.labelBoth%"
+          ],
+          "enumDescriptions": [
+            "%cfg.resumeMethod.enumExtension%",
+            "%cfg.resumeMethod.enumCli%",
+            "%cfg.resumeMethod.enumBoth%"
+          ],
+          "description": "%cfg.resumeClaudeMethod%",
+          "scope": "application",
+          "order": 122
         },
         "codexHistoryViewer.delete.useTrash": {
           "type": "boolean",
