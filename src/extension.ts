@@ -156,6 +156,11 @@ import { CliResumeService, type CliResumeTargetResolution } from "./cliResume/cl
 import { validateCliResumeSessionId } from "./cliResume/cliResumeValidation";
 import { ResumeMethodStore } from "./services/resumeMethodStore";
 import { resolveExtensionResumeSessionId } from "./resume/resumeSessionValidation";
+import {
+  OPEN_SESSION_FROM_TOOLTIP_COMMAND_ID,
+  resolveSessionTooltipReferenceArgument,
+  resolveUniqueSessionByTooltipReference,
+} from "./tree/sessionTooltipCommand";
 
 const SEARCH_ROLE_ORDER: IndexedSearchRole[] = ["user", "assistant", "developer", "tool"];
 // Keep staged rollout internal until the feature behavior is validated with real session data.
@@ -4700,6 +4705,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         promoteReusable: true,
         revealMessageIndex: reveal,
         pageSearchSeed,
+      });
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(OPEN_SESSION_FROM_TOOLTIP_COMMAND_ID, async (args?: unknown) => {
+      const sessionRef = resolveSessionTooltipReferenceArgument(args);
+      if (!sessionRef) return;
+      const session = resolveUniqueSessionByTooltipReference(historyService.getIndex().sessions, sessionRef);
+      if (!session) return;
+      await chatPanels.openSessionPreferExisting(session, {
+        fallbackKind: "session",
+        promoteReusable: true,
       });
     }),
   );

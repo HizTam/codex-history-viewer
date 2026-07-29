@@ -296,6 +296,7 @@
   "tree.tooltip.pinnedProject.historyDate": "Project: {0}\nPins: {1}\nSession date: {2}",
   "tree.tooltip.pinnedProject.historyDateWithAlias": "Project: {0}\nPath: {1}\nPins: {2}\nSession date: {3}",
   "tree.project.noCwd": "No CWD",
+  "tree.tooltip.openSessionView": "Open session view",
   "tree.tooltip.sessionActions": "Click to open this session. Right-click for actions such as pin/promote/delete.",
   "tree.tooltip.sessionDate.started": "Started date: {0}",
   "tree.tooltip.sessionDate.lastActivity": "Last activity date: {0}",

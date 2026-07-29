@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.9.1] - 2026-07-29
+
+### Changed
+
+- Clarified the **Preview: Max Messages** setting description to explain that it controls the maximum number of messages collected for detailed tooltips, rather than the number of messages guaranteed to be displayed, and that VS Code limits tooltip height to approximately 50% of the window.
+
+### Fixed
+
+- Fixed an issue where session tooltips could flicker when they appeared under the mouse pointer while **Tooltip Mode** was set to **Detailed**.
+
 ## [2.9.0] - 2026-07-28
 
 ### Added

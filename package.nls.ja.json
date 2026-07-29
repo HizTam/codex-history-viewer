@@ -113,7 +113,7 @@
   "cfg.sourcesEnabled": "読み込む履歴ソースを決める最上位設定です。Codex のアーカイブ関連設定は、ここで Codex が有効な場合だけ適用されます。",
   "cfg.handoffEnabled": "表示中の Codex / Claude Code セッションに他の AI への引き継ぎ操作を表示します。無効にすると作成・コピー・開く操作は隠れますが、削除と状態ビューは利用できます。",
   "cfg.previewOpenOnSelection": "ツリー項目を選択したときに、エディタ領域でセッションの再利用プレビューを開きます。",
-  "cfg.previewMaxMessages": "ツリー項目の詳細ツールチップに含める user/assistant メッセージ数の上限を指定します。",
+  "cfg.previewMaxMessages": "ツリー項目の詳細ツールチップ用に取得する user/assistant メッセージ数の上限です。画面内に表示される件数を保証する設定ではありません。VS Code はツールチップの高さをウィンドウ高の約50%に制限するため、長い場合は取得したメッセージの一部が表示範囲外になることがあります。",
   "cfg.previewTooltipMode": "セッションのツリー項目ツールチップに表示する情報量を選択します。",
   "cfg.previewTooltipMode.labelFull": "詳細",
   "cfg.previewTooltipMode.labelCompact": "メタ情報のみ",

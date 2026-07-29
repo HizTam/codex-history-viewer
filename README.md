@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.9.0** (2026-07-28).
+Latest release: **2.9.1** (2026-07-29).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -196,6 +196,8 @@ Most settings are available from VS Code Settings under **Codex History Viewer**
 - `codexHistoryViewer.handoff.enabled`: show cross-agent handoff actions.
 - `codexHistoryViewer.resume.codexMethod`: choose Extension, CLI, or Extension and CLI for resuming Codex sessions.
 - `codexHistoryViewer.resume.claudeMethod`: choose Extension, CLI, or Extension and CLI for resuming Claude Code sessions.
+- `codexHistoryViewer.preview.tooltipMode`: choose Detailed, Compact, or Title Only for session tree item tooltips.
+- `codexHistoryViewer.preview.maxMessages`: set the maximum number of user/assistant messages collected for Detailed tooltips. This is not a guaranteed visible count; VS Code limits tooltip height to approximately 50% of the window, so some collected messages may be outside the visible area.
 - `codexHistoryViewer.search.indexToolContent`: control search index tool-content scope.
 - `codexHistoryViewer.fileChangeHistory.explorerContextMenu.enabled`: show File AI Change History in Explorer.
 - `codexHistoryViewer.autoRefresh.enabled`: watch local session files and refresh the History tree and opted-in session tabs when the VS Code window is focused and the History tree is visible or an opted-in session tab is open.
@@ -241,19 +243,10 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.9.0
+## What's New in 2.9.1
 
-- Added support for preparing CLI commands to resume Codex and Claude Code sessions.
-- Added separate settings for selecting the resume method for Codex and Claude Code. Each can be set to Extension, CLI, or Extension and CLI.
-- Updated the Session Viewer resume button to use the selected resume method.
-- Updated the History, Pinned, and Search context menus to follow the resume method settings.
-- Added session information to the Session Viewer, with actions to copy the session ID, copy the full session file path, and reveal the session file in its containing folder.
-- Added a **Session Information** submenu to the History, Pinned, and Search context menus.
-- Changed Markdown transcript tabs to use the session display title (`<session title>.md`) instead of the generic `session.md` label. Markdown export filenames are unchanged.
-- Standardized user-facing terminology to use Codex, Claude Code, and Session Viewer consistently.
-- Fixed session context-menu actions after a reload so they work on the right-clicked session without requiring it to be selected first.
-- Fixed session deletion so a selection from another view or an unrelated row cannot become the deletion target.
-- Fixed History, Pinned, and Search multi-selection so Codex and Claude Code sessions remain selected together when using Ctrl/Cmd or Shift, including ranges that cross source types.
+- Fixed an issue where session tooltips could flicker when they appeared under the mouse pointer while **Tooltip Mode** was set to **Detailed**.
+- Clarified the **Preview: Max Messages** setting description to explain that it controls the maximum number of messages collected for detailed tooltips, rather than the number of messages guaranteed to be displayed, and that VS Code limits tooltip height to approximately 50% of the window.
 
 ## Changelog
 
