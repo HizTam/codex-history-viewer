@@ -20,9 +20,11 @@ import { truncateByDisplayWidth } from "../utils/textUtils";
 import { buildSessionDescription } from "./sessionDescriptionUtils";
 import {
   appendCodexAgentTooltipLines,
+  appendFullSessionTooltipActions,
   appendSessionTooltipDateLines,
   appendSessionTooltipTitleLines,
   buildTreeRowTooltip,
+  escapeForMarkdown,
 } from "./sessionTooltipUtils";
 import { CodexAgentRunsService } from "../agents/codexAgentRunsService";
 import type { CodexAgentPresentation } from "../agents/codexAgentRunsTypes";
@@ -321,7 +323,8 @@ function buildSearchSessionTooltip(
   if (node.hits.length > max) {
     md.appendMarkdown(`\n${escapeForMarkdown(t("tree.tooltip.searchSessionMore", node.hits.length - max))}\n`);
   }
-  md.appendMarkdown(`\n---\n${escapeForMarkdown(t("tree.tooltip.sessionActions"))}\n`);
+  md.appendMarkdown(`\n`);
+  appendFullSessionTooltipActions(md, node.session);
   return md;
 }
 
@@ -332,11 +335,6 @@ function buildSearchHitTooltip(node: SearchHitNode): vscode.MarkdownString {
   md.appendMarkdown(`${escapeForMarkdown(node.hit.snippet)}\n`);
   md.appendMarkdown(`\n---\n${escapeForMarkdown(t("tree.tooltip.searchHitAction"))}\n`);
   return md;
-}
-
-function escapeForMarkdown(s: string): string {
-  // Minimal escaping for embedding user content into MarkdownString.
-  return s.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\*/g, "\\*").replace(/_/g, "\\_");
 }
 
 function formatRoleLabel(

@@ -113,7 +113,7 @@
   "cfg.sourcesEnabled": "Top-level history sources to load. Codex Archived Sessions settings only apply when Codex is enabled here.",
   "cfg.handoffEnabled": "Show cross-agent handoff actions for visible Codex and Claude Code sessions. Disabling this hides handoff creation, copy, and open actions, but cleanup and Status metrics remain available.",
   "cfg.previewOpenOnSelection": "Open a reusable session preview in the editor area when selecting a tree item.",
-  "cfg.previewMaxMessages": "Max number of user/assistant messages to include in detailed tree item tooltips.",
+  "cfg.previewMaxMessages": "Maximum number of user/assistant messages collected for detailed tree item tooltips. This is not a guaranteed visible count. VS Code limits hover height to about 50% of the window, so some collected messages may be outside the visible area when the tooltip is long.",
   "cfg.previewTooltipMode": "Choose how much information session tree item tooltips show.",
   "cfg.previewTooltipMode.labelFull": "Detailed",
   "cfg.previewTooltipMode.labelCompact": "Metadata Only",

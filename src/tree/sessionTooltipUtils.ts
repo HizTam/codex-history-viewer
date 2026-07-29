@@ -3,6 +3,10 @@ import type { PreviewTooltipMode } from "../settings";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { t } from "../i18n";
 import type { CodexAgentPresentation } from "../agents/codexAgentRunsTypes";
+import {
+  buildSessionViewCommandUri,
+  OPEN_SESSION_FROM_TOOLTIP_COMMAND_ID,
+} from "./sessionTooltipCommand";
 
 export interface SessionTooltipAnnotation {
   tags: readonly string[];
@@ -87,8 +91,23 @@ export function buildSessionHoverTooltip(params: {
     md.appendMarkdown(`**${msg.role}**  \n`);
     md.appendMarkdown(`${escapeForMarkdown(msg.text)}\n\n`);
   }
-  md.appendMarkdown(`---\n${escapeForMarkdown(t("tree.tooltip.sessionActions"))}\n`);
+  appendFullSessionTooltipActions(md, session);
   return md;
+}
+
+export function appendFullSessionTooltipActions(
+  md: vscode.MarkdownString,
+  session: Pick<SessionSummary, "identityKey">,
+): void {
+  md.appendMarkdown(`---\n${escapeForMarkdown(t("tree.tooltip.sessionActions"))}`);
+  const commandUri = buildSessionViewCommandUri(session.identityKey);
+  if (commandUri) {
+    md.isTrusted = { enabledCommands: [OPEN_SESSION_FROM_TOOLTIP_COMMAND_ID] };
+    md.appendMarkdown(
+      `[](${commandUri} "${escapeMarkdownLinkTitle(t("tree.tooltip.openSessionView"))}")`,
+    );
+  }
+  md.appendMarkdown(`\n`);
 }
 
 export function appendCodexAgentTooltipLines(
@@ -214,8 +233,12 @@ function formatSessionDateTime(localDate: string, timeLabel: string): string {
   return timePart ? `${datePart} ${timePart}` : datePart;
 }
 
-function escapeForMarkdown(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\*/g, "\\*").replace(/_/g, "\\_");
+export function escapeForMarkdown(value: string): string {
+  return value.replace(/[\\`*_{}[\]()<>#+\-.!|]/gu, "\\$&");
+}
+
+function escapeMarkdownLinkTitle(value: string): string {
+  return value.replace(/\\/gu, "\\\\").replace(/"/gu, '\\"').replace(/[\r\n]+/gu, " ");
 }
 
 function sourceName(source: SessionSummary["source"]): string {

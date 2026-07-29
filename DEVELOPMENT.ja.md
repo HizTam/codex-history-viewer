@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-07-28
-- 対象バージョン: 2.9.0
+- 最終更新: 2026-07-29
+- 対象バージョン: 2.9.1
 
 ## 1. 概要
 
@@ -674,6 +674,7 @@
 - `handoff.enabled`
 - `preview.openOnSelection`
 - `preview.maxMessages`
+  - 詳細ツールチップ用に取得する user / assistant メッセージ数の上限であり、表示保証件数ではない。VS Code の native hover は高さをウィンドウ高のおよそ 50% に制限するため、長い tooltip では取得済みメッセージの一部が表示範囲外になる
 - `preview.tooltipMode`
 - `search.defaultRoles`
 - `search.indexToolContent`
@@ -1251,6 +1252,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - Project node の contextValue は CWD 有無で `codexHistoryViewer.project.withCwd` / `codexHistoryViewer.project.noCwd` に分け、CWD なしには alias menu を出さない
   - archived Codex session は description / tooltip / icon 色で通常履歴と区別する
   - `archiveLocationFilter="activeOnly"` のときは archived Codex session を History / Pinned / Search から除外する
+  - `preview.tooltipMode = full` のセッションツールチップ末尾には、表示文字数 0 の tooltip 専用 command link を置く。許可コマンドは内部 command だけに限定し、localized title は持たせるが新しい link label は表示しない。command URI には session identity から作った固定長の SHA-256 参照だけを入れ、現在の History Index から一意に再解決する。外部由来文字列は Markdown punctuation をエスケープし、対象行からツールチップ内へポインターが移っても VS Code が閉じない操作可能な hover として扱わせる。既存のプレビュー本文は省略せず、`compact` / `titleOnly` と Search の個別 hit tooltip は変更しない
 
 ### 4.11 ツール意味付けレイヤー
 
@@ -2060,6 +2062,8 @@ npm run package
 - Search が空の状態で History 側の絞り込みを変更しても Search 結果が復活せず、既存の Search 結果がある場合だけ実効値変更時に再検索される
 - `preview.tooltipMode` を `full` / `compact` / `titleOnly` で切り替えると、ツリー項目ツールチップの表示量が変わる
 - `full` / `compact` のツールチップでは、カスタムタイトルがなくても履歴ペイン表示と同じタイトルが表示される
+- History / Pinned / Search のセッション親行では、`full` のときだけツールチップ末尾に空ラベルの command link が含まれ、対象行からツールチップ内へポインターを移しても閉じない。新しい link label は表示せず、既存のプレビュー本文も省略しない。内部 command は対象セッションの Codex History Viewer セッションビューを開き、Codex / Claude Code の再開処理は実行しない
+- `compact` / `titleOnly` と Search の個別 hit tooltip にはセッションビューリンクが追加されず、外部由来の本文、タイトル、alias、タグ、note、検索 snippet に Markdown link 構文が含まれても別の command link を生成しない
 - 履歴の自動更新設定が有効なとき、履歴ファイル作成 / 変更 / 削除で History が自動更新される
 - 履歴の自動更新設定が有効なとき、セッションビューのヘッダーに自動更新ボタンが表示される
 - 新規セッションタブ、または再利用タブで別セッションへ切り替えたタブは、自動更新が `off` で始まる
