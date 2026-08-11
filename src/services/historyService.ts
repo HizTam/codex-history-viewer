@@ -19,6 +19,7 @@ import type { SessionTitleOverrideStore } from "./sessionTitleOverrideStore";
 import type { DebugLogger } from "./logger";
 import { sanitizeDebugError } from "./debugLogUtils";
 import { isBoundedSessionIdentityKey } from "../sessions/sessionIdentity";
+import { isValidByteCount } from "../utils/formatBytes";
 
 interface CacheEntryV1 {
   mtimeMs: number;
@@ -874,6 +875,7 @@ export class HistoryService {
     let st: { mtimeMs: number; size: number } | null = null;
     try {
       const stat = await vscode.workspace.fs.stat(vscode.Uri.file(fsPath));
+      if (!isValidByteCount(stat.size)) return emptyRefreshFileResult({ statMiss: 1 });
       st = { mtimeMs: stat.mtime, size: stat.size };
     } catch {
       // Skip unreadable files.
@@ -882,7 +884,10 @@ export class HistoryService {
 
     const cached = cachedEntries[key];
     if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
-      const summary = applyHistoryDateBasis(cached.summary, historyDateBasis);
+      const summary = applyHistoryDateBasis(
+        { ...cached.summary, fileSizeBytes: st.size },
+        historyDateBasis,
+      );
       return emptyRefreshFileResult({
         cacheKey: key,
         entry: { ...cached, summary },
@@ -913,7 +918,10 @@ export class HistoryService {
       });
     }
 
-    const summary = applyHistoryDateBasis(builtSummary, historyDateBasis);
+    const summary = applyHistoryDateBasis(
+      { ...builtSummary, fileSizeBytes: st.size },
+      historyDateBasis,
+    );
     return emptyRefreshFileResult({
       cacheKey: key,
       entry: {
@@ -1081,9 +1089,7 @@ function normalizeCachedEntry(value: unknown, storageKey: string): CacheEntryV1 
     typeof mtimeMs !== "number" ||
     !Number.isFinite(mtimeMs) ||
     mtimeMs < 0 ||
-    typeof size !== "number" ||
-    !Number.isFinite(size) ||
-    size < 0
+    !isValidByteCount(size)
   ) {
     return null;
   }
@@ -1096,7 +1102,7 @@ function normalizeCachedEntry(value: unknown, storageKey: string): CacheEntryV1 
     return {
       mtimeMs,
       size,
-      summary: { ...summary, meta },
+      summary: { ...summary, fileSizeBytes: size, meta },
       codexAgentMetadataVersion: undefined,
     };
   }
@@ -1112,7 +1118,7 @@ function normalizeCachedEntry(value: unknown, storageKey: string): CacheEntryV1 
   return {
     mtimeMs,
     size,
-    summary: { ...summary, meta },
+    summary: { ...summary, fileSizeBytes: size, meta },
     codexAgentMetadataVersion:
       value.codexAgentMetadataVersion === 1 && sanitized.valid ? 1 : undefined,
   };

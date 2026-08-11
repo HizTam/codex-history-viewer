@@ -53,6 +53,7 @@ export interface PreviewMessage {
 
 export interface SessionSummary {
   fsPath: string;
+  fileSizeBytes?: number;
   cacheKey: string;
   identityKey: string;
   source: SessionSource;

@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.9.1** (2026-07-29).
+Latest release: **2.10.0** (2026-08-12).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -20,7 +20,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Optionally include Codex `archived_sessions` when the Codex source is enabled, and switch archive visibility instantly.
 - Show valid cached History and Pinned data immediately at startup while local session files refresh in the background.
 - Search across prompts, responses, tool output, tags, notes, and attachment metadata, with shared search history.
-- View sessions in the Session Viewer with Markdown, code highlighting, math rendering, tool cards, and file-change diffs.
+- View sessions in the Session Viewer with Markdown, including GFM task lists, Mermaid diagrams, code highlighting, math rendering, tool cards, and file-change diffs.
 - Enable an opt-in Codex turn timeline to see turn boundaries, turn summaries, completed-turn folding, and running state in live mode.
 - Use Agent Runs to distinguish Codex sub-agent sessions and inspect parent, sibling, and descendant relationships in a right-side tree. (Experimental; disabled by default.)
 - Use Branch Navigation to inspect and switch between locally forked Codex histories and Claude Code **Fork conversation** histories in their respective session views. (Experimental; disabled by default.)
@@ -61,11 +61,13 @@ Project folders can have extension-local aliases from the History or Pinned proj
 
 Project associations can link another project's history into the current project display or group related projects together without moving the original history files. Associations are available from project context menus and are reflected in History, Pinned, Search, File AI Change History, and handoff content.
 
-Pinned has its own project scope, source, archive visibility, date, tag filters, and saved sort preference. It does not follow History/Search filter state, so saved sessions can stay focused on a different project or source while you browse and search elsewhere. History can sort by started date, last activity date, or name. Pinned can sort by pinned time, started date, last activity date, or name.
+Pinned has its own project scope, source, archive visibility, date, tag filters, and saved sort preference. It does not follow History/Search filter state, so saved sessions can stay focused on a different project or source while you browse and search elsewhere. History can sort by started date, last activity date, or name. Pinned can sort by pinned time, started date, last activity date, or name. When Tooltip Mode is set to Compact or Detailed, History and Pinned session tooltips also show the source session file size.
 
 ## Session Viewer
 
-The Session Viewer renders local session files as readable timelines. It supports Markdown, syntax-highlighted fenced code blocks, KaTeX-compatible math, assistant usage metadata, environment snapshots, tool execution metadata, and grouped file-change cards from patch activity.
+The Session Viewer renders local session files as readable timelines. It supports Markdown, Mermaid diagrams, syntax-highlighted fenced code blocks, KaTeX-compatible math, assistant usage metadata, environment snapshots, tool execution metadata, and grouped file-change cards from patch activity. GFM task-list markers render as read-only checkboxes without modifying the stored session content.
+
+Fenced `mermaid` blocks render as inline diagrams. Each diagram can switch between Light and Dark display modes, open in a non-modal right-side pane for fit-to-view, zoom, scroll, drag-to-pan, and keyboard navigation, and be saved as SVG, PNG, or Mermaid source (`.mmd`).
 
 The resume button follows the resume method selected separately for Codex and Claude Code. Extension and CLI uses a split button: the last used method becomes the main action, while the dropdown always lists both methods. CLI actions enter the resume command in a new VS Code integrated terminal without pressing Enter. The History, Pinned, and Search context menus follow the same source-specific settings.
 
@@ -243,10 +245,13 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.9.1
+## What's New in 2.10.0
 
-- Fixed an issue where session tooltips could flicker when they appeared under the mouse pointer while **Tooltip Mode** was set to **Detailed**.
-- Clarified the **Preview: Max Messages** setting description to explain that it controls the maximum number of messages collected for detailed tooltips, rather than the number of messages guaranteed to be displayed, and that VS Code limits tooltip height to approximately 50% of the window.
+- Added rendering of fenced Mermaid code blocks as diagrams in the Session Viewer.
+- Added a non-modal right-side pane for viewing Mermaid diagrams at a larger size, with fit-to-view, zooming, scrolling, drag-to-pan, and keyboard controls.
+- Added Light and Dark display modes and SVG, PNG, and Mermaid source (`.mmd`) saving for Mermaid diagrams.
+- Added rendering of GFM task lists in the Session Viewer, with `[ ]` and `[x]` states displayed as read-only checkboxes.
+- Added session file sizes to History and Pinned tooltips when Tooltip Mode is set to Compact or Detailed.
 
 ## Changelog
 
@@ -263,6 +268,12 @@ This extension reads local session files and renders them inside VS Code. It doe
 If you use **Copy Quick Prompt** or **Copy Handoff Prompt to Clipboard**, this extension copies session context to your clipboard. Data is only sent externally if you paste it into another tool or extension.
 
 When you open a session as a Markdown transcript, the generated transcript includes local paths such as the session file path and CWD. Review before sharing.
+
+## Supported Providers
+
+Codex History Viewer currently focuses on Codex and Claude Code session history.
+
+Support for additional providers may be considered in the future at the maintainer's discretion, and only when they can be routinely used, tested, and maintained by the maintainer over the long term without compromising the extension's quality, compatibility, or security.
 
 ## Disclaimer
 

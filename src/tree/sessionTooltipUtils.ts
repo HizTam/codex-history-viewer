@@ -3,6 +3,7 @@ import type { PreviewTooltipMode } from "../settings";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { t } from "../i18n";
 import type { CodexAgentPresentation } from "../agents/codexAgentRunsTypes";
+import { formatSessionFileSize } from "../utils/formatBytes";
 import {
   buildSessionViewCommandUri,
   OPEN_SESSION_FROM_TOOLTIP_COMMAND_ID,
@@ -203,6 +204,10 @@ function appendSessionMetadataLines(
     md.appendMarkdown(
       `${escapeForMarkdown(t("tree.tooltip.location"))}: ${escapeForMarkdown(t("session.location.archived"))}  \n`,
     );
+  }
+  const fileSize = formatSessionFileSize(session.fileSizeBytes);
+  if (fileSize) {
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.fileSize", fileSize))}  \n`);
   }
   const alias = String(projectAlias ?? "").trim();
   const cwd = typeof session.meta?.cwd === "string" ? session.meta.cwd.trim() : "";

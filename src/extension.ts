@@ -146,6 +146,7 @@ import {
   type DateTimeSettings,
 } from "./utils/dateTimeSettings";
 import { safeDisplayPath } from "./utils/textUtils";
+import { formatBytesForUi } from "./utils/formatBytes";
 import { normalizeCacheKey, normalizeProjectKey, pathExists } from "./utils/fsUtils";
 import { MementoTransactionError, updateMementoTransaction } from "./storage/mementoTransaction";
 import { CodexAgentRunsService } from "./agents/codexAgentRunsService";
@@ -155,6 +156,7 @@ import { CliResumeCwdResolver } from "./cliResume/cliResumeCwd";
 import { CliResumeService, type CliResumeTargetResolution } from "./cliResume/cliResumeService";
 import { validateCliResumeSessionId } from "./cliResume/cliResumeValidation";
 import { ResumeMethodStore } from "./services/resumeMethodStore";
+import { MermaidPreferenceStore } from "./services/mermaidPreferenceStore";
 import { resolveExtensionResumeSessionId } from "./resume/resumeSessionValidation";
 import {
   OPEN_SESSION_FROM_TOOLTIP_COMMAND_ID,
@@ -331,6 +333,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   const chatOpenPositionStore = new ChatOpenPositionStore(context.globalState);
   const resumeMethodStore = new ResumeMethodStore(context.globalState);
+  const mermaidPreferenceStore = new MermaidPreferenceStore(context.globalState);
   const sessionReferenceRelocator = new SessionReferenceRelocator(
     annotationStore,
     bookmarkStore,
@@ -389,6 +392,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     codexAgentRuns,
     sessionIconResolver,
     resumeMethodStore,
+    mermaidPreferenceStore,
     async () => {
       await vscode.commands.executeCommand("codexHistoryViewer.refresh");
     },
@@ -7795,19 +7799,6 @@ function isPathInsideRoot(fsPath: string, rootPath: string): boolean {
   const rel = path.relative(root, fsPath);
   if (!rel) return true;
   return !rel.startsWith("..") && !path.isAbsolute(rel);
-}
-
-function formatBytesForUi(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  const rounded = value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
-  return `${rounded} ${units[unitIndex]}`;
 }
 
 type HistoryFilterChange =

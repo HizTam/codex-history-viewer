@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-07-23
+Last updated: 2026-08-12
 
 ## Supported Versions
 
@@ -13,6 +13,14 @@ Use the latest published release of Codex History Viewer whenever possible. Olde
 | 1.2.1 and earlier | Do not install or redistribute historical VSIX files. |
 
 ## Security Notes
+
+### Mermaid diagram rendering and export
+
+Codex History Viewer v2.10.0 and later bundle `mermaid@11.16.0` to render fenced Mermaid blocks in the Session Viewer. Mermaid source from session files is treated as untrusted input. Rendering uses fixed security settings, disables HTML labels, and removes frontmatter configuration overrides, initialization directives, and click directives before the source reaches Mermaid.
+
+Generated SVG is parsed and validated before it is inserted into the webview. Executable or externally loaded content, event-handler attributes, unsafe URLs, and unsafe CSS are rejected. XML Base attributes are removed so that internal fragment references cannot be resolved as external resources. SVG export is independently validated again by the extension host, which rejects XML Base attributes and link elements without trusting the webview sanitizer. PNG export is bounded by dimension and pixel-count limits, and files are written only to a location selected through the VS Code save dialog.
+
+Rendering and export also enforce limits on Mermaid source length, diagrams per message, graph edges, generated SVG structure, and exported image size. Inputs that exceed rendering limits fall back to source display or a bounded error state instead of bypassing these checks.
 
 ### markdown-it GHSA-38c4-r59v-3vqw / CVE-2026-2327
 

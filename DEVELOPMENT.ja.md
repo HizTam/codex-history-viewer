@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-07-29
-- 対象バージョン: 2.9.1
+- 最終更新: 2026-08-12
+- 対象バージョン: 2.10.0
 
 ## 1. 概要
 
@@ -626,7 +626,7 @@
 - parent / child の正規化済み absolute `cwd` が同一の場合だけ local Fork の resolved edge とする。`新しい Worktree にフォークする`、異なる `cwd`、relative path、比較不能な `cwd` は 2.8.0 の対象外とし、通常の Fork 経路へ混在させない
 - direct Fork、同じ parent からの複数 Fork、nested Forkを current session の component 内で表示する。parent 欠落、ID 重複、self reference、cycle、上限超過は任意の別sessionへ補完せず、確認できる経路だけを partial として扱う
 - parent / child にmaterializeされた可視 user / assistant messageの共通prefixから、既存Chatと同じ1-based message indexのFork anchorを求める。Codexがコピー履歴へtimestampを再付与する場合があるため、timestampを同一messageの必須条件にしない
-- Codexセッションビューのヘッダー、タイムライン上の前後操作、経路ツリーoverlayはClaude Code Branch Navigationと同じ操作・paging・focus・Escape契約を共用する。ヘッダーアイコンはCodexの向きに合わせて上2点から下1点へ合流する形とし、Agent Runsボタンとは併存するが両overlayは同時に開かない
+- Codexセッションビューのヘッダー、タイムライン上の前後操作、経路ツリーoverlayはClaude Code Branch Navigationと同じ操作・paging・focus・Escape契約を共用する。経路ツリーは通常ホイールをスクロール、`Ctrl` / `Cmd` + ホイールをポインター位置基準のズーム、`0`を100%＋tree全体の中央への復帰として扱う。ヘッダーアイコンはCodexの向きに合わせて上2点から下1点へ合流する形とし、Agent Runsボタンとは併存するが両overlayは同時に開かない
 - 経路選択は同じセッションWebviewを`stateOverride`の二相commitで切り替える。History generation、snapshot、opaque target、対象fileの`mtime` / `size`、最新request IDを非同期境界で再検証し、stale targetでは現在表示を変更しない
 - relation node 500件、depth 64、1 sessionの可視message 100,000件、対象file 256 MiBを上限とする。evidence cacheは`cacheKey`、`mtime`、`size`へ結び付け、History更新、設定無効化、明示的cache再作成で失効させる
 - bookmark / tag / noteは各load時のpresentation stateとして反映し、relation topologyや永続cacheへ混在させない。元のCodex JSONL、workspace、Fork、注釈を作成・変更・merge・削除しない
@@ -661,6 +661,24 @@
 - 移動先のセッションタブが開いていれば reveal し、未 open なら通常の固定 session panel を開く。元 panel の session、scroll、search、details state を別 session へ置き換えない
 - ペイン幅はドラッグで変更して Webview state に保存するが、ペインの open 状態は Reload Window 後に復元しない。Branch Navigation overlay、page search と同時には開かない
 - Webview では表示 node 500 件、depth 64、parent ごとの child 200 件を上限とし、current path を優先して省略件数を表示する。partial relation、missing parent、stale navigation target は確認できた範囲だけを表示し、元の JSONL や注釈を変更しない
+
+### 3.6.6 Mermaid 図
+
+- assistant / user / developer メッセージの fenced code block が `mermaid` または `mmd` の場合、Mermaid 11.16.0 で図として表示する
+- 図は表示範囲付近へ入った時点で遅延描画し、1メッセージ20件、ソース100,000文字、edge 1,000件を上限とする。空ソース、文字数・図件数上限、NULは通常コードブロックへfallbackし、runtime不在、構文・edge上限・生成SVG検証エラーはMermaidカード内の共通エラーとソースfallbackで確認できるようにする。SVG描画成功時だけviewportを`role="img"`とし、loading / error時はstatus、alert、ソースを支援技術から読める状態にする
+- Mermaid の初期化は既存の Webview bundle 内の制約付き bridge に集約し、`securityLevel: strict`、`htmlLabels: false`、`startOnLoad: false`、テーマ、フォント、図種別設定を`secure`で固定する。Mermaidが認識する同一インデント／末尾空白付き区切りを含むleading frontmatter、init / initialize / config directive、click directiveは描画入力から除去し、閉じ区切りのないfrontmatterは拒否する
+- Mermaidが返したSVGは切り離したDOMで再解析し、script、foreignObject、image、iframe、object、embed、animation、discard、event handler、外部URI、危険なCSSを除去してからDOMへ挿入する。`xml:base`を含めattributeのlocal nameが`base`なら除去し、内部`#fragment`が外部resourceへ解決される経路を閉じる。Mermaidが生成するbaseなしの内部参照と `var(--vscode-...)` は許可し、外部URI schemeと混同しない。表示時と保存時のSVGは最大100,000要素、深さ512までとし、保存時は1要素あたりの属性を最大1,024件に制限する
+- Mermaid生成SVGはWebviewへの受け入れとHost保存の双方で5 MiB、PNG保存payloadは16 MiB、`.mmd`保存payloadはUTF-8 512 KiBを上限とする。表示とSVG保存に使う図の寸法は最大辺16,384px、最大64 MiPixel以内へ、PNG rasterizeは最大辺8,192px、最大16 MiPixel以内へ、それぞれ縦横比を維持して縮小する。生成後のPNGが16 MiBを超える場合は保存しない
+- Light / Dark / High Contrast に応じた色付きテーマを使い、作者指定styleのないflowchart標準nodeは、Mermaidが解析したshape metadataに基づき開始・終了、入出力、判定、通常処理、データ、特殊処理のrole別固定色で表示する。同じroleは出現順やラベル本文にかかわらず同色とし、赤を意味推測で自動適用しない。色指定のないmindmapは、Mermaid base themeのDark時に中央文字と分岐scaleが黒になる既定挙動を限定的なtheme CSSで補う。中央rootはDarkで濃青背景と白文字、Lightで薄青背景と濃紺文字を使い、文字をfont-weight 600とする。Darkの子node、label、輪郭、branch edgeにはsection別の11色を割り当て、Lightの正常な分岐配色は変更しない。Git graphと共有するtheme variableは変更せず、theme CSSに`!important`を使わないことで作者の`classDef`を優先する。sequence図の`box` / `rect`、flowchartの`classDef` / `class` / `style` / `:::`など、Mermaid構文で作者が明示した色はテーマにかかわらず変更せず、原文、表示、SVG / PNG出力の一貫性を優先する。ER図、クラス図など作者の行色指定がない表形式nodeの交互行はDarkで濃紺2色と白文字、Lightで白／薄青と濃紺文字へ固定し、Mermaidのlight theme向け自動補色を使わない
+- インラインと右ペインのLight / Darkトグルは全Session Webviewで同期し、最後の明示選択を`globalState`へ保存して別セッション、別プロジェクト、タブ再作成後も復元する。全体値が未設定の初回はVS Codeテーマに追従し、切替時は表示範囲付近の図を再描画して範囲外の図を遅延描画へ戻す。表示面は装飾用グリッドやパターンを持たない単色背景とし、SVG / PNGには描画時テーマに対応する固定背景を埋め込み、`.mmd`は変更しない
+- インライン図は会話中のpreviewとして、縦横比を維持したままviewportの横幅と高さへfitして全体構造を表示する。viewport上限は`min(560px, 66vh)`、SVGの高さ上限はviewportのpadding 32pxと追加余白8pxを除いた値とし、極端に縦長または横長でインラインの文字が小さくなる場合は右ペインで詳細を確認する。通常はscrollbarを表示せず、ブラウザのSVG intrinsic size差などで外接矩形が2pxの許容値を超えた場合だけ安全fallbackとしてcard内scrollを有効にする
+- 各図の縦線付き左矢印アイコンから非モーダルの右ペインを開ける。デスクトップでは会話領域を残し、Fork / Branch Navigation と同じ通常ホイール／矢印キーのスクロール、ドラッグパン、`+` / `-` / `0` のズーム操作、`Ctrl` / `Cmd` + ホイールのポインター位置基準ズーム、全体表示、元図表示、ソースコピーを提供する。`+` / `-` / `0` はpane open中のWebview全体shortcutとし、文字入力中または`Ctrl` / `Cmd` / `Alt`付きのkeyboard eventは除外する。keydownはForkと同じpane root、`window` capture、既存document keydownから同じhandlerへ集約し、NFKC正規化した`event.key`、既知の`event.code`、最後に曖昧操作を除いたlegacy `keyCode`の順で判定する。日本語配列の`;`単独と`Shift+0`は操作として扱わず、shiftなし`0`だけを100%＋図中央への復帰にする。先頭4 action は元図、全体表示、縮小、拡大の順とし、overflow 時は水平・垂直スクロールバーを表示する。pane内controlの操作後にtheme再描画でDOMが再構築された場合は同じactionへfocusを戻す。pane幅変更とwindow resizeはscaleを変更せず、変更前のviewport中央にある図座標をlayout後も中央へ維持する。自動fitは初回openだけとする。元図表示はsession、timeline card keyのhash、timeline card番号、message番号、ordinal、source hashから組み立てたdiagram keyまで照合し、同じassistantカード内の複数図と同じsourceを持つ複数developerカードを区別する。接続済みの対象図がある場合はtimelineを再描画せずpane展開後の幅で決まった位置へ移動する。狭幅では画面幅を使う
+- 右ペイン幅はドラッグまたはキーボードで変更して Webview state に保存するが、open 状態は復元しない。画像プレビュー、Branch Navigation、Agent Runs、page search とは同時に開かない
+- インライン表示と右ペインの双方にResumeと同系統の保存split buttonを置く。主ボタンは初期状態で背景込みSVGを保存し、隣接メニューからSVG、最大8,192pxかつ16MPのPNG、元のMermaidソース（`.mmd`）を選べる。最後に選んだ形式は`globalState`に保存して全Session Webviewの主ボタン表示と動作へ反映する。既定名は本文やセッションIDを含めず、user / assistantでは画面のmessage番号を5桁、card内で`01`から始まるordinalを2桁で0埋めした`mermaid-diagram-00015-01`、message番号を持たないdeveloperではtimeline card番号を使う`mermaid-diagram-card-00027-01`形式とする
+- Webviewは保存データを生成するだけとし、Extension Hostは現在のpanel sessionとの一致、形式、サイズ、PNG signatureを検証する。SVGはXML構造を走査し、危険要素、`a`要素、event属性、local nameが`base`の属性、外部href / src、style / presentation属性、`<style>`本文だけをコンテキスト別に再検証してから`showSaveDialog`で保存する。Webview sanitizer済みという前提を置かず、`xml:base`、別prefix、protocol-relative指定、入れ子継承による内部参照の外部化を拒否する。通常のlabel textに`javascript:`、`expression(`、`@import`、`url()`などの技術用語が含まれるだけでは拒否しない
+- Webview内page searchは図へ置換する前に検索できた元Mermaidソースをtimeline描画世代ごとの仮想検索レコードとして別管理する。ソースをhidden DOM、属性、SVG、永続stateへ複製せず、通常DOM matchと表示順に統合する。検索結果にはrole / message番号、Mermaid label、元ソースsnippetを表示し、activate時は該当カードだけを強調してSVGや右ペインを変更しない。render errorの表示ソースは仮想結果との二重計上を防ぎ、通常コードブロックへfallbackしたソースは従来DOM検索だけを使う
+- `THIRD_PARTY_NOTICES.txt`にはMermaid本体に加えてbundleへ到達し得るrequired production dependencyをlicense別に収録する。配布通知はpackage名を重複排除してversionを省き、同一MIT条文は1回に集約する。正確な配置先・version・同名packageの複数versionはpackage-lockと監査テストで保持し、生成JavaScriptに含まれないtype-only package（`@types/*`、`@iconify/types`、`@chevrotain/types`）は通知対象外とする。Mermaid依存更新時はpackage-lockと生成bundleの双方から再監査する
+- Fork / Branch Navigation / Agent Runs の図データ保存は対象外とする
 
 ### 3.7 設定（`codexHistoryViewer.*`）
 
@@ -1134,6 +1152,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `ChatPanelManager` は保存可能な画像をパネル単位で保持し、Webview からの保存要求時に `showSaveDialog` 経由で書き出す
   - `ChatPanelManager` は保存可能な embedded document をパネル単位で保持し、Webview からの `saveAttachment` 要求時に `showSaveDialog` 経由で書き出す
   - `ChatPanelManager` は `saveImage` / `saveAttachment` の session `fsPath` を検証し、現在の panel と一致しない stale request では保存処理を行わない
+  - `ChatPanelManager` は `saveMermaid` の session `fsPath`、diagram scope、scope番号、card内ordinal、保存payloadを検証し、SVG / PNG / `.mmd` だけを0埋めした固定規則の既定名で保存する
+  - `ChatPanelManager` は Mermaid theme / 保存形式の変更messageを検証して`MermaidPreferenceStore`へ渡し、保存成功後に同じExtension Host内の全Session Webviewへ現在値を配信する。保存失敗時は永続値を要求元へ戻して通知する
   - `ChatPanelManager` は Webview からの `openAttachment` message を受け取り、file reference を VS Code API 経由で開く
   - `ChatPanelManager` は Webview からの `manageCustomTitle` message を受け取り、共通の `codexHistoryViewer.manageCustomTitle` コマンドを実行する
   - `ChatPanelManager` は表示詳細を `summary` / `full` で管理し、`summary` では tool 引数 / tool 出力 / patch diff 行を Webview model から省略する
@@ -1176,6 +1196,9 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `media/chatView.js` は `attachments` の順序を維持し、連続する画像だけを image group として描画する
   - `media/chatView.js` は Code / Image reference の file kind badge を dedicated l10n label で表示し、generic file label へフォールバックさせない
   - `media/chatView.js` は assistant message 内の `::code-comment{...}` directive を Markdown 本文から分離し、レビューコメントカードとして表示する
+  - `media/chatView.js` は Mermaid fenced blockを遅延描画し、Hostから配信された全体Light / Dark選択と保存形式、安全化済みSVGのinline表示、非モーダル拡大ペイン、テーマ固定背景付きSVG / PNGと`.mmd`の保存データ生成を担当する。diagram keyはsession、timeline card、message、ordinal、sourceのハッシュ化済み識別子から作り、カード幅変更後はinline overflowを再計測する。リリース前仕様のWebview stateに残るtheme / 保存形式は参照しない
+  - `scripts/chatViewShiki.entry.js` は Shiki と Mermaid を同じIIFE bundleへまとめ、Mermaidの安全設定、直列描画、flowchart shapeから導出した固定role metadataを制約付きbridgeとして公開する
+  - `mermaidExport.ts` は Extension Host側の保存形式、サイズ、SVG安全条件、PNG signature、固定ファイル名を検証する
   - code comment directive parser は `file` / `title` / `body` / `start` / `end` / `priority` の既知キーを string 外で検出し、属性順序、optional comma、raw 改行、未知 segment の揺れを許容する
   - `start` / `end` は先頭の正整数部分を採用し、負数など正整数で始まらない値は不正として扱う
   - `::code-comment{...}` の範囲を特定できる parse 失敗は未解析カードへ fallback し、範囲を特定できない場合だけ raw text fallback にする
@@ -1381,6 +1404,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - source別設定、最後に成功した方式、安全条件、presentation revisionから単独 / 分割ボタンを描画し、clientからtarget、ID、cwd、command textを受け取らず、現在panelのsessionだけからbase commandを選ぶ
 - `src/services/resumeMethodStore.ts`
   - source別の最後に成功した方式を`globalState`へ保存し、同一Extension Host内の並行完了をsequenceとPromise queueで直列化する
+- `src/services/mermaidPreferenceStore.ts`
+  - Mermaid themeと保存形式を別々のversioned `globalState` keyへ保存し、項目別sequenceとPromise queueで連続更新を直列化する。未設定／不正値はthemeを`auto`、保存形式を`svg`へ正規化し、セッション情報や図データは保存しない
 
 ## 5. 開発手順
 
@@ -2283,3 +2308,15 @@ npm run package
 - `package.nls.*` と `l10n/bundle.l10n.*` のキー所有が混ざっていない
 - `SECURITY.md` に v1.4.3 / 2026-04-30 のセキュリティ方針と `markdown-it` アドバイザリ対応が記載されている
 - ソースコードコメントに日本語が残っていない
+
+## GFMタスクリストとセッションファイルサイズ
+
+- Session Webview の assistant Markdown は、リスト項目先頭の `- [ ]` / `- [x]` / `- [X]` を読み取り専用のチェックボックスとして表示する。元JSONLは変更しない
+- タスクリストのチェックボックスはdisabledの意味を維持しつつ、VS Codeのcheckbox theme colorと明示的なcheck markを使用する。Light / Darkでdisabledの灰色へ薄くならず、High Contrastでは2pxのcontrast borderを使用する
+- Light / High Contrast Lightの完了チェックはbutton背景・button前景を使用し、checkbox select色が同系色になるthemeでもcheck markが背景へ同化しない
+- タスクマーカーは `markdown-it` のローカルruleで処理し、新しい実行時依存は追加しない。raw HTML無効、link validation、CSPは従来どおり維持する
+- code span、strong / emphasis 内、リスト外、marker直後に空白がない文字列はタスクリストへ変換しない
+- History / Pinned のセッションツールチップは、`preview.tooltipMode = compact` または `full` の場合に元JSONLのファイルサイズを表示する。`titleOnly`、Searchのhit tooltip、missing pinは変更しない
+- ファイルサイズはHistory refreshで取得済みの `FileStat.size` またはcache entry直下の `size` を正本とし、tooltip表示時に追加のfilesystem I/Oを行わない
+- サイズ表記は1024換算の `B` / `KB` / `MB` / `GB` / `TB` とする。`B`は整数、`KB`は小数第1位、`MB`以上は小数第2位まで表示する
+- 旧cacheはentry直下に既存のsizeを持つためcache versionを変更せず、runtimeの `SessionSummary.fileSizeBytes` へ投影する

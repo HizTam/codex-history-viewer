@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.10.0] - 2026-08-12
+
+### Added
+
+- Added rendering of fenced Mermaid code blocks as diagrams in the Session Viewer.
+- Added a non-modal right-side pane for viewing Mermaid diagrams at a larger size, with fit-to-view, zooming, scrolling, drag-to-pan, and keyboard controls.
+- Added Light and Dark display modes for Mermaid diagrams.
+- Added saving Mermaid diagrams as SVG, PNG, or Mermaid source (`.mmd`).
+- Added rendering of GFM task lists in the Session Viewer, with `[ ]` and `[x]` states displayed as read-only checkboxes.
+- Added session file sizes to History and Pinned tooltips when Tooltip Mode is set to Compact or Detailed.
+
 ## [2.9.1] - 2026-07-29
 
 ### Changed

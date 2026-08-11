@@ -8,8 +8,7 @@ media/chatViewShiki.bundle.js
 
 # Test outputs
 .vscode-test/
-.test-dist/
-.test-tmp/
+.test-*/
 .root-review-*/
 test/
 tsconfig.test.json

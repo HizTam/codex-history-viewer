@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { t } from "../i18n";
 import { safeDisplayPath } from "../utils/textUtils";
+import { formatBytesForUi } from "../utils/formatBytes";
 
 type UtilityNode = ActionNode | InfoNode;
 type UtilityIcon = vscode.ThemeIcon | vscode.Uri | { light: vscode.Uri; dark: vscode.Uri };
@@ -239,10 +240,10 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
       makeInfo("status.missingPins", t("status.label.missingPins"), String(s.missingPinCount), new vscode.ThemeIcon("warning")),
       makeInfo("status.presets", t("status.label.presets"), String(s.presetCount), new vscode.ThemeIcon("bookmark")),
       makeInfo("status.totalTags", t("status.label.totalTags"), String(s.totalTagCount), new vscode.ThemeIcon("tag")),
-      makeInfo("status.storageBytes", t("status.label.storageBytes"), formatBytes(s.storageBytes), new vscode.ThemeIcon("database")),
+      makeInfo("status.storageBytes", t("status.label.storageBytes"), formatBytesForUi(s.storageBytes), new vscode.ThemeIcon("database")),
       makeInfo("status.trashCount", t("status.label.trashCount"), String(s.trashCount), new vscode.ThemeIcon("trash")),
       makeInfo("status.handoffCount", t("status.label.handoffCount"), String(s.handoffCount), new vscode.ThemeIcon("files")),
-      makeInfo("status.handoffBytes", t("status.label.handoffBytes"), formatBytes(s.handoffBytes), new vscode.ThemeIcon("file-code")),
+      makeInfo("status.handoffBytes", t("status.label.handoffBytes"), formatBytesForUi(s.handoffBytes), new vscode.ThemeIcon("file-code")),
       makeInfo("status.searchHits", t("status.label.searchHits"), String(s.searchHitCount), new vscode.ThemeIcon("search")),
       makeInfo(
         "status.searchRoles",
@@ -360,17 +361,4 @@ function toTreeItem(node: UtilityNode): vscode.TreeItem {
   if (node.icon) item.iconPath = node.icon;
   item.contextValue = node.copyValue ? "codexHistoryViewer.utilityInfo.copyable" : "codexHistoryViewer.utilityInfo";
   return item;
-}
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  const rounded = value >= 100 ? value.toFixed(0) : value >= 10 ? value.toFixed(1) : value.toFixed(2);
-  return `${rounded} ${units[unitIndex]}`;
 }

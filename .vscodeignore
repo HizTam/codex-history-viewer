@@ -12,8 +12,7 @@
 **/.github/**
 **/*.vsix
 scripts/**
-**/.test-dist/**
-**/.test-tmp/**
+**/.test-*/**
 **/.root-review-*/**
 media/screenshot*.png
 test/**

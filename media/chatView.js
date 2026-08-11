@@ -38,6 +38,7 @@
   const restoreCoverEl = document.getElementById("restoreCover");
   const branchOverlayRootEl = document.getElementById("branchOverlayRoot");
   const agentRunsOverlayRootEl = document.getElementById("agentRunsOverlayRoot");
+  const mermaidPaneRootEl = document.getElementById("mermaidPaneRoot");
 
   const md = createMarkdownRenderer();
   const CODE_COMMENT_DIRECTIVE_PREFIX = "::code-comment{";
@@ -53,7 +54,7 @@
   const MAX_AGENT_RUN_NODES = 500;
   const MAX_AGENT_RUN_DEPTH = 64;
   const MAX_AGENT_RUN_CHILDREN = 200;
-  const BRANCH_TREE_PAN_THRESHOLD_PX = 5;
+  const DIAGRAM_PAN_THRESHOLD_PX = 5;
   const BRANCH_CHOICE_PREVIEW_DELAY_MS = 220;
   const BRANCH_CHOICE_PREVIEW_CLOSE_DELAY_MS = 180;
   const CODE_COMMENT_ATTRIBUTE_KEYS = new Set(["file", "title", "body", "start", "end", "priority"]);
@@ -77,6 +78,10 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.47 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 1 1-1.06-1.06L10.19 8 6.47 4.28a.75.75 0 0 1 0-1.06Z"/></svg>';
   const CARD_EXPAND_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.75 2h3a.75.75 0 0 1 0 1.5H5.56l2.22 2.22a.75.75 0 1 1-1.06 1.06L4.5 4.56v1.19a.75.75 0 0 1-1.5 0v-3A.75.75 0 0 1 3.75 2Zm5.5 0h3a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0V4.56L9.28 6.78a.75.75 0 1 1-1.06-1.06l2.22-2.22H9.25a.75.75 0 0 1 0-1.5ZM7.78 10.28 5.56 12.5h1.19a.75.75 0 0 1 0 1.5h-3A.75.75 0 0 1 3 13.25v-3a.75.75 0 0 1 1.5 0v1.19l2.22-2.22a.75.75 0 1 1 1.06 1.06Zm1.44 0a.75.75 0 0 1 1.06-1.06l2.22 2.22v-1.19a.75.75 0 0 1 1.5 0v3a.75.75 0 0 1-.75.75h-3a.75.75 0 0 1 0-1.5h1.19l-2.22-2.22Z"/></svg>';
+  const OPEN_RIGHT_PANE_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M13.25 1.5a.75.75 0 0 1 .75.75v11.5a.75.75 0 0 1-1.5 0V2.25a.75.75 0 0 1 .75-.75ZM6.28 3.97a.75.75 0 0 1 0 1.06L4.06 7.25h6.19a.75.75 0 0 1 0 1.5H4.06l2.22 2.22a.75.75 0 1 1-1.06 1.06l-3.5-3.5a.75.75 0 0 1 0-1.06l3.5-3.5a.75.75 0 0 1 1.06 0Z"/></svg>';
+  const COLOR_MODE_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1Zm0 12.5v-11a5.5 5.5 0 0 1 0 11Z"/></svg>';
   const CARD_RESTORE_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a.75.75 0 0 1 .75.75v3A.75.75 0 0 1 6.75 6h-3a.75.75 0 0 1 0-1.5h1.19L2.72 2.28a.75.75 0 1 1 1.06-1.06L6 3.44V2.75A.75.75 0 0 1 6.75 2Zm2.5 0a.75.75 0 0 1 .75.75v.69l2.22-2.22a.75.75 0 1 1 1.06 1.06L11.06 4.5h1.19a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1-.75-.75v-3A.75.75 0 0 1 9.25 2ZM3.75 10h3a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0v-.69l-2.22 2.22a.75.75 0 1 1-1.06-1.06L4.94 12H3.75a.75.75 0 0 1 0-1.5Zm5.5 0h3a.75.75 0 0 1 0 1.5h-1.19l2.22 2.22a.75.75 0 1 1-1.06 1.06L10 12.56v.69a.75.75 0 0 1-1.5 0v-3a.75.75 0 0 1 .75-.75Z"/></svg>';
   const RESUME_ICON_SVG =
@@ -217,6 +222,25 @@
   const BRANCH_OVERLAY_HORIZONTAL_MARGIN = 16;
   const MIN_AGENT_RUNS_OVERLAY_WIDTH = 480;
   const AGENT_RUNS_OVERLAY_HORIZONTAL_MARGIN = 16;
+  const MIN_MERMAID_PANE_WIDTH = 360;
+  const DEFAULT_MERMAID_PANE_WIDTH = 560;
+  const MIN_MERMAID_PANE_SCALE = 0.1;
+  const MAX_MERMAID_PANE_SCALE = 8;
+  const MERMAID_PANE_ZOOM_STEP = 0.25;
+  const MAX_MERMAID_DIAGRAMS_PER_MESSAGE = 20;
+  const MAX_MERMAID_EXPORT_SCOPE_NUMBER = 999999999;
+  const MAX_MERMAID_EXPORT_ORDINAL = 999;
+  const MAX_MERMAID_SOURCE_LENGTH = 100000;
+  const MAX_MERMAID_PNG_DIMENSION = 8192;
+  const MAX_MERMAID_PNG_PIXELS = 16 * 1024 * 1024;
+  const MAX_MERMAID_PNG_BYTES = 16 * 1024 * 1024;
+  const MAX_MERMAID_SVG_BYTES = 5 * 1024 * 1024;
+  const MAX_MERMAID_SVG_ELEMENTS = 100000;
+  const MAX_MERMAID_SVG_DEPTH = 512;
+  const MAX_MERMAID_DISPLAY_DIMENSION = 16384;
+  const MAX_MERMAID_DISPLAY_PIXELS = 64 * 1024 * 1024;
+  const MAX_MERMAID_PALETTE_NODES = 2048;
+  const MERMAID_INLINE_VISUAL_OVERFLOW_TOLERANCE_PX = 2;
   const PAGE_SEARCH_REFRESH_DEBOUNCE_MS = 180;
   const RESTORE_POSITION_SAVE_DEBOUNCE_MS = 500;
   const OPEN_POSITION_SAVE_DEBOUNCE_MS = 800;
@@ -360,6 +384,30 @@
   let agentRunsTreeNeedsInitialReveal = true;
   let agentRunsTreeRenderFrame = 0;
   let agentRunsTreeFocusNodeId = "";
+  let mermaidPaneModel = null;
+  let mermaidPaneReturnFocus = null;
+  let mermaidPaneWidth = null;
+  let mermaidPaneResizeState = null;
+  let mermaidPaneScale = 1;
+  let mermaidPaneScrollLeft = 0;
+  let mermaidPaneScrollTop = 0;
+  let mermaidPanePointerState = null;
+  let mermaidPaneSuppressNextClick = false;
+  let mermaidPaneWidthAnchorFrame = 0;
+  let mermaidPanePendingWidthAnchor = null;
+  let mermaidPaneStageEl = null;
+  let mermaidPaneScalerEl = null;
+  let mermaidPaneCanvasEl = null;
+  let mermaidPaneSaveControl = null;
+  let mermaidRenderGeneration = 0;
+  let mermaidRenderSequence = 0;
+  let mermaidThemeMode = "";
+  let mermaidThemePreference = "auto";
+  let mermaidSaveFormat = "svg";
+  let mermaidInlineOverflowFrame = 0;
+  let mermaidModelByElement = new WeakMap();
+  let mermaidModelsByKey = new Map();
+  let mermaidSearchRecordsByKey = new Map();
   let sessionOverlayDocumentKeydownAttached = false;
   let sessionOverlayBackdropFocusFrame = 0;
   let pageSearchMatches = [];
@@ -420,6 +468,7 @@
   branchTreeScrollLeft = normalizeBranchTreeScroll(webviewState.branchTreeScrollLeft);
   branchTreeScrollTop = normalizeBranchTreeScroll(webviewState.branchTreeScrollTop);
   agentRunsOverlayWidth = normalizeAgentRunsOverlayWidth(webviewState.agentRunsOverlayWidth);
+  mermaidPaneWidth = normalizeMermaidPaneWidth(webviewState.mermaidPaneWidth);
   const lazyImageObserver =
     typeof IntersectionObserver === "function"
       ? new IntersectionObserver(
@@ -434,6 +483,23 @@
           {
             root: scrollRootEl instanceof Element ? scrollRootEl : null,
             rootMargin: "720px 0px",
+          },
+        )
+      : null;
+  const lazyMermaidObserver =
+    typeof IntersectionObserver === "function"
+      ? new IntersectionObserver(
+          (entries) => {
+            for (const entry of entries) {
+              if (!entry.isIntersecting || !(entry.target instanceof HTMLElement)) continue;
+              lazyMermaidObserver.unobserve(entry.target);
+              const diagramModel = mermaidModelByElement.get(entry.target);
+              if (diagramModel) void renderMermaidDiagram(diagramModel);
+            }
+          },
+          {
+            root: scrollRootEl instanceof Element ? scrollRootEl : null,
+            rootMargin: "600px 0px",
           },
         )
       : null;
@@ -458,6 +524,8 @@
   window.addEventListener("blur", () => {
     cancelBranchOverlayResize(true);
     cancelAgentRunsOverlayResize(true);
+    cancelMermaidPaneResize(true);
+    cancelMermaidPanePointer();
     persistCurrentChatOpenPosition({ immediate: true });
     persistRestorePosition({ immediate: true });
   });
@@ -476,6 +544,8 @@
     scheduleBranchTreeRelayout();
     applyAgentRunsOverlayWidth();
     scheduleAgentRunsTreeRelayout();
+    applyMermaidPaneWidth();
+    scheduleMermaidInlineOverflowUpdate();
   });
   if (document.fonts && typeof document.fonts.addEventListener === "function") {
     document.fonts.addEventListener("loadingdone", scheduleBranchTreeRelayout);
@@ -724,7 +794,21 @@
     scheduleStickyUserOverlayUpdate({ rebuildRows: true });
   });
   applyPageSearchPanelWidth();
+  applyMermaidPaneWidth();
   if (toolbarResizeObserver) toolbarResizeObserver.observe(toolbarEl);
+
+  mermaidThemeMode = getMermaidThemeMode();
+  if (typeof MutationObserver === "function") {
+    const mermaidThemeObserver = new MutationObserver(() => {
+      const nextMode = getMermaidThemeMode();
+      if (nextMode === mermaidThemeMode) return;
+      const previousRenderMode = getActiveMermaidThemeMode();
+      mermaidThemeMode = nextMode;
+      syncMermaidThemeControls();
+      if (getActiveMermaidThemeMode() !== previousRenderMode) rerenderVisibleMermaidDiagrams();
+    });
+    mermaidThemeObserver.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+  }
 
   document.addEventListener("click", (event) => {
     const target = event.target;
@@ -749,11 +833,24 @@
     });
   });
 
+  window.addEventListener("keydown", handleMermaidPaneKeydown, true);
+
   document.addEventListener("keydown", (event) => {
+    if (handleMermaidPaneKeydown(event)) return;
     handleStickyUserKeyScrollIntent(event);
     if (event.key === "Escape" && isImagePreviewOpen()) {
       event.preventDefault();
       closeImagePreview();
+      return;
+    }
+    if (event.key === "Escape" && branchChoiceMenuEl?.dataset.menuKind === "mermaidSave") {
+      event.preventDefault();
+      closeBranchOccurrenceMenuAndRestoreFocus();
+      return;
+    }
+    if (event.key === "Escape" && isMermaidPaneOpen()) {
+      event.preventDefault();
+      closeMermaidPane();
       return;
     }
     if (isImagePreviewOpen() && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
@@ -786,6 +883,10 @@
         scheduleRestoreCoverRelease();
         if (!isRestoreCoverBlockingTimeGuide()) resumeDeferredRenderWork();
       }
+      return;
+    }
+    if (msg.type === "mermaidPreferences") {
+      applyMermaidPreferences(msg.preferences);
       return;
     }
     if (msg.type === "setCodexAgentRunsState") {
@@ -1021,6 +1122,7 @@
       );
       if (sessionChanged) {
         if (agentRunsOverlayOpen) closeAgentRunsOverlay({ restoreFocus: false });
+        if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
         const agentRunsGenerationBoundary = Number(msg.codexAgentRunsGenerationBoundary);
         if (Number.isSafeInteger(agentRunsGenerationBoundary) && agentRunsGenerationBoundary >= 0) {
           agentRunsGeneration = Math.max(agentRunsGeneration + 1, agentRunsGenerationBoundary);
@@ -1051,6 +1153,7 @@
         shouldPreserveUiState = false;
       }
       if (!shouldPreserveUiState) resetStickyUserSuppression();
+      applyMermaidPreferences(msg.mermaidPreferences, { rerender: false });
       const previousPageSearchContentRevision = pageSearchContentRevision;
       model = incomingModel;
       bumpPageSearchContentRevision();
@@ -2487,31 +2590,33 @@
       closeBranchOccurrenceMenuAndRestoreFocus();
       return;
     }
-    const resumeMenu = branchChoiceMenuEl?.dataset.menuKind === "resume";
-    if (resumeMenu && event.key === "Tab") {
+    const menuKind = branchChoiceMenuEl?.dataset.menuKind;
+    const compactActionMenu = menuKind === "resume" || menuKind === "mermaidSave";
+    if (compactActionMenu && event.key === "Tab") {
       event.preventDefault();
       const anchor = branchChoiceMenuReturnFocus;
       const backwards = event.shiftKey;
       closeBranchOccurrenceMenu();
-      focusAdjacentToolbarControl(anchor, backwards);
+      if (menuKind === "resume") focusAdjacentToolbarControl(anchor, backwards);
+      else focusAdjacentMermaidControl(anchor, backwards);
       return;
     }
     if (
-      resumeMenu &&
+      compactActionMenu &&
       (event.key === "Enter" || event.key === " ") &&
       document.activeElement?.getAttribute?.("aria-disabled") === "true"
     ) {
       event.preventDefault();
       return;
     }
-    const navigationKeys = resumeMenu
+    const navigationKeys = compactActionMenu
       ? new Set(["ArrowDown", "ArrowUp", "Home", "End"])
       : new Set(["ArrowDown", "ArrowUp"]);
     if (!navigationKeys.has(event.key)) return;
     const menuItems = Array.from(
       branchChoiceMenuEl?.querySelectorAll(
-        resumeMenu
-          ? '[role="menuitem"][data-menu-navigable="true"]'
+        compactActionMenu
+          ? '[role^="menuitem"][data-menu-navigable="true"]'
           : '[role="menuitem"][data-interactive="true"]',
       ) || [],
     );
@@ -2547,6 +2652,24 @@
     } else if (anchor instanceof HTMLElement && anchor.isConnected) {
       anchor.focus();
     }
+  }
+
+  function focusAdjacentMermaidControl(anchor, backwards) {
+    if (!(anchor instanceof HTMLElement) || !anchor.isConnected) return;
+    const group = anchor.closest(".mermaidActions, .mermaidPaneControls");
+    if (!(group instanceof HTMLElement)) {
+      anchor.focus();
+      return;
+    }
+    const controls = Array.from(group.querySelectorAll("button, select")).filter((control) => {
+      if (!(control instanceof HTMLElement)) return false;
+      if ("disabled" in control && control.disabled) return false;
+      return control.getClientRects().length > 0;
+    });
+    const anchorIndex = controls.indexOf(anchor);
+    const target = controls[anchorIndex + (backwards ? -1 : 1)];
+    if (target instanceof HTMLElement) target.focus();
+    else anchor.focus();
   }
 
   function attachBranchChoicePreview(button, group, choiceIndex, direction) {
@@ -2712,8 +2835,11 @@
   }
 
   function handleBranchChoiceOutside(event) {
+    const compactActionMenu =
+      branchChoiceMenuEl?.dataset.menuKind === "resume" ||
+      branchChoiceMenuEl?.dataset.menuKind === "mermaidSave";
     if (
-      branchChoiceMenuEl?.dataset.menuKind === "resume" &&
+      compactActionMenu &&
       branchChoiceMenuReturnFocus instanceof HTMLElement &&
       branchChoiceMenuReturnFocus.contains(event.target)
     ) {
@@ -2731,7 +2857,9 @@
   }
 
   function closeBranchOccurrenceMenu() {
-    const resumeMenu = branchChoiceMenuEl?.dataset.menuKind === "resume";
+    const compactActionMenu =
+      branchChoiceMenuEl?.dataset.menuKind === "resume" ||
+      branchChoiceMenuEl?.dataset.menuKind === "mermaidSave";
     const returnFocus = branchChoiceMenuReturnFocus;
     closeBranchChoicePreview();
     document.removeEventListener("pointerdown", handleBranchChoiceOutside);
@@ -2739,7 +2867,7 @@
     if (branchChoiceMenuEl instanceof HTMLElement) branchChoiceMenuEl.remove();
     branchChoiceMenuEl = null;
     branchChoiceMenuReturnFocus = null;
-    if (resumeMenu && returnFocus instanceof HTMLElement) {
+    if (compactActionMenu && returnFocus instanceof HTMLElement) {
       returnFocus.setAttribute("aria-expanded", "false");
     }
   }
@@ -3075,6 +3203,7 @@
       return;
     }
     if (agentRunsState !== "ready" || !agentRunsModel || !(agentRunsOverlayRootEl instanceof HTMLElement)) return;
+    if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
     closeBranchOverlay({ restoreFocus: false, restorePageSearch: false });
     if (isPageSearchOpen()) closePageSearch();
     const shouldAnimate = !agentRunsOverlayOpen;
@@ -3874,6 +4003,7 @@
       showToast(getSafeUiText(i18n.branchNone, "No branches were found for this session."));
       return;
     }
+    if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
     branchOverlayRestorePageSearch = isPageSearchOpen();
     if (branchOverlayRestorePageSearch) closePageSearch();
     closeBranchOccurrenceMenu();
@@ -4416,6 +4546,20 @@
       }
     };
 
+    viewport.addEventListener(
+      "wheel",
+      (event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+        if (!Number.isFinite(event.deltaY) || event.deltaY === 0) return;
+        event.preventDefault();
+        setBranchTreeScale(
+          branchTreeScale + (event.deltaY < 0 ? 0.25 : -0.25),
+          { clientX: event.clientX, clientY: event.clientY },
+        );
+      },
+      { passive: false },
+    );
+
     viewport.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 || event.isPrimary === false) return;
       const target = event.target instanceof Element ? event.target : null;
@@ -4436,7 +4580,7 @@
       if (!pan || event.pointerId !== pan.pointerId) return;
       const deltaX = event.clientX - pan.startX;
       const deltaY = event.clientY - pan.startY;
-      if (!pan.dragging && Math.hypot(deltaX, deltaY) < BRANCH_TREE_PAN_THRESHOLD_PX) return;
+      if (!pan.dragging && Math.hypot(deltaX, deltaY) < DIAGRAM_PAN_THRESHOLD_PX) return;
       if (!pan.dragging) {
         pan.dragging = true;
         viewport.classList.add("panning");
@@ -4646,7 +4790,7 @@
     });
   }
 
-  function setBranchTreeScale(value) {
+  function setBranchTreeScale(value, anchorPoint = null) {
     const viewport = document.querySelector(".branchTreeViewport");
     const scaler = document.querySelector(".branchTreeScaler");
     const stage = document.querySelector(".branchTreeStage");
@@ -4654,14 +4798,36 @@
     const next = normalizeBranchTreeScale(value);
     if (next === branchTreeScale) return;
     const previousScale = Math.max(0.01, branchTreeScale);
-    const viewportCenterX = viewport.clientWidth / 2;
-    const viewportCenterY = viewport.clientHeight / 2;
-    const logicalCenterX = (viewport.scrollLeft + viewportCenterX) / previousScale;
-    const logicalCenterY = (viewport.scrollTop + viewportCenterY) / previousScale;
+    const viewportRect = viewport.getBoundingClientRect();
+    const requestedClientX = Number(anchorPoint?.clientX);
+    const requestedClientY = Number(anchorPoint?.clientY);
+    const viewportAnchorX = Number.isFinite(requestedClientX)
+      ? Math.max(0, Math.min(viewport.clientWidth, requestedClientX - viewportRect.left))
+      : viewport.clientWidth / 2;
+    const viewportAnchorY = Number.isFinite(requestedClientY)
+      ? Math.max(0, Math.min(viewport.clientHeight, requestedClientY - viewportRect.top))
+      : viewport.clientHeight / 2;
+    const logicalAnchorX = (viewport.scrollLeft + viewportAnchorX) / previousScale;
+    const logicalAnchorY = (viewport.scrollTop + viewportAnchorY) / previousScale;
     branchTreeScale = next;
     applyBranchTreeScale(viewport, scaler, stage);
-    viewport.scrollLeft = Math.max(0, logicalCenterX * branchTreeScale - viewportCenterX);
-    viewport.scrollTop = Math.max(0, logicalCenterY * branchTreeScale - viewportCenterY);
+    viewport.scrollLeft = Math.max(0, logicalAnchorX * branchTreeScale - viewportAnchorX);
+    viewport.scrollTop = Math.max(0, logicalAnchorY * branchTreeScale - viewportAnchorY);
+    branchTreeScrollLeft = viewport.scrollLeft;
+    branchTreeScrollTop = viewport.scrollTop;
+    persistBranchOverlayState();
+    renderBranchOverlayActionsDisabledState();
+  }
+
+  function resetBranchTreeScale() {
+    const viewport = document.querySelector(".branchTreeViewport");
+    const scaler = document.querySelector(".branchTreeScaler");
+    const stage = document.querySelector(".branchTreeStage");
+    if (!(viewport instanceof HTMLElement) || !(scaler instanceof HTMLElement) || !(stage instanceof HTMLElement)) return;
+    branchTreeScale = 1;
+    applyBranchTreeScale(viewport, scaler, stage);
+    viewport.scrollLeft = Math.max(0, (viewport.scrollWidth - viewport.clientWidth) / 2);
+    viewport.scrollTop = Math.max(0, (viewport.scrollHeight - viewport.clientHeight) / 2);
     branchTreeScrollLeft = viewport.scrollLeft;
     branchTreeScrollTop = viewport.scrollTop;
     persistBranchOverlayState();
@@ -4804,7 +4970,7 @@
       }
       if (event.key === "0") {
         event.preventDefault();
-        setBranchTreeScale(1);
+        resetBranchTreeScale();
         return;
       }
     }
@@ -5680,12 +5846,11 @@
   }
 
   function capturePageSearchCloseScrollAnchor() {
-    if (timelineEl instanceof HTMLElement) {
-      const activeMatch = timelineEl.querySelector("mark.pageSearchMatch-active");
-      if (activeMatch instanceof HTMLElement && isElementVisibleInScrollViewport(activeMatch)) {
-        const activeAnchor = captureTimelineScrollAnchorFromElement(activeMatch);
-        if (activeAnchor) return activeAnchor;
-      }
+    const activeResult = Array.isArray(pageSearchResults) ? pageSearchResults[activePageSearchResultIndex] : null;
+    const activeTarget = getPageSearchResultTargetElement(activeResult);
+    if (activeTarget instanceof HTMLElement && isElementVisibleInScrollViewport(activeTarget)) {
+      const activeAnchor = captureTimelineScrollAnchorFromElement(activeTarget);
+      if (activeAnchor) return activeAnchor;
     }
     return captureTimelineScrollAnchor();
   }
@@ -6329,6 +6494,7 @@
   }
 
   function openPageSearch() {
+    if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
     if (branchOverlayOpen) closeBranchOverlay({ restoreFocus: false, restorePageSearch: false });
     if (agentRunsOverlayOpen) closeAgentRunsOverlay({ restoreFocus: false });
     if (!(pageSearchBarEl instanceof HTMLElement) || !(pageSearchInputEl instanceof HTMLInputElement)) return;
@@ -6451,11 +6617,16 @@
       typeof value.ordinalWithinAnchor === "number" && Number.isFinite(value.ordinalWithinAnchor)
         ? Math.max(0, Math.floor(value.ordinalWithinAnchor))
         : undefined;
+    const sourceOffset =
+      typeof value.sourceOffset === "number" && Number.isFinite(value.sourceOffset)
+        ? Math.max(0, Math.floor(value.sourceOffset))
+        : undefined;
     const anchor = {
       ...(typeof messageIndex === "number" ? { messageIndex } : {}),
       ...(typeof ordinalWithinAnchor === "number" ? { ordinalWithinAnchor } : {}),
+      ...(typeof sourceOffset === "number" ? { sourceOffset } : {}),
     };
-    for (const key of ["role", "turnId", "turnBoundary", "runKey", "textDigest"]) {
+    for (const key of ["role", "turnId", "turnBoundary", "runKey", "textDigest", "mermaidKey"]) {
       if (typeof value[key] === "string" && value[key].trim()) anchor[key] = value[key].trim().slice(0, 256);
     }
     return Object.keys(anchor).length > 0 ? anchor : null;
@@ -6920,6 +7091,9 @@
       }
     }
 
+    collectMermaidPageSearchResults(compiled, { roleFilterActive });
+    pageSearchResults.sort(comparePageSearchResultDocumentOrder);
+    finalizePageSearchResultAnchors();
     renderPageSearchResults();
 
     if (pageSearchResults.length === 0) {
@@ -7031,6 +7205,8 @@
     for (const key of ["role", "turnId", "turnBoundary", "runKey"]) {
       if (anchor[key] && candidate[key] !== anchor[key]) return false;
     }
+    if (anchor.mermaidKey && candidate.mermaidKey !== anchor.mermaidKey) return false;
+    if (typeof anchor.sourceOffset === "number" && candidate.sourceOffset !== anchor.sourceOffset) return false;
     if (typeof anchor.ordinalWithinAnchor === "number" && candidate.ordinalWithinAnchor !== anchor.ordinalWithinAnchor) {
       return false;
     }
@@ -7092,6 +7268,9 @@
       parent.replaceChild(textNode, match);
       if (parent instanceof HTMLElement) parent.normalize();
     }
+    for (const block of document.querySelectorAll(".pageSearchMermaidMatch-active")) {
+      if (block instanceof HTMLElement) block.classList.remove("pageSearchMermaidMatch-active");
+    }
     pageSearchMatches = [];
     pageSearchResults = [];
     activePageSearchResultIndex = -1;
@@ -7130,8 +7309,9 @@
   }
 
   function requestPageSearchRevealRender(activeResult, safeIndex, options = {}) {
-    if (!activeResult || !(activeResult.mark instanceof HTMLElement)) return false;
-    const turnId = normalizeTurnId(getTurnIdForElement(activeResult.mark));
+    const target = getPageSearchResultTargetElement(activeResult);
+    if (!(target instanceof HTMLElement)) return false;
+    const turnId = normalizeTurnId(getTurnIdForElement(target));
     if (!turnId || !collapsedTurnIds.has(turnId)) return false;
     const refreshOptions = {
       preserveIndex: false,
@@ -7162,21 +7342,34 @@
     for (const match of pageSearchMatches) {
       if (match instanceof HTMLElement) match.classList.remove("pageSearchMatch-active");
     }
+    for (const block of document.querySelectorAll(".pageSearchMermaidMatch-active")) {
+      if (block instanceof HTMLElement) block.classList.remove("pageSearchMermaidMatch-active");
+    }
 
     const safeIndex = Math.max(0, Math.min(index, pageSearchResults.length - 1));
     activePageSearchResultIndex = safeIndex;
     const activeResult = pageSearchResults[safeIndex];
-    if (activeResult && activeResult.mark instanceof HTMLElement) {
-      activeResult.mark.classList.add("pageSearchMatch-active");
+    const activeTarget = getPageSearchResultTargetElement(activeResult);
+    if (activeTarget instanceof HTMLElement) {
+      if (activeResult.kind === "mermaid") {
+        activeTarget.classList.add("pageSearchMermaidMatch-active");
+      } else if (activeResult.mark instanceof HTMLElement) {
+        activeResult.mark.classList.add("pageSearchMatch-active");
+      }
       if (reveal) {
         if (requestPageSearchRevealRender(activeResult, safeIndex, options)) return;
-        activeResult.mark.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+        activeTarget.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
       }
     }
     renderPageSearchResults();
     scrollActivePageSearchResultIntoList();
     if (options.focusResult === true) focusPageSearchResultItem(safeIndex);
     updatePageSearchStatus();
+  }
+
+  function getPageSearchResultTargetElement(result) {
+    if (result?.mark instanceof HTMLElement) return result.mark;
+    return result?.revealElement instanceof HTMLElement ? result.revealElement : null;
   }
 
   function moveFocusedPageSearchResult(delta) {
@@ -7214,21 +7407,128 @@
   function buildPageSearchResult(mark, sourceText, startIndex, queryLength) {
     const snippet = buildPageSearchSnippet(sourceText, startIndex, queryLength);
     const context = describePageSearchContext(mark);
-    const anchor = buildPageSearchResultAnchor(mark, context, sourceText, startIndex, queryLength);
     return {
+      anchor: null,
+      anchorQueryLength: queryLength,
+      anchorSourceText: sourceText,
+      anchorStartIndex: startIndex,
+      collectionOrder: pageSearchResults.length,
+      kind: "dom",
       mark,
+      orderElement: mark,
+      revealElement: mark,
       title: context.title,
       meta: context.meta,
       lineNumber: context.lineNumber,
       snippet,
       messageIndex: context.messageIndex,
-      anchor,
     };
   }
 
-  function buildPageSearchResultAnchor(mark, context, sourceText, startIndex, queryLength) {
-    const element = mark instanceof HTMLElement ? mark : null;
-    const bubble = element ? element.closest(".bubble") : null;
+  function collectMermaidPageSearchResults(compiled, options = {}) {
+    if (!compiled || typeof compiled.findAll !== "function") return;
+    for (const record of mermaidSearchRecordsByKey.values()) {
+      if (!shouldIncludeMermaidPageSearchRecord(record, options)) continue;
+      const matches = compiled.findAll(record.source);
+      if (!Array.isArray(matches) || matches.length === 0) continue;
+      const context = describePageSearchContext(record.block);
+      const mermaidMeta = i18n.mermaidLabel || "Mermaid diagram";
+      for (const match of matches) {
+        pageSearchResults.push({
+          anchor: null,
+          anchorQueryLength: match.length,
+          anchorSourceText: record.source,
+          anchorStartIndex: match.start,
+          collectionOrder: pageSearchResults.length,
+          kind: "mermaid",
+          lineNumber: "",
+          mark: null,
+          mermaidKey: record.key,
+          messageIndex: context.messageIndex,
+          meta: [context.meta, mermaidMeta].filter(Boolean).join(" · "),
+          orderElement: record.viewport,
+          revealElement: record.block,
+          snippet: buildPageSearchSnippet(record.source, match.start, match.length),
+          sourceOffset: match.start,
+          title: context.title,
+        });
+      }
+    }
+  }
+
+  function shouldIncludeMermaidPageSearchRecord(record, options = {}) {
+    if (
+      !record ||
+      record.generation !== mermaidRenderGeneration ||
+      typeof record.key !== "string" ||
+      !record.key ||
+      typeof record.source !== "string" ||
+      !(record.block instanceof HTMLElement) ||
+      !(record.viewport instanceof HTMLElement) ||
+      !record.block.isConnected ||
+      !record.viewport.isConnected ||
+      record.block.closest("[hidden]") ||
+      record.block.getClientRects().length === 0
+    ) {
+      return false;
+    }
+    if (!showDetails && record.block.closest(".row.developer, .row.usage, .row.environment")) return false;
+    if (options.roleFilterActive === true) {
+      const role = resolvePageSearchTextRole(record.block);
+      if (!role || !pageSearchSelectedRoles.has(role)) return false;
+    }
+    return true;
+  }
+
+  function comparePageSearchResultDocumentOrder(left, right) {
+    const leftOrder = left?.orderElement;
+    const rightOrder = right?.orderElement;
+    if (leftOrder === rightOrder) {
+      const leftOffset = Number(left?.sourceOffset);
+      const rightOffset = Number(right?.sourceOffset);
+      if (Number.isFinite(leftOffset) && Number.isFinite(rightOffset) && leftOffset !== rightOffset) {
+        return leftOffset - rightOffset;
+      }
+      return Number(left?.collectionOrder || 0) - Number(right?.collectionOrder || 0);
+    }
+    if (!(leftOrder instanceof Node) || !(rightOrder instanceof Node)) {
+      return Number(left?.collectionOrder || 0) - Number(right?.collectionOrder || 0);
+    }
+    const position = leftOrder.compareDocumentPosition(rightOrder);
+    if (position & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (position & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return Number(left?.collectionOrder || 0) - Number(right?.collectionOrder || 0);
+  }
+
+  function finalizePageSearchResultAnchors() {
+    const ordinalByScope = new Map();
+    for (const result of pageSearchResults) {
+      const target = getPageSearchResultTargetElement(result);
+      const context = describePageSearchContext(target);
+      const base = buildPageSearchResultAnchor(
+        target,
+        context,
+        result.anchorSourceText,
+        result.anchorStartIndex,
+        result.anchorQueryLength,
+        {
+          mermaidKey: result.kind === "mermaid" ? result.mermaidKey : "",
+          sourceOffset: result.kind === "mermaid" ? result.sourceOffset : undefined,
+        },
+      );
+      const scopeKey = buildPageSearchAnchorScopeKey(base);
+      const ordinalWithinAnchor = ordinalByScope.get(scopeKey) || 0;
+      ordinalByScope.set(scopeKey, ordinalWithinAnchor + 1);
+      result.anchor = { ...base, ordinalWithinAnchor };
+      delete result.anchorQueryLength;
+      delete result.anchorSourceText;
+      delete result.anchorStartIndex;
+    }
+  }
+
+  function buildPageSearchResultAnchor(element, context, sourceText, startIndex, queryLength, extra = {}) {
+    const target = element instanceof HTMLElement ? element : null;
+    const bubble = target ? target.closest(".bubble") : null;
     const role = bubble instanceof HTMLElement
       ? bubble.classList.contains("user")
         ? "user"
@@ -7238,10 +7538,10 @@
             ? "developer"
             : ""
       : "";
-    const turnCarrier = element ? element.closest("[data-turn-id]") : null;
-    const runCarrier = element ? element.closest("[data-turn-run-key]") : null;
-    const boundaryCarrier = element ? element.closest("[data-turn-boundary]") : null;
-    const base = {
+    const turnCarrier = target ? target.closest("[data-turn-id]") : null;
+    const runCarrier = target ? target.closest("[data-turn-run-key]") : null;
+    const boundaryCarrier = target ? target.closest("[data-turn-boundary]") : null;
+    return {
       ...(typeof context.messageIndex === "number" ? { messageIndex: context.messageIndex } : {}),
       ...(role ? { role } : {}),
       ...(turnCarrier instanceof HTMLElement && turnCarrier.dataset.turnId ? { turnId: turnCarrier.dataset.turnId } : {}),
@@ -7249,14 +7549,14 @@
       ...(boundaryCarrier instanceof HTMLElement && boundaryCarrier.dataset.turnBoundary
         ? { turnBoundary: boundaryCarrier.dataset.turnBoundary }
         : {}),
+      ...(typeof extra.mermaidKey === "string" && extra.mermaidKey
+        ? { mermaidKey: extra.mermaidKey.slice(0, 256) }
+        : {}),
+      ...(typeof extra.sourceOffset === "number" && Number.isFinite(extra.sourceOffset)
+        ? { sourceOffset: Math.max(0, Math.floor(extra.sourceOffset)) }
+        : {}),
       textDigest: hashPageSearchAnchorText(sourceText, startIndex, queryLength),
     };
-    const key = buildPageSearchAnchorScopeKey(base);
-    const ordinalWithinAnchor = pageSearchResults.filter((result) => {
-      const resultKey = buildPageSearchAnchorScopeKey(result && result.anchor);
-      return resultKey && resultKey === key;
-    }).length;
-    return { ...base, ordinalWithinAnchor };
   }
 
   function buildPageSearchAnchorScopeKey(anchor) {
@@ -7267,6 +7567,7 @@
       anchor.turnId ? `t:${anchor.turnId}` : "",
       anchor.turnBoundary ? `b:${anchor.turnBoundary}` : "",
       anchor.runKey ? `k:${anchor.runKey}` : "",
+      anchor.mermaidKey ? `d:${anchor.mermaidKey}` : "",
     ].join("|");
   }
 
@@ -7825,6 +8126,11 @@
     try {
     closeBranchOccurrenceMenu();
     if (lazyImageObserver) lazyImageObserver.disconnect();
+    if (lazyMermaidObserver) lazyMermaidObserver.disconnect();
+    mermaidRenderGeneration += 1;
+    mermaidModelByElement = new WeakMap();
+    mermaidModelsByKey = new Map();
+    mermaidSearchRecordsByKey = new Map();
     resetDeferredRenderWork({ nextGeneration: true });
     prepareTimeGuideForTimelineRender();
     if (annotationEl) annotationEl.textContent = "";
@@ -7839,6 +8145,7 @@
     patchEntrySummaryById.clear();
     document.body.classList.toggle("chatTimeGuideEnabled", timeGuideEnabled === true);
     if (!model) {
+      if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
       currentTurnSummaryById = new Map();
       resetRunningTurnIndicators();
       scheduleStickyUserOverlayUpdate();
@@ -8021,6 +8328,7 @@
       renderPageSearchResults();
       updatePageSearchStatus();
     }
+    syncMermaidPaneAfterTimelineRender();
     } finally {
       renderDepth = Math.max(0, renderDepth - 1);
     }
@@ -9447,7 +9755,7 @@
     const cardKey = buildTimelineCardKey(item, itemIndex);
     const itemType = item && typeof item.type === "string" ? item.type : "note";
     let rendered = null;
-    if (item.type === "message") rendered = renderMessage(item, cardKey);
+    if (item.type === "message") rendered = renderMessage(item, cardKey, itemIndex);
     else if (item.type === "protocolContext") rendered = renderProtocolContext(item, cardKey);
     else if (item.type === "patchGroup") rendered = renderPatchGroup(item, itemIndex, cardKey);
     else if (item.type === "tool") rendered = shouldRenderToolCard() ? renderTool(item, cardKey) : null;
@@ -9919,7 +10227,7 @@
     return row;
   }
 
-  function renderMessage(item, cardKey) {
+  function renderMessage(item, cardKey, itemIndex) {
     const role = item.role === "user" || item.role === "assistant" || item.role === "developer" ? item.role : "assistant";
     if (role !== "assistant" && !showDetails && item.isContext) return null;
 
@@ -9992,16 +10300,29 @@
     const content = el("div", { className: role === "assistant" ? "messageBodyContent markdown" : "messageBodyContent" });
     if (textToRender.trim()) {
       if (role === "assistant") {
-        renderAssistantMarkdownInto(content, textToRender);
+        renderAssistantMarkdownInto(content, textToRender, {
+          cardKey,
+          cardNumber: itemIndex + 1,
+          messageIndex: item.messageIndex,
+        });
       } else {
         const blocks = splitFencedCode(textToRender);
+        let mermaidOrdinal = 0;
         for (const b of blocks) {
           if (b.type === "text") {
             const textBlock = el("div", { className: "textBlock" });
             textBlock.textContent = b.text;
             content.appendChild(textBlock);
           } else if (b.type === "code") {
-            content.appendChild(renderCodeBlock(b.lang, b.code));
+            if (isMermaidLanguage(b.lang)) mermaidOrdinal += 1;
+            content.appendChild(
+              renderCodeBlock(b.lang, b.code, {
+                cardKey,
+                cardNumber: itemIndex + 1,
+                messageIndex: item.messageIndex,
+                mermaidOrdinal,
+              }),
+            );
           }
         }
       }
@@ -11278,6 +11599,7 @@
   function openImagePreview(images, index) {
     const previewImages = Array.isArray(images) ? images.filter(canPreviewImage).map(toPreviewImage) : [];
     if (previewImages.length === 0) return;
+    if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
     const safeIndex = Number.isFinite(index)
       ? Math.min(previewImages.length - 1, Math.max(0, Math.floor(index)))
       : 0;
@@ -13070,6 +13392,22 @@
   }
 
   function renderCodeBlock(lang, code, options) {
+    const mermaidOrdinal = Number(options && options.mermaidOrdinal);
+    if (
+      isMermaidLanguage(lang) &&
+      Number.isSafeInteger(mermaidOrdinal) &&
+      mermaidOrdinal >= 1 &&
+      mermaidOrdinal <= MAX_MERMAID_DIAGRAMS_PER_MESSAGE
+    ) {
+      const diagram = createMermaidBlock(code, {
+        cardKey: options && options.cardKey,
+        cardNumber: options && options.cardNumber,
+        messageIndex: options && options.messageIndex,
+        ordinal: mermaidOrdinal,
+      });
+      if (diagram) return diagram;
+    }
+
     const wrap = el("div", { className: "codeBlock" });
     const header = el("div", { className: "codeHeader" });
     const label = el("span", {});
@@ -13272,6 +13610,7 @@
       if (bubble instanceof HTMLElement) bubble.classList.toggle("bubble-wide", expanded);
       syncTimelineCardWidthButton(btn, expanded);
       schedulePatchLayoutSync();
+      scheduleMermaidInlineOverflowUpdate();
     });
     return btn;
   }
@@ -13690,9 +14029,9 @@
     let bestIndex = -1;
     let bestDistance = Number.POSITIVE_INFINITY;
     for (let i = 0; i < pageSearchResults.length; i += 1) {
-      const mark = pageSearchResults[i]?.mark;
-      if (!(mark instanceof HTMLElement)) continue;
-      const rect = mark.getBoundingClientRect();
+      const target = getPageSearchResultTargetElement(pageSearchResults[i]);
+      if (!(target instanceof HTMLElement)) continue;
+      const rect = target.getBoundingClientRect();
       if (rect.width <= 0 && rect.height <= 0) continue;
       const distance = Math.abs(rect.top - targetTop);
       if (distance < bestDistance) {
@@ -14135,7 +14474,7 @@
     return out;
   }
 
-  function renderMarkdownInto(container, markdownText) {
+  function renderMarkdownInto(container, markdownText, renderContext) {
     if (!md) {
       const textBlock = el("div", { className: "textBlock" });
       textBlock.textContent = String(markdownText ?? "");
@@ -14143,13 +14482,19 @@
       return;
     }
     container.innerHTML = md.render(String(markdownText ?? ""));
-    enhanceMarkdownCodeBlocks(container);
+    enhanceMarkdownCodeBlocks(container, renderContext);
   }
 
-  function renderAssistantMarkdownInto(container, markdownText) {
+  function renderAssistantMarkdownInto(container, markdownText, options) {
+    const renderContext = {
+      cardKey: options && options.cardKey,
+      cardNumber: options && options.cardNumber,
+      messageIndex: options && options.messageIndex,
+      mermaidOrdinal: 0,
+    };
     const parts = splitCodeCommentDirectives(markdownText);
     if (parts.length === 1 && parts[0].type === "markdown") {
-      renderMarkdownInto(container, parts[0].text);
+      renderMarkdownInto(container, parts[0].text, renderContext);
       return;
     }
     for (const part of parts) {
@@ -14159,7 +14504,7 @@
       }
       if (!String(part.text || "").trim()) continue;
       const segment = el("div", { className: "markdownSegment" });
-      renderMarkdownInto(segment, part.text);
+      renderMarkdownInto(segment, part.text, renderContext);
       container.appendChild(segment);
     }
   }
@@ -14417,13 +14762,29 @@
     return comment.end && comment.end !== comment.start ? `${comment.start}-${comment.end}` : String(comment.start);
   }
 
-  function enhanceMarkdownCodeBlocks(root) {
+  function enhanceMarkdownCodeBlocks(root, renderContext) {
     const pres = root.querySelectorAll("pre");
     for (const pre of pres) {
       if (pre.parentElement && pre.parentElement.classList.contains("codeBlock")) continue;
       const codeEl = pre.querySelector("code");
       const codeText = codeEl ? codeEl.textContent || "" : pre.textContent || "";
       const lang = inferMarkdownCodeLanguage(codeEl);
+      if (isMermaidLanguage(lang)) {
+        const nextOrdinal = Number(renderContext && renderContext.mermaidOrdinal) + 1;
+        if (renderContext && typeof renderContext === "object") renderContext.mermaidOrdinal = nextOrdinal;
+        if (nextOrdinal <= MAX_MERMAID_DIAGRAMS_PER_MESSAGE) {
+          const diagram = createMermaidBlock(codeText, {
+            cardKey: renderContext && renderContext.cardKey,
+            cardNumber: renderContext && renderContext.cardNumber,
+            messageIndex: renderContext && renderContext.messageIndex,
+            ordinal: nextOrdinal,
+          });
+          if (diagram) {
+            pre.replaceWith(diagram);
+            continue;
+          }
+        }
+      }
       const displayLang = resolveMarkdownCodeLabel(lang, codeText);
 
       const wrap = el("div", { className: "codeBlock" });
@@ -14449,6 +14810,1894 @@
       const highlightedPre = createHighlightedCodeBlockElement(codeText, lang);
       wrap.appendChild(highlightedPre || pre);
     }
+  }
+
+  function isMermaidLanguage(value) {
+    const language = String(value || "").trim().toLowerCase();
+    return language === "mermaid" || language === "mmd";
+  }
+
+  function buildMermaidDiagramKey(
+    sessionIdentity,
+    cardKey,
+    cardNumber,
+    messageIndex,
+    ordinal,
+    source,
+  ) {
+    const sessionHash = stableStringHash(sessionIdentity);
+    const cardHash = stableStringHash(cardKey);
+    const sourceHash = stableStringHash(source);
+    return `mermaid:${sessionHash}:${cardHash}:${cardNumber}:${messageIndex}:${ordinal}:${sourceHash}`;
+  }
+
+  function createMermaidBlock(rawSource, options) {
+    const source = String(rawSource ?? "").replace(/\r\n?/g, "\n");
+    if (!source.trim() || source.length > MAX_MERMAID_SOURCE_LENGTH || source.includes("\0")) return null;
+
+    const cardKey =
+      options && typeof options.cardKey === "string" && options.cardKey
+        ? options.cardKey
+        : "message:unknown";
+    const cardNumber =
+      Number.isSafeInteger(options && options.cardNumber) &&
+      Number(options.cardNumber) >= 1 &&
+      Number(options.cardNumber) <= MAX_MERMAID_EXPORT_SCOPE_NUMBER
+        ? Number(options.cardNumber)
+        : 1;
+    const messageIndex =
+      Number.isSafeInteger(options && options.messageIndex) && Number(options.messageIndex) >= 0
+        ? Number(options.messageIndex)
+        : 0;
+    const ordinal =
+      Number.isSafeInteger(options && options.ordinal) &&
+      Number(options.ordinal) >= 1 &&
+      Number(options.ordinal) <= MAX_MERMAID_EXPORT_ORDINAL
+        ? Number(options.ordinal)
+        : 1;
+    const sessionIdentity =
+      model && typeof model.fsPath === "string" && model.fsPath
+        ? model.fsPath
+        : model && typeof model.sessionId === "string" && model.sessionId
+          ? model.sessionId
+          : "session:unknown";
+    const key = buildMermaidDiagramKey(
+      sessionIdentity,
+      cardKey,
+      cardNumber,
+      messageIndex,
+      ordinal,
+      source,
+    );
+    const domKey = key.replace(/:/g, "-");
+    const hasMessageNumber =
+      messageIndex >= 1 && messageIndex <= MAX_MERMAID_EXPORT_SCOPE_NUMBER;
+    const diagramScope = hasMessageNumber ? "message" : "card";
+    const diagramScopeNumber = hasMessageNumber ? messageIndex : cardNumber;
+    const block = el("section", {
+      className: "mermaidBlock",
+      "data-mermaid-key": domKey,
+    });
+    const header = el("div", { className: "mermaidHeader" });
+    const label = el("span", { className: "mermaidLabel" });
+    label.textContent = i18n.mermaidLabel || "Mermaid diagram";
+    header.appendChild(label);
+
+    const actions = el("div", { className: "mermaidActions" });
+    const themeToggle = createMermaidThemeToggle();
+    const copyButton = createMermaidActionButton(
+      COPY_ICON_SVG,
+      i18n.mermaidCopySource || i18n.copyCodeTooltip || "Copy Mermaid source",
+    );
+    const expandButton = createMermaidActionButton(
+      OPEN_RIGHT_PANE_ICON_SVG,
+      i18n.mermaidExpand || "Open Mermaid diagram in right pane",
+    );
+    expandButton.disabled = true;
+    actions.append(themeToggle, copyButton);
+    header.appendChild(actions);
+    block.appendChild(header);
+
+    const viewport = el("div", {
+      className: "mermaidInlineViewport",
+    });
+    setMermaidSurfaceTheme(viewport, getActiveMermaidThemeMode());
+    const status = el("div", { className: "mermaidStatus", role: "status" });
+    status.textContent = i18n.mermaidLoading || "Rendering Mermaid diagram...";
+    viewport.appendChild(status);
+    block.appendChild(viewport);
+
+    const diagramModel = {
+      block,
+      diagramOrdinal: ordinal,
+      diagramScope,
+      diagramScopeNumber,
+      expandButton,
+      fsPath: model && typeof model.fsPath === "string" ? model.fsPath : "",
+      generation: mermaidRenderGeneration,
+      key,
+      messageIndex,
+      ordinal,
+      renderedThemeMode: "",
+      renderToken: 0,
+      saveControl: null,
+      source,
+      state: "pending",
+      status,
+      svg: null,
+      viewport,
+    };
+    const saveControl = createMermaidSaveControl(diagramModel);
+    diagramModel.saveControl = saveControl;
+    setMermaidSaveControlDisabled(saveControl, true);
+    actions.append(saveControl.element, expandButton);
+    mermaidModelByElement.set(block, diagramModel);
+    mermaidModelsByKey.set(key, diagramModel);
+    mermaidSearchRecordsByKey.set(key, {
+      block,
+      generation: mermaidRenderGeneration,
+      key,
+      messageIndex,
+      ordinal,
+      source,
+      viewport,
+    });
+
+    copyButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      vscode.postMessage({ type: "copy", text: source });
+    });
+    expandButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openMermaidPane(diagramModel, expandButton);
+    });
+
+    queueMicrotask(() => {
+      if (diagramModel.generation !== mermaidRenderGeneration || !diagramModel.block.isConnected) return;
+      if (lazyMermaidObserver) lazyMermaidObserver.observe(diagramModel.block);
+      else void renderMermaidDiagram(diagramModel);
+    });
+    return block;
+  }
+
+  function createMermaidActionButton(iconSvg, label) {
+    const button = el("button", {
+      type: "button",
+      className: "iconBtn mermaidActionButton",
+    });
+    button.innerHTML = iconSvg;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    return button;
+  }
+
+  function setMermaidViewportAccessibility(viewport, state) {
+    if (!(viewport instanceof HTMLElement)) return;
+    if (state === "image") {
+      viewport.setAttribute("role", "img");
+      viewport.setAttribute("aria-label", i18n.mermaidLabel || "Mermaid diagram");
+      return;
+    }
+    viewport.removeAttribute("role");
+    viewport.removeAttribute("aria-label");
+  }
+
+  function createMermaidThemeToggle() {
+    const button = createMermaidActionButton(COLOR_MODE_ICON_SVG, "");
+    button.classList.add("mermaidThemeToggle");
+    button.setAttribute("role", "switch");
+    syncMermaidThemeControlPresentation(button);
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const nextPreference = getMermaidThemeVariant(getActiveMermaidThemeMode()) === "dark" ? "light" : "dark";
+      setMermaidThemePreference(nextPreference);
+    });
+    return button;
+  }
+
+  function normalizeMermaidThemePreference(value) {
+    return value === "light" || value === "dark" ? value : "auto";
+  }
+
+  function normalizeMermaidRenderedThemeMode(value) {
+    return value === "light" ||
+      value === "dark" ||
+      value === "highContrastLight" ||
+      value === "highContrastDark"
+      ? value
+      : "";
+  }
+
+  function getActiveMermaidThemeMode() {
+    const hostMode = normalizeMermaidRenderedThemeMode(mermaidThemeMode) || getMermaidThemeMode();
+    if (mermaidThemePreference === "light" || mermaidThemePreference === "dark") {
+      return mermaidThemePreference;
+    }
+    return hostMode;
+  }
+
+  function getMermaidThemeVariant(value) {
+    const mode = normalizeMermaidRenderedThemeMode(value);
+    if (mode === "dark" || mode === "highContrastDark") return "dark";
+    if (mode === "light" || mode === "highContrastLight") return "light";
+    return "";
+  }
+
+  function getMermaidThemeLabel(value) {
+    return value === "dark"
+      ? i18n.mermaidThemeDark || "Dark"
+      : i18n.mermaidThemeLight || "Light";
+  }
+
+  function syncMermaidThemeControlPresentation(button) {
+    if (!(button instanceof HTMLButtonElement)) return;
+    const currentVariant = getMermaidThemeVariant(getActiveMermaidThemeMode()) || "light";
+    const nextVariant = currentVariant === "dark" ? "light" : "dark";
+    const currentLabel = getMermaidThemeLabel(currentVariant);
+    const nextLabel = getMermaidThemeLabel(nextVariant);
+    button.innerHTML = COLOR_MODE_ICON_SVG;
+    const label = el("span", { className: "mermaidThemeToggleLabel" });
+    label.textContent = currentLabel;
+    button.appendChild(label);
+    button.dataset.mermaidTheme = currentVariant;
+    button.setAttribute("aria-checked", currentVariant === "dark" ? "true" : "false");
+    button.setAttribute(
+      "aria-label",
+      i18n.mermaidThemeDarkSetting || "Dark Mermaid theme",
+    );
+    button.title = formatTemplate(
+      i18n.mermaidThemeSwitch || "Switch Mermaid diagram to {0} theme",
+      nextLabel,
+    );
+  }
+
+  function syncMermaidThemeControls() {
+    for (const button of document.querySelectorAll(".mermaidThemeToggle")) {
+      syncMermaidThemeControlPresentation(button);
+    }
+  }
+
+  function setMermaidThemePreference(value) {
+    if (value !== "light" && value !== "dark") return;
+    const previousMode = getActiveMermaidThemeMode();
+    if (value === mermaidThemePreference) return;
+    mermaidThemePreference = value;
+    vscode.postMessage({ type: "setMermaidThemePreference", value: mermaidThemePreference });
+    syncMermaidThemeControls();
+    if (getActiveMermaidThemeMode() !== previousMode) rerenderVisibleMermaidDiagrams();
+  }
+
+  function normalizeMermaidPreferences(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const themePreference = normalizeMermaidThemePreference(value.themePreference);
+    const saveFormat = normalizeMermaidSaveFormat(value.saveFormat);
+    if (themePreference !== value.themePreference || saveFormat !== value.saveFormat) return null;
+    return { themePreference, saveFormat };
+  }
+
+  function applyMermaidPreferences(value, options = {}) {
+    const preferences = normalizeMermaidPreferences(value);
+    if (!preferences) return;
+    const previousMode = getActiveMermaidThemeMode();
+    const themeChanged = preferences.themePreference !== mermaidThemePreference;
+    const saveFormatChanged = preferences.saveFormat !== mermaidSaveFormat;
+    mermaidThemePreference = preferences.themePreference;
+    mermaidSaveFormat = preferences.saveFormat;
+    if (themeChanged) syncMermaidThemeControls();
+    if (saveFormatChanged) {
+      for (const element of document.querySelectorAll(".mermaidSaveControl")) {
+        if (!(element instanceof HTMLElement)) continue;
+        syncMermaidSaveControlPresentation({
+          primaryButton: element.querySelector(".mermaidSavePrimaryButton"),
+          primaryFormat: element.querySelector(".mermaidSavePrimaryFormat"),
+        });
+      }
+      syncOpenMermaidSaveMenuSelection();
+    }
+    if (
+      options.rerender !== false &&
+      themeChanged &&
+      getActiveMermaidThemeMode() !== previousMode
+    ) {
+      rerenderVisibleMermaidDiagrams();
+    }
+  }
+
+  function setMermaidSurfaceTheme(element, themeMode) {
+    if (!(element instanceof HTMLElement)) return;
+    const variant = getMermaidThemeVariant(themeMode);
+    if (variant) element.dataset.mermaidTheme = variant;
+    else delete element.dataset.mermaidTheme;
+  }
+
+  function createMermaidSaveControl(diagramModel) {
+    const element = el("div", { className: "mermaidSaveControl" });
+    const primaryButton = createMermaidActionButton(
+      SAVE_ICON_SVG,
+      getMermaidPrimarySaveLabel(mermaidSaveFormat),
+    );
+    primaryButton.classList.add("mermaidSavePrimaryButton");
+    const primaryFormat = el("span", { className: "mermaidSavePrimaryFormat" });
+    primaryButton.appendChild(primaryFormat);
+    const menuButton = createMermaidActionButton(
+      NAV_DOWN_ICON_SVG,
+      i18n.mermaidSaveMenu || i18n.mermaidSaveFormat || "Choose Mermaid save format",
+    );
+    menuButton.classList.add("mermaidSaveMenuButton");
+    menuButton.setAttribute("aria-haspopup", "menu");
+    menuButton.setAttribute("aria-expanded", "false");
+    element.append(primaryButton, menuButton);
+
+    const control = { element, menuButton, primaryButton, primaryFormat };
+    syncMermaidSaveControlPresentation(control);
+    primaryButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void runMermaidSave(diagramModel, mermaidSaveFormat, control);
+    });
+    menuButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleMermaidSaveMenu(diagramModel, control);
+    });
+    return control;
+  }
+
+  function normalizeMermaidSaveFormat(value) {
+    return value === "png" || value === "mmd" ? value : "svg";
+  }
+
+  function getMermaidSaveFormatLabel(format, compact = false) {
+    if (format === "png") return i18n.mermaidFormatPng || "PNG";
+    if (format === "mmd") return compact ? "MMD" : i18n.mermaidFormatSource || "Mermaid source";
+    return i18n.mermaidFormatSvg || "SVG";
+  }
+
+  function getMermaidPrimarySaveLabel(format) {
+    return formatTemplate(
+      i18n.mermaidSaveAs || "Save Mermaid diagram as {0}",
+      getMermaidSaveFormatLabel(normalizeMermaidSaveFormat(format)),
+    );
+  }
+
+  function syncMermaidSaveControlPresentation(control) {
+    if (!control) return;
+    const format = normalizeMermaidSaveFormat(mermaidSaveFormat);
+    const label = getMermaidPrimarySaveLabel(format);
+    if (control.primaryButton instanceof HTMLButtonElement) {
+      control.primaryButton.dataset.mermaidSaveFormat = format;
+      control.primaryButton.title = label;
+      control.primaryButton.setAttribute("aria-label", label);
+    }
+    if (control.primaryFormat instanceof HTMLElement) {
+      control.primaryFormat.textContent = getMermaidSaveFormatLabel(format, true);
+    }
+  }
+
+  function syncOpenMermaidSaveMenuSelection() {
+    if (branchChoiceMenuEl?.dataset.menuKind !== "mermaidSave") return;
+    for (const option of branchChoiceMenuEl.querySelectorAll(".mermaidSaveMenuItem")) {
+      if (!(option instanceof HTMLButtonElement)) continue;
+      const current = option.dataset.mermaidSaveFormat === mermaidSaveFormat;
+      option.dataset.current = current ? "true" : "false";
+      option.setAttribute("aria-checked", current ? "true" : "false");
+    }
+  }
+
+  function setMermaidSaveFormat(value) {
+    const nextFormat = normalizeMermaidSaveFormat(value);
+    if (nextFormat === mermaidSaveFormat) return;
+    mermaidSaveFormat = nextFormat;
+    vscode.postMessage({ type: "setMermaidSaveFormat", value: mermaidSaveFormat });
+    for (const element of document.querySelectorAll(".mermaidSaveControl")) {
+      if (!(element instanceof HTMLElement)) continue;
+      syncMermaidSaveControlPresentation({
+        primaryButton: element.querySelector(".mermaidSavePrimaryButton"),
+        primaryFormat: element.querySelector(".mermaidSavePrimaryFormat"),
+      });
+    }
+    syncOpenMermaidSaveMenuSelection();
+  }
+
+  function setMermaidSaveControlDisabled(control, disabled) {
+    if (!control) return;
+    if (control.primaryButton instanceof HTMLButtonElement) control.primaryButton.disabled = disabled;
+    if (control.menuButton instanceof HTMLButtonElement) control.menuButton.disabled = disabled;
+    if (disabled && branchChoiceMenuReturnFocus === control.menuButton) closeBranchOccurrenceMenu();
+  }
+
+  function setOpenMermaidPaneSaveControlDisabled(diagramModel, disabled) {
+    if (
+      !diagramModel ||
+      !mermaidPaneModel ||
+      mermaidPaneModel.key !== diagramModel.key ||
+      !(mermaidPaneRootEl instanceof HTMLElement)
+    ) {
+      return;
+    }
+    const element = mermaidPaneRootEl.querySelector(".mermaidSaveControl");
+    if (!(element instanceof HTMLElement)) return;
+    setMermaidSaveControlDisabled(
+      {
+        menuButton: element.querySelector(".mermaidSaveMenuButton"),
+        primaryButton: element.querySelector(".mermaidSavePrimaryButton"),
+      },
+      disabled,
+    );
+  }
+
+  async function runMermaidSave(diagramModel, format, control) {
+    setMermaidSaveControlDisabled(control, true);
+    try {
+      await requestMermaidSave(diagramModel, format);
+    } finally {
+      if (
+        control?.element?.isConnected &&
+        diagramModel?.generation === mermaidRenderGeneration &&
+        diagramModel?.state === "ready"
+      ) {
+        setMermaidSaveControlDisabled(control, false);
+      }
+    }
+  }
+
+  function toggleMermaidSaveMenu(diagramModel, control) {
+    if (
+      branchChoiceMenuEl?.dataset.menuKind === "mermaidSave" &&
+      branchChoiceMenuEl.dataset.mermaidKey === diagramModel?.key &&
+      branchChoiceMenuReturnFocus === control?.menuButton
+    ) {
+      closeBranchOccurrenceMenu();
+      return;
+    }
+    showMermaidSaveMenu(diagramModel, control);
+  }
+
+  function showMermaidSaveMenu(diagramModel, control) {
+    if (
+      !diagramModel ||
+      diagramModel.state !== "ready" ||
+      !(diagramModel.svg instanceof SVGElement) ||
+      !(control?.menuButton instanceof HTMLButtonElement) ||
+      control.menuButton.disabled ||
+      !control.menuButton.isConnected
+    ) {
+      return;
+    }
+
+    closeBranchOccurrenceMenu();
+    const menu = el("div", {
+      className: "branchChoiceMenu branchChoiceMenu-portal mermaidSaveMenu",
+    });
+    menu.dataset.menuKind = "mermaidSave";
+    menu.dataset.mermaidKey = diagramModel.key;
+    menu.setAttribute("role", "menu");
+    menu.setAttribute(
+      "aria-label",
+      i18n.mermaidSaveMenu || i18n.mermaidSaveFormat || "Choose Mermaid save format",
+    );
+
+    const options = [];
+    for (const format of ["svg", "png", "mmd"]) {
+      const label = getMermaidSaveFormatLabel(format);
+      const option = el("button", {
+        className: "branchChoiceOption mermaidSaveMenuItem",
+        type: "button",
+        tabIndex: -1,
+      });
+      option.dataset.interactive = "true";
+      option.dataset.menuNavigable = "true";
+      option.dataset.mermaidSaveFormat = format;
+      option.dataset.current = format === mermaidSaveFormat ? "true" : "false";
+      option.setAttribute("role", "menuitemradio");
+      option.setAttribute("aria-checked", format === mermaidSaveFormat ? "true" : "false");
+      option.setAttribute("aria-label", label);
+      const badge = el("span", { className: "mermaidSaveMenuBadge" });
+      badge.textContent = format.toUpperCase();
+      badge.setAttribute("aria-hidden", "true");
+      const text = el("span", { className: "mermaidSaveMenuLabel" });
+      text.textContent = label;
+      option.append(badge, text);
+      option.addEventListener("click", () => {
+        setMermaidSaveFormat(format);
+        closeBranchOccurrenceMenuAndRestoreFocus();
+        void runMermaidSave(diagramModel, format, control);
+      });
+      menu.appendChild(option);
+      options.push(option);
+    }
+
+    document.body.appendChild(menu);
+    branchChoiceMenuEl = menu;
+    branchChoiceMenuReturnFocus = control.menuButton;
+    control.menuButton.setAttribute("aria-expanded", "true");
+    addBranchChoiceViewportListeners();
+    menu.addEventListener("keydown", handleBranchChoiceMenuKeydown);
+    requestAnimationFrame(() => {
+      if (branchChoiceMenuEl !== menu || !control.menuButton.isConnected) return;
+      positionBranchChoicePortal(menu, control.menuButton);
+      options[0]?.focus();
+    });
+    setTimeout(() => {
+      if (branchChoiceMenuEl === menu) document.addEventListener("pointerdown", handleBranchChoiceOutside);
+    }, 0);
+  }
+
+  function closeMermaidSaveMenu() {
+    if (branchChoiceMenuEl?.dataset.menuKind === "mermaidSave") closeBranchOccurrenceMenu();
+  }
+
+  async function renderMermaidDiagram(diagramModel, options = {}) {
+    if (!diagramModel || diagramModel.generation !== mermaidRenderGeneration) return;
+    if (!options.force && (diagramModel.state === "rendering" || diagramModel.state === "ready")) return;
+
+    const bridge = window.codexHistoryViewerMermaid;
+    const renderThemeMode = getActiveMermaidThemeMode();
+    const renderToken = diagramModel.renderToken + 1;
+    diagramModel.renderToken = renderToken;
+    diagramModel.state = "rendering";
+    diagramModel.renderedThemeMode = "";
+    diagramModel.svg = null;
+    setMermaidSaveControlDisabled(diagramModel.saveControl, true);
+    setOpenMermaidPaneSaveControlDisabled(diagramModel, true);
+    diagramModel.expandButton.disabled = true;
+    diagramModel.status.textContent = i18n.mermaidLoading || "Rendering Mermaid diagram...";
+    setMermaidSurfaceTheme(diagramModel.viewport, renderThemeMode);
+    setMermaidViewportAccessibility(diagramModel.viewport, "status");
+    diagramModel.viewport.classList.remove("mermaidInlineScrollable");
+    diagramModel.viewport.replaceChildren(diagramModel.status);
+
+    if (!bridge || typeof bridge.render !== "function") {
+      showMermaidRenderError(diagramModel);
+      return;
+    }
+
+    const renderId = `chv-mermaid-${mermaidRenderGeneration.toString(36)}-${(++mermaidRenderSequence).toString(36)}`;
+    try {
+      const result = await bridge.render(renderId, diagramModel.source, renderThemeMode);
+      if (
+        diagramModel.generation !== mermaidRenderGeneration ||
+        diagramModel.renderToken !== renderToken ||
+        !diagramModel.block.isConnected
+      ) {
+        return;
+      }
+      const svg = sanitizeMermaidSvg(result && result.svg);
+      if (!(svg instanceof SVGElement)) throw new Error("Invalid Mermaid SVG.");
+      applyMermaidFlowchartPalette(
+        svg,
+        renderThemeMode,
+        diagramModel.source,
+        result && result.nodeRoles,
+        renderId,
+      );
+      svg.classList.add("mermaidSvg");
+      svg.setAttribute("focusable", "false");
+      svg.setAttribute("aria-hidden", "true");
+      diagramModel.svg = svg;
+      diagramModel.state = "ready";
+      diagramModel.renderedThemeMode = renderThemeMode;
+      setMermaidViewportAccessibility(diagramModel.viewport, "image");
+      diagramModel.viewport.replaceChildren(svg);
+      scheduleMermaidInlineOverflowUpdate();
+      setMermaidSaveControlDisabled(diagramModel.saveControl, false);
+      diagramModel.expandButton.disabled = false;
+      if (mermaidPaneModel && mermaidPaneModel.key === diagramModel.key) {
+        mermaidPaneModel = diagramModel;
+        renderMermaidPane({ preserveViewport: true });
+      }
+    } catch {
+      if (
+        diagramModel.generation !== mermaidRenderGeneration ||
+        diagramModel.renderToken !== renderToken ||
+        !diagramModel.block.isConnected
+      ) {
+        return;
+      }
+      showMermaidRenderError(diagramModel);
+    }
+  }
+
+  function showMermaidRenderError(diagramModel) {
+    diagramModel.state = "error";
+    diagramModel.renderedThemeMode = "";
+    diagramModel.svg = null;
+    setMermaidSaveControlDisabled(diagramModel.saveControl, true);
+    if (mermaidPaneModel && mermaidPaneModel.key === diagramModel.key) {
+      setMermaidSaveControlDisabled(mermaidPaneSaveControl, true);
+    }
+    diagramModel.expandButton.disabled = true;
+    setMermaidViewportAccessibility(diagramModel.viewport, "error");
+    diagramModel.viewport.classList.remove("mermaidInlineScrollable");
+    if (mermaidPaneModel && mermaidPaneModel.key === diagramModel.key) {
+      closeMermaidPane({ restoreFocus: false });
+    }
+    const error = el("div", { className: "mermaidError", role: "alert" });
+    error.textContent = i18n.mermaidRenderFailed || "The Mermaid diagram could not be rendered.";
+    const fallback = el("pre", {
+      className: "mermaidSourceFallback",
+      "data-page-search-ignore": "true",
+    });
+    const code = el("code", {});
+    code.textContent = diagramModel.source;
+    fallback.appendChild(code);
+    diagramModel.viewport.replaceChildren(error, fallback);
+  }
+
+  function isMermaidInlineVisualOverflow(viewportBounds, diagramBounds) {
+    const values = [
+      viewportBounds?.left,
+      viewportBounds?.top,
+      viewportBounds?.right,
+      viewportBounds?.bottom,
+      diagramBounds?.left,
+      diagramBounds?.top,
+      diagramBounds?.right,
+      diagramBounds?.bottom,
+    ].map(Number);
+    if (
+      values.some((value) => !Number.isFinite(value)) ||
+      values[2] <= values[0] ||
+      values[3] <= values[1]
+    ) {
+      return true;
+    }
+    return (
+      values[4] < values[0] - MERMAID_INLINE_VISUAL_OVERFLOW_TOLERANCE_PX ||
+      values[5] < values[1] - MERMAID_INLINE_VISUAL_OVERFLOW_TOLERANCE_PX ||
+      values[6] > values[2] + MERMAID_INLINE_VISUAL_OVERFLOW_TOLERANCE_PX ||
+      values[7] > values[3] + MERMAID_INLINE_VISUAL_OVERFLOW_TOLERANCE_PX
+    );
+  }
+
+  function updateMermaidInlineOverflow(diagramModel) {
+    const viewport = diagramModel?.viewport;
+    const svg = diagramModel?.svg;
+    if (
+      !(viewport instanceof HTMLElement) ||
+      !(svg instanceof SVGElement) ||
+      !viewport.isConnected ||
+      !svg.isConnected ||
+      viewport.clientWidth < 1 ||
+      viewport.clientHeight < 1
+    ) {
+      return;
+    }
+
+    const wasScrollable = viewport.classList.contains("mermaidInlineScrollable");
+    const previousScrollLeft = viewport.scrollLeft;
+    const previousScrollTop = viewport.scrollTop;
+    viewport.classList.remove("mermaidInlineScrollable");
+    viewport.scrollLeft = 0;
+    viewport.scrollTop = 0;
+
+    const viewportRect = viewport.getBoundingClientRect();
+    const diagramRect = svg.getBoundingClientRect();
+    const viewportLeft = viewportRect.left + viewport.clientLeft;
+    const viewportTop = viewportRect.top + viewport.clientTop;
+    const scrollable = isMermaidInlineVisualOverflow(
+      {
+        left: viewportLeft,
+        top: viewportTop,
+        right: viewportLeft + viewport.clientWidth,
+        bottom: viewportTop + viewport.clientHeight,
+      },
+      diagramRect,
+    );
+    viewport.classList.toggle("mermaidInlineScrollable", scrollable);
+    if (scrollable && wasScrollable) {
+      viewport.scrollLeft = previousScrollLeft;
+      viewport.scrollTop = previousScrollTop;
+    }
+  }
+
+  function scheduleMermaidInlineOverflowUpdate() {
+    if (mermaidInlineOverflowFrame) return;
+    mermaidInlineOverflowFrame = requestAnimationFrame(() => {
+      mermaidInlineOverflowFrame = 0;
+      for (const diagramModel of mermaidModelsByKey.values()) {
+        if (diagramModel.state === "ready") updateMermaidInlineOverflow(diagramModel);
+      }
+    });
+  }
+
+  function sanitizeMermaidSvg(rawSvg) {
+    if (typeof rawSvg !== "string" || rawSvg.length < 1 || rawSvg.length > 5 * 1024 * 1024) return null;
+    const parsed = new DOMParser().parseFromString(rawSvg, "image/svg+xml");
+    if (parsed.querySelector("parsererror")) return null;
+    const root = parsed.documentElement;
+    if (!(root instanceof SVGElement) || String(root.localName).toLowerCase() !== "svg") return null;
+
+    const elements = [];
+    const pendingElements = [{ element: root, depth: 1 }];
+    for (let index = 0; index < pendingElements.length; index += 1) {
+      const current = pendingElements[index];
+      if (
+        !(current?.element instanceof Element) ||
+        current.depth > MAX_MERMAID_SVG_DEPTH ||
+        elements.length >= MAX_MERMAID_SVG_ELEMENTS
+      ) {
+        return null;
+      }
+      elements.push(current.element);
+      for (const child of Array.from(current.element.children)) {
+        const childDepth = current.depth + 1;
+        if (
+          childDepth > MAX_MERMAID_SVG_DEPTH ||
+          pendingElements.length >= MAX_MERMAID_SVG_ELEMENTS
+        ) {
+          return null;
+        }
+        pendingElements.push({ element: child, depth: childDepth });
+      }
+    }
+
+    const deniedElements = new Set([
+      "animate",
+      "animatemotion",
+      "animatetransform",
+      "audio",
+      "base",
+      "discard",
+      "embed",
+      "foreignobject",
+      "handler",
+      "iframe",
+      "image",
+      "object",
+      "script",
+      "set",
+      "video",
+    ]);
+    for (const element of elements.slice(1)) {
+      const localName = String(element.localName || "").toLowerCase();
+      if (localName === "a") {
+        element.replaceWith(...Array.from(element.childNodes));
+        continue;
+      }
+      if (deniedElements.has(localName)) {
+        element.remove();
+      }
+    }
+
+    for (const element of elements) {
+      if (!(element instanceof Element)) continue;
+      if (String(element.localName || "").toLowerCase() === "style") {
+        const cssText = element.textContent || "";
+        if (!isSafeMermaidCss(cssText)) element.remove();
+        continue;
+      }
+      for (const attribute of Array.from(element.attributes)) {
+        const attributeName = attribute.name.toLowerCase();
+        const localName = String(attribute.localName || attributeName).toLowerCase();
+        const value = attribute.value.trim();
+        if (attributeName.startsWith("on") || localName.startsWith("on")) {
+          element.removeAttributeNode(attribute);
+          continue;
+        }
+        if (localName === "base") {
+          element.removeAttributeNode(attribute);
+          continue;
+        }
+        if (localName === "href" || localName === "src") {
+          if (!value.startsWith("#")) element.removeAttributeNode(attribute);
+          continue;
+        }
+        if (
+          (attributeName === "style" || value.toLowerCase().includes("url(")) &&
+          !isSafeMermaidCss(value)
+        ) {
+          element.removeAttributeNode(attribute);
+          continue;
+        }
+        if (
+          localName !== "xmlns" &&
+          attributeName !== "xmlns" &&
+          !attributeName.startsWith("xmlns:") &&
+          /\b(?:javascript|vbscript|data|file|https?):/iu.test(value)
+        ) {
+          element.removeAttributeNode(attribute);
+        }
+      }
+    }
+
+    const serialized = new XMLSerializer().serializeToString(root);
+    const verified = new DOMParser().parseFromString(serialized, "image/svg+xml");
+    if (verified.querySelector("parsererror")) return null;
+    const verifiedRoot = verified.documentElement;
+    return verifiedRoot instanceof SVGElement && String(verifiedRoot.localName).toLowerCase() === "svg"
+      ? verifiedRoot
+      : null;
+  }
+
+  function isSafeMermaidCss(value) {
+    const css = String(value || "");
+    if (
+      css.includes("\\") ||
+      css.includes("/*") ||
+      css.includes("*/") ||
+      css.includes("//") ||
+      /javascript\s*:|expression\s*\(|@import\b/iu.test(css) ||
+      /@font-face\b|\b(?:-webkit-)?image-set\s*\(|\bcross-fade\s*\(|\bpaint\s*\(/iu.test(css) ||
+      /["']\s*\//u.test(css) ||
+      /\b(?:blob|data|file|ftp|https?|vscode(?:-webview)?):/iu.test(css)
+    ) {
+      return false;
+    }
+
+    const urlPattern = /url\s*\(/giu;
+    let match;
+    while ((match = urlPattern.exec(css)) !== null) {
+      const closingIndex = css.indexOf(")", urlPattern.lastIndex);
+      if (closingIndex < 0) return false;
+      let reference = css.slice(urlPattern.lastIndex, closingIndex).trim();
+      if (
+        (reference.startsWith('"') && reference.endsWith('"')) ||
+        (reference.startsWith("'") && reference.endsWith("'"))
+      ) {
+        reference = reference.slice(1, -1).trim();
+      } else if (reference.includes('"') || reference.includes("'")) {
+        return false;
+      }
+      if (!/^#[A-Za-z0-9_.:-]+$/u.test(reference)) return false;
+      urlPattern.lastIndex = closingIndex + 1;
+    }
+    return true;
+  }
+
+  function applyMermaidFlowchartPalette(svg, themeMode, rawSource, rawNodeRoles, rawRenderId) {
+    if (!(svg instanceof SVGElement) || !isMermaidFlowchartSource(rawSource)) return;
+    if (hasMermaidAuthorNodeStyling(rawSource)) return;
+
+    const nodes = Array.from(svg.querySelectorAll("g.node"));
+    if (nodes.length < 1 || nodes.length > MAX_MERMAID_PALETTE_NODES) return;
+    const roleByDomKey = getValidMermaidFlowchartRoleMap(rawNodeRoles);
+    if (roleByDomKey.size < 1) return;
+    const renderId =
+      typeof rawRenderId === "string" && /^chv-mermaid-[a-z0-9-]{1,96}$/u.test(rawRenderId)
+        ? rawRenderId
+        : "";
+    if (!renderId) return;
+    const palette = getMermaidFlowchartRolePalette(themeMode);
+    const rules = [];
+    let decoratedNodeCount = 0;
+    for (const node of nodes) {
+      const domKey = getMermaidFlowchartDomKey(node.getAttribute("id"), renderId);
+      const role = roleByDomKey.get(domKey);
+      if (!role) continue;
+      node.classList.add(`chvMermaidRole-${role}`);
+      decoratedNodeCount += 1;
+    }
+    if (decoratedNodeCount < 1) return;
+
+    for (const [role, color] of Object.entries(palette)) {
+      const className = `chvMermaidRole-${role}`;
+      const shapeSelector = [
+        `.${className} > .label-container`,
+        `.${className} > rect`,
+        `.${className} > polygon`,
+        `.${className} > ellipse`,
+        `.${className} > circle`,
+        `.${className} > path`,
+        `.${className} > g:not(.label) path`,
+        `.${className} > g:not(.label) rect`,
+        `.${className} > g:not(.label) polygon`,
+        `.${className} > g:not(.label) ellipse`,
+        `.${className} > g:not(.label) circle`,
+      ].join(",\n");
+      rules.push(
+        `${shapeSelector} { fill: ${color.fill} !important; stroke: ${color.stroke} !important; stroke-width: ${color.strokeWidth}px !important; }`,
+        `.${className} > .label text, .${className} > .label tspan, .${className} > text, .${className} > text tspan { fill: ${color.text} !important; }`,
+      );
+    }
+
+    const style = svg.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "style");
+    style.setAttribute("data-chv-mermaid-palette", "true");
+    style.textContent = rules.join("\n");
+    svg.appendChild(style);
+  }
+
+  function getValidMermaidFlowchartRoleMap(value) {
+    const allowedRoles = new Set(["data", "decision", "input-output", "process", "special", "terminal"]);
+    if (!Array.isArray(value) || value.length > MAX_MERMAID_PALETTE_NODES) return new Map();
+    const roles = new Map();
+    for (const item of value) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return new Map();
+      const domKey = typeof item.domKey === "string" ? item.domKey : "";
+      const role = typeof item.role === "string" ? item.role : "";
+      if (
+        !domKey ||
+        domKey.length > 4096 ||
+        !/^flowchart-.+/u.test(domKey) ||
+        !allowedRoles.has(role) ||
+        roles.has(domKey)
+      ) {
+        return new Map();
+      }
+      roles.set(domKey, role);
+    }
+    return roles;
+  }
+
+  function getMermaidFlowchartDomKey(value, rawRenderId = "") {
+    let domId = typeof value === "string" ? value : "";
+    const renderId =
+      typeof rawRenderId === "string" && /^chv-mermaid-[a-z0-9-]{1,96}$/u.test(rawRenderId)
+        ? rawRenderId
+        : "";
+    if (renderId) {
+      const renderPrefix = `${renderId}-`;
+      if (domId.startsWith(renderPrefix)) domId = domId.slice(renderPrefix.length);
+    }
+    const match = /^(flowchart-.+)-\d+$/u.exec(domId);
+    return match ? match[1] : "";
+  }
+
+  function isMermaidFlowchartSource(value) {
+    return String(value || "")
+      .replace(/\r\n?/g, "\n")
+      .split("\n")
+      .some((line) => /^\s*(?:flowchart(?:-elk)?|graph)\b/iu.test(line));
+  }
+
+  function hasMermaidAuthorNodeStyling(value) {
+    const source = String(value || "").replace(/\r\n?/g, "\n");
+    if (/:::[a-z_][a-z0-9_-]*/iu.test(source)) return true;
+    return source
+      .split(/[\n;]/u)
+      .some((line) => /^\s*(?:classDef\b|class\s+\S+|style\s+\S+)/iu.test(line));
+  }
+
+  function getMermaidFlowchartRolePalette(themeMode) {
+    const dark = themeMode === "dark" || themeMode === "highContrastDark";
+    const highContrast = themeMode === "highContrastDark" || themeMode === "highContrastLight";
+    const strokeWidth = highContrast ? 2.5 : 1.5;
+    const colors = dark
+      ? {
+          terminal: ["#1d4ed8", "#93c5fd", "#f8fafc"],
+          "input-output": ["#6d28d9", "#c4b5fd", "#faf5ff"],
+          decision: ["#0f766e", "#5eead4", "#f0fdfa"],
+          process: ["#155e75", "#67e8f9", "#ecfeff"],
+          data: ["#92400e", "#fbbf24", "#fffbeb"],
+          special: ["#4338ca", "#a5b4fc", "#eef2ff"],
+        }
+      : {
+          terminal: ["#dbeafe", "#2563eb", "#172554"],
+          "input-output": ["#ede9fe", "#7c3aed", "#2e1065"],
+          decision: ["#ccfbf1", "#0f766e", "#042f2e"],
+          process: ["#cffafe", "#0891b2", "#083344"],
+          data: ["#fef3c7", "#d97706", "#451a03"],
+          special: ["#e0e7ff", "#4f46e5", "#1e1b4b"],
+        };
+    return Object.fromEntries(
+      Object.entries(colors).map(([role, [fill, stroke, text]]) => [
+        role,
+        { fill, stroke, strokeWidth, text },
+      ]),
+    );
+  }
+
+  function getMermaidThemeMode() {
+    const classList = document.body.classList;
+    if (classList.contains("vscode-high-contrast-light")) return "highContrastLight";
+    if (classList.contains("vscode-high-contrast")) return "highContrastDark";
+    if (classList.contains("vscode-dark")) return "dark";
+    return "light";
+  }
+
+  function rerenderVisibleMermaidDiagrams() {
+    const nextThemeMode = getActiveMermaidThemeMode();
+    for (const diagramModel of mermaidModelsByKey.values()) {
+      if (!diagramModel.block.isConnected) continue;
+      const rect = diagramModel.block.getBoundingClientRect();
+      const isNearViewport = rect.bottom >= -600 && rect.top <= window.innerHeight + 600;
+      if (
+        isNearViewport ||
+        (mermaidPaneModel && mermaidPaneModel.key === diagramModel.key) ||
+        !lazyMermaidObserver
+      ) {
+        void renderMermaidDiagram(diagramModel, { force: true });
+      } else {
+        deferMermaidDiagramRender(diagramModel, nextThemeMode);
+      }
+    }
+  }
+
+  function deferMermaidDiagramRender(diagramModel, themeMode) {
+    diagramModel.renderToken += 1;
+    diagramModel.state = "pending";
+    diagramModel.renderedThemeMode = "";
+    setMermaidSaveControlDisabled(diagramModel.saveControl, true);
+    diagramModel.expandButton.disabled = true;
+    if (!(diagramModel.svg instanceof SVGElement)) {
+      diagramModel.status.textContent = i18n.mermaidLoading || "Rendering Mermaid diagram...";
+      setMermaidSurfaceTheme(diagramModel.viewport, themeMode);
+      setMermaidViewportAccessibility(diagramModel.viewport, "status");
+      diagramModel.viewport.replaceChildren(diagramModel.status);
+    }
+    lazyMermaidObserver.observe(diagramModel.block);
+  }
+
+  function isMermaidPaneOpen() {
+    return (
+      mermaidPaneModel != null &&
+      mermaidPaneRootEl instanceof HTMLElement &&
+      mermaidPaneRootEl.hidden === false
+    );
+  }
+
+  function revealMermaidSourceDiagram(diagramModel) {
+    const messageIndex = Number(diagramModel && diagramModel.messageIndex);
+    const diagramKey = typeof diagramModel?.key === "string" ? diagramModel.key : "";
+    if (!diagramKey) return;
+
+    let target = mermaidModelsByKey.get(diagramKey)?.block;
+    if (
+      (!(target instanceof HTMLElement) || !target.isConnected) &&
+      Number.isSafeInteger(messageIndex) &&
+      messageIndex >= 1
+    ) {
+      ensureTurnExpandedForReveal(getTurnIdForMessageIndex(messageIndex), { render: false });
+      expandedMessageIndexes.add(messageIndex);
+      render();
+      const nextTarget = mermaidModelsByKey.get(diagramKey)?.block;
+      target =
+        nextTarget instanceof HTMLElement && nextTarget.isConnected
+          ? nextTarget
+          : document.getElementById(`msg-${messageIndex}`);
+    }
+    if (!(target instanceof HTMLElement) || !target.isConnected) return;
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!target.isConnected) return;
+        clearHighlights();
+        target.classList.add("highlight");
+        const behavior = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+        const root = getScrollRoot();
+        if (root instanceof HTMLElement) {
+          const rootRect = root.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          const nextTop =
+            root.scrollTop +
+            targetRect.top -
+            rootRect.top -
+            (root.clientHeight - targetRect.height) / 2;
+          root.scrollTo({ top: Math.max(0, Math.round(nextTop)), behavior });
+        } else {
+          target.scrollIntoView({ behavior, block: "center", inline: "nearest" });
+        }
+        setTimeout(() => {
+          target.classList.remove("highlight");
+        }, 1800);
+      });
+    });
+  }
+
+  function openMermaidPane(diagramModel, returnFocus) {
+    if (
+      !diagramModel ||
+      diagramModel.state !== "ready" ||
+      !(diagramModel.svg instanceof SVGElement) ||
+      !(mermaidPaneRootEl instanceof HTMLElement)
+    ) {
+      return;
+    }
+
+    if (branchOverlayOpen) closeBranchOverlay({ restoreFocus: false, restorePageSearch: false });
+    if (agentRunsOverlayOpen) closeAgentRunsOverlay({ restoreFocus: false });
+    if (isImagePreviewOpen()) closeImagePreview();
+    if (isPageSearchOpen()) closePageSearch();
+    mermaidPaneModel = diagramModel;
+    mermaidPaneReturnFocus = returnFocus instanceof HTMLElement ? returnFocus : document.activeElement;
+    mermaidPaneScale = 1;
+    mermaidPaneScrollLeft = 0;
+    mermaidPaneScrollTop = 0;
+    mermaidPaneRootEl.hidden = false;
+    mermaidPaneRootEl.setAttribute("role", "complementary");
+    mermaidPaneRootEl.setAttribute("aria-label", i18n.mermaidPaneTitle || "Mermaid diagram");
+    document.body.classList.add("mermaidPaneOpen");
+    applyMermaidPaneWidth();
+    renderMermaidPane({ preserveViewport: false });
+  }
+
+  function closeMermaidPane(options = {}) {
+    if (!(mermaidPaneRootEl instanceof HTMLElement)) return;
+    const returnFocus = mermaidPaneReturnFocus;
+    closeMermaidSaveMenu();
+    cancelMermaidPaneResize(mermaidPaneResizeState != null);
+    cancelMermaidPanePointer();
+    cancelMermaidPaneWidthAnchorRestore();
+    mermaidPaneRootEl.hidden = true;
+    mermaidPaneRootEl.replaceChildren();
+    document.body.classList.remove("mermaidPaneOpen");
+    mermaidPaneModel = null;
+    mermaidPaneReturnFocus = null;
+    mermaidPaneStageEl = null;
+    mermaidPaneScalerEl = null;
+    mermaidPaneCanvasEl = null;
+    mermaidPaneSaveControl = null;
+    mermaidPaneRootEl.onkeydown = null;
+    scheduleMermaidInlineOverflowUpdate();
+    if (options.restoreFocus !== false && returnFocus instanceof HTMLElement && returnFocus.isConnected) {
+      returnFocus.focus();
+    }
+  }
+
+  function syncMermaidPaneAfterTimelineRender() {
+    if (!isMermaidPaneOpen() || !mermaidPaneModel) return;
+    const nextModel = mermaidModelsByKey.get(mermaidPaneModel.key);
+    if (!nextModel) {
+      closeMermaidPane({ restoreFocus: false });
+      return;
+    }
+    if (nextModel.state === "ready" && nextModel.svg instanceof SVGElement) {
+      mermaidPaneModel = nextModel;
+      renderMermaidPane({ preserveViewport: true });
+    }
+  }
+
+  function renderMermaidPane(options = {}) {
+    if (
+      !mermaidPaneModel ||
+      !(mermaidPaneModel.svg instanceof SVGElement) ||
+      !(mermaidPaneRootEl instanceof HTMLElement)
+    ) {
+      return;
+    }
+
+    const preserveViewport = options.preserveViewport === true;
+    const root = mermaidPaneRootEl;
+    const activeElement = document.activeElement;
+    const focusAction =
+      activeElement instanceof HTMLElement && root.contains(activeElement)
+        ? String(activeElement.dataset.mermaidPaneAction || "")
+        : "";
+    if (preserveViewport) rememberMermaidPaneViewport();
+    closeMermaidSaveMenu();
+    if (mermaidPaneResizeState) cancelMermaidPaneResize(true);
+    cancelMermaidPanePointer();
+    root.replaceChildren();
+    root.onkeydown = handleMermaidPaneKeydown;
+    mermaidPaneSaveControl = null;
+
+    const resizeHandle = el("div", {
+      className: "mermaidPaneResizeHandle",
+      role: "separator",
+      "aria-orientation": "vertical",
+      "aria-label": i18n.mermaidResize || "Resize Mermaid diagram pane",
+      tabindex: "0",
+    });
+    resizeHandle.dataset.mermaidPaneAction = "resize";
+    wireMermaidPaneResizeHandle(resizeHandle);
+    root.appendChild(resizeHandle);
+
+    const header = el("div", { className: "mermaidPaneHeader" });
+    const title = el("div", { className: "mermaidPaneTitle" });
+    title.textContent = i18n.mermaidPaneTitle || "Mermaid diagram";
+    header.appendChild(title);
+    const controls = el("div", {
+      className: "mermaidPaneControls",
+      role: "toolbar",
+      "aria-label": i18n.mermaidPaneTitle || "Mermaid diagram",
+    });
+
+    const revealButton = createMermaidActionButton(
+      BRANCH_CENTER_ICON_SVG,
+      i18n.mermaidReveal || "Reveal source diagram",
+    );
+    revealButton.dataset.mermaidPaneAction = "reveal";
+    revealButton.disabled = typeof mermaidPaneModel.key !== "string" || !mermaidPaneModel.key;
+    revealButton.addEventListener("click", () => {
+      revealMermaidSourceDiagram(mermaidPaneModel);
+    });
+    const fitButton = createMermaidActionButton(BRANCH_FIT_ICON_SVG, i18n.mermaidFit || "Fit diagram");
+    fitButton.dataset.mermaidPaneAction = "fit";
+    fitButton.addEventListener("click", () => fitMermaidPaneDiagram());
+    const zoomOutButton = createMermaidActionButton(BRANCH_ZOOM_OUT_ICON_SVG, i18n.mermaidZoomOut || "Zoom out");
+    zoomOutButton.classList.add("mermaidPaneZoomOutButton");
+    zoomOutButton.dataset.mermaidPaneAction = "zoomOut";
+    zoomOutButton.addEventListener("click", () => zoomMermaidPane(-MERMAID_PANE_ZOOM_STEP));
+    const zoomInButton = createMermaidActionButton(BRANCH_ZOOM_IN_ICON_SVG, i18n.mermaidZoomIn || "Zoom in");
+    zoomInButton.classList.add("mermaidPaneZoomInButton");
+    zoomInButton.dataset.mermaidPaneAction = "zoomIn";
+    zoomInButton.addEventListener("click", () => zoomMermaidPane(MERMAID_PANE_ZOOM_STEP));
+    const copyButton = createMermaidActionButton(
+      COPY_ICON_SVG,
+      i18n.mermaidCopySource || "Copy Mermaid source",
+    );
+    copyButton.dataset.mermaidPaneAction = "copy";
+    copyButton.addEventListener("click", () => {
+      if (mermaidPaneModel) vscode.postMessage({ type: "copy", text: mermaidPaneModel.source });
+    });
+
+    const themeToggle = createMermaidThemeToggle();
+    themeToggle.dataset.mermaidPaneAction = "theme";
+    const saveControl = createMermaidSaveControl(mermaidPaneModel);
+    saveControl.primaryButton.dataset.mermaidPaneAction = "save";
+    saveControl.menuButton.dataset.mermaidPaneAction = "saveMenu";
+    mermaidPaneSaveControl = saveControl;
+    const closeButton = createMermaidActionButton(CLOSE_ICON_SVG, i18n.mermaidClose || "Close Mermaid diagram");
+    closeButton.dataset.mermaidPaneAction = "close";
+    closeButton.addEventListener("click", () => closeMermaidPane());
+    controls.append(
+      revealButton,
+      fitButton,
+      zoomOutButton,
+      zoomInButton,
+      themeToggle,
+      copyButton,
+      saveControl.element,
+      closeButton,
+    );
+    header.appendChild(controls);
+    root.appendChild(header);
+
+    const stage = el("div", {
+      className: "mermaidPaneStage",
+      role: "region",
+      "aria-label": i18n.mermaidLabel || "Mermaid diagram",
+      tabindex: "0",
+    });
+    setMermaidSurfaceTheme(stage, mermaidPaneModel.renderedThemeMode);
+    const scaler = el("div", { className: "mermaidPaneScaler" });
+    const canvas = el("div", { className: "mermaidPaneCanvas" });
+    const svg = mermaidPaneModel.svg.cloneNode(true);
+    const dimensions = getMermaidSvgDimensions(svg);
+    svg.classList.add("mermaidPaneSvg");
+    svg.setAttribute("width", String(dimensions.width));
+    svg.setAttribute("height", String(dimensions.height));
+    canvas.dataset.mermaidWidth = String(dimensions.width);
+    canvas.dataset.mermaidHeight = String(dimensions.height);
+    canvas.appendChild(svg);
+    scaler.appendChild(canvas);
+    stage.appendChild(scaler);
+    root.appendChild(stage);
+    mermaidPaneStageEl = stage;
+    mermaidPaneScalerEl = scaler;
+    mermaidPaneCanvasEl = canvas;
+    applyMermaidPaneScale();
+    wireMermaidPaneStage(stage);
+    if (focusAction) {
+      const focusTarget = root.querySelector(
+        `[data-mermaid-pane-action="${cssEscape(focusAction)}"]`,
+      );
+      if (focusTarget instanceof HTMLElement) focusTarget.focus({ preventScroll: true });
+    }
+    if (preserveViewport) {
+      requestAnimationFrame(() => restoreMermaidPaneViewport());
+    } else {
+      requestAnimationFrame(() => fitMermaidPaneDiagram());
+    }
+  }
+
+  function handleMermaidPaneKeydown(event) {
+    const eventTarget = event.target instanceof Element ? event.target : null;
+    const activeTarget = document.activeElement instanceof Element ? document.activeElement : null;
+    if (
+      !isMermaidPaneOpen() ||
+      event.ctrlKey === true ||
+      event.metaKey === true ||
+      event.altKey === true ||
+      isTextInputElement(eventTarget) ||
+      isTextInputElement(activeTarget)
+    ) {
+      return false;
+    }
+    const action = getMermaidPaneZoomKeyAction(event);
+    if (!action) return false;
+    event.preventDefault();
+    event.stopPropagation();
+    if (action === "in") {
+      zoomMermaidPane(MERMAID_PANE_ZOOM_STEP);
+      return true;
+    }
+    if (action === "out") {
+      zoomMermaidPane(-MERMAID_PANE_ZOOM_STEP);
+      return true;
+    }
+    resetMermaidPaneScale();
+    return true;
+  }
+
+  function getMermaidPaneZoomKeyAction(event) {
+    let key = typeof event?.key === "string" ? event.key : "";
+    try {
+      key = key.normalize("NFKC");
+    } catch {
+      key = "";
+    }
+    if (key === "+" || key === "=" || key === "Add") return "in";
+    if ((key === "-" || key === "Subtract") && event?.shiftKey !== true) return "out";
+    if (key === "0" && event?.shiftKey !== true) return "reset";
+
+    const code = typeof event?.code === "string" ? event.code : "";
+    if (code === "Equal" || code === "NumpadAdd") return "in";
+    if (code === "Semicolon" && event?.shiftKey === true) return "in";
+    if ((code === "Minus" || code === "NumpadSubtract") && event?.shiftKey !== true) return "out";
+    if ((code === "Digit0" || code === "Numpad0") && event?.shiftKey !== true) return "reset";
+    if (code && code !== "Unidentified") return "";
+
+    const keyCode = Number(event?.keyCode || event?.which);
+    if (keyCode === 107 || (keyCode === 187 && event?.shiftKey === true)) return "in";
+    if ((keyCode === 189 || keyCode === 109) && event?.shiftKey !== true) return "out";
+    if ((keyCode === 48 || keyCode === 96) && event?.shiftKey !== true) return "reset";
+    return "";
+  }
+
+  function wireMermaidPaneStage(stage) {
+    stage.addEventListener(
+      "scroll",
+      () => {
+        rememberMermaidPaneViewport();
+      },
+      { passive: true },
+    );
+    stage.addEventListener(
+      "wheel",
+      (event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey) return;
+        if (!Number.isFinite(event.deltaY) || event.deltaY === 0) return;
+        event.preventDefault();
+        zoomMermaidPane(
+          event.deltaY < 0 ? MERMAID_PANE_ZOOM_STEP : -MERMAID_PANE_ZOOM_STEP,
+          { clientX: event.clientX, clientY: event.clientY },
+        );
+      },
+      { passive: false },
+    );
+    stage.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.isPrimary === false) return;
+      const rect = stage.getBoundingClientRect();
+      if (event.clientX - rect.left >= stage.clientWidth || event.clientY - rect.top >= stage.clientHeight) {
+        return;
+      }
+      if (document.activeElement !== stage) stage.focus({ preventScroll: true });
+      mermaidPanePointerState = {
+        pointerId: event.pointerId,
+        stage,
+        startX: event.clientX,
+        startY: event.clientY,
+        startScrollLeft: stage.scrollLeft,
+        startScrollTop: stage.scrollTop,
+        dragging: false,
+      };
+    });
+    stage.addEventListener("pointermove", (event) => {
+      const pointerState = mermaidPanePointerState;
+      if (
+        !pointerState ||
+        pointerState.pointerId !== event.pointerId ||
+        pointerState.stage !== stage
+      ) {
+        return;
+      }
+      const deltaX = event.clientX - pointerState.startX;
+      const deltaY = event.clientY - pointerState.startY;
+      if (!pointerState.dragging && Math.hypot(deltaX, deltaY) < DIAGRAM_PAN_THRESHOLD_PX) return;
+      if (!pointerState.dragging) {
+        pointerState.dragging = true;
+        stage.classList.add("panning");
+        stage.setPointerCapture(event.pointerId);
+      }
+      event.preventDefault();
+      stage.scrollLeft = pointerState.startScrollLeft - deltaX;
+      stage.scrollTop = pointerState.startScrollTop - deltaY;
+    });
+    const finishPointer = (event, suppressClick) => {
+      const pointerState = mermaidPanePointerState;
+      if (
+        !pointerState ||
+        pointerState.pointerId !== event.pointerId ||
+        pointerState.stage !== stage
+      ) {
+        return;
+      }
+      const dragged = pointerState.dragging;
+      cancelMermaidPanePointer();
+      if (!dragged || !suppressClick) return;
+      mermaidPaneSuppressNextClick = true;
+      setTimeout(() => {
+        mermaidPaneSuppressNextClick = false;
+      }, 0);
+    };
+    stage.addEventListener("pointerup", (event) => finishPointer(event, true));
+    stage.addEventListener("pointercancel", (event) => finishPointer(event, false));
+    stage.addEventListener("lostpointercapture", (event) => finishPointer(event, false));
+    stage.addEventListener("pointerleave", (event) => {
+      const pointerState = mermaidPanePointerState;
+      if (
+        pointerState &&
+        !pointerState.dragging &&
+        pointerState.pointerId === event.pointerId &&
+        pointerState.stage === stage
+      ) {
+        mermaidPanePointerState = null;
+      }
+    });
+    stage.addEventListener(
+      "click",
+      (event) => {
+        if (!mermaidPaneSuppressNextClick) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        mermaidPaneSuppressNextClick = false;
+      },
+      true,
+    );
+  }
+
+  function cancelMermaidPanePointer() {
+    const pointerState = mermaidPanePointerState;
+    mermaidPanePointerState = null;
+    const stage = pointerState && pointerState.stage;
+    if (stage instanceof HTMLElement) stage.classList.remove("panning");
+    if (
+      pointerState &&
+      stage instanceof HTMLElement &&
+      stage.hasPointerCapture(pointerState.pointerId)
+    ) {
+      stage.releasePointerCapture(pointerState.pointerId);
+    }
+  }
+
+  function zoomMermaidPane(delta, anchorPoint = null) {
+    setMermaidPaneScale(mermaidPaneScale + Number(delta || 0), anchorPoint);
+  }
+
+  function setMermaidPaneScale(value, anchorPoint = null) {
+    if (!(mermaidPaneStageEl instanceof HTMLElement) || !(mermaidPaneCanvasEl instanceof HTMLElement)) return;
+    const previousScale = mermaidPaneScale;
+    const nextScale = Math.max(MIN_MERMAID_PANE_SCALE, Math.min(MAX_MERMAID_PANE_SCALE, Number(value)));
+    if (!Number.isFinite(nextScale) || nextScale === previousScale) return;
+
+    const stageRect = mermaidPaneStageEl.getBoundingClientRect();
+    const canvasRect = mermaidPaneCanvasEl.getBoundingClientRect();
+    const requestedClientX = Number(anchorPoint?.clientX);
+    const requestedClientY = Number(anchorPoint?.clientY);
+    const anchorClientX = Number.isFinite(requestedClientX)
+      ? Math.max(stageRect.left, Math.min(stageRect.left + mermaidPaneStageEl.clientWidth, requestedClientX))
+      : stageRect.left + mermaidPaneStageEl.clientWidth / 2;
+    const anchorClientY = Number.isFinite(requestedClientY)
+      ? Math.max(stageRect.top, Math.min(stageRect.top + mermaidPaneStageEl.clientHeight, requestedClientY))
+      : stageRect.top + mermaidPaneStageEl.clientHeight / 2;
+    const diagramX = (anchorClientX - canvasRect.left) / previousScale;
+    const diagramY = (anchorClientY - canvasRect.top) / previousScale;
+
+    mermaidPaneScale = nextScale;
+    applyMermaidPaneScale();
+
+    const nextCanvasRect = mermaidPaneCanvasEl.getBoundingClientRect();
+    mermaidPaneStageEl.scrollLeft += nextCanvasRect.left + diagramX * nextScale - anchorClientX;
+    mermaidPaneStageEl.scrollTop += nextCanvasRect.top + diagramY * nextScale - anchorClientY;
+    rememberMermaidPaneViewport();
+  }
+
+  function resetMermaidPaneScale() {
+    if (!(mermaidPaneStageEl instanceof HTMLElement)) return;
+    mermaidPaneScale = 1;
+    applyMermaidPaneScale();
+    centerMermaidPaneViewport();
+  }
+
+  function fitMermaidPaneDiagram() {
+    if (!(mermaidPaneStageEl instanceof HTMLElement) || !(mermaidPaneCanvasEl instanceof HTMLElement)) return;
+    const dimensions = getMermaidPaneNaturalDimensions();
+    if (!dimensions || mermaidPaneStageEl.clientWidth <= 0 || mermaidPaneStageEl.clientHeight <= 0) return;
+    const padding = 32;
+    mermaidPaneScale = Math.max(
+      MIN_MERMAID_PANE_SCALE,
+      Math.min(
+        4,
+        (mermaidPaneStageEl.clientWidth - padding) / dimensions.width,
+        (mermaidPaneStageEl.clientHeight - padding) / dimensions.height,
+      ),
+    );
+    applyMermaidPaneScale();
+    centerMermaidPaneViewport();
+  }
+
+  function centerMermaidPaneViewport() {
+    if (!(mermaidPaneStageEl instanceof HTMLElement)) return;
+    mermaidPaneStageEl.scrollLeft = Math.max(
+      0,
+      (mermaidPaneStageEl.scrollWidth - mermaidPaneStageEl.clientWidth) / 2,
+    );
+    mermaidPaneStageEl.scrollTop = Math.max(
+      0,
+      (mermaidPaneStageEl.scrollHeight - mermaidPaneStageEl.clientHeight) / 2,
+    );
+    rememberMermaidPaneViewport();
+  }
+
+  function applyMermaidPaneScale() {
+    if (
+      !(mermaidPaneScalerEl instanceof HTMLElement) ||
+      !(mermaidPaneCanvasEl instanceof HTMLElement)
+    ) {
+      return;
+    }
+    const dimensions = getMermaidPaneNaturalDimensions();
+    const svg = mermaidPaneCanvasEl.querySelector(".mermaidPaneSvg");
+    if (!dimensions || !(svg instanceof SVGElement)) return;
+    mermaidPaneScale = Math.max(
+      MIN_MERMAID_PANE_SCALE,
+      Math.min(MAX_MERMAID_PANE_SCALE, mermaidPaneScale),
+    );
+    mermaidPaneCanvasEl.style.width = `${Math.ceil(dimensions.width * mermaidPaneScale)}px`;
+    mermaidPaneCanvasEl.style.height = `${Math.ceil(dimensions.height * mermaidPaneScale)}px`;
+    svg.style.transform = `scale(${mermaidPaneScale})`;
+    updateMermaidPaneZoomControlsDisabledState();
+  }
+
+  function getMermaidPaneNaturalDimensions() {
+    if (!(mermaidPaneCanvasEl instanceof HTMLElement)) return null;
+    const width = Number(mermaidPaneCanvasEl.dataset.mermaidWidth);
+    const height = Number(mermaidPaneCanvasEl.dataset.mermaidHeight);
+    if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+      return null;
+    }
+    return { width, height };
+  }
+
+  function rememberMermaidPaneViewport() {
+    if (!(mermaidPaneStageEl instanceof HTMLElement)) return;
+    mermaidPaneScrollLeft = mermaidPaneStageEl.scrollLeft;
+    mermaidPaneScrollTop = mermaidPaneStageEl.scrollTop;
+  }
+
+  function restoreMermaidPaneViewport() {
+    if (!(mermaidPaneStageEl instanceof HTMLElement)) return;
+    applyMermaidPaneScale();
+    mermaidPaneStageEl.scrollLeft = Math.max(0, mermaidPaneScrollLeft);
+    mermaidPaneStageEl.scrollTop = Math.max(0, mermaidPaneScrollTop);
+    rememberMermaidPaneViewport();
+  }
+
+  function updateMermaidPaneZoomControlsDisabledState() {
+    if (!(mermaidPaneRootEl instanceof HTMLElement)) return;
+    const zoomOut = mermaidPaneRootEl.querySelector(".mermaidPaneZoomOutButton");
+    const zoomIn = mermaidPaneRootEl.querySelector(".mermaidPaneZoomInButton");
+    if (zoomOut instanceof HTMLButtonElement) {
+      zoomOut.disabled = mermaidPaneScale <= MIN_MERMAID_PANE_SCALE + 0.000001;
+    }
+    if (zoomIn instanceof HTMLButtonElement) {
+      zoomIn.disabled = mermaidPaneScale >= MAX_MERMAID_PANE_SCALE - 0.000001;
+    }
+  }
+
+  function wireMermaidPaneResizeHandle(handle) {
+    handle.addEventListener("pointerdown", (event) => {
+      if (!(mermaidPaneRootEl instanceof HTMLElement)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      mermaidPaneResizeState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startWidth: mermaidPaneRootEl.getBoundingClientRect().width,
+      };
+      handle.setPointerCapture(event.pointerId);
+      document.body.classList.add("mermaidPaneResizing");
+    });
+    handle.addEventListener("pointermove", (event) => {
+      if (!mermaidPaneResizeState || mermaidPaneResizeState.pointerId !== event.pointerId) return;
+      event.preventDefault();
+      mermaidPaneWidth = clampMermaidPaneWidth(
+        mermaidPaneResizeState.startWidth + (mermaidPaneResizeState.startX - event.clientX),
+      );
+      applyMermaidPaneWidth();
+    });
+    const finishResize = (event) => {
+      if (!mermaidPaneResizeState || mermaidPaneResizeState.pointerId !== event.pointerId) return;
+      cancelMermaidPaneResize(true);
+    };
+    handle.addEventListener("pointerup", finishResize);
+    handle.addEventListener("pointercancel", finishResize);
+    handle.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      mermaidPaneWidth = DEFAULT_MERMAID_PANE_WIDTH;
+      applyMermaidPaneWidth();
+      persistMermaidPaneWidth();
+    });
+    handle.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const direction = event.key === "ArrowLeft" ? 1 : -1;
+      mermaidPaneWidth = clampMermaidPaneWidth(
+        (mermaidPaneRootEl instanceof HTMLElement
+          ? mermaidPaneRootEl.getBoundingClientRect().width
+          : DEFAULT_MERMAID_PANE_WIDTH) +
+          direction * 24,
+      );
+      applyMermaidPaneWidth();
+      persistMermaidPaneWidth();
+    });
+  }
+
+  function normalizeMermaidPaneWidth(value) {
+    const width = Number(value);
+    if (!Number.isFinite(width) || width <= 0) return null;
+    return Math.min(100000, Math.max(MIN_MERMAID_PANE_WIDTH, Math.round(width)));
+  }
+
+  function clampMermaidPaneWidth(value) {
+    const available = Math.max(1, Math.floor(window.innerWidth * 0.78));
+    const minimum = Math.min(MIN_MERMAID_PANE_WIDTH, available);
+    const width = Number(value);
+    if (!Number.isFinite(width)) return Math.min(DEFAULT_MERMAID_PANE_WIDTH, available);
+    return Math.max(minimum, Math.min(Math.round(width), available));
+  }
+
+  function applyMermaidPaneWidth() {
+    const viewportAnchor = mermaidPanePendingWidthAnchor || captureMermaidPaneViewportCenter();
+    const width =
+      window.innerWidth <= 700
+        ? window.innerWidth
+        : clampMermaidPaneWidth(mermaidPaneWidth || DEFAULT_MERMAID_PANE_WIDTH);
+    document.documentElement.style.setProperty("--chv-mermaid-pane-width", `${Math.max(1, width)}px`);
+    if (viewportAnchor) scheduleMermaidPaneWidthAnchorRestore(viewportAnchor);
+    scheduleMermaidInlineOverflowUpdate();
+  }
+
+  function captureMermaidPaneViewportCenter() {
+    if (
+      !isMermaidPaneOpen() ||
+      !(mermaidPaneStageEl instanceof HTMLElement) ||
+      !(mermaidPaneCanvasEl instanceof HTMLElement) ||
+      !Number.isFinite(mermaidPaneScale) ||
+      mermaidPaneScale <= 0
+    ) {
+      return null;
+    }
+    const stageRect = mermaidPaneStageEl.getBoundingClientRect();
+    const canvasRect = mermaidPaneCanvasEl.getBoundingClientRect();
+    if (mermaidPaneStageEl.clientWidth <= 0 || mermaidPaneStageEl.clientHeight <= 0) return null;
+    return {
+      diagramX: (stageRect.left + mermaidPaneStageEl.clientWidth / 2 - canvasRect.left) / mermaidPaneScale,
+      diagramY: (stageRect.top + mermaidPaneStageEl.clientHeight / 2 - canvasRect.top) / mermaidPaneScale,
+    };
+  }
+
+  function scheduleMermaidPaneWidthAnchorRestore(anchor) {
+    if (!anchor || !Number.isFinite(anchor.diagramX) || !Number.isFinite(anchor.diagramY)) return;
+    mermaidPanePendingWidthAnchor = anchor;
+    if (mermaidPaneWidthAnchorFrame) cancelAnimationFrame(mermaidPaneWidthAnchorFrame);
+    mermaidPaneWidthAnchorFrame = requestAnimationFrame(() => {
+      mermaidPaneWidthAnchorFrame = 0;
+      const pendingAnchor = mermaidPanePendingWidthAnchor;
+      mermaidPanePendingWidthAnchor = null;
+      restoreMermaidPaneViewportCenter(pendingAnchor);
+    });
+  }
+
+  function restoreMermaidPaneViewportCenter(anchor) {
+    if (
+      !anchor ||
+      !(mermaidPaneStageEl instanceof HTMLElement) ||
+      !(mermaidPaneCanvasEl instanceof HTMLElement)
+    ) {
+      return;
+    }
+    const stageRect = mermaidPaneStageEl.getBoundingClientRect();
+    const canvasRect = mermaidPaneCanvasEl.getBoundingClientRect();
+    const targetClientX = stageRect.left + mermaidPaneStageEl.clientWidth / 2;
+    const targetClientY = stageRect.top + mermaidPaneStageEl.clientHeight / 2;
+    mermaidPaneStageEl.scrollLeft += canvasRect.left + anchor.diagramX * mermaidPaneScale - targetClientX;
+    mermaidPaneStageEl.scrollTop += canvasRect.top + anchor.diagramY * mermaidPaneScale - targetClientY;
+    rememberMermaidPaneViewport();
+  }
+
+  function cancelMermaidPaneWidthAnchorRestore() {
+    if (mermaidPaneWidthAnchorFrame) cancelAnimationFrame(mermaidPaneWidthAnchorFrame);
+    mermaidPaneWidthAnchorFrame = 0;
+    mermaidPanePendingWidthAnchor = null;
+  }
+
+  function cancelMermaidPaneResize(persist) {
+    const resizeState = mermaidPaneResizeState;
+    mermaidPaneResizeState = null;
+    document.body.classList.remove("mermaidPaneResizing");
+    const handle = mermaidPaneRootEl && mermaidPaneRootEl.querySelector(".mermaidPaneResizeHandle");
+    if (
+      resizeState &&
+      handle instanceof HTMLElement &&
+      handle.hasPointerCapture(resizeState.pointerId)
+    ) {
+      handle.releasePointerCapture(resizeState.pointerId);
+    }
+    if (persist) persistMermaidPaneWidth();
+  }
+
+  function persistMermaidPaneWidth() {
+    if (typeof vscode.setState !== "function") return;
+    webviewState = {
+      ...(webviewState && typeof webviewState === "object" ? webviewState : {}),
+      mermaidPaneWidth,
+    };
+    vscode.setState(webviewState);
+  }
+
+  async function requestMermaidSave(diagramModel, format) {
+    if (
+      !diagramModel ||
+      diagramModel.state !== "ready" ||
+      !(diagramModel.svg instanceof SVGElement) ||
+      (format !== "svg" && format !== "png" && format !== "mmd")
+    ) {
+      showToast(i18n.mermaidExportFailed || "The Mermaid diagram could not be prepared for saving.");
+      return;
+    }
+
+    try {
+      let payload;
+      const sourceSvg = diagramModel.svg;
+      const renderedThemeMode = normalizeMermaidRenderedThemeMode(diagramModel.renderedThemeMode);
+      if (format === "mmd") {
+        payload = diagramModel.source;
+      } else {
+        if (!renderedThemeMode) throw new Error("Invalid Mermaid theme.");
+        const svgText = serializeMermaidSvgForExport(sourceSvg, renderedThemeMode);
+        if (!svgText) throw new Error("Invalid Mermaid SVG.");
+        if (new TextEncoder().encode(svgText).byteLength > MAX_MERMAID_SVG_BYTES) {
+          throw new Error("Mermaid SVG is too large.");
+        }
+        payload =
+          format === "png"
+            ? await renderMermaidSvgToPngDataUri(svgText, sourceSvg, renderedThemeMode)
+            : svgText;
+      }
+      if (!diagramModel.fsPath || typeof payload !== "string" || !payload) {
+        throw new Error("Invalid Mermaid export.");
+      }
+      vscode.postMessage({
+        type: "saveMermaid",
+        fsPath: diagramModel.fsPath,
+        diagramOrdinal: diagramModel.diagramOrdinal,
+        diagramScope: diagramModel.diagramScope,
+        diagramScopeNumber: diagramModel.diagramScopeNumber,
+        format,
+        payload,
+      });
+    } catch {
+      showToast(i18n.mermaidExportFailed || "The Mermaid diagram could not be prepared for saving.");
+    }
+  }
+
+  function serializeMermaidSvgForExport(sourceSvg, renderedThemeMode) {
+    if (!(sourceSvg instanceof SVGElement)) return "";
+    const backgroundColor = getMermaidExportBackground(renderedThemeMode);
+    if (!backgroundColor) return "";
+    const clone = sourceSvg.cloneNode(true);
+    if (!(clone instanceof SVGElement)) return "";
+    const dimensions = getMermaidSvgDimensions(clone);
+    const viewBox = getMermaidSvgViewBox(clone, dimensions);
+    clone.classList.remove("mermaidSvg", "mermaidPaneSvg");
+    clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    clone.setAttribute("width", String(Math.ceil(dimensions.width)));
+    clone.setAttribute("height", String(Math.ceil(dimensions.height)));
+    clone.setAttribute("viewBox", `${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`);
+
+    const background = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    background.setAttribute("x", String(viewBox.x));
+    background.setAttribute("y", String(viewBox.y));
+    background.setAttribute("width", String(viewBox.width));
+    background.setAttribute("height", String(viewBox.height));
+    background.setAttribute("fill", backgroundColor);
+    clone.insertBefore(background, clone.firstChild);
+    return new XMLSerializer().serializeToString(clone);
+  }
+
+  function getMermaidExportBackground(renderedThemeMode) {
+    const variant = getMermaidThemeVariant(renderedThemeMode);
+    if (variant === "light") return "#ffffff";
+    if (variant === "dark") return "#0f172a";
+    return "";
+  }
+
+  function getMermaidSvgDimensions(svg) {
+    const viewBox = getMermaidSvgViewBox(svg);
+    const rawWidth = viewBox && viewBox.width > 0 ? viewBox.width : parseMermaidSvgLength(svg.getAttribute("width"));
+    const rawHeight = viewBox && viewBox.height > 0 ? viewBox.height : parseMermaidSvgLength(svg.getAttribute("height"));
+    const width = Math.max(1, rawWidth || 800);
+    const height = Math.max(1, rawHeight || 600);
+    const scale = Math.min(
+      1,
+      MAX_MERMAID_DISPLAY_DIMENSION / width,
+      MAX_MERMAID_DISPLAY_DIMENSION / height,
+      Math.sqrt(MAX_MERMAID_DISPLAY_PIXELS / (width * height)),
+    );
+    return {
+      width: Math.max(1, width * scale),
+      height: Math.max(1, height * scale),
+    };
+  }
+
+  function getMermaidSvgViewBox(svg, fallbackDimensions) {
+    const raw = String(svg && svg.getAttribute("viewBox") ? svg.getAttribute("viewBox") : "").trim();
+    const parts = raw.split(/[\s,]+/u).map(Number);
+    if (parts.length === 4 && parts.every(Number.isFinite) && parts[2] > 0 && parts[3] > 0) {
+      return { x: parts[0], y: parts[1], width: parts[2], height: parts[3] };
+    }
+    if (!fallbackDimensions) return null;
+    return { x: 0, y: 0, width: fallbackDimensions.width, height: fallbackDimensions.height };
+  }
+
+  function parseMermaidSvgLength(value) {
+    const match = String(value || "").trim().match(/^([0-9]+(?:\.[0-9]+)?)(?:px)?$/u);
+    if (!match) return 0;
+    const parsed = Number(match[1]);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  async function renderMermaidSvgToPngDataUri(svgText, sourceSvg, renderedThemeMode) {
+    const backgroundColor = getMermaidExportBackground(renderedThemeMode);
+    if (!backgroundColor) throw new Error("Invalid Mermaid theme.");
+    const natural = getMermaidSvgDimensions(sourceSvg);
+    let scale = Math.min(
+      2,
+      MAX_MERMAID_PNG_DIMENSION / natural.width,
+      MAX_MERMAID_PNG_DIMENSION / natural.height,
+      Math.sqrt(MAX_MERMAID_PNG_PIXELS / (natural.width * natural.height)),
+    );
+    if (!Number.isFinite(scale) || scale <= 0) scale = 1;
+    const width = Math.max(1, Math.min(MAX_MERMAID_PNG_DIMENSION, Math.round(natural.width * scale)));
+    const height = Math.max(1, Math.min(MAX_MERMAID_PNG_DIMENSION, Math.round(natural.height * scale)));
+    if (width * height > MAX_MERMAID_PNG_PIXELS) throw new Error("Mermaid PNG is too large.");
+
+    const svgDataUri = await readBlobAsDataUri(new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }));
+    const image = await loadMermaidExportImage(svgDataUri);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) throw new Error("Canvas is unavailable.");
+    context.fillStyle = backgroundColor;
+    context.fillRect(0, 0, width, height);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(image, 0, 0, width, height);
+    const dataUri = canvas.toDataURL("image/png");
+    const encoded = dataUri.startsWith("data:image/png;base64,")
+      ? dataUri.slice("data:image/png;base64,".length)
+      : "";
+    if (!encoded || encoded.length > Math.ceil((MAX_MERMAID_PNG_BYTES * 4) / 3) + 4) {
+      throw new Error("Mermaid PNG is too large.");
+    }
+    return dataUri;
+  }
+
+  function readBlobAsDataUri(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Could not read Mermaid SVG."));
+      reader.onload = () =>
+        typeof reader.result === "string"
+          ? resolve(reader.result)
+          : reject(new Error("Could not read Mermaid SVG."));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  function loadMermaidExportImage(src) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      const timeoutId = setTimeout(() => {
+        image.src = "";
+        reject(new Error("Mermaid SVG image timed out."));
+      }, 15000);
+      image.onload = () => {
+        clearTimeout(timeoutId);
+        resolve(image);
+      };
+      image.onerror = () => {
+        clearTimeout(timeoutId);
+        reject(new Error("Mermaid SVG image could not be loaded."));
+      };
+      image.src = src;
+    });
   }
 
   function inferMarkdownCodeLanguage(codeEl) {
@@ -14790,8 +17039,60 @@
       return defaultLinkOpen(tokens, idx, options, env, self);
     };
 
+    installTaskListRenderer(mdi);
     installMathRenderer(mdi);
     return mdi;
+  }
+
+  function installTaskListRenderer(mdi) {
+    const ruler = mdi?.core?.ruler;
+    const rendererRules = mdi?.renderer?.rules;
+    if (typeof ruler?.after !== "function" || !rendererRules) return false;
+
+    try {
+      ruler.after("inline", "chv_task_lists", (state) => {
+        if (typeof state?.Token !== "function") return;
+        const tokens = Array.isArray(state?.tokens) ? state.tokens : [];
+        const listItemStack = [];
+        const visitedListItems = new Set();
+
+        for (const token of tokens) {
+          if (token?.type === "list_item_open") {
+            listItemStack.push(token);
+            continue;
+          }
+          if (token?.type === "list_item_close") {
+            listItemStack.pop();
+            continue;
+          }
+          if (token?.type !== "inline" || listItemStack.length === 0) continue;
+
+          const listItem = listItemStack[listItemStack.length - 1];
+          if (visitedListItems.has(listItem)) continue;
+          visitedListItems.add(listItem);
+
+          const marker = /^\[([ xX])\](?:[ \t]+|(?=\r?\n|$))/u.exec(String(token.content || ""));
+          const firstChild = Array.isArray(token.children) ? token.children[0] : null;
+          const childMarker = firstChild?.type === "text"
+            ? /^\[([ xX])\](?:[ \t]+|$)/u.exec(String(firstChild.content || ""))
+            : null;
+          if (!marker || !childMarker) continue;
+
+          firstChild.content = String(firstChild.content || "").slice(childMarker[0].length);
+          const checkbox = new state.Token("task_checkbox", "", 0);
+          checkbox.meta = { checked: marker[1].toLowerCase() === "x" };
+          token.children.unshift(checkbox);
+          if (typeof listItem.attrJoin === "function") listItem.attrJoin("class", "taskListItem");
+        }
+      });
+      rendererRules.task_checkbox = (tokens, idx) => {
+        const checked = tokens[idx]?.meta?.checked === true ? " checked" : "";
+        return `<input class="taskListCheckbox" type="checkbox" disabled${checked}> `;
+      };
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function configureSafeMarkdownLinkify(mdi) {

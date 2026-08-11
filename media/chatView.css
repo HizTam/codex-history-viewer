@@ -5402,6 +5402,70 @@ body.vscode-high-contrast-light .imagePreviewOverlay {
   margin: 2px 0;
 }
 
+.markdown li.taskListItem {
+  list-style: none;
+}
+
+.markdown .taskListCheckbox {
+  --chv-task-checkbox-border: color-mix(
+    in srgb,
+    var(--vscode-checkbox-border, var(--chv-muted)) 65%,
+    var(--chv-fg) 35%
+  );
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  box-sizing: border-box;
+  width: 1em;
+  height: 1em;
+  margin: 0 0.45em 0 -1.35em;
+  border: 1px solid var(--chv-task-checkbox-border);
+  border-radius: 2px;
+  background: var(--vscode-checkbox-background, var(--vscode-input-background, transparent));
+  color: var(--vscode-checkbox-foreground, var(--chv-fg));
+  vertical-align: -0.12em;
+  opacity: 1;
+  pointer-events: none;
+}
+
+.markdown .taskListCheckbox::after {
+  content: "";
+  width: 0.28em;
+  height: 0.52em;
+  border: solid currentColor;
+  border-width: 0 0.14em 0.14em 0;
+  transform: translateY(-0.05em) rotate(45deg) scale(0);
+  transform-origin: center;
+}
+
+.markdown .taskListCheckbox:checked {
+  border-color: var(--vscode-checkbox-selectBorder, var(--vscode-focusBorder, var(--chv-accent)));
+  background: var(--vscode-checkbox-selectBackground, var(--vscode-button-background, var(--chv-accent)));
+  color: var(--vscode-checkbox-selectForeground, var(--vscode-button-foreground, #fff));
+}
+
+.markdown .taskListCheckbox:checked::after {
+  transform: translateY(-0.05em) rotate(45deg) scale(1);
+}
+
+body.vscode-light .markdown .taskListCheckbox:checked,
+body.vscode-high-contrast-light .markdown .taskListCheckbox:checked {
+  border-color: var(--vscode-focusBorder, #007acc);
+  background: var(--vscode-button-background, var(--vscode-focusBorder, #007acc));
+  color: var(--vscode-button-foreground, #fff);
+}
+
+body.vscode-light .markdown .taskListCheckbox:checked::after,
+body.vscode-high-contrast-light .markdown .taskListCheckbox:checked::after {
+  border-color: var(--vscode-button-foreground, #fff);
+}
+
+body.vscode-high-contrast .markdown .taskListCheckbox,
+body.vscode-high-contrast-light .markdown .taskListCheckbox {
+  border-width: 2px;
+  border-color: var(--vscode-contrastBorder, var(--chv-fg));
+}
+
 .markdown blockquote {
   margin: 0 0 8px 0;
   padding: 0 0 0 12px;
@@ -5640,5 +5704,418 @@ details > summary {
   .usageDetailItem {
     grid-template-columns: 1fr;
     gap: 1px;
+  }
+}
+
+/* Mermaid diagrams remain inline while the large view uses a non-modal side pane. */
+.mermaidBlock {
+  margin-top: 10px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--chv-accent) 28%, var(--chv-border) 72%);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--chv-assistant-bg) 94%, var(--chv-accent) 6%);
+}
+
+.mermaidHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--chv-border);
+  background: color-mix(in srgb, var(--chv-tool-bg) 84%, var(--chv-bg) 16%);
+}
+
+.mermaidLabel {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--chv-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mermaidActions,
+.mermaidPaneControls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.mermaidActionButton.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 28px;
+  height: 26px;
+  padding: 3px 6px;
+}
+
+.mermaidThemeToggle.iconBtn {
+  width: auto;
+  min-width: 54px;
+  gap: 4px;
+  padding-inline: 6px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chv-muted) 26%, transparent);
+}
+
+.mermaidThemeToggle svg {
+  flex: 0 0 auto;
+}
+
+.mermaidThemeToggleLabel {
+  overflow: hidden;
+  color: var(--chv-muted);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mermaidSaveControl {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+}
+
+.mermaidSaveControl .mermaidSavePrimaryButton {
+  width: auto;
+  min-width: 48px;
+  gap: 5px;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.mermaidSaveControl .mermaidSaveMenuButton {
+  width: 22px;
+  margin-left: -1px;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding-inline: 3px;
+}
+
+.mermaidSaveControl .mermaidSaveMenuButton svg {
+  width: 12px;
+  height: 12px;
+}
+
+.mermaidSavePrimaryFormat {
+  color: var(--chv-muted);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.mermaidSaveMenu {
+  width: min(240px, calc(100vw - 32px));
+  max-height: none;
+}
+
+.mermaidSaveMenu .mermaidSaveMenuItem {
+  grid-template-columns: 38px minmax(0, 1fr);
+  justify-content: start;
+  min-height: 32px;
+}
+
+.mermaidSaveMenuItem::before {
+  display: none;
+}
+
+.mermaidSaveMenuBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 34px;
+  min-height: 19px;
+  border: 1px solid color-mix(in srgb, var(--chv-muted) 44%, var(--chv-border));
+  border-radius: 4px;
+  color: var(--chv-muted);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.mermaidSaveMenuLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mermaidInlineViewport {
+  --chv-mermaid-surface-bg: var(--chv-bg);
+  --chv-mermaid-inline-viewport-height: min(560px, 66vh);
+  display: grid;
+  box-sizing: border-box;
+  min-height: 180px;
+  max-height: var(--chv-mermaid-inline-viewport-height);
+  place-items: center;
+  overflow: hidden;
+  padding: 16px;
+  background-color: var(--chv-mermaid-surface-bg);
+  background-image: none;
+}
+
+.mermaidInlineViewport.mermaidInlineScrollable {
+  align-items: start;
+  overflow: auto;
+}
+
+.mermaidInlineViewport[data-mermaid-theme="light"],
+.mermaidPaneStage[data-mermaid-theme="light"] {
+  --chv-mermaid-surface-bg: #fff;
+  color-scheme: light;
+}
+
+.mermaidInlineViewport[data-mermaid-theme="dark"],
+.mermaidPaneStage[data-mermaid-theme="dark"] {
+  --chv-mermaid-surface-bg: #0f172a;
+  color-scheme: dark;
+}
+
+.mermaidInlineViewport[data-mermaid-theme="light"] .mermaidStatus {
+  color: #475569;
+}
+
+.mermaidInlineViewport[data-mermaid-theme="dark"] .mermaidStatus {
+  color: #cbd5e1;
+}
+
+.mermaidStatus,
+.mermaidError {
+  max-width: 560px;
+  color: var(--chv-muted);
+  text-align: center;
+}
+
+.mermaidError {
+  color: var(--vscode-errorForeground, #f14c4c);
+}
+
+.mermaidSourceFallback {
+  box-sizing: border-box;
+  width: 100%;
+  max-height: 320px;
+  margin-top: 12px;
+  text-align: left;
+  white-space: pre;
+}
+
+.mermaidSvg {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: max(1px, calc(var(--chv-mermaid-inline-viewport-height) - 40px));
+}
+
+.mermaidBlock.pageSearchMermaidMatch-active {
+  outline: 2px solid var(--chv-find-match-border);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--chv-find-match-active-bg);
+}
+
+body.mermaidPaneOpen #scrollRoot {
+  margin-right: var(--chv-mermaid-pane-width, 560px);
+}
+
+body.mermaidPaneOpen .userStickyOverlay {
+  right: calc(var(--chv-mermaid-pane-width, 560px) + var(--chv-sticky-user-right-reserve, 0px));
+}
+
+body.mermaidPaneOpen .dateGuide {
+  right: calc(var(--chv-mermaid-pane-width, 560px) + 8px);
+}
+
+body.mermaidPaneOpen .runningTurnFallbackChip {
+  max-width: min(720px, calc(100vw - var(--chv-mermaid-pane-width, 560px) - 24px));
+}
+
+#mermaidPaneRoot[hidden] {
+  display: none !important;
+}
+
+#mermaidPaneRoot {
+  position: fixed;
+  top: var(--chv-toolbar-height, 44px);
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  box-sizing: border-box;
+  width: var(--chv-mermaid-pane-width, 560px);
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--chv-border);
+  background: var(--chv-bg);
+  box-shadow: -10px 0 28px color-mix(in srgb, #000 16%, transparent);
+}
+
+.mermaidPaneResizeHandle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  width: 10px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.mermaidPaneResizeHandle::after {
+  position: absolute;
+  top: 10px;
+  bottom: 10px;
+  left: 3px;
+  width: 2px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chv-accent) 58%, transparent);
+  content: "";
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+#mermaidPaneRoot:hover .mermaidPaneResizeHandle::after,
+.mermaidPaneResizeHandle:focus-visible::after,
+body.mermaidPaneResizing .mermaidPaneResizeHandle::after {
+  opacity: 1;
+}
+
+.mermaidPaneHeader {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 42px;
+  padding: 7px 8px 7px 14px;
+  border-bottom: 1px solid var(--chv-border);
+  background: color-mix(in srgb, var(--chv-tool-bg) 82%, var(--chv-bg) 18%);
+}
+
+.mermaidPaneTitle {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mermaidPaneControls {
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.mermaidPaneStage {
+  --chv-mermaid-surface-bg: var(--chv-bg);
+  position: relative;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  outline: none;
+  cursor: grab;
+  touch-action: none;
+  background-color: var(--chv-mermaid-surface-bg);
+  background-image: none;
+}
+
+.mermaidPaneStage:focus-visible {
+  outline: 1px solid var(--chv-accent);
+  outline-offset: -2px;
+}
+
+.mermaidPaneStage.panning,
+.mermaidPaneStage.panning * {
+  cursor: grabbing;
+  user-select: none !important;
+}
+
+body.mermaidPaneResizing {
+  cursor: ew-resize;
+  user-select: none;
+}
+
+.mermaidPaneScaler {
+  position: relative;
+  display: grid;
+  width: max-content;
+  min-width: 100%;
+  min-height: 100%;
+  box-sizing: border-box;
+  place-items: center;
+  padding: 16px;
+}
+
+.mermaidPaneCanvas {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.mermaidPaneSvg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  max-width: none;
+  max-height: none;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+body.vscode-high-contrast .mermaidBlock,
+body.vscode-high-contrast-light .mermaidBlock,
+body.vscode-high-contrast #mermaidPaneRoot,
+body.vscode-high-contrast-light #mermaidPaneRoot {
+  border-color: var(--vscode-contrastBorder, var(--chv-border));
+}
+
+@media (max-width: 700px) {
+  body.mermaidPaneOpen #scrollRoot {
+    margin-right: 0;
+  }
+
+  body.mermaidPaneOpen .userStickyOverlay {
+    right: var(--chv-sticky-user-right-reserve, 0px);
+  }
+
+  body.mermaidPaneOpen .dateGuide {
+    right: 8px;
+  }
+
+  body.mermaidPaneOpen .runningTurnFallbackChip {
+    max-width: min(720px, calc(100vw - 24px));
+  }
+
+  #mermaidPaneRoot {
+    left: 0;
+    width: 100vw;
+    border-left: 0;
+    box-shadow: none;
+  }
+
+  .mermaidPaneResizeHandle {
+    display: none;
+  }
+
+  .mermaidPaneHeader {
+    align-items: flex-start;
+    flex-direction: column;
+    padding-left: 8px;
+  }
+
+  .mermaidPaneControls {
+    width: 100%;
+    justify-content: flex-start;
   }
 }

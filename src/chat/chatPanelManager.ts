@@ -26,6 +26,12 @@ import { normalizeCacheKey, normalizeProjectKey } from "../utils/fsUtils";
 import { collectLocalLinkBaseDirs, openLinkedFileInEditor, resolveLocalFileLinkTarget } from "../utils/localFileLinks";
 import { buildChatPatchEntryDetails, buildChatSessionModel, type ChatPatchEntryDetailTarget } from "./chatModelBuilder";
 import { sanitizeAttachmentForChannel } from "./chatAttachments";
+import {
+  buildMermaidExportFileName,
+  validateMermaidExportRequest,
+  type MermaidExportFormat,
+  type MermaidExportScope,
+} from "./mermaidExport";
 import { t } from "../i18n";
 import { getConfig, type ResumeMethod } from "../settings";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
@@ -86,6 +92,12 @@ import {
   type ResumeMethodStore,
   type ResumeSource,
 } from "../services/resumeMethodStore";
+import {
+  parseMermaidSaveFormatPreference,
+  parseMermaidThemePreference,
+  type MermaidPreferenceStore,
+  type MermaidPreferences,
+} from "../services/mermaidPreferenceStore";
 
 type SaveableChatImage = {
   src: string;
@@ -241,6 +253,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly codexAgentRuns: CodexAgentRunsService;
   private readonly sessionIconResolver: SessionIconResolver;
   private readonly resumeMethodStore: ResumeMethodStore;
+  private readonly mermaidPreferenceStore: MermaidPreferenceStore;
   private readonly onMissingSession?: MissingSessionHandler;
   private readonly logger?: DebugLogger;
   private readonly autoRefreshConsumerVisibilityEmitter = new vscode.EventEmitter<void>();
@@ -297,6 +310,7 @@ export class ChatPanelManager implements vscode.Disposable {
     codexAgentRuns: CodexAgentRunsService,
     sessionIconResolver: SessionIconResolver,
     resumeMethodStore: ResumeMethodStore,
+    mermaidPreferenceStore: MermaidPreferenceStore,
     onMissingSession?: MissingSessionHandler,
     logger?: DebugLogger,
   ) {
@@ -313,6 +327,7 @@ export class ChatPanelManager implements vscode.Disposable {
     this.codexAgentRuns = codexAgentRuns;
     this.sessionIconResolver = sessionIconResolver;
     this.resumeMethodStore = resumeMethodStore;
+    this.mermaidPreferenceStore = mermaidPreferenceStore;
     this.onMissingSession = onMissingSession;
     this.logger = logger;
     this.bookmarkSubscription = this.bookmarkStore.onDidChange(() => {
@@ -420,6 +435,75 @@ export class ChatPanelManager implements vscode.Disposable {
         type: "resumePresentation",
         snapshot: this.buildCliResumeSnapshot(panel, revision),
       });
+    }
+  }
+
+  private refreshMermaidPreferences(preferences: MermaidPreferences = this.mermaidPreferenceStore.get()): void {
+    for (const panel of this.getOpenPanels()) {
+      if (!this.readyByPanel.get(panel)) continue;
+      void panel.webview.postMessage({ type: "mermaidPreferences", preferences });
+    }
+  }
+
+  private async updateMermaidThemePreference(
+    panel: vscode.WebviewPanel,
+    msg: unknown,
+    sequence: number | undefined,
+  ): Promise<void> {
+    const value = parseMermaidThemePreference(
+      msg && typeof msg === "object" && !Array.isArray(msg)
+        ? (msg as { value?: unknown }).value
+        : undefined,
+    );
+    if (!value || sequence === undefined) {
+      await panel.webview.postMessage({
+        type: "mermaidPreferences",
+        preferences: this.mermaidPreferenceStore.get(),
+      });
+      return;
+    }
+
+    try {
+      const changed = await this.mermaidPreferenceStore.updateThemePreference(value, sequence);
+      if (changed) this.refreshMermaidPreferences();
+    } catch (error) {
+      this.logger?.debug(`mermaid.preference theme save failed error=${sanitizeDebugError(error)}`);
+      await panel.webview.postMessage({
+        type: "mermaidPreferences",
+        preferences: this.mermaidPreferenceStore.get(),
+      });
+      void vscode.window.showErrorMessage(t("chat.mermaid.preferenceSaveFailed"));
+    }
+  }
+
+  private async updateMermaidSaveFormat(
+    panel: vscode.WebviewPanel,
+    msg: unknown,
+    sequence: number | undefined,
+  ): Promise<void> {
+    const value = parseMermaidSaveFormatPreference(
+      msg && typeof msg === "object" && !Array.isArray(msg)
+        ? (msg as { value?: unknown }).value
+        : undefined,
+    );
+    if (!value || sequence === undefined) {
+      await panel.webview.postMessage({
+        type: "mermaidPreferences",
+        preferences: this.mermaidPreferenceStore.get(),
+      });
+      return;
+    }
+
+    try {
+      const changed = await this.mermaidPreferenceStore.updateSaveFormat(value, sequence);
+      if (changed) this.refreshMermaidPreferences();
+    } catch (error) {
+      this.logger?.debug(`mermaid.preference save format failed error=${sanitizeDebugError(error)}`);
+      await panel.webview.postMessage({
+        type: "mermaidPreferences",
+        preferences: this.mermaidPreferenceStore.get(),
+      });
+      void vscode.window.showErrorMessage(t("chat.mermaid.preferenceSaveFailed"));
     }
   }
 
@@ -1028,6 +1112,7 @@ export class ChatPanelManager implements vscode.Disposable {
     <div id="meta"></div>
     <div id="timeline"></div>
   </div>
+  <aside id="mermaidPaneRoot" hidden></aside>
   <div id="restoreCover" aria-hidden="true" hidden></div>
   <div id="branchOverlayRoot" hidden></div>
   <div id="agentRunsOverlayRoot" hidden></div>
@@ -1053,6 +1138,14 @@ export class ChatPanelManager implements vscode.Disposable {
         : type === "resumeInCli"
           ? "cli"
           : undefined;
+    const mermaidThemeUpdateSequence =
+      type === "setMermaidThemePreference"
+        ? this.mermaidPreferenceStore.beginThemeUpdate()
+        : undefined;
+    const mermaidSaveFormatUpdateSequence =
+      type === "setMermaidSaveFormat"
+        ? this.mermaidPreferenceStore.beginSaveFormatUpdate()
+        : undefined;
     // Reserve valid split invocations before the first asynchronous boundary to preserve receive order.
     const splitResumeInvocation = resumeMethod
       ? this.reserveSplitResumeInvocation(panel, state, msg, resumeMethod)
@@ -1082,6 +1175,8 @@ export class ChatPanelManager implements vscode.Disposable {
       type !== "revealSessionFile" &&
       type !== "debug" &&
       type !== "rememberOpenPosition" &&
+      type !== "setMermaidThemePreference" &&
+      type !== "setMermaidSaveFormat" &&
       type !== "switchClaudeBranch" &&
       type !== "openCodexAgentRun" &&
       type !== "toggleCodexAgentRunPin" &&
@@ -1245,6 +1340,18 @@ export class ChatPanelManager implements vscode.Disposable {
       }
       case "saveAttachment": {
         await this.saveAttachmentFromPanel(panel, msg);
+        return;
+      }
+      case "saveMermaid": {
+        await this.saveMermaidFromPanel(panel, msg);
+        return;
+      }
+      case "setMermaidThemePreference": {
+        await this.updateMermaidThemePreference(panel, msg, mermaidThemeUpdateSequence);
+        return;
+      }
+      case "setMermaidSaveFormat": {
+        await this.updateMermaidSaveFormat(panel, msg, mermaidSaveFormatUpdateSequence);
         return;
       }
       case "requestImageData": {
@@ -3094,6 +3201,7 @@ export class ChatPanelManager implements vscode.Disposable {
       cliResume: this.buildCliResumeSnapshot(panel, resumeRevision),
       bookmarks: bookmarkState.bookmarkKeys,
       i18n: this.buildI18n(),
+      mermaidPreferences: this.mermaidPreferenceStore.get(),
       dateTime,
       chatOpenPosition: config.chatOpenPosition,
       autoRefreshAvailable: config.autoRefresh.enabled,
@@ -3464,6 +3572,42 @@ export class ChatPanelManager implements vscode.Disposable {
     }
   }
 
+  private async saveMermaidFromPanel(panel: vscode.WebviewPanel, msg: any): Promise<void> {
+    const state = this.stateByPanel.get(panel);
+    if (!this.isCurrentPanelSessionRequest(state, msg, "saveMermaid")) return;
+
+    const validated = validateMermaidExportRequest(msg);
+    if (!validated) {
+      void vscode.window.showErrorMessage(t("chat.mermaid.saveFailed", t("chat.mermaid.invalidExport")));
+      return;
+    }
+
+    const defaultUri = buildDefaultMermaidSaveUri(
+      resolveSessionSaveCwd(state),
+      validated.diagramScope,
+      validated.diagramScopeNumber,
+      validated.diagramOrdinal,
+      validated.extension,
+    );
+    const targetUri = await vscode.window.showSaveDialog({
+      title: t("chat.mermaid.saveDialogTitle"),
+      defaultUri,
+      filters: {
+        [getMermaidExportFilterLabel(validated.format)]: [validated.extension.slice(1)],
+      },
+    });
+    if (!targetUri) return;
+    const latestState = this.stateByPanel.get(panel);
+    if (!this.isCurrentPanelSessionRequest(latestState, msg, "saveMermaidAfterDialog")) return;
+
+    try {
+      await vscode.workspace.fs.writeFile(targetUri, validated.bytes);
+      void vscode.window.showInformationMessage(t("chat.mermaid.saved"));
+    } catch (error) {
+      void vscode.window.showErrorMessage(t("chat.mermaid.saveFailed", formatError(error)));
+    }
+  }
+
   private isCurrentPanelSessionRequest(state: ChatPanelState | undefined, msg: any, operation: string): state is ChatPanelState {
     if (!state) {
       this.logger?.debug(formatDebugFields(`chatAttachment ${operation} ignored`, { reason: "missingState" }));
@@ -3474,7 +3618,6 @@ export class ChatPanelManager implements vscode.Disposable {
     if (!requestedFsPath) {
       this.logger?.debug(
         formatDebugFields(`chatAttachment ${operation} ignored`, {
-          session: safeDebugBasename(state.fsPath),
           reason: "missingFsPath",
         }),
       );
@@ -3484,8 +3627,6 @@ export class ChatPanelManager implements vscode.Disposable {
     if (normalizeCacheKey(requestedFsPath) !== normalizeCacheKey(state.fsPath)) {
       this.logger?.debug(
         formatDebugFields(`chatAttachment ${operation} ignored`, {
-          session: safeDebugBasename(state.fsPath),
-          requested: safeDebugBasename(requestedFsPath),
           reason: "staleFsPath",
         }),
       );
@@ -3815,6 +3956,29 @@ export class ChatPanelManager implements vscode.Disposable {
       imageAttachmentLabel: t("chat.image.attachmentLabel"),
       attachmentOpen: t("chat.attachment.open"),
       attachmentSave: t("chat.attachment.save"),
+      mermaidLabel: t("chat.mermaid.label"),
+      mermaidLoading: t("chat.mermaid.loading"),
+      mermaidRenderFailed: t("chat.mermaid.renderFailed"),
+      mermaidExpand: t("chat.mermaid.expand"),
+      mermaidClose: t("chat.mermaid.close"),
+      mermaidPaneTitle: t("chat.mermaid.paneTitle"),
+      mermaidZoomIn: t("chat.mermaid.zoomIn"),
+      mermaidZoomOut: t("chat.mermaid.zoomOut"),
+      mermaidFit: t("chat.mermaid.fit"),
+      mermaidReveal: t("chat.mermaid.reveal"),
+      mermaidCopySource: t("chat.mermaid.copySource"),
+      mermaidThemeLight: t("chat.mermaid.themeLight"),
+      mermaidThemeDark: t("chat.mermaid.themeDark"),
+      mermaidThemeDarkSetting: t("chat.mermaid.themeDarkSetting"),
+      mermaidThemeSwitch: t("chat.mermaid.themeSwitch"),
+      mermaidSaveAs: t("chat.mermaid.saveAs"),
+      mermaidSaveMenu: t("chat.mermaid.saveMenu"),
+      mermaidSaveFormat: t("chat.mermaid.saveFormat"),
+      mermaidFormatSvg: t("chat.mermaid.formatSvg"),
+      mermaidFormatPng: t("chat.mermaid.formatPng"),
+      mermaidFormatSource: t("chat.mermaid.formatSource"),
+      mermaidResize: t("chat.mermaid.resize"),
+      mermaidExportFailed: t("chat.mermaid.exportFailed"),
       attachmentFileReference: t("chat.attachment.fileReference"),
       attachmentOpenedFile: t("chat.attachment.openedFile"),
       attachmentSelection: t("chat.attachment.selection"),
@@ -4942,6 +5106,28 @@ function buildDefaultAttachmentSaveUri(sessionCwd: string | undefined, label: st
   const baseDir = typeof sessionCwd === "string" && sessionCwd.trim() ? sessionCwd.trim() : undefined;
   if (!baseDir) return vscode.Uri.file(fileName);
   return vscode.Uri.joinPath(vscode.Uri.file(baseDir), fileName);
+}
+
+function buildDefaultMermaidSaveUri(
+  sessionCwd: string | undefined,
+  diagramScope: MermaidExportScope,
+  diagramScopeNumber: number,
+  diagramOrdinal: number,
+  extension: ".svg" | ".png" | ".mmd",
+): vscode.Uri {
+  const fileName = buildMermaidExportFileName(
+    { diagramScope, diagramScopeNumber, diagramOrdinal },
+    extension,
+  );
+  const baseDir = typeof sessionCwd === "string" && sessionCwd.trim() ? sessionCwd.trim() : undefined;
+  if (!baseDir) return vscode.Uri.file(fileName);
+  return vscode.Uri.joinPath(vscode.Uri.file(baseDir), fileName);
+}
+
+function getMermaidExportFilterLabel(format: MermaidExportFormat): string {
+  if (format === "png") return t("chat.mermaid.pngFilter");
+  if (format === "mmd") return t("chat.mermaid.sourceFilter");
+  return t("chat.mermaid.svgFilter");
 }
 
 function buildImageFileName(label: string, extension: string): string {
