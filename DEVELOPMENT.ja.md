@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-08-12
-- 対象バージョン: 2.10.0
+- 最終更新: 2026-08-14
+- 対象バージョン: 2.11.0
 
 ## 1. 概要
 
@@ -46,30 +46,33 @@
   - `Delete Handoff Files`
   - `Empty Trash`
 - **Pinned**: ピン留め済みセッション一覧
-  - 絞り込み: 日付スコープ / プロジェクト (`cwd`) / ソース / アーカイブ表示 / タグ
+  - 絞り込み: 日付スコープ / プロジェクト (`cwd`) / ソース / 表示対象 / タグ
   - プロジェクト表示: `一覧表示` / `プロジェクト別表示`
   - プロジェクト対象範囲: `すべて` / `現在のプロジェクトグループ`
   - プロジェクト (`cwd`) に別名が設定されている場合は、プロジェクト見出し、セッション行の CWD 表示、tooltip、絞り込み表示で別名を優先する
-  - 表示順: More Actions から `ピン留め順 新しい順 / 古い順`、`開始日時 新しい順 / 古い順`、`最終メッセージ日時 新しい順 / 古い順`、`名前 昇順 / 降順` を選択する
-  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、再読み込み、エクスポート、Undo。表示順は toolbar には置かず More Actions に集約する
-  - `History` / `Search` の絞り込み、ソース、アーカイブ表示とは独立して状態を保持する
+  - 表示順: More Actions から `ピン留め順 新しい順 / 古い順`、`開始日時 新しい順 / 古い順`、`最終メッセージ日時 新しい順 / 古い順`、`名前 昇順 / 降順`、`ファイルサイズ 大きい順 / 小さい順` を選択する
+  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、タグ絞り込み、タグ絞り込み解除、表示対象切替、ソース切替、再読み込み、エクスポート、Undo。表示順はtoolbarに置かずMore Actionsへフラット表示し、セッションの表示対象は1階層のサブメニューへまとめる
+  - 表示対象は `通常のみ` / `通常＋アーカイブ` / `アーカイブのみ` / `非表示のみ` / `すべて` の5種類とし、`History` / `Search` の絞り込み、ソース、表示対象とは独立して状態を保持する
   - 欠損ピンも表示対象
   - 欠損ピンは日付スコープまたは現在プロジェクト絞り込みでは非表示にし、プロジェクト別表示では `CWD なし` 配下に集約する
   - `History` / `Search` からのドラッグ&ドロップで追加可能
-  - Codex アーカイブ済みセッションのピンは、Pinned 独自のソースとアーカイブ表示が対象に含めるときだけ表示する
+  - Codex アーカイブ済みセッションのピンは、Pinned 独自のソースと表示対象が含めるときだけ表示する
   - 公式側でアーカイブされてパスが変わったピンは、session identity で追従する
+  - 非表示セッションのpin自体は表示対象から外れても保持し、`非表示のみ` / `すべて` で表示すると説明と tooltip に非表示状態を示す
 - **History**: 年 / 月 / 日でグルーピングした履歴ツリー、またはセッション一覧のフラット一覧
   - 表示モード: `日付別` / `セッション一覧`
-  - 表示順: More Actions から `開始日時 新しい順 / 古い順`、`最終メッセージ日時 新しい順 / 古い順`、`名前 昇順 / 降順` を選択する
-  - 絞り込み: 日付スコープ / プロジェクト選択 (`ProjectSelection`: `all` / `groups` / `none`) / ソース / アーカイブ表示 / タグ
+  - 表示順: More Actions から `開始日時 新しい順 / 古い順`、`最終メッセージ日時 新しい順 / 古い順`、`名前 昇順 / 降順`、`ファイルサイズ 大きい順 / 小さい順` を選択する
+  - 絞り込み: 日付スコープ / プロジェクト選択 (`ProjectSelection`: `all` / `groups` / `none`) / ソース / 表示対象 / タグ
   - プロジェクト表示: `一覧表示` / `プロジェクト別表示`
   - プロジェクト対象範囲: `すべて` / `現在のプロジェクトグループ`。実効対象は`ProjectSelection`を正本とし、後者は現在workspaceの1groupを選んだことを表す保存UI状態として扱う
   - プロジェクト (`cwd`) に別名が設定されている場合は、プロジェクト見出し、セッション行の CWD 表示、tooltip、絞り込み表示で別名を優先する
   - `プロジェクト別表示` では、`セッション一覧` は `Project -> Session`、`日付別` は `Project -> Year -> Month -> Day -> Session` として表示する
-  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、表示モード切替、並び替え、タグ絞り込み、タグ絞り込み解除、アーカイブ表示切替、ソース切替、履歴インサイト、再読み込み、エクスポート、Undo など
-  - `絞り込み解除`は日付 / 明示的なプロジェクト選択 / ソース / アーカイブ表示 / タグを解除し、プロジェクト表示と対象範囲は表示状態として維持する。対象範囲が`現在のプロジェクトグループ`なら、その裏付けとなる1groupの`ProjectSelection`も維持する
-  - 複数選択で開く / エクスポート / Promote / Delete が可能。Codex / Claude Code の混在選択を許可し、Ctrl / Cmd での追加・解除と Shift での連続範囲選択はソース種別で分断しない
-  - Codex アーカイブ済みセッションは、アーカイブ表示が `すべて` または `アーカイブのみ` のときに表示し、アイコン / 説明 / tooltip で通常履歴と区別する
+  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、表示モード切替、並び替え、タグ絞り込み、タグ絞り込み解除、表示対象切替、ソース切替、履歴インサイト、再読み込み、エクスポート、Undoなど。More Actionsでは並び替えをフラット表示し、表示単位、プロジェクト表示、プロジェクト範囲、ソース、セッションの表示対象を1階層のサブメニューへまとめる。サブメニュー内は現在値によらない固定順とし、表示単位は`日付別`→`セッション一覧`、プロジェクト範囲は`現在のプロジェクトグループ`→`すべて`の順にする
+  - 表示対象は `通常のみ` / `通常＋アーカイブ` / `アーカイブのみ` / `非表示のみ` / `すべて` の5種類とする。Codex archive が利用できない場合も保存済みの選択は維持し、実効 UI は `通常のみ` / `非表示のみ` / `すべて` に縮退する
+  - `絞り込み解除`は日付 / 明示的なプロジェクト選択 / ソース / 表示対象 / タグを解除し、プロジェクト表示と対象範囲は表示状態として維持する。対象範囲が`現在のプロジェクトグループ`なら、その裏付けとなる1groupの`ProjectSelection`も維持する
+  - 複数選択で開く / エクスポート / Promote / Delete / 非表示 / 再表示が可能。Codex / Claude Code の混在選択を許可し、Ctrl / Cmd での追加・解除と Shift での連続範囲選択はソース種別で分断しない
+  - 非表示は拡張機能内のメタデータであり、通常履歴と Codex アーカイブの双方に適用する。元の JSONL は変更しない
+  - Codex アーカイブ済みセッションは、表示対象が `通常＋アーカイブ` / `アーカイブのみ` / `すべて` のときに表示し、アイコン / 説明 / tooltip で通常履歴と区別する
   - 初回履歴ロード中は、空状態案内ではなく読み込み中ノードを表示する
   - 履歴が 0 件の場合は、履歴保存先確認・再読み込み・Claude Code 有効化に関する案内ノードを表示する
   - 絞り込み適用後に一致する履歴がない場合は、絞り込み条件の変更 / 解除を促す案内ノードを表示する
@@ -77,13 +80,13 @@
   - 表示構造: セッション -> ヒット一覧
   - ヘッダー操作: `Search...`、`Clear Results`、保存済み検索の実行、現在の検索を保存、`Rerun Search`、エクスポート、Undo
   - 既定ロール設定は Control view / Command Palette / settings から管理する
-  - 検索対象は History 側の「日付 / プロジェクト / ソース / アーカイブ表示 / タグ / プロジェクト対象範囲」絞り込みに追従し、Pinned 側の独立した絞り込みには追従しない
+  - 検索対象は History 側の「日付 / プロジェクト / ソース / 表示対象 / タグ / プロジェクト対象範囲」絞り込みに追従し、Pinned 側の独立した絞り込みには追従しない
   - 検索結果が空のとき、History 側の絞り込み変更だけでは Search にセッション一覧を生成しない。これらの条件は次回検索の対象範囲としてだけ使う
   - 検索結果が表示されているとき、History 側の絞り込み変更が実効値として変わった場合だけ、最後の検索条件で再検索する
   - 検索結果のセッション行と tooltip ではプロジェクト別名を表示に反映するが、検索 hit 対象には含めない
-  - Search のヘッダーにはタグ / ソース / アーカイブ表示 / 日付 / プロジェクトの絞り込み操作を置かず、絞り込み操作は History 側に集約する
-  - アーカイブ非表示時は archived hit を候補から除外し、`search.maxResults` は表示される hit 数として扱う
-  - History 側でアーカイブ表示を切り替えた時点で検索結果がある場合は、最後の検索条件で再検索する
+  - Search のヘッダーにはタグ / ソース / 表示対象 / 日付 / プロジェクトの絞り込み操作を置かず、絞り込み操作は History 側に集約する
+  - 検索候補はHistoryの5状態を厳密に適用する。`非表示のみ`では非表示セッションだけ、`すべて`では表示／非表示の両方を対象とし、`search.maxResults` は表示される hit 数として扱う
+  - History 側で表示対象を切り替えた時点で検索結果がある場合は、最後の検索条件で再検索する
 - **Status**: 実行時状態の要約
   - 有効ソースごとのセッション件数
   - Codex source と Codex archived sessions が有効な場合は archived 件数
@@ -102,7 +105,7 @@
 
 - History ビューのタイトルメニューまたは Command Palette の `履歴インサイトを表示` から、現在の History 条件に一致するセッションを集計する editor Webview を開く
 - 起動時の対象セッション集合は snapshot として固定する。History 側の条件変更や新規セッションを自動追従せず、`再集計` は同じ対象集合の更新分だけを解析し、`履歴の条件を適用` は現在の History 条件から snapshot を作り直す
-- 対象条件はソース、両端包含の From / To、Codex の保存場所、関連付け後の複数プロジェクト、タグを扱う
+- 対象条件はソース、両端包含の From / To、5種類の表示対象、関連付け後の複数プロジェクト、タグを扱う。`非表示のみ` と `すべて` を含め、選択した表示対象どおりに集計する
 - Webview 内のフィルターは未適用 draft として保持し、`適用` するまで snapshot を変更しない。既定では History / Search の条件を変更せず、`履歴にも適用` を選択してから `適用` した場合だけ同じ検証済み条件を History へ原子的に反映する
 - フィルター適用では、新しい snapshot の保存、必要な History 条件の保存、panel state の公開をこの順で行う。保存前に表示状態を切り替えず、History 条件の保存に失敗した場合は snapshot を以前の値へ補償ロールバックする
 - `open`、`refreshCurrent`、フィルター適用は開始順に直列化する。先行処理が公開した snapshot を後着loadで上書きせず、後発の検証済みフィルター適用を黙って破棄しない。保存失敗時は直前のpanel stateと解析lifecycleを復旧する
@@ -134,6 +137,7 @@
 - `Prepare Codex CLI Resume Command`: VS Code の新しい統合ターミナルへ `codex resume <SESSION_ID>` を入力し、利用者の Enter を待つ
 - `Prepare Claude Code CLI Resume Command`: VS Code の新しい統合ターミナルへ `claude --resume <SESSION_ID>` を入力し、利用者の Enter を待つ
 - `他の AI へ引き継ぎ`: Handoff 用の階層メニューを表示する
+- `Hide / Show`: 選択した1件または複数セッションを拡張機能内だけで非表示 / 再表示し、Undo に対応する
 - `Move to Archive`: active Codex セッションを Codex archived sessions へ移動する
 - `Move to Codex History`: archived Codex セッションを通常の Codex history へ戻す
 - `Pin / Unpin`: ピン留めの追加 / 解除
@@ -141,8 +145,8 @@
 - `Delete`: 削除確認後に削除する
 - `Undo Last Action`: delete / pin / annotation / tag 操作などを 1 手戻す
 - `Edit Session Annotation`: タグ / ノート編集
-- `Export Sessions`: 生 JSONL または Markdown transcript を出力
-- `Import Sessions`: フォルダ単位で `.jsonl` を再帰取り込み
+- `Export Sessions`: 生 JSONL または Markdown transcript を出力。生 JSONL のフォルダ出力には対象セッションの `session-metadata.json` を併記する
+- `Import Sessions`: フォルダ単位で `.jsonl` を再帰取り込みし、manifest V2が宣言する `session-metadata.json` があれば検証後に復元確認を出す。manifest V1も従来どおり受理する
 
 ### 3.2.1 CLI 再開
 
@@ -192,10 +196,9 @@
 - `codexHistoryViewer.sources.enabled` に `codex` が含まれ、かつ `codexHistoryViewer.codex.archivedSessions.enabled` が有効な場合、通常の Codex `sessions` に加えて Codex `archived_sessions` も読み込む
 - `codexHistoryViewer.codex.archivedSessionsRoot` が空の場合は、Codex `sessionsRoot` と同階層の `archived_sessions` を既定値にする
 - `codexHistoryViewer.sources.enabled` に `codex` が含まれていない場合は、`codexHistoryViewer.codex.archivedSessions.enabled = true` でも archived sessions を使用しない
-- History / Search の Codex 用 `archiveLocationFilter` は workspace ごとに保持し、既定は `通常のみ` とする。Claude Code のみを選択している間の実効条件は `すべて` に固定するが、この値で Codex 用の保存値を上書きせず、Codex または All へ戻したときと再起動後に直前の Codex 条件を復元する
-- Pinned は `pinnedArchiveLocationFilter` を別に保持し、History と Pinned の view title action からそれぞれ独立して `通常のみ` / `すべて` / `アーカイブのみ` を切り替えられる。Search は History 側のアーカイブ表示を検索対象範囲として参照する
-- History のソース絞り込みが `claude` の場合、History のアーカイブ表示切替は toolbar では disabled 表示にし、More Actions ではアーカイブ表示 group を非表示にする
-- Pinned のソース絞り込みが `claude` の場合、Pinned のアーカイブ表示切替は disabled 表示かつ実行しても状態を変更しない
+- History と Pinned は workspace ごとに独立した表示対象 preference を保持し、各 view title action から `通常のみ` / `通常＋アーカイブ` / `アーカイブのみ` / `非表示のみ` / `すべて` を切り替えられる。Search はHistory側の5状態をそのまま参照し、`非表示のみ`ではhiddenだけ、`すべて`ではvisible／hiddenの両方を検索する
+- Codex archiveが無効、または各viewのsourceがClaude Codeのみの場合は、History／Pinnedそれぞれの実効表示対象と巡回候補を `通常のみ` / `非表示のみ` / `すべて` の3状態へ縮退させる。保存済みpreferenceは上書きせず、archive capabilityが戻ったときに復元する
+- view title actionは現在の実効表示対象をeye-closed／eye／archive／exclude／check-allで表し、tooltipへview名と状態名を表示する。HistoryとPinnedの状態、操作、永続化は互いに連動させない
 - archived 由来の session は `storage.archiveState = "archived"`、`rootKind = "codexArchivedSessions"` として扱う
 - active と archived に同じ session identity がある場合は active を優先し、重複表示を避ける
 - archived Codex session の Markdown には `Location: Archived` を表示し、セッションビューでは `Archived` 表示で通常履歴と区別する
@@ -210,7 +213,7 @@
 - archive / unarchive / pin reconcile では、annotation / bookmark / chat open position などの path-keyed metadata を移動先へ寄せる
 - `chat.openPosition = lastMessage` の archived Codex セッションビューから `Move to Codex History` を実行した場合は、操作直前に見ていた本文メッセージへ復元後に移動する
 - `PinEntry` は `identityKey` / `archiveState` / `rootKind` を保持し、公式側でアーカイブされて path が変わった場合も refresh 後に追従する
-- archived sessions が無効またはアーカイブ非表示のとき、archived 由来と判断できる pin は Pinned に欠損として出さず、Status の missing pin count にも含めない
+- archived sessions が無効、または Pinned の表示対象が archived を含まないとき、archived 由来と判断できる pin は Pinned に欠損として出さず、Status の missing pin count にも含めない
 - archived 由来と判断できない missing pin は、通常の削除 / 外部移動と区別できないため従来通り missing として扱う
 
 ### 3.2.4 他の AI へ引き継ぎ
@@ -223,6 +226,7 @@
   - `Claude Code へ引き継ぐ`: Codex セッションかつ Codex / Claude の両ソースが有効な場合のみ表示し、Handoff ファイルを作成または既存利用して Claude Code を開く
   - `引き継ぎファイルを作成`: 選択セッションの Handoff ファイルを作成する
   - `引き継ぎプロンプトをクリップボードにコピー`: Handoff ファイルを参照するプロンプトをクリップボードへコピーする
+  - `引き継ぎファイルのパスをクリップボードにコピー`: Handoff ファイルを作成または更新し、その絶対OSパスだけをクリップボードへコピーする
   - `引き継ぎファイルを開く`: 選択セッションに対応する Handoff ファイルを開く。存在しない場合は作成確認トーストを出し、承認時は作成後に開く
 - `Delete Handoff Files` と Status の Handoff 件数 / 容量は保守機能として残し、`handoff.enabled` が無効でも利用できる
 - Claude Code から Codex への引き継ぎは Codex 側の入力欄へ自動投入できないため、通常メニューには出さず、プロンプトのクリップボードコピーで扱う
@@ -252,8 +256,8 @@
   - セッション注釈のタグ / ノート
   - 添付 / ファイル参照の label、path、MIME type、file kind
   - Claude Code text document から抽出した上限内テキスト
-- Codex archived sessions は実効有効な場合に検索インデックスへ取り込み、表示時は `archiveLocationFilter` に従って hit を含める / 除外する
-- archived 非表示時は archived hit を先に除外してから `search.maxResults` を適用するため、表示件数が最大件数に達する
+- Codex archived sessions は実効有効な場合に検索インデックスへ取り込み、検索時は History の5状態の表示対象に従って、保存場所と非表示状態の両方から hit を含める / 除外する
+- 表示対象に一致しない hit を先に除外してから `search.maxResults` を適用するため、対象内の表示件数が最大件数に達する
 - PDF / Office / binary / base64 document の内容や、Codex file reference の参照先ファイル内容は検索インデックスへ入れない
 - 保存済み検索:
   - 実行: 保存済み検索 QuickPick で検索語を選択し、保存済みの検索語だけを再利用する。検索対象ロールと大文字小文字の扱いは現在設定を使う
@@ -664,7 +668,7 @@
 
 ### 3.6.6 Mermaid 図
 
-- assistant / user / developer メッセージの fenced code block が `mermaid` または `mmd` の場合、Mermaid 11.16.0 で図として表示する
+- assistant / user / developer メッセージの fenced code block が `mermaid` または `mmd` の場合、Mermaid 11.16.1 で図として表示する
 - 図は表示範囲付近へ入った時点で遅延描画し、1メッセージ20件、ソース100,000文字、edge 1,000件を上限とする。空ソース、文字数・図件数上限、NULは通常コードブロックへfallbackし、runtime不在、構文・edge上限・生成SVG検証エラーはMermaidカード内の共通エラーとソースfallbackで確認できるようにする。SVG描画成功時だけviewportを`role="img"`とし、loading / error時はstatus、alert、ソースを支援技術から読める状態にする
 - Mermaid の初期化は既存の Webview bundle 内の制約付き bridge に集約し、`securityLevel: strict`、`htmlLabels: false`、`startOnLoad: false`、テーマ、フォント、図種別設定を`secure`で固定する。Mermaidが認識する同一インデント／末尾空白付き区切りを含むleading frontmatter、init / initialize / config directive、click directiveは描画入力から除去し、閉じ区切りのないfrontmatterは拒否する
 - Mermaidが返したSVGは切り離したDOMで再解析し、script、foreignObject、image、iframe、object、embed、animation、discard、event handler、外部URI、危険なCSSを除去してからDOMへ挿入する。`xml:base`を含めattributeのlocal nameが`base`なら除去し、内部`#fragment`が外部resourceへ解決される経路を閉じる。Mermaidが生成するbaseなしの内部参照と `var(--vscode-...)` は許可し、外部URI schemeと混同しない。表示時と保存時のSVGは最大100,000要素、深さ512までとし、保存時は1要素あたりの属性を最大1,024件に制限する
@@ -918,6 +922,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 通常の `ensureEntries()` は保存失敗後も process-local 結果を返すが、`rebuildAll()` は削除 / 保存失敗を伝播し、保存成功前の結果を current cache として公開しない
 - `src/insights/historyInsightsSnapshot.ts` / `src/insights/historyInsightsAggregator.ts`
   - History provider が確定した session reference 集合と `bucketLocalDate` を snapshot の正本にし、Webview や集計側で History の条件述語 / 日付境界を再実装しない
+  - workspaceStateからsnapshotを復元するときは、`descriptor.sortOrder`を`HistorySortOrder`と同期した完全な型付き許可表で検証し、正規の表示順は保持しつつ未知値をfail-closedで拒否する
   - snapshot と解析 entry を `cacheKey` / `identityKey` で結合し、推論トークン / 変更イベント数を含む概要、推論トークンを含む日別 bucket、ソース / モデル / プロジェクト / ツール内訳、指標別アクティブセッション、ファイル統計、利用詳細、充足率を構築する
   - 利用詳細では入力キャッシュと推論、メッセージ構成、ターン状態を指標単位で集計し、変更ファイル種別は共通の `FilePresentationKind` ごとに重複除外後のファイル数と変更イベント数を構築する
   - ツール内訳とアクティブセッションは指標ごとの上位候補だけをmodelへ含め、safe integer飽和と取得可否を他の集計指標と同じ規則で扱う
@@ -1009,7 +1014,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 ### 4.7 検索フロー
 
 - `src/extension.ts` / `src/services/searchExecutionCoordinator.ts`
-  - 検索 generation を発行した直後、最初の await より前に、設定、History の date / project / source / tag / archive 条件、project association resolver、current History refresh queue を固定する
+  - 検索 generation を発行した直後、最初の await より前に、設定、History の date / project / source / tag / 5状態の表示対象、project association resolver、current History refresh queue を固定する
   - 実行中検索を非公開にする通常条件は、進捗通知からの明示キャンセルと新しい検索開始だけとする。History filter / scope、project association、関連設定、Auto Refresh、手動 History refresh、明示 maintenance の開始では generation を変更せず、開始時条件の検索を完走させる
   - 実行中に filter / scope が変わった場合は自動再検索要求を1件へまとめ、開始時条件の結果を公開した後に最新条件で一度だけ再検索する。旧検索が明示キャンセル、入力キャンセル、失敗で結果を公開しなかった場合は自動再検索しない
   - 実行中の `refreshViews({ clearSearch: true })` は保留し、検索が新結果を公開した場合は旧結果向けの clear 要求を破棄する。検索が結果を公開せず終了した場合だけ保留した clear を実行する
@@ -1017,8 +1022,9 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 開始時に互換性のある History Index がなければ、呼び出し時に捕捉した History refresh queue を一度だけ待つ。待機後も開始設定と互換な Index を取得できなければ `historyUnavailable` とし、後発 queue または後発設定を追わない
   - current History Index から readonly session inventory を copy し、検索インデックスの差分同期、候補抽出、結果作成まで同じ開始時 snapshot を使う
   - 削除済みファイルに対応してインデックスから不要エントリを落とす
-  - 候補絞り込みは「日付 / プロジェクト / ソース / History タグ」の順で適用する
-  - `includeArchivedSessions` に従って archived session を除外し、除外後に `search.maxResults` を適用する
+  - 候補絞り込みは「日付 / プロジェクト / ソース / Historyの5状態 / History タグ」の順で適用する
+  - History／Pinnedと共通の5状態判定を使い、「非表示のみ」はhidden sessionだけ、「すべて」はvisible／hiddenの両方を対象にしてから `search.maxResults` を適用する。互換呼び出しの `includeArchivedSessions`／archive条件はvisible session用の従来3状態へ変換する
+  - hidden resultはSearch treeのdescription、tooltip、context valueに非表示状態を反映し、右クリックから再表示できる
   - プロジェクト別名は検索 hit 対象には含めず、検索実行時に SearchRootNode の scope label へだけ反映する
   - 進捗表示とキャンセルに対応する
 - `src/services/searchIndexService.ts`
@@ -1052,17 +1058,29 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `PinEntry` は `identityKey` / `archiveState` / `rootKind` を保持する
   - refresh 後の `reconcile()` で identity key を使い、active / archived 間で移動した pin path を追従する
   - archived 由来 pin は archived sessions 無効時またはアーカイブ非表示時に missing として出さない
+- `src/services/hiddenSessionStore.ts`
+  - セッションの非表示状態を `globalState` に保存し、identity key を正本、正規化 path を補助キーとして active / archived 間の移動へ追従する
+  - 単体・複数の非表示 / 再表示、Undo、削除時の退避と復元、再スキャン後の照合を一括更新で扱う
+- `src/services/sessionMetadataBackupService.ts`
+  - タグ、ノート、カスタムタイトル、非表示、ピン、メッセージ等のしおりを、Raw JSONLエクスポートのsidecarとして絶対パスを含めない version 付き JSONへ保存する。メタデータが空のセッションもlocatorだけのrecordを出力する
+  - Raw import時の検証済みmanifest file対応表を起点に、sourceとsession IDまたはsourceと相対パスでsidecar recordを一意に照合し、対応表外、未一致、曖昧な項目を変更しない
+  - Raw importの完全置換では、タグ / ノート / カスタムタイトル / 非表示 / ピン / しおりを復元元と同じ状態へ置き換え、復元元にない値は削除または解除する。しおりを1件でも復元先JSONL上で一意検証できないセッションは、そのしおり集合だけを変更しない
+  - 全入力と全照合を検証してメモリ上へ staging してから、共通metadata mutation coordinator内でメタデータ種別ごとに一括保存する。保存失敗時は開始前 snapshot へcommitと逆順で補償ロールバックする
+  - preview時の照合先、復元元metadata、再構築済みbookmark key、既存metadataをfingerprint化し、確認後に復元planが変化していれば書込前にstaleとして中止する
+  - Raw export sidecarはUTF-8 BOMなし、最大32 MiBとし、未知format/version、不正UTF-8、絶対path、path traversal、上限超過を拒否する。Raw importのmanifestはUTF-8 BOMなし、最大16 MiB、最大200,000 file entryとして相対pathとsymlink解決後のroot内包含を検証する。manifest V2またはsidecarが欠損・破損していてもJSONL importは維持し、metadata側の失敗を別に通知する
+  - 有効なV2 importはJSONLとmetadataへの全書き込み前に事前計画し、modalで`すべて復元` / `セッションデータのみ` / 既存重複対象がある場合の`メタデータのみ` / キャンセルを選ぶ。キャンセル時は何も変更せず、`メタデータのみ`はJSONLを変更しない
+  - metadata保存成功後のHistory再読込に失敗してもrestore失敗へ読み替えず、確定済みmetadataを維持して手動refreshを案内する
 - View / filter state
-  - Historyの日付 / `ProjectSelection` / source / tag / archive locationは`HistoryFilterStateV2`として`workspaceState`に保存する。`ProjectSelection`がHistory / Searchの実効project集合の正本で、project display / project scope / view modeはV2の対象集合に含めず独立して保存する。`historyProjectScope=currentGroup`は、V2 selectionが現在workspaceのcanonical group 1件と一致する場合だけ有効なtoolbar由来状態とする
-  - Reload時はV2とproject scopeを両方復元し、current-group不変条件を検証する。不一致ならV2 selectionを安全な明示条件として維持してscopeだけ`all`へ正規化し、scopeが`all`でも明示selectionは保持する。scopeが`all`のときにV2 selectionから`currentGroup`を推測しない
-  - V2が破損している場合は旧条件へfallbackせず`ProjectSelection.none`とscope=`all`を使い、古いscope markerも`all`へ保存する。V2本体はユーザーが条件をリセットまたは再適用するまで自動上書きしない
-  - date / source / tag / archive locationだけの変更ではproject selectionを維持し、現在workspace groupとの一致が続く場合だけ`currentGroup` scopeも維持する。不一致またはworkspaceなしならselectionを変えずscopeだけ`all`へ正規化する。明示project選択、History InsightsからのHistory適用、drill-downではscopeを`all`へする。clearはscopeが`currentGroup`なら現在group selectionを維持する
-  - archive preferenceと`HistoryFilterStateV2`、または`ProjectSelection`とdisplay / scopeのように複数keyの値を同時更新する場合は、変更するkeyを同じ補償transactionへ含める。成功済みkeyの旧値を保持し、後段失敗時に逆順で補償ロールバックする。初回V2移行時もV2、必要なarchive preference、display、scope、一度限りのlegacy project filter補正を1 transactionにまとめる。保存完了前にin-memory state、provider、context、view descriptionを変更しない
-  - Historyのproject stateとfilter stateの更新は共通queueで直列化し、source / tagなど変更対象以外のfieldはqueue内の最新確定stateから合成する。association再読込と実際の関連付け追加 / 解除 / 種類変更後もselectionとscopeの整合性を再検証し、変更時はV2とscopeを同じtransactionで保存する。拡張自身の関連付け操作では変更前scopeが`currentGroup`なら現在workspace groupを再選択してscopeを維持し、外部変更を取り込む通常refreshで不一致ならselectionを維持してscopeだけ`all`へする。V2修復を保存できなければ関連付けを操作前snapshotへ戻し、復元にも失敗した場合はReloadを案内する。保存成功後の派生view / Search更新だけが失敗した場合は確定stateを維持し、再試行導線を出す
+  - Historyの日付 / `ProjectSelection` / source / tag / `displayTarget` は`HistoryFilterStateV3`として`workspaceState`に保存する。`ProjectSelection`がHistory / Searchの実効project集合の正本で、project display / project scope / view modeはV3の対象集合に含めず独立して保存する。`historyProjectScope=currentGroup`は、V3 selectionが現在workspaceのcanonical group 1件と一致する場合だけ有効なtoolbar由来状態とする
+  - 初回は`HistoryFilterStateV2`とarchive preferenceからV3へ移行する。V2のsourceがClaudeのみの場合は、V2本体の実効値`archiveLocation=all`ではなく、別保存されていたCodex用archive preferenceを5状態preferenceへ引き継ぐ。Reload時はV3とproject scopeを両方復元し、current-group不変条件を検証する。不一致ならV3 selectionを安全な明示条件として維持してscopeだけ`all`へ正規化し、scopeが`all`でも明示selectionは保持する。scopeが`all`のときにV3 selectionから`currentGroup`を推測しない
+  - V3が破損している場合は旧条件へfallbackせず`ProjectSelection.none`、`displayTarget=activeVisible`、scope=`all`を使う。破損値から意図しない非表示セッションを露出させない
+  - date / source / tag / display targetだけの変更ではproject selectionを維持し、現在workspace groupとの一致が続く場合だけ`currentGroup` scopeも維持する。不一致またはworkspaceなしならselectionを変えずscopeだけ`all`へ正規化する。明示project選択、History InsightsからのHistory適用、drill-downではscopeを`all`へする。clearはscopeが`currentGroup`なら現在group selectionを維持する
+  - display target preferenceと`HistoryFilterStateV3`、または`ProjectSelection`とdisplay / scopeのように複数keyの値を同時更新する場合は、変更するkeyを同じ補償transactionへ含める。成功済みkeyの旧値を保持し、後段失敗時に逆順で補償ロールバックする。初回V3移行時もV3、必要なdisplay target preference、display、scope、一度限りのlegacy project filter補正を1 transactionにまとめる。保存完了前にin-memory state、provider、context、view descriptionを変更しない
+  - Historyのproject stateとfilter stateの更新は共通queueで直列化し、source / tagなど変更対象以外のfieldはqueue内の最新確定stateから合成する。association再読込と実際の関連付け追加 / 解除 / 種類変更後もselectionとscopeの整合性を再検証し、変更時はV3とscopeを同じtransactionで保存する。拡張自身の関連付け操作では変更前scopeが`currentGroup`なら現在workspace groupを再選択してscopeを維持し、外部変更を取り込む通常refreshで不一致ならselectionを維持してscopeだけ`all`へする。V3修復を保存できなければ関連付けを操作前snapshotへ戻し、復元にも失敗した場合はReloadを案内する。保存成功後の派生view / Search更新だけが失敗した場合は確定stateを維持し、再試行導線を出す
   - History / Searchの説明では`現在のプロジェクトグループ`と、その裏付けの単一group selectionを重複表示しない。Pinnedは従来どおり独立したproject filter / scopeモデルを維持する
-  - Pinned の日付 / project CWD / project display / project scope / source / archive location / sort mode / tag は `workspaceState` に保存し、History / Search とは独立して扱う
+  - Pinned の日付 / project CWD / project display / project scope / source / display target preference / sort mode / tag は `workspaceState` に保存し、History / Search とは独立して扱う
   - Search の `lastSearchRequest` は `workspaceState` に保存する。Search 独自の tag filter は持たず、History 側の tag filter を使う
-  - `pinnedSourceFilter` の初回未保存時は `historySourceFilter` を初期値として移行し、`pinnedArchiveLocationFilter` の初回未保存時は `archiveLocationFilter` を初期値として移行する
+  - `pinnedSourceFilter` の初回未保存時は `historySourceFilter` を初期値として移行し、`pinnedDisplayTargetPreference` の初回未保存時は従来の `pinnedArchiveLocationFilter`（それも未保存なら `archiveLocationFilter`）を対応するvisible系表示対象へ移行する
   - プロジェクト判定用の key は `normalizeProjectKey()` で正規化し、全 OS で大文字小文字を区別しない
 - `src/services/searchPresetStore.ts`
   - 保存済み検索語を `globalState` に保存する
@@ -1099,15 +1117,16 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 生成時に 30 日超または 100 ディレクトリ超の古い Handoff ディレクトリを整理する
 - `src/extension.ts`
   - `handoffToClaude` は Codex セッションを対象に、既存ファイル確認後に `claude-vscode.editor.open` へ localized prompt を渡す
-  - `handoffToCodex` は Codex の入力欄へ自動投入できないため、Handoff prompt をクリップボードへコピーし、可能な範囲で Codex UI を開く
+  - Claude Code セッションから Codex への直接引き継ぎコマンドは提供しない。Codex の入力欄へプロンプトを渡す公開連携手段がないため、`copyHandoffPrompt` でコピーしたプロンプトを利用者が手動で貼り付ける
   - `copyHandoffPrompt` は既存 Handoff ファイルを確認なしで使い、存在しない場合だけ作成して、作成有無に応じたコピー完了通知と `引き継ぎファイルを開く` action を出す
+  - `copyHandoffPathToClipboard` は同じ作成 / 再利用処理で Handoff ファイルを用意し、その完全パスだけをクリップボードへコピーする
   - `createHandoffFile` は既存 Handoff ファイルがある場合に「既存を使う / 再作成」を確認する
   - `openSessionHandoff` は選択セッションに対応する Handoff ファイルを開き、存在しない場合は作成確認トーストから生成して開けるようにする
 - `package.json`
   - `codexHistoryViewer.handoff.enabled` が有効な場合だけ、Codex / Claude Code の表示中セッションに Handoff 階層メニューを表示する
   - `codexHistoryViewer.handoffEnabled` context key により、Handoff 階層メニューと作成 / コピー / 開く操作の表示を切り替える
   - `codexHistoryViewer.codexToClaudeHandoffEnabled` context key により、`Claude Code へ引き継ぐ` だけ Handoff が有効かつ Codex / Claude の両ソースが有効な Codex セッションに限定して表示する
-  - `引き継ぎファイルを作成` / `引き継ぎプロンプトをクリップボードにコピー` / `引き継ぎファイルを開く` は Codex / Claude Code セッションで表示する
+  - `引き継ぎファイルを作成` / `引き継ぎプロンプトをクリップボードにコピー` / `引き継ぎファイルのパスをコピー` / `引き継ぎファイルを開く` は active の Codex / Claude Code セッションで表示する
 
 ### 4.9.2 Codex アーカイブ / 復元
 
@@ -1130,8 +1149,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - restore が例外を投げた場合は `app.restoreArchivedFailed` を表示し、履歴と view を更新して部分移動済み状態にも追従する
   - filesystem restore の場合だけ Undo を出し、公式 provider restore では本家状態との整合を優先して Undo を出さない
   - `codexHistoryViewer.archiveSession` は Codex source と archived sessions が有効な active Codex session だけを対象にする
-  - `archiveLocationFilter` は History / Search の Codex 用 preference として `workspaceState` に保存し、VS Code context `codexHistoryViewer.archiveLocationFilter` に反映する。Claude Code のみでは provider / filter state の実効値を `all` にするが、preference へ書き戻さない
-  - `pinnedArchiveLocationFilter` は Pinned 用として `workspaceState` に保存し、VS Code context `codexHistoryViewer.pinnedArchiveLocationFilter` に反映する
+  - `displayTarget` は History の保存済み preference と実効表示を分離する。Codex archive が無効または source が Claude Code の場合は archive を必要とする選択を実効的に縮退させるが、preference へ書き戻さない
+  - Pinnedの`displayTarget`も保存済みpreferenceと実効表示を分離し、`workspaceState`とVS Code context `codexHistoryViewer.pinnedDisplayTarget`へHistoryとは独立して反映する。従来の`pinnedArchiveLocationFilter`は初回移行元と後方互換用の同期先に限定する
 
 ### 4.10 表示
 
@@ -1270,11 +1289,11 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - Codex archived sessions root は、Codex source が無効な場合や archived sessions が無効な場合は表示しない
   - Current project 表示は、プロジェクト別名がある場合に alias label を使う
 - History / Pinned / Search ツリー: `src/tree/*`
-  - History は `date` / `latest` の表示モードを持ち、`latest` ではセッションをフラットに降順表示する
+  - History は `date` / `latest` の表示モードを持ち、`latest` ではセッションをフラット表示して現在の表示順を適用する
   - プロジェクト別名がある場合は、Project node、session description、tooltip、Search の session 行表示に alias を反映する
   - Project node の contextValue は CWD 有無で `codexHistoryViewer.project.withCwd` / `codexHistoryViewer.project.noCwd` に分け、CWD なしには alias menu を出さない
   - archived Codex session は description / tooltip / icon 色で通常履歴と区別する
-  - `archiveLocationFilter="activeOnly"` のときは archived Codex session を History / Pinned / Search から除外する
+  - History / Pinned は独立した5状態の表示対象を持ち、Search は History の表示対象に従う。`activeVisible` では archived Codex session と非表示sessionを除外し、`all` では保存場所と非表示状態を問わず対象にする
   - `preview.tooltipMode = full` のセッションツールチップ末尾には、表示文字数 0 の tooltip 専用 command link を置く。許可コマンドは内部 command だけに限定し、localized title は持たせるが新しい link label は表示しない。command URI には session identity から作った固定長の SHA-256 参照だけを入れ、現在の History Index から一意に再解決する。外部由来文字列は Markdown punctuation をエスケープし、対象行からツールチップ内へポインターが移っても VS Code が閉じない操作可能な hover として扱わせる。既存のプレビュー本文は省略せず、`compact` / `titleOnly` と Search の個別 hit tooltip は変更しない
 
 ### 4.11 ツール意味付けレイヤー
@@ -1319,6 +1338,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - `package.json` の `codexHistoryViewer.ui.ja.*` / `codexHistoryViewer.ui.en.*`
   - `codexHistoryViewer.ui.language` に合わせてメニュー文言を切り替えるための alias command
   - VS Code の表示言語ではなく拡張独自設定に従う必要があるため、例外的に言語別タイトルを直接持つ
+  - More Actionsのsubmenuは親を`.ja` / `.en`に分け、子にも同じ言語のaliasだけを置き、`codexHistoryViewer.uiLang`で同じ言語だけを表示する。表示対象のbase setterは公開済みcommand IDとの後方互換性のため維持する
+  - More Actionsのsubmenu内は親がカテゴリを示すため、子commandのtitleはカテゴリ接頭辞を付けず、選択値と現在値を表す末尾の`✓`だけを表示する。ルート直下の並び替えは対象を含むラベルを維持する
 - 実行時の View タイトルは `runtime.view.*` キーを使う
   - `package.nls.*` の `view.*` と同名にしないことで、manifest 用キーと実行時キーの責務を分ける
 - TypeScript 内に UI 表示用の日本語を直書きしない
@@ -1455,7 +1476,29 @@ npm run package
 - README用の `media/screenshot*.png` は配布VSIXへ含めない。README内の画像はpackage時にremote URLへ変換されるため、`.vscodeignore`で除外する
 - ローカル最終確認用の `.root-review-*` は `.gitignore` と `.vscodeignore` の双方で除外する。リリース前は完成したVSIXを展開し、private docs、test、source map、別VSIX、レビュー用一時ファイルが混入していないことを確認する
 
-### 5.4 v2.8.0 リリースメモ（2026-07-21）
+### 5.4 v2.11.0 リリースメモ（2026-08-14）
+
+**追加された機能**
+
+- History、Pinned、History Insights の表示対象へ `非表示のみ` / `すべて` を追加し、既存の保存場所指定と合わせた5種類の表示対象を扱えるようにした。HistoryとPinnedの選択状態は独立して保持する
+- History / Pinned / Search のセッション右クリックで、複数選択を含む非表示 / 再表示と Undo を追加した。Pinned は非表示セッションのpinを保持して表示対象に応じて状態を明示し、Search はHistoryの表示対象に従って非表示セッションを検索し、状態を明示する
+- UI上の `元のセッションデータをエクスポート` では、生JSONLに加えてタグ、メモ、カスタムタイトル、非表示、ピン留め、メッセージ等のブックマークを移行する `session-metadata.json` とmanifest V2を出力する。importではセッションデータとメタデータの処理範囲を選択でき、Codexの通常／アーカイブ保存場所も保持する
+- Raw importで上書き可能なJSONLが全byte一致する場合はfilesystem書き込みを省略し、`スキップ` ではなく `変更不要` として確認dialogと完了通知へ独立計上する。確認後のdestination変化は実行直前に再比較し、実際の上書き／変更不要件数を結果へ反映する。ユーザー向けUIではproviderの保存形式に依存しない `セッションデータ` と呼び、完了通知を `セッションデータを復元しました` としてメタデータ復元通知と区別する
+- タグ／メモの変更eventは、開いているセッションビューへcurrent session revision付きの軽量messageとして自動反映する。注釈欄とページ内検索だけを更新し、JSONL再解析、timeline再描画、scroll／展開状態の初期化は行わない。current panelへの配送に失敗した場合だけ、セッションビューの再読み込みを促す警告を表示する
+- Handoff メニューへ `引き継ぎファイルのパスをコピー` を追加した
+- History / Pinned の表示順へファイルサイズの大きい順 / 小さい順を追加した。サイズ不明は末尾とし、プロジェクト別表示では表示対象セッションの合計サイズを使用する
+- History / Pinned の More Actions は並び替えを直接選べる状態のまま維持し、その他の表示設定を1階層のサブメニューへ整理した
+
+**互換性と安全性**
+
+- v2の History filter state と従来のPinnedアーカイブ表示は初回起動時に対応するvisible系表示対象へ移行し、既存状態だけで非表示セッションが突然露出しないようにする
+- メタデータ復元は絶対パスを使用せず、検証済みmanifest対応表から一意に照合できたセッションだけを対象にする。上書き対象のタグ、メモ、カスタムタイトル、非表示、ピン留め、ブックマークは復元元と同じ状態へ完全置換し、復元元にない値は削除または解除する
+- Raw exportでメタデータsidecarまたはV2 manifestを付属できなかった場合は、セッションの成功 / 失敗 / スキップ件数と分けて警告する
+- Raw importはセッションデータ（現行実装ではJSONL）とメタデータへの全書き込み前にmodal表示し、セッションデータの新規 / 上書き / 変更不要 / スキップ / 読込不能件数、メタデータ対象のCodex／Claude Code別件数、復元元ディレクトリ、追加 / 上書き / 削除 / 解除 / 復元不可を示す。`すべて復元` / `セッションデータのみ` / 既存重複対象がある場合の`メタデータのみ`を選択でき、キャンセル時はどちらも変更しない。初期2.11.0形式の `rootKind` がないV2 manifestも、有効なsidecarから一意に保存場所を特定できる場合はアーカイブ状態を復元する
+- File AI Change History は非表示状態に左右されず、従来どおり対象セッションを表示する
+- Session Viewerへ同梱するMermaidを11.16.1、DOMPurifyを3.4.13へ更新し、該当するupstream security advisoryへ対応した
+
+### 5.5 v2.8.0 リリースメモ（2026-07-21）
 
 **追加された機能**
 
@@ -1503,7 +1546,7 @@ npm run package
 - 配布するMarkdown rendererを`markdown-it@14.3.0` / `linkify-it@5.0.2`へ更新し、fuzzy emailと`mailto:`自動検出を無効にするfail-closed対策もdefense-in-depthとして維持した
 - `package.json` / `package-lock.json` のバージョンを `2.8.0` に更新した
 
-### 5.5 v2.7.0 リリースメモ（2026-07-02）
+### 5.6 v2.7.0 リリースメモ（2026-07-02）
 
 **追加された機能**
 
@@ -1589,7 +1632,7 @@ npm run package
 - page-search temporary expansion の clear、query 取得、render 後 restore dispatch の小さな重複を整理し、状態変化がない場合の余分な render を減らした
 - `package.json` / `package-lock.json` のバージョンを `2.7.0` に更新した
 
-### 5.6 v2.6.1 リリースメモ（2026-06-22）
+### 5.7 v2.6.1 リリースメモ（2026-06-22）
 
 **追加された機能**
 
@@ -1611,13 +1654,13 @@ npm run package
 - Claude Code の text-only 中断 record と tool result / attachment 混在 record を raw content で区別し、混在 record は通常 message として扱うようにした
 - `package.json` / `package-lock.json` のバージョンを `2.6.1` に更新した
 
-### 5.7 v2.6.0 リリースメモ（2026-06-12）
+### 5.8 v2.6.0 リリースメモ（2026-06-12）
 
 **追加された機能**
 
 - History に開始日時、最終メッセージ日時、名前の昇順 / 降順ソートを追加した。ソート設定は workspaceState に保存し、次回起動後も維持する
 - Pinned にピン留め順、開始日時、最終メッセージ日時、名前の昇順 / 降順ソートを追加した。Pinned のソート設定も workspaceState に保存する
-- History / Pinned の More Actions に並び替え項目を追加し、現在の選択項目には `（現在）` / ` (Current)` を付けて表示する
+- History / Pinned の More Actions に並び替え項目を追加し、現在の選択項目には末尾に ` ✓` を付けて表示する
 
 **変更された機能**
 
@@ -1635,7 +1678,7 @@ npm run package
 - sort / 表示状態の切り替え後に、選択中の履歴が見失われやすい問題を軽減した
 - `package.json` / `package-lock.json` のバージョンを `2.6.0` に更新した
 
-### 5.8 v2.5.1 リリースメモ（2026-06-10）
+### 5.9 v2.5.1 リリースメモ（2026-06-10）
 
 **修正された機能**
 
@@ -1645,7 +1688,7 @@ npm run package
 - JSON 書き込みを一時ファイル経由の best-effort atomic write に変更し、rename に失敗する provider では直接書き込みへフォールバックするようにした。古い孤立一時ファイルは `Empty Trash` で内部的に回収できるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.5.1` に更新した
 
-### 5.9 v2.5.0 リリースメモ（2026-06-07）
+### 5.10 v2.5.0 リリースメモ（2026-06-07）
 
 **追加された機能**
 
@@ -1677,7 +1720,7 @@ npm run package
 - ピン留めビューのプロジェクト並び順が、同じ時間に更新された場合に崩れることがある問題を修正した
 - `package.json` / `package-lock.json` のバージョンを `2.5.0` に更新した
 
-### 5.10 v2.4.1 リリースメモ（2026-05-26）
+### 5.11 v2.4.1 リリースメモ（2026-05-26）
 
 - プロジェクト (`cwd`) に、この拡張機能内だけの別名を設定 / 消去できるようにした
 - プロジェクト別名は History / Pinned のプロジェクト見出し、セッション行、tooltip、絞り込み表示、Status、Search の scope / セッション表示に反映する
@@ -1690,7 +1733,7 @@ npm run package
 - セッション Webview で `::code-comment{...}` directive をレビューコメントカードとして表示し、comma 区切りや複数行、未知 segment を含む出力も既知キーから復元できるようにした
 - `package.json` のバージョンを `2.4.1` に更新した
 
-### 5.11 v2.4.0 リリースメモ（2026-05-23）
+### 5.12 v2.4.0 リリースメモ（2026-05-23）
 
 - History に `絞り込みなし` / `現在のプロジェクト` / `プロジェクト単位` のプロジェクト表示 mode を追加した
 - プロジェクト判定用 key を全 OS で大文字小文字非区別に統一した
@@ -1708,7 +1751,7 @@ npm run package
 - Codex の `# Files mentioned by the user:` block が IDE context 後ろにある場合も、HTML / log / JSON などの file reference attachment として表示されるように修正した
 - `package.json` / `package-lock.json` のバージョンを `2.4.0` に更新した
 
-### 5.12 v2.3.0 リリースメモ（2026-05-22）
+### 5.13 v2.3.0 リリースメモ（2026-05-22）
 
 - セッションメッセージの添付モデルを `attachments` に統合し、画像も `type: "image"` の attachment として扱うようにした
 - Claude Code の `type: "document"` を document card として表示できるようにした
@@ -1742,7 +1785,7 @@ npm run package
 - Resume / Handoff では clean text と attachment summary を使い、raw tag / `Files mentioned` block の重複やバイナリ再添付を避けるようにした
 - `package.json` / `package-lock.json` のバージョンを `2.3.0` に更新した
 
-### 5.13 v2.2.0 リリースメモ（2026-05-21）
+### 5.14 v2.2.0 リリースメモ（2026-05-21）
 
 - Codex の通常 `sessions` に加えて、任意で `archived_sessions` を読み込めるようにした
 - `codexHistoryViewer.codex.archivedSessions.enabled` と `codexHistoryViewer.codex.archivedSessionsRoot` を追加した
@@ -1776,7 +1819,7 @@ npm run package
 - 検索インデックスの context に archived root / archived 有効状態を含めるようにした
 - `package.json` のバージョンを `2.2.0` に更新した
 
-### 5.14 v2.1.0 リリースメモ（2026-05-19）
+### 5.15 v2.1.0 リリースメモ（2026-05-19）
 
 - Codex / Claude Code 間の Handoff を新規実装した
 - History / Pinned / Search のセッション右クリックに、`他の AI へ引き継ぎ` 階層メニューを追加した
@@ -1796,7 +1839,7 @@ npm run package
 - セッションビュー内の軽量コピー機能は `Copy Quick Prompt` / `簡易プロンプトをコピー` とし、完全な Handoff と役割を分離した
 - `package.json` / `package-lock.json` のバージョンを `2.1.0` に更新した
 
-### 5.15 v2.0.1 リリースメモ（2026-05-15）
+### 5.16 v2.0.1 リリースメモ（2026-05-15）
 
 - 通常履歴 Webview とファイル履歴 Webview に、しおり ON/OFF 機能を追加した
 - しおり状態は VS Code `globalState` に保存し、元の JSONL 履歴ファイルは変更しない
@@ -1820,7 +1863,7 @@ npm run package
 - ファイル履歴 Webview の `履歴で開く` ボタンにアイコンを追加した
 - `package.json` / `package-lock.json` のバージョンを `2.0.1` に更新した
 
-### 5.16 v2.0.0 リリースメモ（2026-05-14）
+### 5.17 v2.0.0 リリースメモ（2026-05-14）
 
 - ワークスペース内のファイルを起点に、Codex / Claude Code の diff 履歴を時系列で確認できる File AI Change History を追加した
 - カスタムタイトル操作を QuickPick 入口へ統一し、セッションビューのヘッダーからも設定 / 消去できるようにした
@@ -1838,7 +1881,7 @@ npm run package
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
-### 5.17 v1.5.1 リリースメモ（2026-05-08）
+### 5.18 v1.5.1 リリースメモ（2026-05-08）
 
 - 自動更新 `follow` で、末尾が grouped diff カードの場合に本文追従が diff に奪われないよう、直前の非 diff カードを追従対象にするようにした
 - 自動更新 `follow` では pending のカードアンカー復元より追従を優先し、レイアウト更新後に追従位置がずれにくいよう再スクロールするようにした
@@ -1849,7 +1892,7 @@ npm run package
 - `custom_tool_call` の patch / diff 本文は検索インデックスに入れず、対象ファイルや command など検索の入口になる情報だけを入れるようにした
 - 検索インデックスの cache version を更新し、既存 cache は次回検索時に自動再構築されるようにした
 
-### 5.18 v1.5.0 リリースメモ（2026-05-07）
+### 5.19 v1.5.0 リリースメモ（2026-05-07）
 
 - Codex / Claude Code セッションに対して、この拡張機能内だけのカスタムタイトルを設定 / 消去できるようにした
 - カスタムタイトルは History / Pinned / セッション Webview のタイトルへ反映し、詳細ツールチップではオリジナルタイトルも確認できるようにした
@@ -1858,7 +1901,7 @@ npm run package
 - `Rebuild Search Index` コマンドを追加し、検索インデックス設定変更時に再作成へ誘導するようにした
 - Status に拡張機能バージョンを表示するようにした
 
-### 5.19 v1.4.3 リリースメモ（2026-04-30）
+### 5.20 v1.4.3 リリースメモ（2026-04-30）
 
 - `SECURITY.md` を追加し、`markdown-it` の GHSA-38c4-r59v-3vqw / CVE-2026-2327 について、v1.2.2 以降は `markdown-it@14.1.1` を同梱していることを明記した
 - v1.2.1 以前の古い VSIX をインストールまたは再配布しないよう、セキュリティポリシーに明記した
@@ -1940,11 +1983,11 @@ npm run package
 - `codexHistoryViewer.sources.enabled` に `codex` がない場合、`codexHistoryViewer.codex.archivedSessions.enabled = true` でも Codex archived sessions が読み込まれない
 - `codexHistoryViewer.sources.enabled` に `codex` がない場合、Status に Codex archived session count / root が表示されない
 - Codex source と archived sessions が有効な状態で archived root が存在しない場合もエラーにならない
-- Codex source と archived sessions が有効、かつアーカイブ表示が `通常のみ` のとき、History / Pinned / Search に archived Codex session が出ない
-- アーカイブ表示を `すべて` または `アーカイブのみ` にすると、History / Pinned / Search に archived Codex session が出る
-- アーカイブ表示を切り替えると、History / Pinned は再スキャンなしで即時に更新される
-- Search 結果がある状態でアーカイブ表示を切り替えると、最後の検索条件で再検索される
-- アーカイブ非表示時の Search は、表示される通常履歴 hit 数が `search.maxResults` に達する
+- Codex source と archived sessions が有効な状態で、History / Pinned それぞれの表示対象を `通常のみ` にすると、そのビューに archived Codex session と非表示sessionが出ない。SearchはHistoryの表示対象に従う
+- 表示対象を `通常＋アーカイブ` / `アーカイブのみ` / `非表示のみ` / `すべて` にすると、保存場所と非表示状態の組み合わせどおりに対象sessionが表示される
+- 表示対象を切り替えると、History / Pinned は再スキャンなしで即時に更新される
+- Search 結果がある状態で History の表示対象を切り替えると、最後の検索条件で再検索される
+- History の表示対象が archived を除外しているときも、Search は対象となるhitへ絞り込んだ後で `search.maxResults` を適用する
 - archived Codex session の Markdown に `Location: Archived` が表示され、セッションビューでは `Archived` 表示で通常履歴と区別できる
 - active Codex session の Markdown に `Location: Active` が表示される
 - archived Codex session のセッションビューでは `Resume in Codex` の位置に `Move to Codex History` が表示される
@@ -2040,36 +2083,49 @@ npm run package
 - `simplified` では diff entry を開くまで重い diff 本文が描画されない
 - 長い履歴のタブを切り替えて戻っても、本文領域の一瞬の縮小表示が restore cover で見えにくい
 - Codex のみ有効 / Claude Code のみ有効 / 両方有効で履歴が正しく出る
+- HistoryとPinnedの表示対象をそれぞれ `通常のみ` / `通常＋アーカイブ` / `アーカイブのみ` / `非表示のみ` / `すべて` に切り替えると、互いの状態を変えずactive / archivedと表示 / 非表示の組み合わせが正確に反映される
+- Codex archive が利用できない場合は各ビューの表示対象が `通常のみ` / `非表示のみ` / `すべて` に縮退し、再び利用可能にしたときは各ビューに保存済みのpreferenceが復元される
+- History / Pinned / Search で複数セッションを非表示 / 再表示でき、Undo 後に直前の状態へ戻る。非表示セッションはHistoryが`非表示のみ` / `すべて`のときだけSearchに出て、Search／Pinnedの双方で非表示表示と再表示操作が使える
+- 非表示セッションも File AI Change History には表示される
+- History Insights の表示対象5種類が History と同じ集合を集計し、`履歴にも適用` で同じ表示対象を History へ反映する
+- 生 JSONL export / import のsidecar復元で、タグ、メモ、カスタムタイトル、非表示、ピン留め、ブックマークが移行される。生JSONLではCodexの通常／アーカイブ保存場所も保持される
+- 重複IDを上書きする場合、タグ、メモ、カスタムタイトル、非表示、ピン留め、ブックマークが復元元と同じ状態へ置換され、復元元に存在しない情報は削除または解除される
+- Raw importのmodalで`セッションデータのみ`を選ぶとメタデータは変わらず、既存重複対象がある場合の`メタデータのみ`ではJSONLが変わらず、キャンセルでは両方が変わらない
+- Raw importで上書き対象JSONLが全byte一致する場合、確認dialogと完了通知は `変更不要` と表示し、`スキップ` や `上書き` に重複計上せず、JSONLのtimestampも更新しない
+- Raw importでタグ／メモを復元すると、復元前から開いているセッションビューにも手動reloadなしで反映され、ページ内検索結果も最新値へ追従する
+- 不正schema、上限超過、絶対パス、path traversal、曖昧照合を含むメタデータは安全に拒否またはスキップされ、保存失敗時は復元前状態へ戻る
 - Codex / Claude Code のどちらか一方だけが有効な場合でも、表示中セッション右クリックに `他の AI へ引き継ぎ` 階層メニューが表示される
 - `他の AI へ引き継ぎ` 配下で、Codex と Claude Code の両方が有効な Codex セッションには `Claude Code へ引き継ぐ` が表示され、Claude Code セッションや Claude Code 無効時の Codex セッションには表示されない
 - `codexHistoryViewer.handoff.enabled = false` のとき、表示中セッション右クリックに `他の AI へ引き継ぎ` 階層メニューが表示されず、Control の `Delete Handoff Files` と Status の Handoff 件数 / 容量は表示される
 - `引き継ぎファイルを作成` で `globalStorageUri/handoffs/<source>/.../handoff.md` が作成され、同じセッションでは同じファイルが使われる
 - 既存 Handoff ファイルがある状態で `Claude Code へ引き継ぐ` または `引き継ぎファイルを作成` を実行すると、既存利用 / 再作成の確認が出る
 - `引き継ぎプロンプトをクリップボードにコピー` は、既存 Handoff ファイルがある場合に確認なしで既存ファイル参照プロンプトをコピーする
+- `引き継ぎファイルのパスをコピー` は、既存 Handoff ファイルを再利用し、存在しない場合は作成してから完全パスだけをクリップボードへコピーする
 - Handoff ファイルがない状態で `引き継ぎプロンプトをクリップボードにコピー` を実行すると、Handoff ファイルを作成してからプロンプトをコピーし、作成したことも通知する。通知から Handoff ファイルを開ける
 - Handoff ファイルがない状態で `引き継ぎファイルを開く` を実行すると、作成確認トーストが出て、承認時は作成後に開く
 - Codex から Claude Code への Handoff では、Claude Code が localized prompt 付きで開く、または fallback 通知から Handoff ファイルを開く / プロンプトをコピーできる
-- Claude Code から Codex への Handoff は、Handoff prompt がクリップボードへコピーされ、Codex 入力欄へ自動投入されない前提の案内になる
+- Claude CodeからCodexへの直接引き継ぎコマンドは提供しない。汎用の`引き継ぎプロンプトをクリップボードにコピー`を利用し、利用者がCodexの入力欄へ手動で貼り付ける
 - Handoff prompt は `ui.language` に応じてローカライズされる
 - `handoff.md` には `Source session file`、直近のユーザー依頼、末尾優先の transcript 抜粋、復元可能なファイル変更が含まれる
 - `handoff.md` の本文ラベルは英語で、tool call / tool output 本文は含まれない
 - `引き継ぎファイルを削除` 実行後、Status の Handoff 件数 / 容量が更新される
-- `History` の日付 / プロジェクト / ソース / アーカイブ表示 / タグ絞り込みが期待どおり動く
+- `History` の日付 / プロジェクト / ソース / 表示対象 / タグ絞り込みが期待どおり動く
 - `History` の表示モードを `日付別` / `セッション一覧` で切り替えられ、選択中セッションが可能な範囲で新しいツリー上へ追従する
-- `History` の More Actions から、開始日時 / 最終メッセージ日時 / 名前の昇順 / 降順を切り替えられ、現在値には `（現在）` が表示される
+- `History`のMore Actionsでは、開始日時／最終メッセージ日時の新しい順・古い順、名前の昇順・降順、ファイルサイズの大きい順・小さい順の8項目がフラット表示され、現在値には末尾の`✓`が表示される。表示単位、プロジェクト表示、プロジェクト範囲、ソース、セッションの表示対象は1階層のサブメニューから選択できる。表示単位は`日付別`→`セッション一覧`、プロジェクト範囲は`現在のプロジェクトグループ`→`すべて`の固定順で、選択を変えても位置は変わらない。ファイルサイズ不明のセッションは方向にかかわらず末尾、プロジェクト別表示では表示対象セッションの合計サイズ順になる
 - Date Basis と日付系 sort 軸が異なる場合、History / Pinned の session row は sort 軸の日時を表示し、tooltip は Date Basis 側の日時を補足する。`titleOnly` は Date Basis 側のみ、`compact` / `full` は両方の日時を表示する
-- `History` の More Actions では、ソースが 1 種類だけ有効な場合に source 選択が表示されず、ソースが `Claude Code` の場合に archive 表示 group が表示されない
+- `History` の More Actions では、ソースが 1 種類だけ有効な場合にsource選択が表示されず、ソースが `Claude Code` の場合も表示対象groupは残って `通常のみ` / `非表示のみ` / `すべて` の3状態だけが選択できる
 - `History`のプロジェクト表示を`一覧表示` / `プロジェクト別表示`で切り替えられ、対象範囲を`すべて` / `現在のプロジェクトグループ`で切り替えられる。Reload後も対象範囲のアイコン、More Actionsの現在値、実際の`ProjectSelection`が一致する
 - `History` の `プロジェクト別表示` で、`セッション一覧` と `日付別` の階層がそれぞれ期待どおりになる
-- `History`の絞り込み解除は、対象範囲以外が非絞り込みならdisabled表示になり、日付 / 明示project selection / ソース / アーカイブ表示 / タグを解除して、プロジェクト表示と対象範囲は解除しない。対象範囲がcurrent groupなら裏付けselectionも維持する
+- `History`の絞り込み解除は、対象範囲以外が非絞り込みならdisabled表示になり、日付 / 明示project selection / ソース / 表示対象 / タグを解除して、プロジェクト表示と対象範囲は解除しない。対象範囲がcurrent groupなら裏付けselectionも維持する
 - `Pinned` のプロジェクト表示を `一覧表示` / `プロジェクト別表示` で切り替えられ、対象範囲を `すべて` / `現在のプロジェクトグループ` で切り替えられる。History のプロジェクト表示には影響しない
-- `Pinned` の日付 / プロジェクト / ソース / アーカイブ表示 / タグ絞り込みが期待どおり動き、History / Search 側の絞り込みに影響しない
+- `Pinned` の日付 / プロジェクト / ソース / 表示対象 / タグ絞り込みが期待どおり動き、History / Search 側の絞り込みに影響しない
 - `Pinned` のソース切替を `all` / `codex` / `claude` で切り替えられ、History 側のソース切替に影響しない
-- `Pinned` のソースが `claude` のとき、Pinned のアーカイブ表示切替が disabled になり、Command Palette から実行しても状態が変わらない
-- `Pinned` の More Actions から、ピン留め順 / 開始日時 / 最終メッセージ日時 / 名前の昇順 / 降順を切り替えられ、現在値には `（現在）` が表示される
+- `Pinned` のソースが `claude` のときも表示対象切替は利用でき、`通常のみ` / `非表示のみ` / `すべて` の3状態だけを巡回する。source切替だけではarchive利用可能時の保存済みpreferenceを上書きせず、3状態UIから明示的に選択した場合だけ新しいpreferenceとして保存する
+- `Pinned`のMore Actionsでは、ピン留め順／開始日時／最終メッセージ日時の新しい順・古い順、名前の昇順・降順、ファイルサイズの大きい順・小さい順の10項目がフラット表示され、現在値には末尾の`✓`が表示される。セッションの表示対象は1階層のサブメニューから選択できる。元ファイル欠損またはファイルサイズ不明の項目は方向にかかわらず末尾、プロジェクト別表示では表示対象セッションの合計サイズ順になる
 - `Pinned` の toolbar には表示順切替 icon が表示されず、表示順の変更は More Actions に集約される
 - `Pinned` のプロジェクト tooltip は、表示順に応じた代表日時を `ピン留め日時` / `セッション日時` として表示する
-- `Pinned` の絞り込み解除は日付 / プロジェクト / ソース / アーカイブ表示 / タグを解除し、プロジェクト表示、対象範囲、表示順は維持する
+- History / Pinnedでファイルサイズ順を選択した場合、プロジェクトと関連グループのtooltipに並び替えで使用した合計ファイルサイズを表示する。表示対象にサイズ不明のセッションが1件でもあれば合計も不明として表示する
+- `Pinned` の絞り込み解除は日付 / プロジェクト / ソース / 表示対象 / タグを解除し、プロジェクト表示、対象範囲、表示順は維持する
 - `History` の再読み込み、`Pinned` の再読み込み、`Search` の `Rerun Search` が、それぞれセッションのエクスポートのすぐ左に表示される
 - History / Pinned の右クリックから QuickPick 経由でカスタムタイトルを設定 / 消去でき、History / Pinned / セッション Webview タイトルへ反映される
 - カスタムタイトルがあるセッションの詳細ツールチップにオリジナルタイトルが表示される
@@ -2108,7 +2164,7 @@ npm run package
 - `Show details` を ON/OFF しても、切り替え前に見ていたカードまたは次の表示カードへスクロールが復元される
 - 詳細 OFF の大型セッションで tool 詳細、patch diff 行、画像 data URI が初回描画時にまとめて読み込まれず、詳細表示・diff 展開・画像表示時に必要分が読み込まれる
 - 再利用タブで別セッションへ切り替えたとき、検索状態、画像プレビュー、画像データキャッシュ、画像保存先 CWD、patch entry 詳細の pending 要求が前セッションから残らない
-- `Search` の view title action に `Search...`、`Clear Results`、保存済み検索実行、現在検索保存、`Rerun Search`、エクスポート、Undo が表示され、`Rerun Search` はエクスポートのすぐ左に配置される。タグ / ソース / アーカイブ表示 / 日付 / プロジェクトの絞り込み操作や保存済み検索削除は表示されない
+- `Search` の view title action に `Search...`、`Clear Results`、保存済み検索実行、現在検索保存、`Rerun Search`、エクスポート、Undo が表示され、`Rerun Search` はエクスポートのすぐ左に配置される。タグ / ソース / 表示対象 / 日付 / プロジェクトの絞り込み操作や保存済み検索削除は表示されない
 - `Search` が History 側の絞り込み条件を検索対象範囲として使い、Pinned 側の独立した絞り込み条件には追従しない。Search が空のときは History 側の絞り込み変更だけで結果を生成しない
 - `settings.json` で `preview.maxMessages` / `search.maxResults` に範囲外の値を入れても、設定読み取り時に許容範囲へ丸められる
 - `Search` のロール設定、保存済み検索、再検索が動き、保存済み検索は選択で実行、ゴミ箱ボタンで個別削除できる

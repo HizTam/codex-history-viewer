@@ -29,6 +29,7 @@ import {
 import { CodexAgentRunsService } from "../agents/codexAgentRunsService";
 import type { CodexAgentPresentation } from "../agents/codexAgentRunsTypes";
 import { SessionIconResolver } from "../ui/sessionIconResolver";
+import type { HiddenSessionStore } from "../services/hiddenSessionStore";
 
 // Provides the Search view (root -> session -> hit).
 export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode> {
@@ -38,6 +39,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   private readonly projectAssociationStore: ProjectAssociationStore;
   private readonly codexAgentRuns: CodexAgentRunsService;
   private readonly sessionIconResolver: SessionIconResolver;
+  private readonly hiddenSessionStore?: Pick<HiddenSessionStore, "isHidden">;
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   public readonly onDidChangeTreeData = this.emitter.event;
 
@@ -52,11 +54,13 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     projectAssociationStore: ProjectAssociationStore,
     codexAgentRunsOrExtensionUri: CodexAgentRunsService | vscode.Uri,
     sessionIconResolver?: SessionIconResolver,
+    hiddenSessionStore?: Pick<HiddenSessionStore, "isHidden">,
   ) {
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
     this.projectAliasStore = projectAliasStore;
     this.projectAssociationStore = projectAssociationStore;
+    this.hiddenSessionStore = hiddenSessionStore;
     if (isCodexAgentRunsService(codexAgentRunsOrExtensionUri)) {
       this.codexAgentRuns = codexAgentRunsOrExtensionUri;
       this.sessionIconResolver = sessionIconResolver!;
@@ -105,6 +109,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     }
     if (element instanceof SearchSessionNode) {
       const pinned = this.pinStore.isPinned(element.session.fsPath);
+      const hidden = this.hiddenSessionStore?.isHidden(element.session) ?? false;
       const annotation = this.annotationStore.get(element.session.fsPath);
       // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
       const shortTitle = truncateByDisplayWidth(element.session.displayTitle, 40, "...");
@@ -125,12 +130,14 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         projectAlias,
         projectDisplayCwd,
         agentPresentation,
+        hidden,
       );
       const node = new SessionNode(element.session, pinned);
       item.contextValue = toTreeItemContextValue(
         node,
         agentPresentation?.relation,
         Boolean(agentPresentation?.parentSession),
+        hidden,
       );
       // Show source-specific icons (Codex/Claude) in the list row.
       item.iconPath = this.sessionIconResolver.resolve(
@@ -155,11 +162,13 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         projectAlias,
         projectDisplayCwd,
         agentPresentation,
+        hidden,
       );
       return item;
     }
     if (element instanceof SearchHitNode) {
       const pinned = this.pinStore.isPinned(element.session.fsPath);
+      const hidden = this.hiddenSessionStore?.isHidden(element.session) ?? false;
       const roleLabel = formatRoleLabel(element.hit.role, element.hit.source);
       const locationLabel = formatLocationLabel(element.hit);
       const label = `${locationLabel} ${roleLabel}: ${element.hit.snippet}`;
@@ -176,6 +185,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         node,
         agentPresentation?.relation,
         Boolean(agentPresentation?.parentSession),
+        hidden,
       );
       item.iconPath = new vscode.ThemeIcon("search");
 
@@ -186,7 +196,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         arguments: [element],
       };
       item.tooltip =
-        getConfig().previewTooltipMode === "titleOnly" ? buildTreeRowTooltip(label) : buildSearchHitTooltip(element);
+        getConfig().previewTooltipMode === "titleOnly" ? buildTreeRowTooltip(label) : buildSearchHitTooltip(element, hidden);
       return item;
     }
     if (element instanceof SearchHelpNode) {
@@ -281,6 +291,7 @@ function buildSearchSessionTooltip(
   projectAlias?: string,
   projectDisplayCwd?: string | null,
   agentPresentation?: CodexAgentPresentation,
+  hidden = false,
 ): string | vscode.MarkdownString {
   const mode = getConfig().previewTooltipMode;
   if (mode === "titleOnly") return buildTreeRowTooltip(label, description);
@@ -293,6 +304,9 @@ function buildSearchSessionTooltip(
   md.appendMarkdown(`Source: ${sourceName(node.session.source)}  \n`);
   if (node.session.storage.archiveState === "archived") {
     md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.location"))}: ${escapeForMarkdown(t("session.location.archived"))}  \n`);
+  }
+  if (hidden) {
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.visibility", t("tree.description.hidden")))}  \n`);
   }
   const alias = String(projectAlias ?? "").trim();
   const cwd = typeof node.session.meta?.cwd === "string" ? node.session.meta.cwd.trim() : "";
@@ -328,11 +342,14 @@ function buildSearchSessionTooltip(
   return md;
 }
 
-function buildSearchHitTooltip(node: SearchHitNode): vscode.MarkdownString {
+function buildSearchHitTooltip(node: SearchHitNode, hidden = false): vscode.MarkdownString {
   const md = new vscode.MarkdownString(undefined, true);
   md.isTrusted = false;
   md.appendMarkdown(`**${escapeForMarkdown(formatLocationLabel(node.hit))} ${formatRoleLabel(node.hit.role, node.hit.source)}**  \n`);
   md.appendMarkdown(`${escapeForMarkdown(node.hit.snippet)}\n`);
+  if (hidden) {
+    md.appendMarkdown(`\n${escapeForMarkdown(t("tree.tooltip.visibility", t("tree.description.hidden")))}  \n`);
+  }
   md.appendMarkdown(`\n---\n${escapeForMarkdown(t("tree.tooltip.searchHitAction"))}\n`);
   return md;
 }

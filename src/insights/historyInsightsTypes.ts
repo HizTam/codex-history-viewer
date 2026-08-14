@@ -4,12 +4,14 @@ import type { DateScope } from "../types/dateScope";
 import type { ProjectSelection, ProjectSelectionGroup } from "../types/projectSelection";
 import type { AnalysisAvailability } from "../analysis/sessionAnalysisTypes";
 import type { FilePresentationKind } from "../utils/fileKind";
+import type { HistoryDisplayTarget } from "../types/historyFilterState";
 export interface HistoryInsightsCondition {
   date: DateScope;
   projects: ProjectSelection;
   source: SessionSourceFilter;
   tags: readonly string[];
   archiveLocation: ArchiveLocationFilter;
+  displayTarget?: HistoryDisplayTarget;
 }
 
 export interface HistoryInsightsSessionReference {
@@ -35,6 +37,7 @@ export interface HistoryInsightsFilterDescriptor {
   projectScopeCwd?: string | null;
   tags: string[];
   archiveLocation: ArchiveLocationFilter;
+  displayTarget: HistoryDisplayTarget;
   viewMode: HistoryViewMode;
   sortOrder: HistorySortOrder;
   projectGrouped: boolean;
@@ -110,6 +113,7 @@ export interface HistoryInsightsFilterOption {
   memberCount?: number;
   current?: boolean;
   value?: string;
+  requiresCodexArchive?: boolean;
   section?: "current" | "related" | "projects";
 }
 
@@ -124,6 +128,7 @@ export interface HistoryInsightsFilterPresentation {
   source: SessionSourceFilter;
   dateRange: HistoryInsightsDateRange;
   archiveLocation: ArchiveLocationFilter;
+  displayTarget: HistoryDisplayTarget;
   projectsLabel: string;
   projectSelectionKind: ProjectSelection["kind"];
   tags: string[];
@@ -134,13 +139,13 @@ export interface HistoryInsightsFilterPresentation {
 
 export type HistoryInsightsFilterSelection =
   | { filter: "source"; source: SessionSource }
-  | { filter: "archiveLocation"; archiveLocation: Exclude<ArchiveLocationFilter, "all"> }
+  | { filter: "archiveLocation"; displayTarget: HistoryDisplayTarget }
   | { filter: "projects"; projects: { kind: "all" } | { kind: "group"; group: ProjectSelectionGroup } }
   | { filter: "tags"; tags: string[] };
 
 export interface HistoryInsightsFilterApplication {
   source: SessionSourceFilter;
-  archiveLocation: ArchiveLocationFilter;
+  displayTarget: HistoryDisplayTarget;
   projects: ProjectSelection;
   tags: string[];
   dateRange: HistoryInsightsDateRange;

@@ -5,11 +5,27 @@ import { normalizeProjectKey } from "../utils/fsUtils";
 import { parseProjectSelection, projectSelectionFromCwds } from "../types/projectSelection";
 import { sanitizeHistoryInsightsDateRange } from "./historyInsightsDateRange";
 import type { HistoryInsightsSnapshot } from "./historyInsightsTypes";
+import {
+  archiveLocationFromHistoryDisplayTarget,
+  historyDisplayTargetFromArchiveLocation,
+  isHistoryDisplayTarget,
+} from "../types/historyFilterState";
 
 export interface ResolvedHistoryInsightsSnapshot {
   snapshot: HistoryInsightsSnapshot;
   sessions: SessionSummary[];
 }
+
+const HISTORY_INSIGHTS_SORT_ORDER_VALUES: Readonly<Record<HistoryInsightsSnapshot["descriptor"]["sortOrder"], true>> = {
+  createdDesc: true,
+  createdAsc: true,
+  lastActivityDesc: true,
+  lastActivityAsc: true,
+  titleAsc: true,
+  titleDesc: true,
+  fileSizeDesc: true,
+  fileSizeAsc: true,
+};
 
 export function resolveHistoryInsightsSnapshot(
   snapshot: HistoryInsightsSnapshot,
@@ -104,12 +120,17 @@ export function sanitizeHistoryInsightsSnapshot(value: unknown): HistoryInsights
   if (!dateRange) return null;
   const source = descriptor.source;
   const archiveLocation = descriptor.archiveLocation;
+  const displayTarget = descriptor.displayTarget === undefined
+    ? undefined
+    : descriptor.displayTarget;
   const viewMode = descriptor.viewMode;
   const sortOrder = descriptor.sortOrder;
   if (source !== "all" && source !== "codex" && source !== "claude") return null;
   if (archiveLocation !== "activeOnly" && archiveLocation !== "all" && archiveLocation !== "archivedOnly") return null;
+  if (displayTarget !== undefined && !isHistoryDisplayTarget(displayTarget)) return null;
+  if (displayTarget !== undefined && archiveLocationFromHistoryDisplayTarget(displayTarget) !== archiveLocation) return null;
   if (viewMode !== "date" && viewMode !== "latest") return null;
-  if (!["createdDesc", "createdAsc", "lastActivityDesc", "lastActivityAsc", "titleAsc", "titleDesc"].includes(String(sortOrder))) return null;
+  if (!isHistoryInsightsSortOrder(sortOrder)) return null;
   if (typeof descriptor.projectGrouped !== "boolean") return null;
   const projectCwd = nullableBoundedString(descriptor.projectCwd, 32_768);
   const projectScopeCwd = nullableBoundedString(descriptor.projectScopeCwd, 32_768);
@@ -135,12 +156,19 @@ export function sanitizeHistoryInsightsSnapshot(value: unknown): HistoryInsights
       projects,
       tags: descriptor.tags.slice(),
       archiveLocation,
+      displayTarget: displayTarget ?? historyDisplayTargetFromArchiveLocation(archiveLocation),
       viewMode,
       sortOrder: sortOrder as HistoryInsightsSnapshot["descriptor"]["sortOrder"],
       projectGrouped: descriptor.projectGrouped,
       chips: descriptor.chips.slice(),
     },
   };
+}
+
+function isHistoryInsightsSortOrder(
+  value: unknown,
+): value is HistoryInsightsSnapshot["descriptor"]["sortOrder"] {
+  return typeof value === "string" && Object.prototype.hasOwnProperty.call(HISTORY_INSIGHTS_SORT_ORDER_VALUES, value);
 }
 
 function boundedString(value: unknown, maxLength: number): string {

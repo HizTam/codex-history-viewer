@@ -9,6 +9,7 @@ export function buildSessionDescription(
   projectAlias?: string,
   projectDisplayCwd?: string | null,
   agentPresentation?: CodexAgentPresentation,
+  hidden = false,
 ): string {
   const parts: string[] = [];
   if (agentPresentation?.relation === "child" || agentPresentation?.relation === "both") {
@@ -21,6 +22,7 @@ export function buildSessionDescription(
     parts.push(t("codexAgentRuns.directChildrenDescription", agentPresentation.directChildCount));
   }
   if (session.storage.archiveState === "archived") parts.push(t("tree.description.archived"));
+  if (hidden) parts.push(t("tree.description.hidden"));
   const alias = String(projectAlias ?? "").trim();
   if (alias) parts.push(alias);
   else if (projectDisplayCwd) parts.push(safeDisplayPath(projectDisplayCwd, 80));

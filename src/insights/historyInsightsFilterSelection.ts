@@ -6,7 +6,8 @@ import type {
 } from "./historyInsightsTypes";
 import { sanitizeHistoryInsightsDateRange } from "./historyInsightsDateRange";
 import { MAX_PROJECT_SELECTION_GROUPS, type ProjectSelection } from "../types/projectSelection";
-import type { ArchiveLocationFilter, SessionSourceFilter } from "../sessions/sessionTypes";
+import type { SessionSourceFilter } from "../sessions/sessionTypes";
+import type { HistoryDisplayTarget } from "../types/historyFilterState";
 
 export type HistoryInsightsFilterApplicationResult =
   | { ok: true; value: HistoryInsightsFilterApplication }
@@ -21,14 +22,14 @@ export function resolveHistoryInsightsFilterApplication(
   const raw = value as Partial<HistoryInsightsFilterApplyPayload>;
   if (typeof raw.snapshotId !== "string" || raw.snapshotId !== expectedSnapshotId) return { ok: false, reason: "stale" };
   const source = resolveSourceSelections(raw.sourceIds, selections);
-  const selectedArchiveLocation = resolveArchiveLocationSelections(raw.archiveLocationIds, selections);
+  const displayTarget = resolveDisplayTargetSelection(raw.archiveLocationIds, selections);
   const projects = resolveProjectSelections(raw.projectIds, selections);
   const tags = resolveHistoryInsightsFilterSelection("tags", raw.tagIds, selections);
   const dateRange = sanitizeHistoryInsightsDateRange({ from: raw.from ?? null, to: raw.to ?? null });
   if (
     typeof raw.applyToHistory !== "boolean" ||
     !source ||
-    !selectedArchiveLocation ||
+    !displayTarget ||
     !projects ||
     !tags || tags.filter !== "tags" ||
     !dateRange
@@ -39,7 +40,7 @@ export function resolveHistoryInsightsFilterApplication(
     ok: true,
     value: {
       source,
-      archiveLocation: source === "claude" ? "all" : selectedArchiveLocation,
+      displayTarget,
       projects,
       tags: tags.tags,
       dateRange,
@@ -85,18 +86,15 @@ function resolveSourceSelections(
   return sources.length === 1 ? sources[0]! : null;
 }
 
-function resolveArchiveLocationSelections(
+function resolveDisplayTargetSelection(
   value: unknown,
   selections: ReadonlyMap<string, HistoryInsightsFilterSelection>,
-): ArchiveLocationFilter | null {
+): HistoryDisplayTarget | null {
+  if (!Array.isArray(value) || value.length !== 1) return null;
   const resolved = resolveFiniteSelections("archiveLocation", value, selections);
-  if (!resolved) return null;
-  const locations = resolved.flatMap((selection) => selection.filter === "archiveLocation" ? [selection.archiveLocation] : []);
-  if (locations.length !== resolved.length) return null;
-  const locationSet = new Set(locations);
-  if (locationSet.size !== locations.length) return null;
-  if (locationSet.size === 2 && locationSet.has("activeOnly") && locationSet.has("archivedOnly")) return "all";
-  return locations.length === 1 ? locations[0]! : null;
+  if (!resolved || resolved.length !== 1) return null;
+  const selection = resolved[0];
+  return selection?.filter === "archiveLocation" ? selection.displayTarget : null;
 }
 
 function resolveFiniteSelections(

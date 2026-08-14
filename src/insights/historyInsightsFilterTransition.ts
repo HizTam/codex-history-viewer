@@ -1,6 +1,10 @@
-import type { ArchiveLocationFilter } from "../sessions/sessionTypes";
 import { historyInsightsDateRangeToDateScope } from "./historyInsightsDateRange";
 import type { HistoryInsightsCondition, HistoryInsightsFilterApplication } from "./historyInsightsTypes";
+import {
+  archiveLocationFromHistoryDisplayTarget,
+  resolveEffectiveHistoryDisplayTarget,
+  type HistoryDisplayTarget,
+} from "../types/historyFilterState";
 
 export interface HistoryInsightsFilterTransition {
   condition: HistoryInsightsCondition;
@@ -9,14 +13,15 @@ export interface HistoryInsightsFilterTransition {
 
 export function buildHistoryInsightsFilterTransition(
   application: HistoryInsightsFilterApplication,
-  effectiveArchiveLocation: ArchiveLocationFilter,
+  effectiveDisplayTarget: HistoryDisplayTarget,
 ): HistoryInsightsFilterTransition {
   const condition: HistoryInsightsCondition = {
     date: historyInsightsDateRangeToDateScope(application.dateRange),
     projects: application.projects,
     source: application.source,
     tags: application.tags.slice(0, 12),
-    archiveLocation: effectiveArchiveLocation,
+    archiveLocation: archiveLocationFromHistoryDisplayTarget(effectiveDisplayTarget),
+    displayTarget: effectiveDisplayTarget,
   };
   return {
     condition,
@@ -24,15 +29,11 @@ export function buildHistoryInsightsFilterTransition(
   };
 }
 
-export function validateHistoryInsightsArchiveLocation(
-  application: Pick<HistoryInsightsFilterApplication, "source" | "archiveLocation">,
+export function resolveHistoryInsightsDisplayTarget(
+  application: Pick<HistoryInsightsFilterApplication, "source" | "displayTarget">,
   archivedSessionsEnabled: boolean,
-): ArchiveLocationFilter | null {
-  if (application.source === "claude") {
-    return application.archiveLocation === "all" ? "all" : null;
-  }
-  if (!archivedSessionsEnabled) {
-    return application.archiveLocation === "activeOnly" ? "activeOnly" : null;
-  }
-  return application.archiveLocation;
+): HistoryDisplayTarget | null {
+  const requiresArchive = application.displayTarget === "visibleAllLocations" || application.displayTarget === "archivedVisible";
+  if (requiresArchive && (application.source === "claude" || !archivedSessionsEnabled)) return null;
+  return resolveEffectiveHistoryDisplayTarget(application.displayTarget, application.source, archivedSessionsEnabled);
 }

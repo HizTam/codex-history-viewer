@@ -17,7 +17,6 @@
       shouldUseCompactHeader,
       calculateFiniteSelectionState,
       nextFilterIdsAfterRemoval,
-      calculateArchiveSelectionTransition,
       hasFilterConditionChanges,
       resolveFilterApplyAction,
       shouldUseRefreshToast,
@@ -63,11 +62,11 @@
   let activeBreakdownMetricDropdown = null;
   let filterOverlay = null;
   let filterDraft = null;
+  let visibilitySelectionBeforeClaude = null;
   let filterApplying = false;
   let applyToHistoryPreference = restored.applyToHistoryPreference === true;
   let applyToHistoryPreferenceRevision = 0;
   let applyToHistoryControl = null;
-  let archiveSelectionBeforeClaude = null;
   let refreshRequested = false;
   let refreshToastTimer = null;
   let refreshToastMessage = "";
@@ -297,8 +296,8 @@
     if (!filters || model?.refreshing) return;
     closeActivityMetricDropdown(false);
     filterDraft = createFilterDraft(filters);
+    visibilitySelectionBeforeClaude = null;
     filterApplying = false;
-    archiveSelectionBeforeClaude = null;
     filterControlSyncers.clear();
     filterOverlay = renderFilterOverlay(trigger);
     app.appendChild(filterOverlay);
@@ -350,7 +349,7 @@
     grid.append(
       renderFilterDropdown("source", "filterSource", values.options.source, values.canEditSource, true),
       renderDateRangeControl(),
-      renderFilterDropdown("archiveLocation", "filterLocation", values.options.archiveLocation, values.canEditArchiveLocation, true),
+      renderFilterDropdown("archiveLocation", "filterLocation", values.options.archiveLocation, values.canEditArchiveLocation, false),
       renderFilterDropdown("projects", "filterProject", values.options.projects, true, true),
       renderFilterDropdown("tags", "filterTags", values.options.tags, true, true),
     );
@@ -365,7 +364,7 @@
   function renderFilterDropdown(kind, labelKey, options, enabled, multiple) {
     const wrapper = el("div", { className: "filterControl" });
     const surface = el("div", { className: "filterControlSurface" });
-    const finiteCheckSet = kind === "source" || kind === "archiveLocation";
+    const finiteCheckSet = kind === "source";
     const button = el("button", { type: "button", className: "filterButton" });
     button.dataset.filterKind = kind;
     button.dataset.baseDisabled = String(!enabled);
@@ -401,6 +400,10 @@
     const sectionHeadings = new Map();
     const syncOption = (optionButton, option) => {
       const selected = selectedIds.has(option.id);
+      const unavailable = kind === "archiveLocation" && isFilterDraftClaudeOnly() && option.requiresCodexArchive;
+      if (kind === "archiveLocation") optionButton.hidden = unavailable;
+      optionButton.dataset.unavailable = String(unavailable);
+      optionButton.disabled = filterApplying || unavailable;
       optionButton.setAttribute(finiteCheckSet ? "aria-checked" : "aria-selected", String(selected));
       optionButton.classList.toggle("selected", selected);
       const marker = optionButton.querySelector(".filterOptionMarker");
@@ -468,8 +471,7 @@
         }
         selectedIds.clear();
         selectedIds.add(option.id);
-        setDraftIds(kind, [option.id]);
-        syncAllFilterControls();
+        updateDraftSelection(kind, [option.id], options);
         closeActiveFilterDropdown(true);
       });
       optionButtons.push(optionButton);
@@ -510,7 +512,7 @@
       wrapper.classList.add("open");
       button.setAttribute("aria-expanded", "true");
       activeFilterDropdown = { wrapper, button, menu };
-      const target = searchInput || optionButtons.find((candidate) => candidate.getAttribute(finiteCheckSet ? "aria-checked" : "aria-selected") === "true") || selectAllButton || optionButtons[0];
+      const target = searchInput || optionButtons.find((candidate) => !candidate.hidden && candidate.getAttribute(finiteCheckSet ? "aria-checked" : "aria-selected") === "true") || selectAllButton || optionButtons.find((candidate) => !candidate.hidden);
       if (target) requestAnimationFrame(() => {
         positionFilterDropdown(button, menu);
         target.focus({ preventScroll: true });
@@ -530,16 +532,14 @@
       }
       current.textContent = filterDraftValue(kind, options, multiple);
       const selectedOptions = options.filter((option) => selectedIds.has(option.id));
-      const fullSelection = kind === "archiveLocation" && isDraftClaudeSource()
-        ? text("filterNotApplicable")
-        : selectedOptions.length > 0
+      const fullSelection = selectedOptions.length > 0
           ? selectedOptions.map((option) => option.label).join(", ")
           : kind === "tags"
             ? text("filterNoTagConstraint")
             : current.textContent;
       button.title = formatTemplate(text("filterEditHint"), text(labelKey), fullSelection);
       button.setAttribute("aria-label", button.title);
-      const missingRequired = finiteCheckSet && !(kind === "archiveLocation" && isDraftClaudeSource()) && selectedOptions.length === 0;
+      const missingRequired = (finiteCheckSet || kind === "archiveLocation") && selectedOptions.length === 0;
       selectionError.hidden = !missingRequired;
       renderFilterTokens(kind, options, enabled, tokenList, openMenu);
     };
@@ -554,10 +554,6 @@
   function renderFilterTokens(kind, options, enabled, tokenList, openMenu) {
     clear(tokenList);
     tokenList.classList.remove("hasMore");
-    if (kind === "archiveLocation" && isDraftClaudeSource()) {
-      tokenList.appendChild(filterToken(text("filterNotApplicable"), "", false));
-      return;
-    }
     const selected = new Set(getDraftIds(kind));
     const selectedOptions = options.filter((option) => selected.has(option.id));
     if (selectedOptions.length === 0) {
@@ -616,13 +612,42 @@
   }
 
   function updateDraftSelection(kind, ids, options) {
-    const wasClaudeOnly = kind === "source" && isDraftClaudeSource();
+    const wasClaudeOnly = isFilterDraftClaudeOnly();
     const order = new Map(options.map((option, index) => [option.id, index]));
     const orderedIds = ids.slice().sort((left, right) => (order.get(left) ?? Number.MAX_SAFE_INTEGER) - (order.get(right) ?? Number.MAX_SAFE_INTEGER));
     setDraftIds(kind, orderedIds);
-    if (kind === "source") syncDraftArchiveForSource(wasClaudeOnly);
+    if (kind === "source") reconcileArchiveSelectionForSource(wasClaudeOnly);
+    else if (kind === "archiveLocation") visibilitySelectionBeforeClaude = null;
     clearFilterApplyError();
     syncAllFilterControls();
+  }
+
+  function isFilterDraftClaudeOnly() {
+    if (!filterDraft || !filters) return false;
+    const selected = new Set(filterDraft.sourceIds);
+    const sourceOptions = filters.options?.source || [];
+    const selectedOptions = sourceOptions.filter((option) => selected.has(option.id));
+    return selectedOptions.length === 1 && selectedOptions[0]?.value === "claude";
+  }
+
+  function reconcileArchiveSelectionForSource(wasClaudeOnly) {
+    if (!filterDraft || !filters) return;
+    const options = filters.options?.archiveLocation || [];
+    const selectedOption = options.find((option) => filterDraft.archiveLocationIds.includes(option.id));
+    const isClaudeOnly = isFilterDraftClaudeOnly();
+    if (isClaudeOnly && !wasClaudeOnly) {
+      if (selectedOption?.requiresCodexArchive) {
+        visibilitySelectionBeforeClaude = selectedOption.id;
+        const activeOption = options.find((option) => option.value === "activeVisible" && !option.requiresCodexArchive);
+        if (activeOption) filterDraft.archiveLocationIds = [activeOption.id];
+      }
+      return;
+    }
+    if (!isClaudeOnly && wasClaudeOnly && visibilitySelectionBeforeClaude) {
+      const previousOption = options.find((option) => option.id === visibilitySelectionBeforeClaude);
+      if (previousOption) filterDraft.archiveLocationIds = [previousOption.id];
+      visibilitySelectionBeforeClaude = null;
+    }
   }
 
   function syncAllFilterControls() {
@@ -687,7 +712,7 @@
   function createFilterDraft(value) {
     return {
       sourceIds: selectedOptionIds(value.options.source, 2),
-      archiveLocationIds: selectedOptionIds(value.options.archiveLocation, 2),
+      archiveLocationIds: selectedOptionIds(value.options.archiveLocation, 1),
       projectIds: selectedOptionIds(value.options.projects, 32),
       tagIds: selectedOptionIds(value.options.tags, 12),
       from: value.dateRange.from || null,
@@ -719,11 +744,10 @@
       return;
     }
     if (kind === "source") filterDraft.sourceIds = ids.slice(0, 2);
-    if (kind === "archiveLocation") filterDraft.archiveLocationIds = ids.slice(0, 2);
+    if (kind === "archiveLocation") filterDraft.archiveLocationIds = ids.slice(0, 1);
   }
 
   function filterDraftValue(kind, options, multiple) {
-    if (kind === "archiveLocation" && isDraftClaudeSource()) return text("filterNotApplicable");
     const selected = new Set(getDraftIds(kind));
     const selectedOptions = options.filter((option) => selected.has(option.id));
     const labels = selectedOptions.map((option) => option.label);
@@ -731,7 +755,7 @@
       const memberCount = selectedOptions.reduce((sum, option) => sum + Math.max(1, nonNegativeInteger(option.memberCount)), 0);
       return formatTemplate(text("filterProjectGroupAndMemberCount"), labels.length, memberCount);
     }
-    if ((kind === "source" || kind === "archiveLocation") && options.length > 1 && labels.length === options.length) {
+    if (kind === "source" && options.length > 1 && labels.length === options.length) {
       return text("filterAll");
     }
     if (kind === "tags" && labels.length === 0) return text("filterNoTagConstraint");
@@ -742,7 +766,7 @@
   function isFilterDraftValid() {
     if (!filterDraft) return false;
     if (!isValidFilterIdArray(filterDraft.sourceIds, 1, 2)) return false;
-    if (!isValidFilterIdArray(filterDraft.archiveLocationIds, 1, 2)) return false;
+    if (!isValidFilterIdArray(filterDraft.archiveLocationIds, 1, 1)) return false;
     if (!Array.isArray(filterDraft.projectIds) || filterDraft.projectIds.length < 1 || filterDraft.projectIds.length > 32 || new Set(filterDraft.projectIds).size !== filterDraft.projectIds.length) return false;
     if (filterDraft.projectIds.some((id) => !/^[a-f0-9]{24}$/.test(String(id || "")))) return false;
     if (!Array.isArray(filterDraft.tagIds) || filterDraft.tagIds.length > 12 || new Set(filterDraft.tagIds).size !== filterDraft.tagIds.length) return false;
@@ -769,8 +793,7 @@
         control.disabled = filterApplying;
         return;
       }
-      const sourceDisablesArchive = control.dataset.filterKind === "archiveLocation" && isDraftClaudeSource();
-      control.disabled = filterApplying || control.dataset.baseDisabled === "true" || sourceDisablesArchive;
+      control.disabled = filterApplying || control.dataset.baseDisabled === "true" || control.dataset.unavailable === "true";
     });
     const trigger = document.getElementById("insights-filter-button");
     if (trigger) trigger.disabled = filterApplying || model?.refreshing === true;
@@ -786,25 +809,6 @@
     control.setAttribute("aria-pressed", String(applyToHistoryPreference));
     control.title = hint;
     control.setAttribute("aria-label", `${text("filterApplyToHistory")}. ${hint}`);
-  }
-
-  function isDraftClaudeSource() {
-    if (!filters || !filterDraft) return false;
-    const selected = filters.options.source.filter((option) => filterDraft.sourceIds.includes(option.id));
-    return selected.length === 1 && selected[0]?.value === "claude";
-  }
-
-  function syncDraftArchiveForSource(wasClaudeOnly) {
-    if (!filters || !filterDraft) return;
-    const transition = calculateArchiveSelectionTransition(
-      wasClaudeOnly,
-      isDraftClaudeSource(),
-      filterDraft.archiveLocationIds,
-      archiveSelectionBeforeClaude,
-      filters.options.archiveLocation.map((option) => option.id),
-    );
-    filterDraft.archiveLocationIds = transition.selectedIds;
-    archiveSelectionBeforeClaude = transition.storedIds;
   }
 
   function applyFilterDraft() {
@@ -885,9 +889,9 @@
     const overlay = filterOverlay;
     filterOverlay = null;
     filterDraft = null;
+    visibilitySelectionBeforeClaude = null;
     filterApplying = false;
     applyToHistoryControl = null;
-    archiveSelectionBeforeClaude = null;
     filterControlSyncers.clear();
     overlay?.remove();
     const trigger = document.getElementById("insights-filter-button");
@@ -982,29 +986,6 @@
       if (allOption) nextIds.push(allOption.id);
     }
     return nextIds;
-  }
-
-  function calculateArchiveSelectionTransition(wasClaudeOnly, isClaudeOnly, currentIds, storedIds, availableIds) {
-    const available = Array.isArray(availableIds) ? availableIds.slice() : [];
-    const allowed = new Set(available);
-    const current = (Array.isArray(currentIds) ? currentIds : []).filter((id) => allowed.has(id));
-    const stored = Array.isArray(storedIds) ? storedIds.filter((id) => allowed.has(id)) : null;
-    if (isClaudeOnly) {
-      return {
-        selectedIds: available,
-        storedIds: wasClaudeOnly ? stored : current,
-      };
-    }
-    if (wasClaudeOnly && stored) {
-      return {
-        selectedIds: stored.length > 0 ? stored : available,
-        storedIds: null,
-      };
-    }
-    return {
-      selectedIds: current,
-      storedIds: stored,
-    };
   }
 
   function hasFilterConditionChanges(draft, baseline) {
@@ -2661,6 +2642,8 @@
     const raw = value && typeof value === "object" ? value : {};
     const source = raw.source === "codex" || raw.source === "claude" ? raw.source : "all";
     const archiveLocation = raw.archiveLocation === "all" || raw.archiveLocation === "archivedOnly" ? raw.archiveLocation : "activeOnly";
+    const displayTargets = new Set(["activeVisible", "visibleAllLocations", "archivedVisible", "hiddenAllLocations", "all"]);
+    const displayTarget = displayTargets.has(raw.displayTarget) ? raw.displayTarget : "activeVisible";
     const normalizedRange = normalizeDateRangeInput(raw.dateRange?.from ?? "", raw.dateRange?.to ?? "");
     const dateRange = normalizedRange.valid ? { from: normalizedRange.from, to: normalizedRange.to } : { from: null, to: null };
     const tags = safeArray(raw.tags, 12) ? raw.tags.filter((tag) => typeof tag === "string" && tag.length <= 256) : [];
@@ -2669,6 +2652,7 @@
       source,
       dateRange,
       archiveLocation,
+      displayTarget,
       projectsLabel: typeof raw.projectsLabel === "string" ? raw.projectsLabel.slice(0, 512) : "",
       projectSelectionKind: raw.projectSelectionKind === "none" || raw.projectSelectionKind === "groups" ? raw.projectSelectionKind : "all",
       tags,
@@ -2676,7 +2660,7 @@
       canEditArchiveLocation: raw.canEditArchiveLocation === true,
       options: {
         source: normalizeFilterOptions(rawOptions.source, 2),
-        archiveLocation: normalizeFilterOptions(rawOptions.archiveLocation, 2),
+        archiveLocation: normalizeFilterOptions(rawOptions.archiveLocation, 5),
         projects: normalizeFilterOptions(rawOptions.projects, 251),
         tags: normalizeFilterOptions(rawOptions.tags, 500),
       },
@@ -2702,6 +2686,7 @@
         searchText: typeof candidate.searchText === "string" ? candidate.searchText.slice(0, 2048) : "",
         memberCount: nonNegativeInteger(candidate.memberCount),
         current: candidate.current === true,
+        requiresCodexArchive: candidate.requiresCodexArchive === true,
         value: typeof candidate.value === "string" ? candidate.value.slice(0, 128) : "",
         section: candidate.section === "current" || candidate.section === "related" || candidate.section === "projects" ? candidate.section : undefined,
       });
@@ -2716,10 +2701,8 @@
   }
 
   function filterLocationValue(value) {
-    if (value.source === "claude") return text("filterNotApplicable");
-    if (value.archiveLocation === "all") return text("filterLocationAll");
-    if (value.archiveLocation === "archivedOnly") return text("filterLocationArchived");
-    return text("filterLocationActive");
+    const option = value.options?.archiveLocation?.find((candidate) => candidate.selected);
+    return option?.label || text("filterLocationActive");
   }
 
   function normalizeProgress(value) {

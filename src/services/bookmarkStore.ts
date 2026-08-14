@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { normalizeCacheKey } from "../utils/fsUtils";
+import type { SessionMetadataMutationCoordinator } from "./sessionMetadataMutationCoordinator";
 
 export type BookmarkTargetKind = "message" | "patchGroup" | "tool" | "usage" | "environment" | "note";
 
@@ -32,7 +33,7 @@ export interface BookmarkKeyParams {
   fallbackId?: string;
 }
 
-const BOOKMARKS_KEY = "codexHistoryViewer.bookmarks.v1";
+export const BOOKMARKS_KEY = "codexHistoryViewer.bookmarks.v1";
 const BOOKMARK_KEY_PATTERN = /^bm-([a-z0-9]+)-([a-zA-Z]+)-([a-z0-9]+)$/u;
 
 // Stores timeline bookmark state in globalState without changing source history files.
@@ -42,7 +43,7 @@ export class BookmarkStore implements vscode.Disposable {
 
   public readonly onDidChange = this.onDidChangeEmitter.event;
 
-  constructor(memento: vscode.Memento) {
+  constructor(memento: vscode.Memento, private readonly coordinator?: SessionMetadataMutationCoordinator) {
     this.memento = memento;
   }
 
@@ -73,6 +74,10 @@ export class BookmarkStore implements vscode.Disposable {
   }
 
   public async toggle(target: BookmarkTarget): Promise<boolean> {
+    return this.runMutation(() => this.toggleUncoordinated(target));
+  }
+
+  private async toggleUncoordinated(target: BookmarkTarget): Promise<boolean> {
     const sanitized = sanitizeBookmarkTarget(target);
     if (!sanitized) return false;
 
@@ -97,6 +102,10 @@ export class BookmarkStore implements vscode.Disposable {
   }
 
   public async removeMany(fsPaths: readonly string[]): Promise<BookmarkEntry[]> {
+    return this.runMutation(() => this.removeManyUncoordinated(fsPaths));
+  }
+
+  private async removeManyUncoordinated(fsPaths: readonly string[]): Promise<BookmarkEntry[]> {
     const removeKeys = new Set(
       fsPaths
         .map((fsPath) => (typeof fsPath === "string" ? fsPath.trim() : ""))
@@ -116,6 +125,10 @@ export class BookmarkStore implements vscode.Disposable {
   }
 
   public async restore(entries: readonly BookmarkEntry[]): Promise<void> {
+    await this.runMutation(() => this.restoreUncoordinated(entries));
+  }
+
+  private async restoreUncoordinated(entries: readonly BookmarkEntry[]): Promise<void> {
     const restored = compactBookmarks(entries);
     if (restored.length === 0) return;
 
@@ -127,7 +140,27 @@ export class BookmarkStore implements vscode.Disposable {
     this.onDidChangeEmitter.fire();
   }
 
+  public async replaceAll(
+    entries: readonly BookmarkEntry[],
+    options?: { notify?: boolean; skipCoordinator?: boolean },
+  ): Promise<void> {
+    if (this.coordinator && options?.skipCoordinator !== true) {
+      await this.coordinator.runExclusive(() => this.replaceAll(entries, { ...options, skipCoordinator: true }));
+      return;
+    }
+    await this.memento.update(BOOKMARKS_KEY, compactBookmarks(entries));
+    if (options?.notify !== false) this.onDidChangeEmitter.fire();
+  }
+
+  public notifyChanged(): void {
+    this.onDidChangeEmitter.fire();
+  }
+
   public async relocateSession(oldFsPath: string, newFsPath: string): Promise<number> {
+    return this.runMutation(() => this.relocateSessionUncoordinated(oldFsPath, newFsPath));
+  }
+
+  private async relocateSessionUncoordinated(oldFsPath: string, newFsPath: string): Promise<number> {
     const oldCacheKey = normalizeCacheKey(oldFsPath);
     const newCacheKey = normalizeCacheKey(newFsPath);
     if (!oldCacheKey || !newCacheKey || oldCacheKey === newCacheKey) return 0;
@@ -161,6 +194,10 @@ export class BookmarkStore implements vscode.Disposable {
     this.onDidChangeEmitter.fire();
     return relocated;
   }
+
+  private runMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.coordinator ? this.coordinator.runExclusive(operation) : operation();
+  }
 }
 
 export function buildBookmarkKey(params: BookmarkKeyParams): string {
@@ -190,6 +227,29 @@ export function buildBookmarkKey(params: BookmarkKeyParams): string {
 export function normalizeBookmarkKey(value: unknown): string {
   const key = typeof value === "string" ? value.trim() : "";
   return BOOKMARK_KEY_PATTERN.test(key) ? key : "";
+}
+
+export function getBookmarkTargetFingerprint(
+  key: string,
+): { kind: BookmarkTargetKind; targetHash: string } | null {
+  const normalized = normalizeBookmarkKey(key);
+  const match = BOOKMARK_KEY_PATTERN.exec(normalized);
+  const kind = sanitizeBookmarkKind(match?.[2]);
+  const targetHash = typeof match?.[3] === "string" ? match[3] : "";
+  if (!kind || !/^[a-z0-9]{1,64}$/u.test(targetHash)) return null;
+  return { kind, targetHash };
+}
+
+export function buildBookmarkKeyFromTargetFingerprint(
+  sessionCacheKey: string,
+  kind: BookmarkTargetKind,
+  targetHash: string,
+): string {
+  const sessionHash = hashString(normalizeBookmarkText(sessionCacheKey));
+  const normalizedKind = sanitizeBookmarkKind(kind);
+  const normalizedTargetHash = normalizeBookmarkText(targetHash);
+  if (!sessionHash || !normalizedKind || !/^[a-z0-9]{1,64}$/u.test(normalizedTargetHash)) return "";
+  return `bm-${sessionHash}-${normalizedKind}-${normalizedTargetHash}`;
 }
 
 export function sanitizeBookmarkTarget(value: unknown): BookmarkTarget | null {
@@ -244,16 +304,10 @@ function compactBookmarks(values: readonly unknown[]): BookmarkEntry[] {
 }
 
 function relocateBookmarkKey(key: string, newSessionCacheKey: string): string {
-  const normalizedKey = normalizeBookmarkKey(key);
-  const newSessionHash = hashString(normalizeBookmarkText(newSessionCacheKey));
-  if (!normalizedKey || !newSessionHash) return "";
-
-  const match = BOOKMARK_KEY_PATTERN.exec(normalizedKey);
-  if (!match) return "";
-  const kind = match[2] ?? "";
-  const targetHash = match[3] ?? "";
-  if (!kind || !targetHash) return "";
-  return `bm-${newSessionHash}-${kind}-${targetHash}`;
+  const fingerprint = getBookmarkTargetFingerprint(key);
+  return fingerprint
+    ? buildBookmarkKeyFromTargetFingerprint(newSessionCacheKey, fingerprint.kind, fingerprint.targetHash)
+    : "";
 }
 
 function sanitizeBookmarkKind(value: unknown): BookmarkTargetKind | "" {

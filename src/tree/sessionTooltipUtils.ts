@@ -68,6 +68,7 @@ export function buildSessionHoverTooltip(params: {
   primaryDateTime?: string;
   primaryDateLabelKey?: SessionDateLabelKey;
   agentPresentation?: CodexAgentPresentation;
+  hidden?: boolean;
 }): string | vscode.MarkdownString {
   const { session, annotation, label, description, mode, projectAlias, projectDisplayCwd, primaryDateLabelKey } = params;
   if (mode === "titleOnly") {
@@ -83,6 +84,9 @@ export function buildSessionHoverTooltip(params: {
   appendSessionTooltipTitleLines(md, session);
   appendSessionTooltipDateLines(md, session, params.primaryDateTime, primaryDateLabelKey);
   appendSessionMetadataLines(md, session, annotation, projectAlias, projectDisplayCwd);
+  if (params.hidden) {
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.visibility", t("tree.description.hidden")))}  \n`);
+  }
   appendCodexAgentTooltipLines(md, params.agentPresentation);
 
   if (mode === "compact") return md;

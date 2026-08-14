@@ -1,6 +1,7 @@
 import type { ProjectAssociation } from "../services/projectAssociationStore";
 import { t } from "../i18n";
 import { maxSessionSortKey, minSessionSortKey } from "../sessions/sessionSortKeys";
+import { totalSessionFileSizeBytes } from "../sessions/sessionFileSizeSort";
 import {
   ProjectNode,
   type ProjectSortMetadata,
@@ -205,12 +206,19 @@ function getProjectTreeProjectCount(node: TreeNode): number {
 function buildRelatedGroupSortMetadata(targetKey: string, children: readonly TreeNode[]): ProjectSortMetadata {
   let createdSortKey: string | null = null;
   let lastActivitySortKey: string | null = null;
+  const totalFileSizeValues: Array<number | null> = [];
 
   for (const child of children) {
     if (!(child instanceof ProjectNode || child instanceof RelatedGroupNode)) continue;
     createdSortKey = minSessionSortKey(createdSortKey, child.sort.createdSortKey);
     lastActivitySortKey = maxSessionSortKey(lastActivitySortKey, child.sort.lastActivitySortKey);
+    totalFileSizeValues.push(child.sort.totalFileSizeBytes);
   }
 
-  return { createdSortKey, lastActivitySortKey, stableKey: targetKey };
+  return {
+    createdSortKey,
+    lastActivitySortKey,
+    totalFileSizeBytes: totalSessionFileSizeBytes(totalFileSizeValues),
+    stableKey: targetKey,
+  };
 }

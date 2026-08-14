@@ -11,12 +11,8 @@ import {
   type SearchHistoryEntry,
   type SearchHistoryStore,
 } from "../services/searchHistoryStore";
-import {
-  buildBookmarkKey,
-  type BookmarkStore,
-  type BookmarkTarget,
-  type BookmarkTargetKind,
-} from "../services/bookmarkStore";
+import { type BookmarkStore, type BookmarkTarget } from "../services/bookmarkStore";
+import { buildTimelineBookmarkTarget } from "../services/bookmarkTargetResolver";
 import type { ChatOpenPositionStore } from "../services/chatOpenPositionStore";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { buildSessionSummary } from "../sessions/sessionSummary";
@@ -336,6 +332,7 @@ export class ChatPanelManager implements vscode.Disposable {
       this.refreshCodexAgentRuns();
     });
     this.annotationSubscription = this.annotationStore.onDidChange(() => {
+      this.refreshAnnotationState();
       this.invalidateClaudeBranchNavigation();
       this.refreshCodexAgentRuns();
     });
@@ -416,6 +413,52 @@ export class ChatPanelManager implements vscode.Disposable {
     }
     const keys = Array.from(this.bookmarkStore.getKeysForTargets(Array.from(targets.values())).values());
     await panel.webview.postMessage({ type: "bookmarkState", keys });
+  }
+
+  private refreshAnnotationState(): void {
+    const deliveries: Array<Promise<boolean>> = [];
+    for (const panel of this.getOpenPanels()) {
+      if (!this.readyByPanel.get(panel)) continue;
+      deliveries.push(this.sendAnnotationState(panel));
+    }
+    if (deliveries.length === 0) return;
+    void Promise.all(deliveries).then((results) => {
+      if (results.some((delivered) => !delivered)) {
+        void vscode.window.showWarningMessage(t("chat.annotationRefreshFailed"));
+      }
+    });
+  }
+
+  private async sendAnnotationState(panel: vscode.WebviewPanel): Promise<boolean> {
+    const state = this.stateByPanel.get(panel);
+    const revision = state?.sessionInfoRevision;
+    if (!state || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision <= 0) return true;
+    try {
+      const annotation = this.annotationStore.get(state.fsPath);
+      const delivered = await panel.webview.postMessage({
+        type: "annotationState",
+        revision,
+        annotation: {
+          tags: annotation?.tags ? [...annotation.tags] : [],
+          note: annotation?.note ?? "",
+        },
+      });
+      if (
+        !delivered &&
+        this.readyByPanel.get(panel) &&
+        this.stateByPanel.get(panel) === state
+      ) {
+        this.logger?.debug("chat annotation state delivery failed");
+        return false;
+      }
+      return true;
+    } catch {
+      if (this.readyByPanel.get(panel) && this.stateByPanel.get(panel) === state) {
+        this.logger?.debug("chat annotation state delivery failed");
+        return false;
+      }
+      return true;
+    }
   }
 
   public refreshPanels(): void {
@@ -1517,14 +1560,12 @@ export class ChatPanelManager implements vscode.Disposable {
       }
       case "editAnnotation": {
         await vscode.commands.executeCommand("codexHistoryViewer.editSessionAnnotation", { fsPath: state.fsPath });
-        await this.sendSessionData(panel);
         return;
       }
       case "removeTag": {
         const tag = typeof msg?.tag === "string" ? msg.tag.trim() : "";
         if (!tag) return;
         await vscode.commands.executeCommand("codexHistoryViewer.removeSessionTag", { fsPath: state.fsPath, tag });
-        await this.sendSessionData(panel);
         return;
       }
       case "switchClaudeBranch": {
@@ -3334,7 +3375,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
     const items = Array.isArray(model.items)
       ? model.items.map((item, itemIndex) => {
-          const target = buildChatBookmarkTarget(sessionFsPath, sessionCacheKey, item, itemIndex);
+          const target = buildTimelineBookmarkTarget(sessionFsPath, sessionCacheKey, item, itemIndex);
           if (!target) return item;
           targets.set(target.key, target);
           itemTargets.set(itemIndex, target);
@@ -4715,85 +4756,6 @@ function sanitizePatchDetailChangeType(value: unknown): ChatPatchChangeType | un
 
 function toWebviewChatSessionModel(model: ChatSessionModel, detailMode: ChatSessionDetailMode): ChatSessionModel {
   return detailMode === "full" ? toFullWebviewChatSessionModel(model) : toSummaryChatSessionModel(model);
-}
-
-function buildChatBookmarkTarget(
-  sessionFsPath: string,
-  sessionCacheKey: string,
-  item: ChatTimelineItem,
-  itemIndex: number,
-): BookmarkTarget | null {
-  if (!item || typeof item !== "object") return null;
-  const kind = getBookmarkTargetKind(item);
-  if (!kind) return null;
-  const timestampIso = typeof item.timestampIso === "string" ? item.timestampIso.trim() : "";
-  const rawMessageIndex = "messageIndex" in item ? item.messageIndex : undefined;
-  const messageIndex =
-    typeof rawMessageIndex === "number" && Number.isFinite(rawMessageIndex)
-      ? Math.max(0, Math.floor(rawMessageIndex))
-      : undefined;
-  const fallbackId = getBookmarkFallbackId(item, itemIndex);
-  const groupId = getBookmarkGroupId(item);
-  const keyParams = { sessionCacheKey, kind, groupId, messageIndex, timestampIso, fallbackId };
-  const key = buildBookmarkKey(keyParams);
-  if (!key) return null;
-  return {
-    key,
-    sessionFsPath,
-    sessionCacheKey,
-    kind,
-    ...(groupId ? { groupId } : {}),
-    title: getBookmarkTitle(item, itemIndex),
-    ...(messageIndex !== undefined ? { messageIndex } : {}),
-    ...(timestampIso ? { timestampIso } : {}),
-  };
-}
-
-function getBookmarkTargetKind(item: ChatTimelineItem): BookmarkTargetKind | "" {
-  if (item.type === "message") return "message";
-  if (item.type === "patchGroup") return "patchGroup";
-  if (item.type === "tool") return "tool";
-  if (item.type === "usage") return "usage";
-  if (item.type === "environment") return "environment";
-  if (item.type === "note") return "note";
-  return "";
-}
-
-function getBookmarkFallbackId(item: ChatTimelineItem, itemIndex: number): string {
-  if (item.type === "patchGroup") {
-    const turnId = typeof item.turnId === "string" ? item.turnId.trim() : "";
-    if (turnId) return turnId;
-  }
-  if (item.type === "tool") {
-    const callId = typeof item.callId === "string" ? item.callId.trim() : "";
-    if (callId) return callId;
-  }
-  if (item.type === "note") {
-    const title = typeof item.title === "string" ? item.title.trim() : "";
-    if (title) return `${itemIndex}:${title}`;
-  }
-  return `item:${itemIndex}`;
-}
-
-function getBookmarkGroupId(item: ChatTimelineItem): string | undefined {
-  if (item.type !== "patchGroup") return undefined;
-  const explicitGroupId = typeof item.bookmarkGroupId === "string" ? item.bookmarkGroupId.trim() : "";
-  if (explicitGroupId) return explicitGroupId;
-  const turnId = typeof item.turnId === "string" ? item.turnId.trim() : "";
-  return turnId ? `turn:${turnId}` : undefined;
-}
-
-function getBookmarkTitle(item: ChatTimelineItem, itemIndex: number): string {
-  if (item.type === "message") {
-    const role = item.role === "user" || item.role === "assistant" || item.role === "developer" ? item.role : "message";
-    return typeof item.messageIndex === "number" ? `${role} #${item.messageIndex}` : role;
-  }
-  if (item.type === "patchGroup") return `diff #${itemIndex + 1}`;
-  if (item.type === "tool") return item.name || `tool #${itemIndex + 1}`;
-  if (item.type === "usage") return `usage #${itemIndex + 1}`;
-  if (item.type === "environment") return `environment #${itemIndex + 1}`;
-  if (item.type === "note") return item.title || `note #${itemIndex + 1}`;
-  return `card #${itemIndex + 1}`;
 }
 
 function toFullWebviewChatSessionModel(model: ChatSessionModel): ChatSessionModel {

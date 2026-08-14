@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-08-12
+Last updated: 2026-08-14
 
 ## Supported Versions
 
@@ -8,7 +8,9 @@ Use the latest published release of Codex History Viewer whenever possible. Olde
 
 | Version | Security status |
 | --- | --- |
-| 2.8.0 and later | Recommended. Includes both Markdown rendering mitigations noted below. |
+| 2.11.0 and later | Recommended. Includes the Mermaid and DOMPurify dependency updates and both Markdown rendering mitigations noted below. |
+| 2.10.0 | Bundles Mermaid and DOMPurify versions covered by the advisories noted below; upgrade to 2.11.0 or later. |
+| 2.8.0 through 2.9.x | Includes both Markdown rendering mitigations and does not include Mermaid rendering; upgrade to the latest release whenever possible. |
 | 1.2.2 through 2.7.x | Includes the `markdown-it` fix, but not the `linkify-it` mail-address mitigation; upgrade to 2.8.0 or later. |
 | 1.2.1 and earlier | Do not install or redistribute historical VSIX files. |
 
@@ -16,7 +18,9 @@ Use the latest published release of Codex History Viewer whenever possible. Olde
 
 ### Mermaid diagram rendering and export
 
-Codex History Viewer v2.10.0 and later bundle `mermaid@11.16.0` to render fenced Mermaid blocks in the Session Viewer. Mermaid source from session files is treated as untrusted input. Rendering uses fixed security settings, disables HTML labels, and removes frontmatter configuration overrides, initialization directives, and click directives before the source reaches Mermaid.
+Codex History Viewer v2.10.0 introduced fenced Mermaid rendering in the Session Viewer and bundled `mermaid@11.16.0` with `dompurify@3.4.12`. These dependency versions are covered by upstream advisories for prototype pollution (`GHSA-c4c3-pg64-4m4v`, `GHSA-3rrr-jr9j-h3q3`), CSS injection (`GHSA-6x64-9x62-f2gx`), denial of service (`GHSA-2v8p-3f2j-5mp7`, `GHSA-rhh3-jpg6-66xh`), and XSS (`GHSA-55q2-fjhq-7xh7`). Codex History Viewer v2.11.0 updates the bundled dependencies to `mermaid@11.16.1` and `dompurify@3.4.13`. Users of v2.10.0 should upgrade to v2.11.0 or later.
+
+Mermaid source from session files is treated as untrusted input. Rendering uses fixed security settings, disables HTML labels, and removes frontmatter configuration overrides, initialization directives, and click directives before the source reaches Mermaid. These controls reduce exposure to unsafe diagram content but do not replace dependency updates.
 
 Generated SVG is parsed and validated before it is inserted into the webview. Executable or externally loaded content, event-handler attributes, unsafe URLs, and unsafe CSS are rejected. XML Base attributes are removed so that internal fragment references cannot be resolved as external resources. SVG export is independently validated again by the extension host, which rejects XML Base attributes and link elements without trusting the webview sanitizer. PNG export is bounded by dimension and pixel-count limits, and files are written only to a location selected through the VS Code save dialog.
 

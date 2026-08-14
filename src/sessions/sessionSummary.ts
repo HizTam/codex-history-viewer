@@ -417,7 +417,7 @@ function detectSessionSource(meta: SessionMetaInfo, fsPath: string): SessionSour
   return base.startsWith("rollout-") ? "codex" : "claude";
 }
 
-function resolveSessionIdentityKey(
+export function resolveSessionIdentityKey(
   source: SessionSource,
   meta: SessionMetaInfo,
   fsPath: string,

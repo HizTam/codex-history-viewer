@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { normalizeCacheKey } from "../utils/fsUtils";
+import type { SessionMetadataMutationCoordinator } from "./sessionMetadataMutationCoordinator";
 
 export interface SessionAnnotation {
   fsPath: string;
@@ -14,7 +15,7 @@ export interface AnnotationTagStat {
   count: number;
 }
 
-const ANNOTATION_KEY = "codexHistoryViewer.sessionAnnotations.v1";
+export const ANNOTATION_KEY = "codexHistoryViewer.sessionAnnotations.v1";
 
 // Stores per-session tags/notes in Memento.
 export class SessionAnnotationStore implements vscode.Disposable {
@@ -23,7 +24,7 @@ export class SessionAnnotationStore implements vscode.Disposable {
 
   public readonly onDidChange = this.onDidChangeEmitter.event;
 
-  constructor(memento: vscode.Memento) {
+  constructor(memento: vscode.Memento, private readonly coordinator?: SessionMetadataMutationCoordinator) {
     this.memento = memento;
   }
 
@@ -70,6 +71,10 @@ export class SessionAnnotationStore implements vscode.Disposable {
   }
 
   public async set(fsPath: string, params: { tags: readonly string[]; note: string }): Promise<void> {
+    await this.runMutation(() => this.setUncoordinated(fsPath, params));
+  }
+
+  private async setUncoordinated(fsPath: string, params: { tags: readonly string[]; note: string }): Promise<void> {
     const key = normalizeCacheKey(fsPath);
     const current = this.getAll();
     const tags = normalizeTags(params.tags);
@@ -93,6 +98,10 @@ export class SessionAnnotationStore implements vscode.Disposable {
   }
 
   public async remove(fsPath: string): Promise<void> {
+    await this.runMutation(() => this.removeUncoordinated(fsPath));
+  }
+
+  private async removeUncoordinated(fsPath: string): Promise<void> {
     const key = normalizeCacheKey(fsPath);
     const current = this.getAll();
     const list = current.filter((x) => x.cacheKey !== key);
@@ -101,6 +110,10 @@ export class SessionAnnotationStore implements vscode.Disposable {
   }
 
   public async removeMany(fsPaths: readonly string[]): Promise<void> {
+    await this.runMutation(() => this.removeManyUncoordinated(fsPaths));
+  }
+
+  private async removeManyUncoordinated(fsPaths: readonly string[]): Promise<void> {
     const removeKeys = new Set(fsPaths.map((p) => normalizeCacheKey(p)));
     const current = this.getAll();
     const list = current.filter((x) => !removeKeys.has(x.cacheKey));
@@ -108,7 +121,26 @@ export class SessionAnnotationStore implements vscode.Disposable {
     await this.persist(list);
   }
 
+  public async replaceAll(
+    values: readonly SessionAnnotation[],
+    options?: { notify?: boolean; skipCoordinator?: boolean },
+  ): Promise<void> {
+    if (options?.skipCoordinator === true) {
+      await this.persist(values, options);
+      return;
+    }
+    await this.runMutation(() => this.persist(values, options));
+  }
+
+  public notifyChanged(): void {
+    this.onDidChangeEmitter.fire();
+  }
+
   public async relocate(oldFsPath: string, newFsPath: string): Promise<boolean> {
+    return this.runMutation(() => this.relocateUncoordinated(oldFsPath, newFsPath));
+  }
+
+  private async relocateUncoordinated(oldFsPath: string, newFsPath: string): Promise<boolean> {
     const oldKey = normalizeCacheKey(oldFsPath);
     const newKey = normalizeCacheKey(newFsPath);
     if (!oldKey || !newKey || oldKey === newKey) return false;
@@ -136,6 +168,10 @@ export class SessionAnnotationStore implements vscode.Disposable {
   }
 
   public async addTagsMany(fsPaths: readonly string[], tags: readonly string[]): Promise<number> {
+    return this.runMutation(() => this.addTagsManyUncoordinated(fsPaths, tags));
+  }
+
+  private async addTagsManyUncoordinated(fsPaths: readonly string[], tags: readonly string[]): Promise<number> {
     const addTags = normalizeTags(tags);
     if (addTags.length === 0) return 0;
     const keys = new Set(fsPaths.map((p) => normalizeCacheKey(p)));
@@ -167,6 +203,10 @@ export class SessionAnnotationStore implements vscode.Disposable {
   }
 
   public async removeTagsMany(fsPaths: readonly string[], tags: readonly string[]): Promise<number> {
+    return this.runMutation(() => this.removeTagsManyUncoordinated(fsPaths, tags));
+  }
+
+  private async removeTagsManyUncoordinated(fsPaths: readonly string[], tags: readonly string[]): Promise<number> {
     const removeKeys = new Set(normalizeTags(tags).map((x) => normalizeTagKey(x)));
     if (removeKeys.size === 0) return 0;
     const targetKeys = new Set(fsPaths.map((p) => normalizeCacheKey(p)));
@@ -197,9 +237,13 @@ export class SessionAnnotationStore implements vscode.Disposable {
     return changed;
   }
 
-  private async persist(values: readonly SessionAnnotation[]): Promise<void> {
+  private async persist(values: readonly SessionAnnotation[], options?: { notify?: boolean }): Promise<void> {
     await this.memento.update(ANNOTATION_KEY, compactAnnotations(values));
-    this.onDidChangeEmitter.fire();
+    if (options?.notify !== false) this.onDidChangeEmitter.fire();
+  }
+
+  private runMutation<T>(operation: () => Promise<T>): Promise<T> {
+    return this.coordinator ? this.coordinator.runExclusive(operation) : operation();
   }
 }
 

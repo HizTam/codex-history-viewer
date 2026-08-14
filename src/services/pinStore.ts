@@ -8,6 +8,7 @@ import type {
   SessionSummary,
 } from "../sessions/sessionTypes";
 import { normalizeCacheKey } from "../utils/fsUtils";
+import type { SessionMetadataMutationCoordinator } from "./sessionMetadataMutationCoordinator";
 
 // Stores pin state in Memento (globalState).
 export interface PinEntry {
@@ -25,7 +26,7 @@ export interface PinReconcileResult {
   moves: Array<{ oldFsPath: string; newFsPath: string }>;
 }
 
-const PINS_KEY = "codexHistoryViewer.pins.v1";
+export const PINS_KEY = "codexHistoryViewer.pins.v1";
 
 export class PinStore implements vscode.Disposable {
   private readonly memento: vscode.Memento;
@@ -34,7 +35,7 @@ export class PinStore implements vscode.Disposable {
 
   public readonly onDidChange = this.onDidChangeEmitter.event;
 
-  constructor(memento: vscode.Memento) {
+  constructor(memento: vscode.Memento, private readonly coordinator?: SessionMetadataMutationCoordinator) {
     this.memento = memento;
   }
 
@@ -238,6 +239,23 @@ export class PinStore implements vscode.Disposable {
     });
   }
 
+  public async replaceAll(entries: readonly PinEntry[], options?: { notify?: boolean; skipCoordinator?: boolean }): Promise<void> {
+    if (this.coordinator && options?.skipCoordinator !== true) {
+      await this.coordinator.runExclusive(() => this.replaceAll(entries, { ...options, skipCoordinator: true }));
+      return;
+    }
+    const replace = async (): Promise<void> => {
+      await this.memento.update(PINS_KEY, compactPins(entries));
+      if (options?.notify !== false) this.onDidChangeEmitter.fire();
+    };
+    if (options?.skipCoordinator === true) await replace();
+    else await this.enqueueMutation(replace);
+  }
+
+  public notifyChanged(): void {
+    this.onDidChangeEmitter.fire();
+  }
+
   public async unpinMany(fsPaths: readonly string[]): Promise<{ unpinned: number; skipped: number }> {
     // Unpin in bulk (batch the Memento update into a single write).
     const normalized = this.normalizeFsPaths(fsPaths);
@@ -261,6 +279,7 @@ export class PinStore implements vscode.Disposable {
   }
 
   private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.coordinator) return this.coordinator.runExclusive(operation);
     const next = this.mutationQueue.then(operation, operation);
     this.mutationQueue = next.then(
       () => undefined,

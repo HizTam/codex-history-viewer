@@ -3,6 +3,7 @@ import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
+import type { HiddenSessionStore } from "../services/hiddenSessionStore";
 import type { ProjectAliasStore } from "../services/projectAliasStore";
 import { NO_CWD_PROJECT_KEY, type ProjectAssociationStore } from "../services/projectAssociationStore";
 import {
@@ -22,7 +23,13 @@ import {
   YearNode,
   toTreeItemContextValue,
 } from "./treeNodes";
-import type { ArchiveLocationFilter, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
+import type { SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
+import {
+  archiveLocationFromHistoryDisplayTarget,
+  historyDisplayTargetFromArchiveLocation,
+  matchesSessionDisplayTarget,
+  type HistoryDisplayTarget,
+} from "../types/historyFilterState";
 import {
   compareNullableSessionSortKeys,
   getSessionCreatedSortKey,
@@ -30,9 +37,15 @@ import {
   maxSessionSortKey,
   minSessionSortKey,
 } from "../sessions/sessionSortKeys";
+import {
+  compareSessionFileSizeBytes,
+  compareSessionSummariesByFileSize,
+  totalSessionFileSizeBytes,
+} from "../sessions/sessionFileSizeSort";
 import type { DateScope } from "../types/dateScope";
 import { getConfig } from "../settings";
 import { normalizeProjectKey } from "../utils/fsUtils";
+import { formatSessionFileSize } from "../utils/formatBytes";
 import { safeDisplayPath, truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
 import { buildSessionDescription } from "./sessionDescriptionUtils";
@@ -75,7 +88,9 @@ export type HistorySortOrder =
   | "lastActivityDesc"
   | "lastActivityAsc"
   | "titleAsc"
-  | "titleDesc";
+  | "titleDesc"
+  | "fileSizeDesc"
+  | "fileSizeAsc";
 
 export type HistoryRevealIdentity =
   | { kind: "session"; fsPath: string }
@@ -104,6 +119,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private readonly historyService: HistoryService;
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;
+  private readonly hiddenSessionStore: HiddenSessionStore;
   private readonly projectAliasStore: ProjectAliasStore;
   private readonly projectAssociationStore: ProjectAssociationStore;
   private viewMode: HistoryViewMode;
@@ -114,7 +130,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private projectGrouped: boolean;
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
-  private archiveLocationFilter: ArchiveLocationFilter;
+  private displayTarget: HistoryDisplayTarget;
   private sortOrder: HistorySortOrder;
   private initialLoadComplete = false;
   private readonly codexAgentRuns: CodexAgentRunsService;
@@ -131,6 +147,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     historyService: HistoryService,
     pinStore: PinStore,
     annotationStore: SessionAnnotationStore,
+    hiddenSessionStore: HiddenSessionStore,
     projectAliasStore: ProjectAliasStore,
     projectAssociationStore: ProjectAssociationStore,
     viewMode: HistoryViewMode,
@@ -141,7 +158,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     projectGrouped: boolean,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
-    archiveLocationFilter: ArchiveLocationFilter,
+    displayTarget: HistoryDisplayTarget,
     codexAgentRunsOrExtensionUri: CodexAgentRunsService | vscode.Uri,
     sessionIconResolverOrProjectSelection?: SessionIconResolver | ProjectSelection,
     projectSelection?: ProjectSelection,
@@ -149,6 +166,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.historyService = historyService;
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
+    this.hiddenSessionStore = hiddenSessionStore;
     this.projectAliasStore = projectAliasStore;
     this.projectAssociationStore = projectAssociationStore;
     this.viewMode = viewMode;
@@ -160,7 +178,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.projectGrouped = projectGrouped;
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
-    this.archiveLocationFilter = archiveLocationFilter;
+    this.displayTarget = displayTarget;
     if (isCodexAgentRunsService(codexAgentRunsOrExtensionUri)) {
       this.codexAgentRuns = codexAgentRunsOrExtensionUri;
       this.sessionIconResolver = sessionIconResolverOrProjectSelection as SessionIconResolver;
@@ -248,8 +266,8 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.clearSessionDerivedCaches();
   }
 
-  public setArchiveLocationFilter(archiveLocationFilter: ArchiveLocationFilter): void {
-    this.archiveLocationFilter = archiveLocationFilter;
+  public setDisplayTarget(displayTarget: HistoryDisplayTarget): void {
+    this.displayTarget = displayTarget;
     this.clearSessionDerivedCaches();
   }
 
@@ -273,13 +291,13 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     projects: ProjectSelection,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
-    archiveLocationFilter: ArchiveLocationFilter,
+    displayTarget: HistoryDisplayTarget,
   ): void {
     this.setFilter(filter);
     this.setProjectSelection(projects);
     this.setSourceFilter(sourceFilter);
     this.setTagFilter(tagFilter);
-    this.setArchiveLocationFilter(archiveLocationFilter);
+    this.setDisplayTarget(displayTarget);
   }
 
   public createInsightsSnapshot(
@@ -294,7 +312,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
           projects: override.projects,
           source: normalizeSourceFilter(override.source),
           tags: normalizeTagFilter(override.tags),
-          archiveLocation: override.archiveLocation,
+          displayTarget: override.displayTarget ?? historyDisplayTargetFromArchiveLocation(override.archiveLocation),
         }
       : {
           date: override ? historyInsightsDateRangeToDateScope(override) : this.filter,
@@ -302,11 +320,11 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
           projects: this.projectSelection,
           source: this.sourceFilter,
           tags: this.tagFilter,
-          archiveLocation: this.archiveLocationFilter,
+          displayTarget: this.displayTarget,
         };
     const sessions = this.historyService.getIndex().sessions.filter(
       (session) =>
-        matchesArchiveLocation(session, condition.archiveLocation) &&
+        matchesHistoryDisplayTarget(session, condition.displayTarget, this.hiddenSessionStore) &&
         matchProjectSelection(session.meta?.cwd, condition.projects, (cwd) => this.getCanonicalProjectKey(cwd)) &&
         matchesSourceFilter(session, condition.source) &&
         matchesTagFilter(session, condition.tags, this.annotationStore) &&
@@ -335,7 +353,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const chips = [
       t("historyInsights.filter.source", sourceLabel),
       t("historyInsights.filter.date", formatInsightsDateRangeLabel(condition.dateRange)),
-      t("historyInsights.filter.location", t(`archiveLocation.${condition.archiveLocation}`)),
+      t("historyInsights.filter.location", t(`historyDisplayTarget.${condition.displayTarget}`)),
     ];
     const formatProject = (cwd: string): string => {
       const displayCwd = this.getProjectDisplayCwd(cwd);
@@ -363,7 +381,8 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
         source: condition.source,
         projects: condition.projects,
         tags: condition.tags.slice(),
-        archiveLocation: condition.archiveLocation,
+        archiveLocation: archiveLocationFromHistoryDisplayTarget(condition.displayTarget),
+        displayTarget: condition.displayTarget,
         viewMode: this.viewMode,
         sortOrder: this.sortOrder,
         projectGrouped: this.projectGrouped,
@@ -401,7 +420,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   private matchesArchiveVisibility(session: SessionSummary): boolean {
-    return matchesArchiveLocation(session, this.archiveLocationFilter);
+    return matchesHistoryDisplayTarget(session, this.displayTarget, this.hiddenSessionStore);
   }
 
   private buildNoHistoryNodes(): HistoryEmptyNode[] {
@@ -540,11 +559,13 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       projectAlias,
       projectDisplayCwd,
       agentPresentation,
+      this.hiddenSessionStore.isHidden(session),
     );
     item.contextValue = toTreeItemContextValue(
       node,
       agentPresentation?.relation,
       Boolean(agentPresentation?.parentSession),
+      this.hiddenSessionStore.isHidden(session),
     );
     // Show source-specific icons (Codex/Claude) in the list row.
     item.iconPath = this.sessionIconResolver.resolve(
@@ -572,6 +593,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       primaryDateTime: this.getSessionTooltipDateTime(session, dateAxis),
       primaryDateLabelKey: this.getSessionTooltipDateLabelKey(dateAxis),
       agentPresentation,
+      hidden: this.hiddenSessionStore.isHidden(session),
     });
     return item;
   }
@@ -737,6 +759,18 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       return left.sort.stableKey.localeCompare(right.sort.stableKey);
     }
 
+    if (isHistoryFileSizeSortOrder(this.sortOrder)) {
+      const fileSize = compareSessionFileSizeBytes(
+        left.sort.totalFileSizeBytes,
+        right.sort.totalFileSizeBytes,
+        this.sortOrder === "fileSizeAsc" ? "asc" : "desc",
+      );
+      if (fileSize !== 0) return fileSize;
+      const label = compareLabels(left.label, right.label);
+      if (label !== 0) return label;
+      return left.sort.stableKey.localeCompare(right.sort.stableKey);
+    }
+
     const primary =
       this.sortOrder === "createdAsc" || this.sortOrder === "createdDesc"
         ? compareNullableSessionSortKeys(
@@ -804,6 +838,9 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
             element.latestLabel,
           ),
     ];
+    if (isHistoryFileSizeSortOrder(this.sortOrder)) {
+      lines.push(t("tree.tooltip.totalFileSize", formatProjectFileSize(element.sort.totalFileSizeBytes)));
+    }
     if (element.targetMissingHistory) lines.push(t("projectAssociation.target.missingHistory"));
     appendAssociatedSourceLines(lines, element.associatedSources, formatProjectAssociationMode);
     return lines.join("\n");
@@ -820,6 +857,9 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
         element.latestLabel,
       ),
     ];
+    if (isHistoryFileSizeSortOrder(this.sortOrder)) {
+      lines.push(t("tree.tooltip.totalFileSize", formatProjectFileSize(element.sort.totalFileSizeBytes)));
+    }
     appendAssociatedSourceLines(lines, element.directSources, formatProjectAssociationMode);
     return lines.join("\n");
   }
@@ -951,7 +991,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     if (!element && idx.sessions.length === 0) return this.buildNoHistoryNodes();
 
     const shouldFilterSessions =
-      this.archiveLocationFilter !== "all" ||
+      this.displayTarget !== "all" ||
       this.filter.kind !== "all" ||
       this.projectSelection.kind !== "all" ||
       this.sourceFilter !== "all" ||
@@ -1135,6 +1175,8 @@ function normalizeHistorySortOrder(value: HistorySortOrder): HistorySortOrder {
     case "lastActivityAsc":
     case "titleAsc":
     case "titleDesc":
+    case "fileSizeDesc":
+    case "fileSizeAsc":
       return value;
     default:
       return "createdDesc";
@@ -1152,6 +1194,10 @@ function compareSessionsBySortOrder(
     const created = compareNullableSessionSortKeys(getSessionCreatedSortKey(left), getSessionCreatedSortKey(right), "desc");
     if (created !== 0) return created;
     return compareStableSessionPath(left, right);
+  }
+
+  if (isHistoryFileSizeSortOrder(sortOrder)) {
+    return compareSessionSummariesByFileSize(left, right, sortOrder === "fileSizeAsc" ? "asc" : "desc");
   }
 
   const primary =
@@ -1180,7 +1226,20 @@ function buildProjectSortMetadata(stableKey: string, sessions: readonly SessionS
     createdSortKey = minSessionSortKey(createdSortKey, getSessionCreatedSortKey(session));
     lastActivitySortKey = maxSessionSortKey(lastActivitySortKey, getSessionLastActivitySortKey(session));
   }
-  return { createdSortKey, lastActivitySortKey, stableKey };
+  return {
+    createdSortKey,
+    lastActivitySortKey,
+    totalFileSizeBytes: totalSessionFileSizeBytes(sessions.map((session) => session.fileSizeBytes)),
+    stableKey,
+  };
+}
+
+function isHistoryFileSizeSortOrder(value: HistorySortOrder): value is "fileSizeDesc" | "fileSizeAsc" {
+  return value === "fileSizeDesc" || value === "fileSizeAsc";
+}
+
+function formatProjectFileSize(value: number | null): string {
+  return formatSessionFileSize(value) ?? t("tree.tooltip.fileSizeUnknown");
 }
 
 function buildLatestDisplayLabel(sessions: readonly SessionSummary[]): string {
@@ -1210,12 +1269,14 @@ function matchesSourceFilter(session: SessionSummary, source: SessionSourceFilte
   return source === "all" || session.source === source;
 }
 
-function matchesArchiveLocation(session: SessionSummary, archiveLocation: ArchiveLocationFilter): boolean {
-  if (archiveLocation === "all") return true;
-  if (archiveLocation === "archivedOnly") {
-    return session.source === "codex" && session.storage.archiveState === "archived";
-  }
-  return session.storage.archiveState !== "archived";
+function matchesHistoryDisplayTarget(
+  session: SessionSummary,
+  displayTarget: HistoryDisplayTarget,
+  hiddenSessionStore: HiddenSessionStore,
+): boolean {
+  const hidden = hiddenSessionStore.isHidden(session);
+  const archived = session.source === "codex" && session.storage.archiveState === "archived";
+  return matchesSessionDisplayTarget(displayTarget, archived, hidden);
 }
 
 function matchesTagFilter(

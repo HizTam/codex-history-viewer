@@ -16,11 +16,17 @@ import {
   SearchIndexService,
 } from "./searchIndexService";
 import type { SessionAnnotationStore } from "./sessionAnnotationStore";
+import type { HiddenSessionStore } from "./hiddenSessionStore";
 import { matchProjectByCanonicalKey, resolveCanonicalProjectKey } from "./projectPathMapper";
 import {
   matchProjectSelection,
   type ProjectSelection,
 } from "../types/projectSelection";
+import {
+  historyDisplayTargetFromArchiveLocation,
+  matchesSessionDisplayTarget,
+  type HistoryDisplayTarget,
+} from "../types/historyFilterState";
 
 type SearchMode = "plain" | "exact" | "regex";
 
@@ -73,7 +79,7 @@ export interface HistorySearchScopeSnapshot {
   readonly projects: ProjectSelection;
   readonly source: SessionSourceFilter;
   readonly tags: readonly string[];
-  readonly archiveLocation: ArchiveLocationFilter;
+  readonly displayTarget: HistoryDisplayTarget;
   readonly defaultRoleFilter: readonly IndexedSearchRole[];
   readonly searchHistoryProjectKey: string;
 }
@@ -84,7 +90,7 @@ export function createHistorySearchScopeSnapshot(params: HistorySearchScopeSnaps
     projects: freezeProjectSelection(params.projects),
     source: sanitizeSessionSourceFilter(params.source),
     tags: Object.freeze(sanitizeTagFilter(params.tags)),
-    archiveLocation: params.archiveLocation,
+    displayTarget: params.displayTarget,
     defaultRoleFilter: Object.freeze(Array.from(sanitizeRoleFilter(params.defaultRoleFilter))),
     searchHistoryProjectKey: params.searchHistoryProjectKey,
   });
@@ -135,6 +141,7 @@ export async function runSearchFlow(
     request?: SearchRequest;
     defaultRoleFilter?: readonly IndexedSearchRole[];
     tagFilter?: readonly string[];
+    displayTargetFilter?: HistoryDisplayTarget;
     archiveLocationFilter?: ArchiveLocationFilter;
     includeArchivedSessions?: boolean;
     projectScopeCwd?: string | null;
@@ -143,6 +150,7 @@ export async function runSearchFlow(
     getCanonicalProjectKey?: (projectCwd: string) => string | null;
     isRequestCurrent?: () => boolean;
     sessionInventory?: readonly SessionSummary[];
+    hiddenSessionStore?: HiddenSessionStore;
   },
 ): Promise<SearchFlowResult | null> {
   if (options?.isRequestCurrent && !options.isRequestCurrent()) return null;
@@ -157,6 +165,8 @@ export async function runSearchFlow(
   const tagFilter = sanitizeTagFilter(options?.tagFilter ?? []);
   const archiveLocationFilter =
     options?.archiveLocationFilter ?? ((options?.includeArchivedSessions ?? true) ? "all" : "activeOnly");
+  const displayTargetFilter =
+    options?.displayTargetFilter ?? historyDisplayTargetFromArchiveLocation(archiveLocationFilter);
   const request = options?.request;
 
   let queryInput = "";
@@ -204,7 +214,11 @@ export async function runSearchFlow(
           )
         : matchProjectByCanonicalKey(s.meta?.cwd, { projectKey, projectScopeKey }, options?.getCanonicalProjectKey)) &&
       matchSource(s, effectiveSourceFilter) &&
-      matchArchiveLocation(s, archiveLocationFilter) &&
+      matchesSessionDisplayTarget(
+        displayTargetFilter,
+        s.source === "codex" && s.storage.archiveState === "archived",
+        options?.hiddenSessionStore?.isHidden(s) ?? false,
+      ) &&
       matchAnnotationTags(s, tagFilter, annotationStore),
   );
 
@@ -358,18 +372,6 @@ function matchScope(session: SessionSummary, scope: DateScope): boolean {
 
 function matchSource(session: SessionSummary, sourceFilter: SessionSourceFilter): boolean {
   return sourceFilter === "all" ? true : session.source === sourceFilter;
-}
-
-function matchArchiveLocation(session: SessionSummary, archiveLocationFilter: ArchiveLocationFilter): boolean {
-  switch (archiveLocationFilter) {
-    case "all":
-      return true;
-    case "archivedOnly":
-      return session.source === "codex" && session.storage.archiveState === "archived";
-    case "activeOnly":
-    default:
-      return session.storage.archiveState !== "archived";
-  }
 }
 
 function matchAnnotationTags(

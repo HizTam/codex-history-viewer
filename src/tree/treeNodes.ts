@@ -40,6 +40,7 @@ export interface ProjectParentAssociation {
 export interface ProjectSortMetadata {
   createdSortKey: string | null;
   lastActivitySortKey: string | null;
+  totalFileSizeBytes: number | null;
   stableKey: string;
 }
 
@@ -120,7 +121,12 @@ export class ProjectNode {
     this.associatedSources = params.associatedSources ?? [];
     this.targetMissingHistory = params.targetMissingHistory ?? false;
     this.parentAssociation = params.parentAssociation ?? null;
-    this.sort = params.sort ?? { createdSortKey: null, lastActivitySortKey: null, stableKey: params.key };
+    this.sort = params.sort ?? {
+      createdSortKey: null,
+      lastActivitySortKey: null,
+      totalFileSizeBytes: null,
+      stableKey: params.key,
+    };
   }
 }
 
@@ -167,7 +173,12 @@ export class RelatedGroupNode {
     this.directSources = params.directSources ?? [];
     this.children = params.children ?? [];
     this.parentAssociation = params.parentAssociation ?? null;
-    this.sort = params.sort ?? { createdSortKey: null, lastActivitySortKey: null, stableKey: params.key };
+    this.sort = params.sort ?? {
+      createdSortKey: null,
+      lastActivitySortKey: null,
+      totalFileSizeBytes: null,
+      stableKey: params.key,
+    };
   }
 }
 
@@ -328,6 +339,7 @@ export function toTreeItemContextValue(
   node: TreeNode,
   agentRelation: CodexAgentRelationKind = "none",
   agentParentAvailable = false,
+  hidden = false,
 ): string {
   // Centralize contextValue strings used by package.json menus/viewItem conditions.
   switch (node.kind) {
@@ -350,13 +362,13 @@ export function toTreeItemContextValue(
     case "session":
       return withCliResumeIdMarker(
         withCustomTitleMarker(
-          withCodexAgentMarker(
+          withSessionStateMarkers(withCodexAgentMarker(
             node.pinned
               ? `codexHistoryViewer.sessionPinned.${node.session.source}`
               : `codexHistoryViewer.session.${node.session.source}`,
             agentRelation,
             agentParentAvailable,
-          ),
+          ), node.session, hidden),
           node.session,
         ),
         node.session,
@@ -370,18 +382,21 @@ export function toTreeItemContextValue(
     case "searchSession":
       return withCliResumeIdMarker(
         withCustomTitleMarker(
-          withCodexAgentMarker(
+          withSessionStateMarkers(withCodexAgentMarker(
             `codexHistoryViewer.searchSession.${node.session.source}`,
             agentRelation,
             agentParentAvailable,
-          ),
+          ), node.session, hidden),
           node.session,
         ),
         node.session,
       );
     case "searchHit":
       return withCliResumeIdMarker(
-        withCustomTitleMarker(`codexHistoryViewer.searchHit.${node.session.source}`, node.session),
+        withCustomTitleMarker(
+          withSessionStateMarkers(`codexHistoryViewer.searchHit.${node.session.source}`, node.session, hidden),
+          node.session,
+        ),
         node.session,
       );
     case "searchHelp":
@@ -406,8 +421,14 @@ function withCodexAgentMarker(
 }
 
 function withCustomTitleMarker(base: string, session: SessionSummary): string {
-  const archivedBase = session.storage.archiveState === "archived" ? `${base}.archived` : base;
-  return session.customTitle ? `${archivedBase}.customTitle` : archivedBase;
+  return session.customTitle ? `${base}.customTitle` : base;
+}
+
+function withSessionStateMarkers(base: string, session: SessionSummary, hidden: boolean): string {
+  const markers: string[] = [];
+  if (session.storage.archiveState === "archived") markers.push("archived");
+  if (hidden) markers.push("hidden");
+  return markers.length > 0 ? `${base}.${markers.join(".")}` : base;
 }
 
 function withCliResumeIdMarker(base: string, session: SessionSummary): string {

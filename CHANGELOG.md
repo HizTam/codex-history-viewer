@@ -2,7 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.10.0] - 2026-08-12
+## [2.11.0] - 2026-08-14
+
+### Added
+
+- Added the ability to hide or show one or multiple sessions from History, Pinned, and Search.
+- Added **Hidden Only** and **All** to the display target controls in History, Pinned, and History Insights, alongside the existing **Active Only**, **Active + Archived**, and **Archived Only** options.
+- Added an action to the Handoff submenu for copying the handoff file path to the clipboard.
+- Added file size sorting to History and Pinned, with the largest or smallest files shown first.
+
+### Changed
+
+- Updated original session data export and restore to include tags, notes, custom titles, hidden state, pins, and bookmarks for messages and other timeline entries. For Codex sessions, the active or archived location is also restored.
+- Updated History, Pinned, and Search descriptions and tooltips to identify hidden or archived sessions.
+- Reorganized the History and Pinned More Actions menus: sorting remains directly accessible, while secondary display controls are grouped into one-level submenus.
+- Kept hidden sessions available in File AI Change History, as before.
+- Updated the bundled Mermaid renderer to 11.16.1 and its DOMPurify dependency to 3.4.13 to incorporate upstream security fixes.
+
+## [2.10.0] - 2026-08-11
 
 ### Added
 

@@ -43,6 +43,10 @@ import {
 } from "./historyInsightsLoadIntent";
 import { selectVisibleProjectOptionKeys } from "./historyInsightsProjectOptions";
 import { resolveHistoryInsightsSnapshot, sanitizeHistoryInsightsSnapshot } from "./historyInsightsSnapshot";
+import {
+  archiveLocationFromHistoryDisplayTarget,
+  resolveEffectiveHistoryDisplayTarget,
+} from "../types/historyFilterState";
 
 const VIEW_TYPE = "codexHistoryViewer.historyInsights";
 const SNAPSHOT_STATE_KEY = "codexHistoryViewer.historyInsights.snapshot.v1";
@@ -1192,6 +1196,11 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
 
   private buildFilterPresentation(snapshot: HistoryInsightsSnapshot): HistoryInsightsFilterPresentation {
     const config = getConfig();
+    const effectiveDisplayTarget = resolveEffectiveHistoryDisplayTarget(
+      snapshot.descriptor.displayTarget,
+      snapshot.descriptor.source,
+      config.enableCodexArchivedSessions,
+    );
     const codexAvailable = config.enableCodexSource || config.enableCodexArchivedSessions;
     const claudeAvailable = config.enableClaudeSource;
     const projectSelection = snapshot.descriptor.projects;
@@ -1224,15 +1233,18 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       { value: source },
     ));
     const archiveValues = config.enableCodexArchivedSessions
-      ? (["activeOnly", "archivedOnly"] as const)
-      : (["activeOnly"] as const);
-    const archiveOptions = archiveValues.map((archiveLocation) => option(
+      ? (["activeVisible", "visibleAllLocations", "archivedVisible", "hiddenAllLocations", "all"] as const)
+      : (["activeVisible", "hiddenAllLocations", "all"] as const);
+    const archiveOptions = archiveValues.map((displayTarget) => option(
       "archiveLocation",
-      archiveLocation,
-      t(`historyInsights.${archiveLocation === "activeOnly" ? "filterLocationActiveChoice" : "filterLocationArchivedChoice"}`),
-      snapshot.descriptor.archiveLocation === "all" || archiveLocation === snapshot.descriptor.archiveLocation,
-      { filter: "archiveLocation", archiveLocation },
-      { value: archiveLocation },
+      displayTarget,
+      t(`historyDisplayTarget.${displayTarget}`),
+      displayTarget === effectiveDisplayTarget,
+      { filter: "archiveLocation", displayTarget },
+      {
+        value: displayTarget,
+        requiresCodexArchive: displayTarget === "visibleAllLocations" || displayTarget === "archivedVisible",
+      },
     ));
     const projectOptions: HistoryInsightsFilterOption[] = [option(
       "projects",
@@ -1348,7 +1360,8 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
     return {
       source: snapshot.descriptor.source,
       dateRange: snapshot.descriptor.dateRange,
-      archiveLocation: snapshot.descriptor.archiveLocation,
+      archiveLocation: archiveLocationFromHistoryDisplayTarget(effectiveDisplayTarget),
+      displayTarget: effectiveDisplayTarget,
       projectsLabel: projectSelection.kind === "all"
         ? t("historyInsights.filterAll")
         : projectSelection.kind === "none"
@@ -1359,7 +1372,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       projectSelectionKind: projectSelection.kind,
       tags: snapshot.descriptor.tags.slice(0, 12),
       canEditSource: sourceOptions.length > 1,
-      canEditArchiveLocation: config.enableCodexArchivedSessions,
+      canEditArchiveLocation: true,
       options: {
         source: sourceOptions,
         archiveLocation: archiveOptions,

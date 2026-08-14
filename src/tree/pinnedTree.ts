@@ -3,16 +3,23 @@ import * as vscode from "vscode";
 import type { HistoryService } from "../services/historyService";
 import type { PinEntry, PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
+import type { HiddenSessionStore } from "../services/hiddenSessionStore";
 import type { ProjectAliasStore } from "../services/projectAliasStore";
 import { NO_CWD_PROJECT_KEY, type ProjectAssociationStore } from "../services/projectAssociationStore";
-import type { ArchiveLocationFilter, SessionSource, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
+import type { SessionSource, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
 import {
   compareNullableSessionSortKeys,
   getSessionCreatedSortKey,
   getSessionDisplayDateSortKey,
   getSessionLastActivitySortKey,
 } from "../sessions/sessionSortKeys";
+import {
+  compareSessionFileSizeBytes,
+  compareSessionSummariesByFileSize,
+  totalSessionFileSizeBytes,
+} from "../sessions/sessionFileSizeSort";
 import { matchesDateScope, type DateScope } from "../types/dateScope";
+import { matchesSessionDisplayTarget, type SessionDisplayTarget } from "../types/historyFilterState";
 import {
   HistoryEmptyNode,
   MissingPinnedNode,
@@ -30,6 +37,7 @@ import { getConfig } from "../settings";
 import { formatYmdHmInTimeZone } from "../utils/dateUtils";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { normalizeProjectKey } from "../utils/fsUtils";
+import { formatSessionFileSize } from "../utils/formatBytes";
 import { safeDisplayPath, truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
 import { buildSessionDescription } from "./sessionDescriptionUtils";
@@ -59,7 +67,9 @@ export type PinnedSortMode =
   | "lastActivityDesc"
   | "lastActivityAsc"
   | "titleAsc"
-  | "titleDesc";
+  | "titleDesc"
+  | "fileSizeDesc"
+  | "fileSizeAsc";
 
 type PinnedVisibleEntry = {
   projectKey: string;
@@ -88,12 +98,13 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   private readonly historyService: HistoryService;
   private readonly pinStore: PinStore;
   private readonly annotationStore: SessionAnnotationStore;
+  private readonly hiddenSessionStore: HiddenSessionStore;
   private readonly projectAliasStore: ProjectAliasStore;
   private readonly projectAssociationStore: ProjectAssociationStore;
   private filter: DateScope;
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
-  private archiveLocationFilter: ArchiveLocationFilter;
+  private displayTarget: SessionDisplayTarget;
   private projectCwd: string | null;
   private projectCwdKey: string | null = null;
   private projectScopeCwd: string | null;
@@ -113,12 +124,13 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     historyService: HistoryService,
     pinStore: PinStore,
     annotationStore: SessionAnnotationStore,
+    hiddenSessionStore: HiddenSessionStore,
     projectAliasStore: ProjectAliasStore,
     projectAssociationStore: ProjectAssociationStore,
     filter: DateScope,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
-    archiveLocationFilter: ArchiveLocationFilter,
+    displayTarget: SessionDisplayTarget,
     projectCwd: string | null,
     projectScopeCwd: string | null,
     projectGrouped: boolean,
@@ -129,12 +141,13 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     this.historyService = historyService;
     this.pinStore = pinStore;
     this.annotationStore = annotationStore;
+    this.hiddenSessionStore = hiddenSessionStore;
     this.projectAliasStore = projectAliasStore;
     this.projectAssociationStore = projectAssociationStore;
     this.filter = filter;
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
-    this.archiveLocationFilter = archiveLocationFilter;
+    this.displayTarget = displayTarget;
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
     this.projectScopeCwd =
       typeof projectScopeCwd === "string" && projectScopeCwd.trim().length > 0 ? projectScopeCwd.trim() : null;
@@ -178,8 +191,8 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     this.clearVisibleEntriesCache();
   }
 
-  public setArchiveLocationFilter(archiveLocationFilter: ArchiveLocationFilter): void {
-    this.archiveLocationFilter = archiveLocationFilter;
+  public setDisplayTarget(displayTarget: SessionDisplayTarget): void {
+    this.displayTarget = displayTarget;
     this.clearVisibleEntriesCache();
   }
 
@@ -214,7 +227,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     projectScopeCwd: string | null,
     sourceFilter: SessionSourceFilter,
     tagFilter: readonly string[],
-    archiveLocationFilter: ArchiveLocationFilter,
+    displayTarget: SessionDisplayTarget,
   ): void {
     // Update filters in bulk; the caller triggers refresh.
     this.setFilter(filter);
@@ -222,7 +235,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     this.setProjectScopeFilter(projectScopeCwd);
     this.setSourceFilter(sourceFilter);
     this.setTagFilter(tagFilter);
-    this.setArchiveLocationFilter(archiveLocationFilter);
+    this.setDisplayTarget(displayTarget);
   }
 
   private matchesTags(fsPath: string): boolean {
@@ -242,16 +255,9 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     return matchesDateScope(session.localDate, this.filter);
   }
 
-  private matchesArchiveVisibility(session: SessionSummary): boolean {
-    switch (this.archiveLocationFilter) {
-      case "all":
-        return true;
-      case "archivedOnly":
-        return session.source === "codex" && session.storage.archiveState === "archived";
-      case "activeOnly":
-      default:
-        return session.storage.archiveState !== "archived";
-    }
+  private matchesDisplayTarget(session: SessionSummary): boolean {
+    const archived = session.source === "codex" && session.storage.archiveState === "archived";
+    return matchesSessionDisplayTarget(this.displayTarget, archived, this.hiddenSessionStore.isHidden(session));
   }
 
   private matchesProject(session: SessionSummary): boolean {
@@ -268,10 +274,15 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     return inferred === this.sourceFilter;
   }
 
-  private matchesPinnedArchiveVisibility(pin: PinEntry): boolean {
+  private matchesMissingPinnedDisplayTarget(pin: PinEntry): boolean {
     const archived = isArchivedPinEntry(pin);
-    if (archived) return getConfig().enableCodexArchivedSessions && this.archiveLocationFilter !== "activeOnly";
-    return this.archiveLocationFilter !== "archivedOnly";
+    if (archived && !getConfig().enableCodexArchivedSessions) return false;
+    const hidden = this.hiddenSessionStore.isHidden({
+      identityKey: pin.identityKey ?? "",
+      cacheKey: pin.cacheKey,
+      fsPath: pin.fsPath,
+    });
+    return matchesSessionDisplayTarget(this.displayTarget, archived, hidden);
   }
 
   public getTreeItem(element: TreeNode): vscode.TreeItem {
@@ -306,6 +317,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       const agentPresentation = config.agentRunsEnabled && element.session.source === "codex"
         ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"))
         : undefined;
+      const hidden = this.hiddenSessionStore.isHidden(element.session);
       const item = new vscode.TreeItem(
         `${formatSessionDateTimeForAxis(element.session, dateAxis)} ${shortTitle}`,
       );
@@ -315,11 +327,13 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         projectAlias,
         projectDisplayCwd,
         agentPresentation,
+        hidden,
       );
       item.contextValue = toTreeItemContextValue(
         element,
         agentPresentation?.relation,
         Boolean(agentPresentation?.parentSession),
+        hidden,
       );
       // Show source-specific icons (Codex/Claude) in the list row.
       item.iconPath = this.sessionIconResolver.resolve(
@@ -347,6 +361,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         primaryDateTime: getPinnedSessionTooltipDateTime(element.session, dateAxis),
         primaryDateLabelKey: getPinnedSessionTooltipDateLabelKey(dateAxis),
         agentPresentation,
+        hidden,
       });
       return item;
     }
@@ -410,7 +425,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     for (const p of pins) {
       const s = this.historyService.findByFsPath(p.fsPath);
       if (s) {
-        if (!this.matchesArchiveVisibility(s)) continue;
+        if (!this.matchesDisplayTarget(s)) continue;
         if (!this.matchesDateFilter(s)) continue;
         if (!this.matchesSource(s)) continue;
         if (!this.matchesTags(s.fsPath)) continue;
@@ -429,7 +444,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         });
       } else {
         if (this.filter.kind !== "all") continue;
-        if (!this.matchesPinnedArchiveVisibility(p)) continue;
+        if (!this.matchesMissingPinnedDisplayTarget(p)) continue;
         if (!this.matchesMissingPinnedSource(p.fsPath)) continue;
         if (this.projectCwd) continue;
         entries.push({
@@ -470,7 +485,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         this.projectAssociationStore.getRepresentativeTargetCwd(targetKey) ?? bucket?.cwd ?? null,
       getAliasByCwd: (cwd) => this.projectAliasStore.getAliasByCwd(cwd) ?? null,
       buildProjectLabel,
-      compareNodes: (left, right) => comparePinnedProjectTreeNodes(left, right, projectOrder),
+      compareNodes: (left, right) => comparePinnedProjectTreeNodes(left, right, projectOrder, this.sortMode),
     });
   }
 
@@ -540,6 +555,12 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       associatedSources,
       targetMissingHistory: !group.hasTargetSession && associatedSources.length > 0,
       parentAssociation,
+      sort: {
+        createdSortKey: null,
+        lastActivitySortKey: null,
+        totalFileSizeBytes: totalSessionFileSizeBytes(group.entries.map((entry) => entry.session?.fileSizeBytes)),
+        stableKey: group.key,
+      },
     });
   }
 
@@ -587,6 +608,9 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
             element.latestLabel,
           ),
     ];
+    if (isPinnedFileSizeSortMode(this.sortMode)) {
+      lines.push(t("tree.tooltip.totalFileSize", formatProjectFileSize(element.sort.totalFileSizeBytes)));
+    }
     if (element.targetMissingHistory) lines.push(t("projectAssociation.target.missingHistory"));
     appendAssociatedSourceLines(lines, element.associatedSources, formatProjectAssociationMode);
     return lines.join("\n");
@@ -603,6 +627,9 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         element.latestLabel,
       ),
     ];
+    if (isPinnedFileSizeSortMode(this.sortMode)) {
+      lines.push(t("tree.tooltip.totalFileSize", formatProjectFileSize(element.sort.totalFileSizeBytes)));
+    }
     appendAssociatedSourceLines(lines, element.directSources, formatProjectAssociationMode);
     return lines.join("\n");
   }
@@ -622,6 +649,8 @@ function normalizePinnedSortMode(value: unknown): PinnedSortMode {
     case "lastActivityAsc":
     case "titleAsc":
     case "titleDesc":
+    case "fileSizeDesc":
+    case "fileSizeAsc":
       return value;
     case "historyDate":
       return getConfig().historyDateBasis === "lastActivity" ? "lastActivityDesc" : "createdDesc";
@@ -649,6 +678,9 @@ function comparePinnedVisibleEntries(
     case "titleAsc":
     case "titleDesc":
       return compareBySessionTitle(left, right, sortMode);
+    case "fileSizeDesc":
+    case "fileSizeAsc":
+      return compareBySessionFileSize(left, right, sortMode);
     case "pinnedAtDesc":
     default:
       return compareByPinnedAt(left, right, "desc");
@@ -681,7 +713,23 @@ function comparePinnedProjectTreeNodes(
   left: TreeNode,
   right: TreeNode,
   projectOrder: ReadonlyMap<string, number>,
+  sortMode: PinnedSortMode,
 ): number {
+  if (
+    isPinnedFileSizeSortMode(sortMode) &&
+    (left instanceof ProjectNode || left instanceof RelatedGroupNode) &&
+    (right instanceof ProjectNode || right instanceof RelatedGroupNode)
+  ) {
+    const fileSize = compareSessionFileSizeBytes(
+      left.sort.totalFileSizeBytes,
+      right.sort.totalFileSizeBytes,
+      sortMode === "fileSizeAsc" ? "asc" : "desc",
+    );
+    if (fileSize !== 0) return fileSize;
+    const label = compareLabels(left.label, right.label);
+    if (label !== 0) return label;
+    return left.sort.stableKey.localeCompare(right.sort.stableKey);
+  }
   const leftOrder = getPinnedProjectTreeOrder(left, projectOrder);
   const rightOrder = getPinnedProjectTreeOrder(right, projectOrder);
   if (leftOrder !== rightOrder) return leftOrder - rightOrder;
@@ -747,6 +795,29 @@ function compareBySessionTitle(
     compareNullableSessionSortKeys(getSessionCreatedSortKey(left.session), getSessionCreatedSortKey(right.session), "desc") ||
     compareNumberDesc(left.pinnedAt, right.pinnedAt) ||
     compareFsPath(left.fsPath, right.fsPath)
+  );
+}
+
+function compareBySessionFileSize(
+  left: PinnedVisibleEntry,
+  right: PinnedVisibleEntry,
+  sortMode: "fileSizeDesc" | "fileSizeAsc",
+): number {
+  const fileSize = compareSessionFileSizeBytes(
+    left.session?.fileSizeBytes,
+    right.session?.fileSizeBytes,
+    sortMode === "fileSizeAsc" ? "asc" : "desc",
+  );
+  if (fileSize !== 0) return fileSize;
+  if (left.session && !right.session) return -1;
+  if (!left.session && right.session) return 1;
+  if (!left.session || !right.session) {
+    return compareNumberDesc(left.pinnedAt, right.pinnedAt) || compareFsPath(left.fsPath, right.fsPath);
+  }
+  return compareSessionSummariesByFileSize(
+    left.session,
+    right.session,
+    sortMode === "fileSizeAsc" ? "asc" : "desc",
   );
 }
 
@@ -821,6 +892,14 @@ function formatProjectLatestLabel(entry: PinnedVisibleEntry | null, sortMode: Pi
 
 function isPinnedAtSortMode(sortMode: PinnedSortMode): boolean {
   return sortMode === "pinnedAtDesc" || sortMode === "pinnedAtAsc";
+}
+
+function isPinnedFileSizeSortMode(sortMode: PinnedSortMode): sortMode is "fileSizeDesc" | "fileSizeAsc" {
+  return sortMode === "fileSizeDesc" || sortMode === "fileSizeAsc";
+}
+
+function formatProjectFileSize(value: number | null): string {
+  return formatSessionFileSize(value) ?? t("tree.tooltip.fileSizeUnknown");
 }
 
 function formatSessionDateLabel(date: string, time: string): string {

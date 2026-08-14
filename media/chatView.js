@@ -907,6 +907,10 @@
       updateToolbar();
       return;
     }
+    if (msg.type === "annotationState") {
+      applySessionAnnotationState(msg);
+      return;
+    }
     if (msg.type === "resumePresentationInvalidated") {
       applyResumePresentationInvalidationSafely(msg);
       return;
@@ -14422,6 +14426,75 @@
       fileName,
       filePath,
     };
+  }
+
+  function normalizeSessionAnnotation(value) {
+    if (!value || typeof value !== "object" || !Array.isArray(value.tags) || value.tags.length > 12) return null;
+    const tags = [];
+    const seen = new Set();
+    for (const rawTag of value.tags) {
+      if (typeof rawTag !== "string" || rawTag.length > 256) return null;
+      const tag = rawTag.trim();
+      const key = tag.toLocaleLowerCase();
+      if (!tag || seen.has(key)) return null;
+      seen.add(key);
+      tags.push(tag);
+    }
+    if (typeof value.note !== "string" || value.note.length > 500) return null;
+    return { tags, note: value.note };
+  }
+
+  function areSameSessionAnnotations(left, right) {
+    if (!left || !right || left.note !== right.note || left.tags.length !== right.tags.length) return false;
+    return left.tags.every((tag, index) => tag === right.tags[index]);
+  }
+
+  function applySessionAnnotationState(message) {
+    const revision = Number(message && message.revision);
+    if (
+      !model ||
+      !sessionInfoSnapshot ||
+      !Number.isSafeInteger(revision) ||
+      revision <= 0 ||
+      revision !== sessionInfoSnapshot.revision
+    ) {
+      return false;
+    }
+    const annotation = normalizeSessionAnnotation(message.annotation);
+    if (!annotation) return false;
+    const current = normalizeSessionAnnotation(model.annotation);
+    if (current && areSameSessionAnnotations(current, annotation)) return false;
+
+    const scrollCompensation = captureAnnotationScrollCompensation();
+    withPageSearchContentMutation(
+      () => {
+        model = { ...model, annotation };
+        if (annotationEl) annotationEl.textContent = "";
+        renderAnnotationHeader(annotation);
+        restoreAnnotationScrollCompensation(scrollCompensation);
+        scheduleStickyUserOverlayUpdate();
+        updateTimeGuide({ afterPaint: true });
+        return true;
+      },
+      { refreshImmediately: true },
+    );
+    return true;
+  }
+
+  function captureAnnotationScrollCompensation() {
+    const root = getScrollRoot();
+    if (!(root instanceof HTMLElement) || !(annotationEl instanceof HTMLElement)) return null;
+    const rootRect = root.getBoundingClientRect();
+    const annotationRect = annotationEl.getBoundingClientRect();
+    if (annotationRect.bottom > rootRect.top + 0.5) return null;
+    return { root, height: annotationRect.height };
+  }
+
+  function restoreAnnotationScrollCompensation(compensation) {
+    if (!compensation || !(annotationEl instanceof HTMLElement)) return;
+    const nextHeight = annotationEl.getBoundingClientRect().height;
+    const delta = nextHeight - compensation.height;
+    if (Number.isFinite(delta) && Math.abs(delta) > 0.5) compensation.root.scrollTop += delta;
   }
 
   function normalizeRevealTarget(value) {
