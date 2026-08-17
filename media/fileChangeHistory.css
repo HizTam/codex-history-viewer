@@ -676,6 +676,15 @@ mark.pageSearchMatch-active {
   box-shadow: inset 0 0 0 1px var(--chv-find-match-border);
 }
 
+mark.pageSearchMatch-logical {
+  padding: 0;
+}
+
+.pageSearchLogicalMatch-active {
+  outline: 1px solid var(--chv-find-match-border);
+  outline-offset: 1px;
+}
+
 .fchRoot {
   min-height: 100%;
 }
@@ -1130,6 +1139,39 @@ mark.pageSearchMatch-active {
   font-size: 12px;
   line-height: 1.35;
   white-space: pre;
+}
+
+.patchDiffCode {
+  display: block;
+  min-width: max-content;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.patchDiffCode.shiki {
+  background-color: transparent !important;
+}
+
+body.vscode-dark .patchDiffCode.shiki,
+body.vscode-dark .patchDiffCode.shiki span {
+  color: var(--shiki-dark) !important;
+}
+
+body.vscode-high-contrast .patchDiffCode.shiki,
+body.vscode-high-contrast .patchDiffCode.shiki span {
+  color: var(--shiki-hcDark) !important;
+}
+
+body.vscode-high-contrast-light .patchDiffCode.shiki,
+body.vscode-high-contrast-light .patchDiffCode.shiki span {
+  color: var(--shiki-hcLight) !important;
 }
 
 .patchDiffText-add.patchDiffText-right,

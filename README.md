@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.11.0** (2026-08-14).
+Latest release: **2.11.1** (2026-08-17).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -160,7 +160,7 @@ Use it when you want to answer questions such as:
 
 The Explorer file context menu entry is opt-in. Enable **File Change History > Explorer Context Menu: Enabled**, then right-click a file in VS Code Explorer and run **Show File AI Change History**.
 
-The view is scoped to the current workspace and selected file. It supports Codex / Claude Code source toggles, in-page search with shared query history and richer query syntax, incremental **Load more**, previous/next navigation, and **Open in History** links back to the matching diff card in the original session.
+The view is scoped to the current workspace and selected file. It supports Codex / Claude Code source toggles, in-page search with shared query history and richer query syntax, incremental **Load more**, previous/next navigation, and **Open in History** links back to the matching diff card in the original session. Diff code is syntax-highlighted when the language can be determined from the file path; otherwise, it is displayed as plain text.
 
 File AI Change History follows project associations when resolving related history, so associated project displays and path mappings are reflected when possible. Hidden sessions remain part of its candidate history.
 
@@ -256,16 +256,11 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.11.0
+## What's New in 2.11.1
 
-- Added the ability to hide or show one or multiple sessions from History, Pinned, and Search.
-- Added **Hidden Only** and **All** to the display target controls in History, Pinned, and History Insights, alongside the existing **Active Only**, **Active + Archived**, and **Archived Only** options.
-- Added an action to the Handoff submenu for copying the handoff file path to the clipboard.
-- Added file size sorting to History and Pinned, with the largest or smallest files shown first.
-- Reorganized the History and Pinned More Actions menus: sorting remains directly accessible, while secondary display controls are grouped into one-level submenus.
-- Updated original session data export and restore to include tags, notes, custom titles, hidden state, pins, and bookmarks for messages and other timeline entries. For Codex sessions, the active or archived location is also restored.
-- Updated History, Pinned, and Search descriptions and tooltips to identify hidden or archived sessions.
-- Updated the bundled Mermaid renderer to 11.16.1 and its DOMPurify dependency to 3.4.13 with upstream security fixes.
+- Expanded syntax highlighting in the Session Viewer to cover additional code block languages and file types in file-change diffs.
+- Added syntax highlighting to File AI Change History diffs when the language can be determined from the file path.
+- Improved in-page search so phrases spanning syntax-highlighted tokens are found correctly in code blocks and file-change diffs.
 
 ## Changelog
 
@@ -273,7 +268,7 @@ See [CHANGELOG](CHANGELOG.md).
 
 ## Security
 
-See [SECURITY](SECURITY.md). Use the latest release whenever possible. Upgrade v2.10.0 to v2.11.0 or later, and do not install or redistribute v1.2.1 or earlier VSIX files.
+See [SECURITY](SECURITY.md) for details. Use Codex History Viewer v2.11.0 or later, preferably the latest published release. Do not install or redistribute v1.2.1 or earlier VSIX files.
 
 ## Privacy
 
@@ -282,6 +277,12 @@ This extension reads local session files and renders them inside VS Code. It doe
 If you use **Copy Quick Prompt** or **Copy Handoff Prompt to Clipboard**, this extension copies session context to your clipboard. Data is only sent externally if you paste it into another tool or extension.
 
 When you open a session as a Markdown transcript, the generated transcript includes local paths such as the session file path and CWD. Review before sharing.
+
+## Project Scope
+
+Codex History Viewer is intentionally local-first. Features that cannot be implemented using only locally available session data and require the extension to access external services over the network are outside the project scope. The extension will not request, store, or use sign-in credentials such as account IDs, passwords, API keys, or access tokens.
+
+This includes, for example, live lookups of account quota, subscription status, billing information, and costs. Features that require continuously updated provider pricing or account-plan data are also outside the project scope, even when authentication is not required.
 
 ## Supported Providers
 

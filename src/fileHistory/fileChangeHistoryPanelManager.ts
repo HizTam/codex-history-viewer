@@ -890,6 +890,12 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     const pageSearchCoreUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "media", "pageSearchCore.js"),
     );
+    const codeLanguageSupportUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "codeLanguageSupport.js"),
+    );
+    const shikiBundleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.extensionUri, "media", "chatViewShiki.bundle.js"),
+    );
     const jsUri = webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "media", "fileChangeHistory.js"));
     const csp = [
       `default-src 'none'`,
@@ -931,6 +937,8 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     <div id="pageSearchResults" role="listbox" aria-live="polite"></div>
   </div>
   <div id="restoreCover" aria-hidden="true" hidden></div>
+  <script nonce="${nonce}" src="${codeLanguageSupportUri}"></script>
+  <script nonce="${nonce}" src="${shikiBundleUri}"></script>
   <script nonce="${nonce}" src="${sharedTimeGuideJsUri}"></script>
   <script nonce="${nonce}" src="${pageSearchCoreUri}"></script>
   <script nonce="${nonce}" src="${jsUri}"></script>

@@ -1,6 +1,11 @@
-// Shared page-search parser and matcher for webviews.
+// Shared page-search parser, matcher, and logical text highlighter for webviews.
 (function () {
   const MAX_PAGE_SEARCH_MATCHES = 1000;
+  const PAGE_SEARCH_TEXT_UNIT_ATTRIBUTE = "data-page-search-text-unit";
+  const PAGE_SEARCH_TEXT_UNIT_SELECTOR = `[${PAGE_SEARCH_TEXT_UNIT_ATTRIBUTE}="true"]`;
+  const PAGE_SEARCH_TEXT_UNIT_MODES = new Set(["direct", "shiki-lines"]);
+  // Keep external source text out of DOM attributes and release it with the rendered element.
+  const pageSearchTextUnits = new WeakMap();
 
   function compileQuery(rawInput, caseSensitive) {
     const raw = String(rawInput || "").trim();
@@ -197,9 +202,270 @@
     return value;
   }
 
+  function registerTextUnit(element, sourceText, options = {}) {
+    if (!isHtmlElement(element)) return false;
+    const source = String(sourceText ?? "");
+    const mode = normalizeTextUnitMode(options && options.mode);
+    if (!createTextUnitMapping(element, source, mode)) {
+      pageSearchTextUnits.delete(element);
+      element.removeAttribute(PAGE_SEARCH_TEXT_UNIT_ATTRIBUTE);
+      return false;
+    }
+    pageSearchTextUnits.set(element, Object.freeze({ sourceText: source, mode }));
+    element.setAttribute(PAGE_SEARCH_TEXT_UNIT_ATTRIBUTE, "true");
+    return true;
+  }
+
+  function getTextUnit(element) {
+    if (!isHtmlElement(element)) return null;
+    return pageSearchTextUnits.get(element) || null;
+  }
+
+  function findTextUnit(element) {
+    if (!isHtmlElement(element)) return null;
+    let candidate = element.closest(PAGE_SEARCH_TEXT_UNIT_SELECTOR);
+    while (isHtmlElement(candidate)) {
+      if (pageSearchTextUnits.has(candidate)) return candidate;
+      candidate = candidate.parentElement?.closest(PAGE_SEARCH_TEXT_UNIT_SELECTOR) || null;
+    }
+    return null;
+  }
+
+  function highlightTextUnit(element, matches) {
+    const record = getTextUnit(element);
+    if (!record || !Array.isArray(matches)) return null;
+    const mapping = createTextUnitMapping(element, record.sourceText, record.mode);
+    if (!mapping) return null;
+
+    const plan = buildTextHighlightPlan(record.sourceText.length, mapping.spans, matches);
+    if (!plan) return null;
+    const groups = matches.map((match) => ({
+      start: match.start,
+      length: match.length,
+      marks: [],
+    }));
+    if (plan.fragments.length === 0) return groups;
+
+    const rangesBySpan = Array.from({ length: mapping.spans.length }, () => []);
+    for (const item of plan.fragments) rangesBySpan[item.spanIndex].push(item);
+
+    const replacements = [];
+    try {
+      for (let spanIndex = 0; spanIndex < mapping.spans.length; spanIndex += 1) {
+        const ranges = rangesBySpan[spanIndex];
+        if (ranges.length === 0) continue;
+        const span = mapping.spans[spanIndex];
+        const node = span.node;
+        const parent = node && node.parentNode;
+        if (!node || !parent || !element.contains(node)) return null;
+        const nodeText = node.textContent || "";
+        if (nodeText.length !== span.end - span.start) return null;
+
+        const fragment = element.ownerDocument.createDocumentFragment();
+        let cursor = 0;
+        for (const range of ranges) {
+          if (range.startOffset < cursor || range.endOffset > nodeText.length) return null;
+          if (range.startOffset > cursor) {
+            fragment.appendChild(element.ownerDocument.createTextNode(nodeText.slice(cursor, range.startOffset)));
+          }
+          const mark = element.ownerDocument.createElement("mark");
+          mark.className = "pageSearchMatch pageSearchMatch-logical";
+          mark.textContent = nodeText.slice(range.startOffset, range.endOffset);
+          fragment.appendChild(mark);
+          groups[range.matchIndex].marks.push(mark);
+          cursor = range.endOffset;
+        }
+        if (cursor < nodeText.length) {
+          fragment.appendChild(element.ownerDocument.createTextNode(nodeText.slice(cursor)));
+        }
+        replacements.push({ node, parent, fragment });
+      }
+
+      for (const replacement of replacements) {
+        if (replacement.node.parentNode !== replacement.parent || !element.contains(replacement.node)) return null;
+      }
+      for (const replacement of replacements) {
+        replacement.parent.replaceChild(replacement.fragment, replacement.node);
+      }
+      return groups;
+    } catch {
+      restoreLogicalHighlightMarks(element);
+      return null;
+    }
+  }
+
+  function buildTextHighlightPlan(sourceLength, rawSpans, rawMatches) {
+    if (!Number.isSafeInteger(sourceLength) || sourceLength < 0) return null;
+    if (!Array.isArray(rawSpans) || !Array.isArray(rawMatches)) return null;
+
+    const spans = [];
+    let previousSpanEnd = 0;
+    for (const rawSpan of rawSpans) {
+      const start = Number(rawSpan && rawSpan.start);
+      const end = Number(rawSpan && rawSpan.end);
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end)) return null;
+      if (start < previousSpanEnd || end <= start || end > sourceLength) return null;
+      spans.push({ start, end });
+      previousSpanEnd = end;
+    }
+
+    const matches = [];
+    let previousMatchEnd = 0;
+    for (const rawMatch of rawMatches) {
+      const start = Number(rawMatch && rawMatch.start);
+      const length = Number(rawMatch && rawMatch.length);
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(length) || length <= 0) return null;
+      const end = start + length;
+      if (!Number.isSafeInteger(end) || start < previousMatchEnd || start < 0 || end > sourceLength) return null;
+      matches.push({ start, end });
+      previousMatchEnd = end;
+    }
+
+    const fragments = [];
+    let firstPossibleSpan = 0;
+    for (let matchIndex = 0; matchIndex < matches.length; matchIndex += 1) {
+      const match = matches[matchIndex];
+      while (firstPossibleSpan < spans.length && spans[firstPossibleSpan].end <= match.start) {
+        firstPossibleSpan += 1;
+      }
+      for (let spanIndex = firstPossibleSpan; spanIndex < spans.length; spanIndex += 1) {
+        const span = spans[spanIndex];
+        if (span.start >= match.end) break;
+        const overlapStart = Math.max(span.start, match.start);
+        const overlapEnd = Math.min(span.end, match.end);
+        if (overlapEnd <= overlapStart) continue;
+        fragments.push({
+          matchIndex,
+          spanIndex,
+          startOffset: overlapStart - span.start,
+          endOffset: overlapEnd - span.start,
+        });
+      }
+    }
+    return { fragments, matchCount: matches.length };
+  }
+
+  function createTextUnitMapping(element, sourceText, mode) {
+    const direct = createDirectTextUnitMapping(element, sourceText);
+    if (direct) return direct;
+    return mode === "shiki-lines" ? createShikiLineTextUnitMapping(element, sourceText) : null;
+  }
+
+  function createDirectTextUnitMapping(element, sourceText) {
+    if ((element.textContent || "") !== sourceText) return null;
+    const spans = [];
+    let offset = 0;
+    for (const node of collectTextNodes(element)) {
+      const length = (node.textContent || "").length;
+      if (length > 0) spans.push({ node, start: offset, end: offset + length });
+      offset += length;
+    }
+    return offset === sourceText.length ? { spans } : null;
+  }
+
+  function createShikiLineTextUnitMapping(element, sourceText) {
+    const codeElement = element.querySelector("code");
+    if (!isHtmlElement(codeElement)) return null;
+    const lineElements = Array.from(codeElement.children);
+    if (lineElements.some((line) => !isHtmlElement(line) || !line.classList.contains("line"))) return null;
+
+    const sourceLines = splitSourceLines(sourceText);
+    if (lineElements.length !== sourceLines.length) return null;
+    const spans = [];
+    for (let index = 0; index < sourceLines.length; index += 1) {
+      const line = lineElements[index];
+      const sourceLine = sourceLines[index];
+      if ((line.textContent || "") !== sourceLine.text) return null;
+      let offset = sourceLine.start;
+      for (const node of collectTextNodes(line)) {
+        const length = (node.textContent || "").length;
+        if (length > 0) spans.push({ node, start: offset, end: offset + length });
+        offset += length;
+      }
+      if (offset !== sourceLine.end) return null;
+    }
+    // Line separators intentionally remain unmapped virtual source ranges.
+    return { spans };
+  }
+
+  function splitSourceLines(sourceText) {
+    const lines = [];
+    let lineStart = 0;
+    let index = 0;
+    while (index < sourceText.length) {
+      const char = sourceText[index];
+      if (char !== "\r" && char !== "\n") {
+        index += 1;
+        continue;
+      }
+      lines.push({ start: lineStart, end: index, text: sourceText.slice(lineStart, index) });
+      if (char === "\r" && sourceText[index + 1] === "\n") index += 1;
+      index += 1;
+      lineStart = index;
+    }
+    lines.push({ start: lineStart, end: sourceText.length, text: sourceText.slice(lineStart) });
+    return lines;
+  }
+
+  function collectTextNodes(element) {
+    const out = [];
+    const walker = element.ownerDocument.createTreeWalker(element, 4);
+    while (walker.nextNode()) out.push(walker.currentNode);
+    return out;
+  }
+
+  function clearHighlights(root) {
+    const scope = root && typeof root.querySelectorAll === "function" ? root : null;
+    if (!scope) return false;
+    const parents = new Set();
+    for (const mark of Array.from(scope.querySelectorAll("mark.pageSearchMatch"))) {
+      const parent = mark.parentNode;
+      if (!parent) continue;
+      parent.replaceChild(mark.ownerDocument.createTextNode(mark.textContent || ""), mark);
+      parents.add(parent);
+    }
+    for (const parent of parents) {
+      if (parent && typeof parent.normalize === "function") parent.normalize();
+    }
+    for (const element of Array.from(scope.querySelectorAll(".pageSearchLogicalMatch-active"))) {
+      if (element && element.classList) element.classList.remove("pageSearchLogicalMatch-active");
+    }
+    return true;
+  }
+
+  function restoreLogicalHighlightMarks(element) {
+    const parents = new Set();
+    for (const mark of Array.from(element.querySelectorAll("mark.pageSearchMatch-logical"))) {
+      const parent = mark.parentNode;
+      if (!parent) continue;
+      parent.replaceChild(element.ownerDocument.createTextNode(mark.textContent || ""), mark);
+      parents.add(parent);
+    }
+    for (const parent of parents) {
+      if (parent && typeof parent.normalize === "function") parent.normalize();
+    }
+  }
+
+  function normalizeTextUnitMode(value) {
+    const mode = typeof value === "string" ? value : "";
+    return PAGE_SEARCH_TEXT_UNIT_MODES.has(mode) ? mode : "direct";
+  }
+
+  function isHtmlElement(value) {
+    return typeof HTMLElement !== "undefined" && value instanceof HTMLElement;
+  }
+
   window.CHV_PAGE_SEARCH = Object.freeze({
+    buildTextHighlightPlan,
+    clearHighlights,
     compileQuery,
+    findTextUnit,
     getInvalidKind,
+    getTextUnit,
+    highlightTextUnit,
     isSlashRegexLike,
+    registerTextUnit,
+    splitSourceLines,
+    textUnitSelector: PAGE_SEARCH_TEXT_UNIT_SELECTOR,
   });
 })();

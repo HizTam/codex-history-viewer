@@ -47,6 +47,7 @@
   const MAX_CODE_COMMENT_FILE_LENGTH = 4096;
   const MAX_CODE_COMMENT_TITLE_LENGTH = 512;
   const MAX_CODE_COMMENT_BODY_LENGTH = 20000;
+  const MAX_SHIKI_DIFF_CHARACTERS = 200000;
   const MAX_PAGE_SEARCH_HISTORY_CANDIDATES = 20;
   const MAX_BRANCH_OVERLAY_CARDS = 200;
   const MAX_BRANCH_CONTROL_CHOICES = 20;
@@ -172,49 +173,136 @@
     tool: "T",
   });
   const PATCH_LANGUAGE_BY_EXTENSION = Object.freeze({
+    ".ascx": "html",
+    ".aspx": "html",
+    ".automount": "systemd",
+    ".bas": "vb",
     ".bash": "shellscript",
+    ".bat": "bat",
+    ".bicep": "bicep",
+    ".bicepparam": "bicep",
     ".c": "c",
+    ".c++": "cpp",
     ".cc": "cpp",
+    ".cjs": "javascript",
+    ".cmd": "bat",
     ".cpp": "cpp",
     ".cs": "csharp",
+    ".cshtml": "razor",
+    ".csl": "kusto",
     ".css": "css",
+    ".csx": "csharp",
+    ".cts": "typescript",
+    ".cxx": "cpp",
+    ".ddl": "sql",
+    ".device": "systemd",
+    ".dml": "sql",
+    ".dtx": "latex",
+    ".env": "dotenv",
+    ".frm": "vb",
+    ".fs": "fsharp",
+    ".fsi": "fsharp",
+    ".fsscript": "fsharp",
+    ".fsx": "fsharp",
     ".go": "go",
     ".h": "c",
+    ".hcl": "hcl",
+    ".hh": "cpp",
     ".hpp": "cpp",
+    ".htaccess": "apache",
     ".htm": "html",
     ".html": "html",
+    ".hxx": "cpp",
     ".ini": "ini",
+    ".ins": "latex",
     ".java": "java",
     ".js": "javascript",
     ".json": "json",
+    ".json5": "json",
     ".jsonc": "jsonc",
     ".jsx": "jsx",
+    ".kql": "kusto",
     ".kt": "kotlin",
     ".kts": "kotlin",
+    ".kusto": "kusto",
+    ".link": "systemd",
+    ".ltx": "latex",
+    ".master": "html",
     ".md": "markdown",
+    ".mjs": "javascript",
+    ".mount": "systemd",
+    ".mts": "typescript",
+    ".mysql": "sql",
+    ".netdev": "systemd",
+    ".network": "systemd",
     ".nginx": "nginx",
+    ".path": "systemd",
+    ".pck": "plsql",
+    ".pgsql": "sql",
     ".php": "php",
+    ".pkb": "plsql",
+    ".pkh": "plsql",
+    ".pks": "plsql",
+    ".pl": "perl",
+    ".plb": "plsql",
+    ".plpgsql": "sql",
+    ".plsql": "plsql",
+    ".pm": "perl",
+    ".pod": "perl",
     ".proto": "proto",
     ".ps1": "powershell",
+    ".psd1": "powershell",
+    ".psgi": "perl",
     ".psm1": "powershell",
+    ".psql": "sql",
     ".py": "python",
+    ".pyw": "python",
+    ".razor": "razor",
     ".rb": "ruby",
+    ".reg": "reg",
     ".rs": "rust",
+    ".scope": "systemd",
+    ".service": "systemd",
     ".sh": "shellscript",
+    ".slice": "systemd",
+    ".snapshot": "systemd",
+    ".socket": "systemd",
     ".sql": "sql",
+    ".sty": "latex",
+    ".swap": "systemd",
     ".swift": "swift",
+    ".target": "systemd",
+    ".tex": "latex",
     ".tf": "terraform",
+    ".timer": "systemd",
     ".toml": "toml",
     ".ts": "typescript",
+    ".tsql": "sql",
     ".tsx": "tsx",
+    ".vb": "vb",
+    ".vba": "vb",
+    ".vbhtml": "razor",
+    ".vbs": "vb",
     ".xml": "xml",
     ".yaml": "yaml",
     ".yml": "yaml",
     ".zsh": "shellscript",
   });
   const PATCH_LANGUAGE_BY_FILENAME = Object.freeze({
+    "apache2.conf": "apache",
+    cpanfile: "perl",
     dockerfile: "dockerfile",
+    envvars: "apache",
+    gemfile: "ruby",
+    "httpd-ssl.conf": "apache",
+    "httpd-vhosts.conf": "apache",
+    "httpd.conf": "apache",
     makefile: "makefile",
+    "nginx.conf": "nginx",
+    rakefile: "ruby",
+    ssh_config: "ssh-config",
+    sshd_config: "ssh-config",
+    vagrantfile: "ruby",
   });
   const MIN_PAGE_SEARCH_WIDTH = 280;
   const PAGE_SEARCH_HORIZONTAL_MARGIN = 16;
@@ -7095,6 +7183,7 @@
       }
     }
 
+    collectLogicalPageSearchResults(compiled, roots, { roleFilterActive });
     collectMermaidPageSearchResults(compiled, { roleFilterActive });
     pageSearchResults.sort(comparePageSearchResultDocumentOrder);
     finalizePageSearchResultAnchors();
@@ -7230,25 +7319,104 @@
 
     const parent = node.parentElement;
     if (!(parent instanceof HTMLElement)) return false;
-    if (parent.closest("#pageSearchBar, .dateGuide")) return false;
-    if (parent.closest("[data-page-search-ignore='true']")) return false;
-    if (parent.closest(".turnMarker, .runningTurnAnchorRow, .runningTurnFallbackChip")) return false;
-    if (parent.closest("script, style, textarea, input, select")) return false;
-    if (parent.closest("button") && !parent.closest(".patchGroupFilePath")) return false;
-    if (parent.closest("mark.pageSearchMatch")) return false;
-    if (parent.closest("[hidden]")) return false;
-    if (!showDetails && parent.closest(".row.developer, .row.usage, .row.environment")) return false;
-    const role = resolvePageSearchTextRole(parent);
+    if (findRegisteredPageSearchTextUnit(parent)) return false;
+    return shouldAcceptPageSearchElement(parent, options);
+  }
+
+  function shouldAcceptPageSearchElement(element, options = {}) {
+    if (!(element instanceof HTMLElement)) return false;
+    if (element.closest("#pageSearchBar, .dateGuide")) return false;
+    if (element.closest("[data-page-search-ignore='true']")) return false;
+    if (element.closest(".turnMarker, .runningTurnAnchorRow, .runningTurnFallbackChip")) return false;
+    if (element.closest("script, style, textarea, input, select")) return false;
+    if (element.closest("button") && !element.closest(".patchGroupFilePath")) return false;
+    if (element.closest("mark.pageSearchMatch")) return false;
+    if (element.closest("[hidden]")) return false;
+    if (!showDetails && element.closest(".row.developer, .row.usage, .row.environment")) return false;
+    const role = resolvePageSearchTextRole(element);
     if (options.roleFilterActive === true && (!role || !pageSearchSelectedRoles.has(role))) return false;
 
-    const closedDetails = parent.closest("details:not([open])");
+    const closedDetails = element.closest("details:not([open])");
     if (closedDetails) {
-      const summary = parent.closest("summary");
+      const summary = element.closest("summary");
       if (!(summary instanceof HTMLElement) || summary.parentElement !== closedDetails) return false;
     }
 
-    if (parent.getClientRects().length === 0 && !parent.closest("summary")) return false;
+    if (element.getClientRects().length === 0 && !element.closest("summary")) return false;
     return true;
+  }
+
+  function collectLogicalPageSearchResults(compiled, roots, options = {}) {
+    const core = getPageSearchCore();
+    if (
+      !core ||
+      typeof core.getTextUnit !== "function" ||
+      typeof core.highlightTextUnit !== "function" ||
+      typeof core.textUnitSelector !== "string"
+    ) {
+      return;
+    }
+
+    const units = [];
+    const seen = new Set();
+    for (const root of roots) {
+      if (!(root instanceof HTMLElement)) continue;
+      const candidates = [];
+      if (root.matches(core.textUnitSelector)) candidates.push(root);
+      candidates.push(...root.querySelectorAll(core.textUnitSelector));
+      for (const candidate of candidates) {
+        if (!(candidate instanceof HTMLElement) || seen.has(candidate)) continue;
+        seen.add(candidate);
+        const record = core.getTextUnit(candidate);
+        if (!record || typeof record.sourceText !== "string") continue;
+        if (!shouldAcceptPageSearchElement(candidate, options)) continue;
+        units.push({ element: candidate, sourceText: record.sourceText });
+      }
+    }
+
+    for (const unit of units) {
+      const matches = compiled.findAll(unit.sourceText);
+      if (!Array.isArray(matches) || matches.length === 0) continue;
+      let groups = null;
+      try {
+        groups = core.highlightTextUnit(unit.element, matches);
+      } catch {
+        groups = null;
+      }
+      if (!Array.isArray(groups) || groups.length !== matches.length) {
+        groups = matches.map(() => ({ marks: [] }));
+      }
+
+      for (let index = 0; index < matches.length; index += 1) {
+        const match = matches[index];
+        const marks = Array.isArray(groups[index] && groups[index].marks)
+          ? groups[index].marks.filter(
+              (mark) => mark instanceof HTMLElement && mark.matches("mark.pageSearchMatch") && unit.element.contains(mark),
+            )
+          : [];
+        pageSearchMatches.push(...marks);
+        pageSearchResults.push(
+          buildPageSearchResult(marks[0] || unit.element, unit.sourceText, match.start, match.length, {
+            kind: "logical",
+            marks,
+            orderElement: unit.element,
+            revealElement: unit.element,
+            sourceOffset: match.start,
+          }),
+        );
+      }
+    }
+  }
+
+  function findRegisteredPageSearchTextUnit(element) {
+    const core = getPageSearchCore();
+    if (!core || typeof core.findTextUnit !== "function") return null;
+    try {
+      const unit = core.findTextUnit(element);
+      return unit instanceof HTMLElement ? unit : null;
+    } catch {
+      return null;
+    }
   }
 
   function resolvePageSearchTextRole(element) {
@@ -7265,12 +7433,30 @@
   }
 
   function clearPageSearchHighlights() {
-    for (const match of Array.from(document.querySelectorAll("mark.pageSearchMatch"))) {
-      const textNode = document.createTextNode(match.textContent || "");
-      const parent = match.parentNode;
-      if (!parent) continue;
-      parent.replaceChild(textNode, match);
-      if (parent instanceof HTMLElement) parent.normalize();
+    const core = getPageSearchCore();
+    let cleared = false;
+    if (core && typeof core.clearHighlights === "function") {
+      try {
+        cleared = core.clearHighlights(document) === true;
+      } catch {
+        cleared = false;
+      }
+    }
+    if (!cleared) {
+      const parents = new Set();
+      for (const match of Array.from(document.querySelectorAll("mark.pageSearchMatch"))) {
+        const textNode = document.createTextNode(match.textContent || "");
+        const parent = match.parentNode;
+        if (!parent) continue;
+        parent.replaceChild(textNode, match);
+        parents.add(parent);
+      }
+      for (const parent of parents) {
+        if (parent && typeof parent.normalize === "function") parent.normalize();
+      }
+      for (const unit of document.querySelectorAll(".pageSearchLogicalMatch-active")) {
+        if (unit instanceof HTMLElement) unit.classList.remove("pageSearchLogicalMatch-active");
+      }
     }
     for (const block of document.querySelectorAll(".pageSearchMermaidMatch-active")) {
       if (block instanceof HTMLElement) block.classList.remove("pageSearchMermaidMatch-active");
@@ -7349,6 +7535,9 @@
     for (const block of document.querySelectorAll(".pageSearchMermaidMatch-active")) {
       if (block instanceof HTMLElement) block.classList.remove("pageSearchMermaidMatch-active");
     }
+    for (const unit of document.querySelectorAll(".pageSearchLogicalMatch-active")) {
+      if (unit instanceof HTMLElement) unit.classList.remove("pageSearchLogicalMatch-active");
+    }
 
     const safeIndex = Math.max(0, Math.min(index, pageSearchResults.length - 1));
     activePageSearchResultIndex = safeIndex;
@@ -7357,8 +7546,12 @@
     if (activeTarget instanceof HTMLElement) {
       if (activeResult.kind === "mermaid") {
         activeTarget.classList.add("pageSearchMermaidMatch-active");
-      } else if (activeResult.mark instanceof HTMLElement) {
-        activeResult.mark.classList.add("pageSearchMatch-active");
+      } else {
+        const activeMarks = getPageSearchResultMarks(activeResult);
+        for (const mark of activeMarks) mark.classList.add("pageSearchMatch-active");
+        if (activeMarks.length === 0 && activeResult.kind === "logical") {
+          activeTarget.classList.add("pageSearchLogicalMatch-active");
+        }
       }
       if (reveal) {
         if (requestPageSearchRevealRender(activeResult, safeIndex, options)) return;
@@ -7372,8 +7565,16 @@
   }
 
   function getPageSearchResultTargetElement(result) {
-    if (result?.mark instanceof HTMLElement) return result.mark;
+    const marks = getPageSearchResultMarks(result);
+    if (marks.length > 0) return marks[0];
     return result?.revealElement instanceof HTMLElement ? result.revealElement : null;
+  }
+
+  function getPageSearchResultMarks(result) {
+    if (Array.isArray(result && result.marks)) {
+      return result.marks.filter((mark) => mark instanceof HTMLElement);
+    }
+    return result?.mark instanceof HTMLElement ? [result.mark] : [];
   }
 
   function moveFocusedPageSearchResult(delta) {
@@ -7408,19 +7609,29 @@
     active.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
 
-  function buildPageSearchResult(mark, sourceText, startIndex, queryLength) {
+  function buildPageSearchResult(target, sourceText, startIndex, queryLength, options = {}) {
+    const configuredMarks = Array.isArray(options.marks)
+      ? options.marks.filter((mark) => mark instanceof HTMLElement)
+      : [];
+    const fallbackMark = target instanceof HTMLElement && target.matches("mark.pageSearchMatch") ? target : null;
+    const marks = configuredMarks.length > 0 ? configuredMarks : fallbackMark ? [fallbackMark] : [];
+    const mark = marks[0] || null;
+    const revealElement = options.revealElement instanceof HTMLElement ? options.revealElement : mark || target;
+    const orderElement = options.orderElement instanceof HTMLElement ? options.orderElement : mark || revealElement;
     const snippet = buildPageSearchSnippet(sourceText, startIndex, queryLength);
-    const context = describePageSearchContext(mark);
+    const context = describePageSearchContext(mark || revealElement);
     return {
       anchor: null,
       anchorQueryLength: queryLength,
       anchorSourceText: sourceText,
       anchorStartIndex: startIndex,
       collectionOrder: pageSearchResults.length,
-      kind: "dom",
+      kind: typeof options.kind === "string" && options.kind ? options.kind : "dom",
       mark,
-      orderElement: mark,
-      revealElement: mark,
+      marks,
+      orderElement,
+      revealElement,
+      ...(Number.isFinite(Number(options.sourceOffset)) ? { sourceOffset: Math.max(0, Math.floor(Number(options.sourceOffset))) } : {}),
       title: context.title,
       meta: context.meta,
       lineNumber: context.lineNumber,
@@ -7447,6 +7658,7 @@
           kind: "mermaid",
           lineNumber: "",
           mark: null,
+          marks: [],
           mermaidKey: record.key,
           messageIndex: context.messageIndex,
           meta: [context.meta, mermaidMeta].filter(Boolean).join(" · "),
@@ -7517,7 +7729,7 @@
         result.anchorQueryLength,
         {
           mermaidKey: result.kind === "mermaid" ? result.mermaidKey : "",
-          sourceOffset: result.kind === "mermaid" ? result.sourceOffset : undefined,
+          sourceOffset: Number.isFinite(Number(result.sourceOffset)) ? Number(result.sourceOffset) : undefined,
         },
       );
       const scopeKey = buildPageSearchAnchorScopeKey(base);
@@ -12879,6 +13091,7 @@
     const lineColumn = el("div", { className: `patchDiffLineColumn patchDiffLineColumn-${side}` });
     const viewport = el("div", { className: `patchDiffViewport patchDiffViewport-${side}` });
     const textColumn = el("div", { className: `patchDiffTextColumn patchDiffTextColumn-${side}` });
+    const highlightedLines = createHighlightedPatchLines(rows, side, entryLanguage);
 
     rows.forEach((row, index) => {
       const kind = row && typeof row.kind === "string" ? row.kind : "context";
@@ -12900,7 +13113,7 @@
             : "";
 
       lineColumn.appendChild(renderPatchLineNumber(lineValue, side, kind, index));
-      textColumn.appendChild(renderPatchTextCell(textValue, side, entryLanguage, kind, index));
+      textColumn.appendChild(renderPatchTextCell(textValue, side, kind, index, highlightedLines?.[index]));
     });
 
     viewport.appendChild(textColumn);
@@ -12918,25 +13131,102 @@
     return cell;
   }
 
-  function renderPatchTextCell(text, side, entryLanguage, kind, rowIndex) {
+  function renderPatchTextCell(text, side, kind, rowIndex, highlightedLine) {
     const cell = el("div", {
       className: `patchDiffText patchDiffText-${side} patchDiffText-${kind}`,
     });
     cell.dataset.rowIndex = String(rowIndex);
     const safeText = typeof text === "string" ? text : "";
-    if (!safeText) {
-      cell.textContent = " ";
-      return cell;
+    if (safeText && highlightedLine && typeof highlightedLine.html === "string") {
+      const codeEl = el("code", { className: "patchDiffCode" });
+      if (typeof highlightedLine.className === "string" && highlightedLine.className.trim()) {
+        for (const className of highlightedLine.className.split(/\s+/)) {
+          if (className) codeEl.classList.add(className);
+        }
+      }
+      if (typeof highlightedLine.style === "string" && highlightedLine.style.trim()) {
+        codeEl.style.cssText = highlightedLine.style;
+        codeEl.style.backgroundColor = "transparent";
+      }
+      codeEl.innerHTML = highlightedLine.html;
+      codeEl.setAttribute("dir", "ltr");
+      if (registerPageSearchTextUnit(codeEl, safeText, "direct")) {
+        cell.appendChild(codeEl);
+        return cell;
+      }
     }
-
-    const highlighted = createHighlightedInlineCodeElement(safeText, entryLanguage);
-    if (highlighted) {
-      cell.appendChild(highlighted);
-      return cell;
-    }
-
-    cell.textContent = safeText;
+    cell.textContent = safeText || " ";
+    if (safeText) registerPageSearchTextUnit(cell, safeText, "direct");
     return cell;
+  }
+
+  function createHighlightedPatchLines(rows, side, entryLanguage) {
+    if (!entryLanguage || !Array.isArray(rows) || rows.length === 0) return null;
+    const shiki = getShikiHighlighter();
+    if (!shiki || typeof shiki.highlightCodeToHtml !== "function") return null;
+
+    const codeEntries = [];
+    rows.forEach((row, rowIndex) => {
+      const lineNumber = side === "left" ? row && row.leftLine : row && row.rightLine;
+      if (!Number.isSafeInteger(lineNumber) || lineNumber < 1) return;
+      const text =
+        side === "left"
+          ? row && typeof row.leftText === "string"
+            ? row.leftText
+            : ""
+          : row && typeof row.rightText === "string"
+            ? row.rightText
+            : "";
+      codeEntries.push({ rowIndex, text });
+    });
+    if (codeEntries.length === 0) return null;
+    const codeLines = codeEntries.map((entry) => entry.text);
+    let codeCharacterCount = Math.max(0, codeLines.length - 1);
+    for (const line of codeLines) {
+      if (line.length > MAX_SHIKI_DIFF_CHARACTERS - codeCharacterCount) return null;
+      codeCharacterCount += line.length;
+    }
+    const codeText = codeLines.join("\n");
+    if (
+      !codeText ||
+      codeText.length !== codeCharacterCount ||
+      codeText.length > MAX_SHIKI_DIFF_CHARACTERS
+    ) {
+      return null;
+    }
+
+    let html = "";
+    try {
+      html = shiki.highlightCodeToHtml(codeText, entryLanguage) || "";
+    } catch {
+      return null;
+    }
+    if (!html) return null;
+
+    const temporary = el("div", {});
+    temporary.innerHTML = html.trim();
+    const highlightedPre = temporary.firstElementChild;
+    if (!(highlightedPre instanceof HTMLElement) || highlightedPre.tagName.toLowerCase() !== "pre") return null;
+    const highlightedCode = highlightedPre.querySelector("code");
+    if (!(highlightedCode instanceof HTMLElement)) return null;
+    const lineElements = Array.from(highlightedCode.children);
+    if (lineElements.some((element) => !(element instanceof HTMLElement) || !element.classList.contains("line"))) {
+      return null;
+    }
+    if (lineElements.length !== codeLines.length) return null;
+    if (lineElements.some((line, index) => (line.textContent || "") !== codeLines[index])) return null;
+
+    const className = highlightedPre.className;
+    const style = highlightedPre.getAttribute("style") || "";
+    const highlightedLines = Array.from({ length: rows.length }, () => null);
+    codeEntries.forEach((entry, index) => {
+      highlightedLines[entry.rowIndex] = {
+        className,
+        html: lineElements[index].innerHTML,
+        style,
+      };
+    });
+    return highlightedLines;
   }
 
   function renderSignedCountBadge(value, kind) {
@@ -13015,6 +13305,26 @@
     if (!fileName) return "";
 
     if (PATCH_LANGUAGE_BY_FILENAME[fileName]) return PATCH_LANGUAGE_BY_FILENAME[fileName];
+    if (fileName.startsWith(".env.")) return "dotenv";
+    if (fileName.startsWith("dockerfile.")) return "dockerfile";
+    if (fileName.startsWith("makefile.")) return "makefile";
+
+    const directoryNames = segments.slice(0, -1).map((segment) => String(segment || "").toLowerCase());
+    const parentDirectory = directoryNames[directoryNames.length - 1] || "";
+    if (fileName === "config" && parentDirectory === ".ssh") return "ssh-config";
+    if (directoryNames.includes(".ssh") && parentDirectory === "config.d") return "ssh-config";
+    if (
+      fileName.endsWith(".conf") &&
+      /\.(?:automount|device|link|mount|netdev|network|path|scope|service|slice|snapshot|socket|swap|target|timer)\.d$/u.test(
+        parentDirectory,
+      )
+    ) {
+      return "systemd";
+    }
+    if (fileName.endsWith(".conf") && directoryNames.some((name) => name === "apache2" || name === "httpd")) {
+      return "apache";
+    }
+    if (fileName.endsWith(".conf") && directoryNames.includes("nginx")) return "nginx";
 
     const dotIndex = fileName.lastIndexOf(".");
     if (dotIndex < 0) return "";
@@ -13396,6 +13706,8 @@
   }
 
   function renderCodeBlock(lang, code, options) {
+    const codeText = String(code || "");
+    const explicitLanguage = typeof lang === "string" ? lang.trim() : "";
     const mermaidOrdinal = Number(options && options.mermaidOrdinal);
     if (
       isMermaidLanguage(lang) &&
@@ -13415,7 +13727,7 @@
     const wrap = el("div", { className: "codeBlock" });
     const header = el("div", { className: "codeHeader" });
     const label = el("span", {});
-    label.textContent = lang ? String(lang) : "";
+    label.textContent = explicitLanguage ? resolveMarkdownCodeLabel(explicitLanguage, codeText) : "";
     header.appendChild(label);
     const btn = el("button", { type: "button", className: "codeCopyBtn iconBtn" });
     const copyLabel = i18n.copy || "Copy";
@@ -13426,14 +13738,20 @@
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      vscode.postMessage({ type: "copy", text: String(code || "") });
+      vscode.postMessage({ type: "copy", text: codeText });
     });
     header.appendChild(btn);
     wrap.appendChild(header);
 
-    const pre = el("pre", {});
-    pre.textContent = String(code || "");
-    wrap.appendChild(pre);
+    const highlightedPre = explicitLanguage ? createHighlightedCodeBlockElement(codeText, explicitLanguage) : null;
+    if (highlightedPre) {
+      wrap.appendChild(highlightedPre);
+    } else {
+      const pre = el("pre", {});
+      pre.textContent = codeText;
+      registerPageSearchTextUnit(pre, codeText, "direct");
+      wrap.appendChild(pre);
+    }
     return wrap;
   }
 
@@ -14881,7 +15199,12 @@
 
       pre.replaceWith(wrap);
       const highlightedPre = createHighlightedCodeBlockElement(codeText, lang);
-      wrap.appendChild(highlightedPre || pre);
+      if (highlightedPre) {
+        wrap.appendChild(highlightedPre);
+      } else {
+        registerPageSearchTextUnit(pre, codeText, "direct");
+        wrap.appendChild(pre);
+      }
     }
   }
 
@@ -16776,7 +17099,7 @@
   function inferMarkdownCodeLanguage(codeEl) {
     if (!codeEl) return "";
     const cls = String(codeEl.className || "");
-    const m = cls.match(/(?:^|\\s)language-([a-z0-9_+-]+)(?:\\s|$)/i);
+    const m = cls.match(/(?:^|\s)language-([a-z0-9_+#-]+)(?:\s|$)/i);
     return m ? m[1] : "";
   }
 
@@ -16810,34 +17133,18 @@
     removeShikiLineBreakTextNodes(highlightedPre);
     highlightedPre.classList.add("codePre");
     highlightedPre.setAttribute("dir", "ltr");
+    if (!registerPageSearchTextUnit(highlightedPre, String(codeText ?? ""), "shiki-lines")) return null;
     return highlightedPre;
   }
 
-  function createHighlightedInlineCodeElement(codeText, lang) {
-    const shiki = getShikiHighlighter();
-    if (!shiki || typeof shiki.highlightLineFragment !== "function") return null;
-
-    let fragment = null;
+  function registerPageSearchTextUnit(element, sourceText, mode) {
+    const core = getPageSearchCore();
+    if (!core || typeof core.registerTextUnit !== "function") return false;
     try {
-      fragment = shiki.highlightLineFragment(codeText, lang);
+      return core.registerTextUnit(element, String(sourceText ?? ""), { mode }) === true;
     } catch {
-      return null;
+      return false;
     }
-    if (!fragment || typeof fragment.html !== "string" || !fragment.html) return null;
-
-    const codeEl = el("code", { className: "patchDiffCode" });
-    if (typeof fragment.className === "string" && fragment.className.trim()) {
-      for (const className of fragment.className.split(/\s+/)) {
-        if (className) codeEl.classList.add(className);
-      }
-    }
-    if (typeof fragment.style === "string" && fragment.style.trim()) {
-      codeEl.style.cssText = fragment.style;
-      codeEl.style.backgroundColor = "transparent";
-    }
-    codeEl.innerHTML = fragment.html;
-    codeEl.setAttribute("dir", "ltr");
-    return codeEl;
   }
 
   function removeShikiLineBreakTextNodes(highlightedPre) {

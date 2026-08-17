@@ -938,6 +938,15 @@ mark.pageSearchMatch-active {
   box-shadow: inset 0 0 0 1px var(--chv-find-match-border);
 }
 
+mark.pageSearchMatch-logical {
+  padding: 0;
+}
+
+.pageSearchLogicalMatch-active {
+  outline: 1px solid var(--chv-find-match-border);
+  outline-offset: 1px;
+}
+
 .sessionHeader {
   border: 1px solid var(--chv-border);
   border-radius: 10px;

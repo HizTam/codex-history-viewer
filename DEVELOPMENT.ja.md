@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-08-14
-- 対象バージョン: 2.11.0
+- 最終更新: 2026-08-17
+- 対象バージョン: 2.11.1
 
 ## 1. 概要
 
@@ -684,6 +684,22 @@
 - `THIRD_PARTY_NOTICES.txt`にはMermaid本体に加えてbundleへ到達し得るrequired production dependencyをlicense別に収録する。配布通知はpackage名を重複排除してversionを省き、同一MIT条文は1回に集約する。正確な配置先・version・同名packageの複数versionはpackage-lockと監査テストで保持し、生成JavaScriptに含まれないtype-only package（`@types/*`、`@iconify/types`、`@chevrotain/types`）は通知対象外とする。Mermaid依存更新時はpackage-lockと生成bundleの双方から再監査する
 - Fork / Branch Navigation / Agent Runs の図データ保存は対象外とする
 
+### 3.6.7 コードブロックのシンタックスハイライト
+
+- Session Webview のassistant / user / developer fenced code blockと差分カード、およびファイル履歴 Webviewのdiff cardは、`scripts/chatViewShiki.entry.js` へ静的登録したローカル Shiki 文法だけで色分けする。文法はネットワークから取得せず、未知言語、初期化失敗、ハイライト失敗時はコード本文を失わないプレーンテキスト表示へfallbackする
+- 既存文法に加え、Apache Conf、Windows Batch、Bicep、dotenv、F#、HCL、Kusto、LaTeX、Perl、PL/SQL、ASP.NET Razor、Windows Registry、SSH Config、systemd、TeX、Visual Basicを登録する。`.NET`を単一言語として扱わず、既存C# / PowerShellと追加するF# / Razor / Visual Basicで個別に対応する
+- `apacheconf` / `httpd` / `htaccess` は `apache`、`batch` / `cmd` は `bat`、`cc` / `cxx` は `cpp`、`f#` / `fs` は `fsharp`、`cshtml` は `razor`、`jscript` は `javascript`、`vba` / `vbs` / `vbscript` は `vb` へ正規化する。Visual Basic文法が内包する`cmd` aliasよりWindows Batchを優先するため、`cmd`は必ず明示的に`bat`へ正規化する
+- SQL方言のうち、`tsql` / `t-sql` / `mssql` / `sqlserver` / `mysql` / `sqlite` / `postgresql` / `pgsql` / `plpgsql` は汎用`sql`へ正規化する。`plsql`は専用文法を使用する。ASP.NET Web Formsの`aspx` / `ascx` / `master`はHTML部分の色分けとして`html`へ正規化し、埋め込みサーバーコードの完全な色分けは保証しない
+- Classic ASPの`asp`、Cisco IOS、Junosなど専用文法を登録していないネットワーク機器のconfigは、誤った色分けを避けるためaliasを割り当てない
+- assistant Markdownが生成する`language-*` classからは、英数字、`_`、`+`、`#`、`-`を言語名として抽出する。これにより`f#` / `c#`を固定alias mapまで保持する
+- user / developer messageの独自fence描画とtool detailの共通コードブロックは、明示された言語IDがある場合だけShiki正規化とcanonical labelを適用する。tool Argumentsの明示`json`は色分けするが、言語未指定fenceとtool Outputは2.11.0と同じラベルなしのプレーンテキストにする。assistant Markdownの既存内容推測は変更しない
+- Session Webviewの差分カードとファイル履歴 Webviewのdiff cardは、追加文法と既存aliasに対応する拡張子、Apache / Nginx / SSHの代表ファイル名、`.env.*`、Dockerfile / Makefile派生名、`.ssh/config` / `config.d`、systemd drop-in、Apache / Nginx配下の`.conf`から言語を推定する。汎用`.conf`、LaTeX classとVisual Basic classで衝突する`.cls`、専用文法のない機器configは推測で割り当てない。`.tex`は一般的な用途を優先して`latex`へ割り当てる。Session用と`media/codeLanguageSupport.js`のファイル履歴用mapは静的テストで完全一致を維持する
+- Session Webviewの差分カードもhunkの左右単位で実在する行だけをまとめてShiki処理し、追加・削除の反対側にある表示用空欄を混入させず、複数行構文の状態を維持する。片側が200,000文字を超える場合、Shiki出力の行数または各行本文が入力と一致しない場合、初期化・解析に失敗した場合は片側全体をプレーンテキストへfallbackする
+- ファイル履歴 Webviewはnonce付きで既存Shiki bundleと`media/codeLanguageSupport.js`を読み込む。diff本文はhunkの左右単位で実在する行だけをまとめて色分けし、各行でhighlighterを再実行しない。既存`isHugeDiff()`に該当するcard、片側が200,000文字を超える場合、Shiki出力の行数または各行本文が入力と一致しない場合、初期化・解析に失敗した場合はプレーンテキストへfallbackする
+- ファイル履歴はSession Webviewと同じShiki / Mermaid共通bundleを再利用してVSIX内の文法重複を避けるため、初回表示には同bundleの読み込み・初期化コストが加わる
+- Shikiで分割されたtoken `span`はWebview内page searchの検索単位にしない。`media/pageSearchCore.js`が元コードをDOM属性やhidden要素ではなくWeakMapで保持し、コードブロック全体またはdiff一行を論理検索単位として検索する。token境界をまたぐ語句も一件として数え、snippet、anchor、File AI Change Historyのcard内occurrenceは元コードとDOM順から生成する。元コードと表示DOMを写像できないShiki出力は描画時にプレーンテキストへfallbackし、登録後の写像失敗時もmarkなしの論理検索結果として本文と件数を失わない
+- info string は既存どおり文字列化、前後空白除去、小文字化、固定alias mapの順で処理する。コード本文を実行せず、本文、session ID、session pathをログへ追加しない。Mermaidの`mermaid` / `mmd` fence、GFM、KaTeX、code block header / copyの既存経路は変更しない
+
 ### 3.7 設定（`codexHistoryViewer.*`）
 
 - `sources.enabled`
@@ -852,6 +868,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - Windows では大小文字差と区切り文字差を吸収する
 - `src/fileHistory/fileChangeHistoryPanelManager.ts`
   - ファイル履歴 Webview の作成、再利用、reload、load more、通常履歴 Webview への reveal を担当する
+  - nonce付きで`media/codeLanguageSupport.js`と既存`media/chatViewShiki.bundle.js`を読み込み、外部通信なしでdiff構文色分けを提供する
   - 初回読み込みと追加読み込みで `state.cards` を更新する直前に、読み込み済み card 全体を変更時刻昇順で安定 sort する
   - `codexHistoryViewer.webview.restoreAfterReload = true` のときだけ `codexHistoryViewer.fileChangeHistory` の `WebviewPanelSerializer` を登録し、Reload Window / VS Code 再起動後も対象ファイルと読み込み済みカード件数を元に再読み込みする
   - Webview serializer 復元時は、最後に見ていた card anchor を `scrollAnchor` として保存し、復元後に同じ card 付近へ戻す
@@ -868,6 +885,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - `media/fileChangeHistory.js` / `media/fileChangeHistory.css`
   - ファイル履歴 Webview のヘッダー、source toggle、検索、diff card、load more、空状態、stale banner を描画する
   - diff card は通常履歴 Webview の diff card と同じ before / after column、行番号、追加 / 削除表示を使う
+  - diff cardの言語は`media/codeLanguageSupport.js`で対象パスから推定し、hunkの左右単位でShiki処理してVS CodeのLight / Dark / High Contrastテーマへ追従する。huge diff、200,000文字超過、行数・各行本文不一致、Shiki失敗時はプレーンテキストへfallbackする
   - loading 表示の fallback はタイトル文言を流用せず、`l10n/bundle.l10n.*` の loading 文言を使う
   - 検索は読み込み済み card だけを対象にし、追加読み込み後は自動で再検索する
   - Webview 内検索の検索結果は、所属 card の mixed timeline 番号 `#N` を常時表示し、diff 本文 hit では `変更前 L...` / `変更後 L...` の行番号 badge を併記する
@@ -877,6 +895,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - Webview 内検索の diff 行番号 badge は、通常幅では `変更前 L...` / `変更後 L...` を表示し、検索パネル幅が不足する場合は CSS container query で visible text を `L...` に圧縮する。圧縮時も tooltip / aria-label には変更前 / 変更後を含める
   - Webview 内検索の compact badge 切り替えは render 後の overflow 測定ではなく検索パネル幅だけを基準にし、`scrollWidth` / `clientWidth` の layout read を行わない
   - Webview 内検索結果の `occurrenceIndex` は検索 refresh ごとの `cardId -> count` Map で生成し、hit ごとに既存 results 全体を走査しない
+  - Shikiでtoken化したdiff本文もbefore / afterの一行を論理検索単位として扱い、token境界をまたぐ語句、boolean条件、正規表現を一件として検索する。通常DOMと論理diffの結果をDOM順にsortした後、`cardId -> count` Mapで`occurrenceIndex`を付ける
   - Webview 内検索の Enter / 前へ / 次へでは pending debounce を flush し、flush 済みの場合は同じ検索 refresh を二重実行しない
   - 追加読み込み成功後も、card id と card 内 offset を使って閲覧中 card 付近へ scroll を復元する
   - source toggle では先頭へ戻さず、表示対象に残る閲覧中 card、または時刻と表示位置が近い card へ scroll を復元する
@@ -1216,7 +1235,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `media/chatView.js` は Code / Image reference の file kind badge を dedicated l10n label で表示し、generic file label へフォールバックさせない
   - `media/chatView.js` は assistant message 内の `::code-comment{...}` directive を Markdown 本文から分離し、レビューコメントカードとして表示する
   - `media/chatView.js` は Mermaid fenced blockを遅延描画し、Hostから配信された全体Light / Dark選択と保存形式、安全化済みSVGのinline表示、非モーダル拡大ペイン、テーマ固定背景付きSVG / PNGと`.mmd`の保存データ生成を担当する。diagram keyはsession、timeline card、message、ordinal、sourceのハッシュ化済み識別子から作り、カード幅変更後はinline overflowを再計測する。リリース前仕様のWebview stateに残るtheme / 保存形式は参照しない
-  - `scripts/chatViewShiki.entry.js` は Shiki と Mermaid を同じIIFE bundleへまとめ、Mermaidの安全設定、直列描画、flowchart shapeから導出した固定role metadataを制約付きbridgeとして公開する
+  - `scripts/chatViewShiki.entry.js` は選択したShiki文法とMermaidを同じIIFE bundleへまとめ、コード言語aliasの正規化とハイライト、Mermaidの安全設定、直列描画、flowchart shapeから導出した固定role metadataを制約付きbridgeとして公開する
   - `mermaidExport.ts` は Extension Host側の保存形式、サイズ、SVG安全条件、PNG signature、固定ファイル名を検証する
   - code comment directive parser は `file` / `title` / `body` / `start` / `end` / `priority` の既知キーを string 外で検出し、属性順序、optional comma、raw 改行、未知 segment の揺れを許容する
   - `start` / `end` は先頭の正整数部分を採用し、負数など正整数で始まらない値は不正として扱う
@@ -2311,6 +2330,10 @@ npm run package
 - all-diff mode 中の表示は `全差分を閉じる` に切り替わり、もう一度押すと全 patch detail が閉じ、compact summary と all-diff mode 開始前の card 幅状態に戻る
 - all-diff mode 解除後も、file row のクリックで対象 file の patch detail だけを展開し、focus / scroll できる
 - 差分カードの折りたたみ展開、hunk ごとの折り返し切り替え、行ジャンプが動く
+- 追加した言語の対象拡張子と代表ファイル名を持つ差分カードで、行内のシンタックスハイライトが表示される。曖昧な`.conf` / `.cls`はプレーンテキスト表示を維持する
+- ファイル履歴 Webviewでも同じ対象パスのdiff cardにシンタックスハイライトが表示され、大きすぎるdiffやShiki失敗時は本文を失わずプレーンテキスト表示される
+- tool Outputに`# Title`、Python / YAML / TOMLの`#`コメントが含まれてもbashラベルやシェル配色にならず、tool Argumentsの明示`json`は色分けされる
+- Session差分のパスから言語を推定できない場合は行内容から言語を推測せず、プレーンテキスト表示を維持する
 - diff カードの上下ナビゲーションで前後の diff へ移動できる
 - 各カードの最大幅展開ボタンで対象カードだけが広がり、再クリックで通常幅に戻る
 - 差分ハイライトが VS Code テーマに追従する
@@ -2319,6 +2342,7 @@ npm run package
 - Webview 内検索の文字入力では連続入力中に検索が連発せず、短い待ち時間の後に最新 query で検索される
 - Webview 内検索で query を空にすると、待ち時間なしで highlight と検索結果 status が消える
 - Webview 内検索で Enter / 前へ / 次へを押すと、待ち時間なしで現在 query の結果へ移動できる
+- Sessionとファイル履歴のShiki色分け領域で、`foo = bar`、`def main`などtoken境界をまたぐ語句が一件として検索され、snippetに前後文脈が残る。改行をまたぐ正規表現、CRLF、改行だけの一致も件数、前後移動、検索解除を壊さない
 - attachment card の Result / Parameter details を開閉した直後、Webview 内検索の件数、highlight、active result が古い DOM のまま残らない
 - ファイル履歴 Webview の Webview 内検索で debounce pending 中に Enter / 前へ / 次へを押しても、検索 refresh が二重実行されない
 - ファイル履歴 Webview の検索結果には常に所属 card の mixed timeline 番号 `#N` が表示され、View 内の `#N` と一致する

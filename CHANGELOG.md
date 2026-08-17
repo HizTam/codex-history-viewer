@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.11.1] - 2026-08-17
+
+### Added
+
+- Expanded syntax highlighting in the Session Viewer to cover additional code block languages and file types in file-change diffs.
+- Added syntax highlighting to File AI Change History diffs when the language can be determined from the file path.
+
+### Fixed
+
+- Fixed in-page search in syntax-highlighted code blocks and file-change diffs so phrases spanning multiple highlighted tokens can be found correctly.
+
 ## [2.11.0] - 2026-08-14
 
 ### Added

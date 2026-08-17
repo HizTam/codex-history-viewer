@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.11.0",
+  "version": "2.11.1",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -6073,7 +6073,7 @@
     "watch:webview": "node scripts/build-webview-shiki.mjs --watch",
     "watch": "tsc -watch -p .",
     "package": "vsce package --allow-missing-repository",
-    "lint": "npm run -s check:l10n && node --check media/chatView.js && node --check media/fileChangeHistory.js && node --check media/historyInsights.js",
+    "lint": "npm run -s check:l10n && node --check media/codeLanguageSupport.js && node --check media/pageSearchCore.js && node --check media/chatView.js && node --check media/fileChangeHistory.js && node --check media/historyInsights.js",
     "check:l10n": "node scripts/check-l10n-garbled.js",
     "typecheck": "tsc -p . --noEmit"
   },

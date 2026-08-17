@@ -1,13 +1,19 @@
 import { createHighlighterCoreSync } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+import apache from "@shikijs/langs/apache";
 import bash from "@shikijs/langs/bash";
+import bat from "@shikijs/langs/bat";
+import bicep from "@shikijs/langs/bicep";
 import c from "@shikijs/langs/c";
 import cpp from "@shikijs/langs/cpp";
 import csharp from "@shikijs/langs/csharp";
 import css from "@shikijs/langs/css";
 import diff from "@shikijs/langs/diff";
 import dockerfile from "@shikijs/langs/dockerfile";
+import dotenv from "@shikijs/langs/dotenv";
+import fsharp from "@shikijs/langs/fsharp";
 import go from "@shikijs/langs/go";
+import hcl from "@shikijs/langs/hcl";
 import html from "@shikijs/langs/html";
 import ini from "@shikijs/langs/ini";
 import javascript from "@shikijs/langs/javascript";
@@ -16,21 +22,31 @@ import json from "@shikijs/langs/json";
 import jsonc from "@shikijs/langs/jsonc";
 import jsx from "@shikijs/langs/jsx";
 import kotlin from "@shikijs/langs/kotlin";
+import kusto from "@shikijs/langs/kusto";
+import latex from "@shikijs/langs/latex";
 import makefile from "@shikijs/langs/makefile";
 import markdown from "@shikijs/langs/markdown";
 import nginx from "@shikijs/langs/nginx";
+import perl from "@shikijs/langs/perl";
 import php from "@shikijs/langs/php";
+import plsql from "@shikijs/langs/plsql";
 import proto from "@shikijs/langs/proto";
 import powershell from "@shikijs/langs/powershell";
 import python from "@shikijs/langs/python";
+import razor from "@shikijs/langs/razor";
+import reg from "@shikijs/langs/reg";
 import ruby from "@shikijs/langs/ruby";
 import rust from "@shikijs/langs/rust";
 import sql from "@shikijs/langs/sql";
+import sshConfig from "@shikijs/langs/ssh-config";
 import swift from "@shikijs/langs/swift";
-import toml from "@shikijs/langs/toml";
+import systemd from "@shikijs/langs/systemd";
 import terraform from "@shikijs/langs/terraform";
+import tex from "@shikijs/langs/tex";
+import toml from "@shikijs/langs/toml";
 import tsx from "@shikijs/langs/tsx";
 import typescript from "@shikijs/langs/typescript";
+import vb from "@shikijs/langs/vb";
 import xml from "@shikijs/langs/xml";
 import yaml from "@shikijs/langs/yaml";
 import darkPlus from "@shikijs/themes/dark-plus";
@@ -52,19 +68,33 @@ import mermaid from "mermaid";
 
   const languageAliasMap = {
     "c#": "csharp",
+    "f#": "fsharp",
+    "t-sql": "sql",
+    apacheconf: "apache",
+    ascx: "html",
+    aspx: "html",
+    batch: "bat",
+    cc: "cpp",
     cjs: "javascript",
+    cmd: "bat",
+    cshtml: "razor",
     cs: "csharp",
+    cxx: "cpp",
     console: "shellscript",
     css: "css",
     docker: "dockerfile",
+    fs: "fsharp",
     golang: "go",
     h: "c",
     hpp: "cpp",
     htm: "html",
     html: "html",
     html5: "html",
+    htaccess: "apache",
+    httpd: "apache",
     java: "java",
     js: "javascript",
+    jscript: "javascript",
     jsx: "jsx",
     json: "json",
     json5: "json",
@@ -73,7 +103,13 @@ import mermaid from "mermaid";
     kts: "kotlin",
     md: "markdown",
     mjs: "javascript",
+    mssql: "sql",
+    mysql: "sql",
+    master: "html",
+    pgsql: "sql",
     py: "python",
+    plpgsql: "sql",
+    postgresql: "sql",
     psql: "sql",
     plain: "plaintext",
     plaintext: "plaintext",
@@ -88,12 +124,18 @@ import mermaid from "mermaid";
     zsh: "shellscript",
     shell: "shellscript",
     sql: "sql",
+    sqlite: "sql",
+    sqlserver: "sql",
     tf: "terraform",
     text: "plaintext",
     toml: "toml",
     ts: "typescript",
+    tsql: "sql",
     tsx: "tsx",
     txt: "plaintext",
+    vba: "vb",
+    vbs: "vb",
+    vbscript: "vb",
     xml: "xml",
     yaml: "yaml",
     yml: "yaml",
@@ -105,14 +147,20 @@ import mermaid from "mermaid";
     highlighter = createHighlighterCoreSync({
       engine: createJavaScriptRegexEngine(),
       langs: [
+        apache,
         bash,
+        bat,
+        bicep,
         c,
         cpp,
         csharp,
         css,
         diff,
         dockerfile,
+        dotenv,
+        fsharp,
         go,
+        hcl,
         html,
         ini,
         javascript,
@@ -121,21 +169,31 @@ import mermaid from "mermaid";
         jsonc,
         jsx,
         kotlin,
+        kusto,
+        latex,
         makefile,
         markdown,
         nginx,
+        perl,
         php,
+        plsql,
         proto,
         powershell,
         python,
+        razor,
+        reg,
         ruby,
         rust,
         sql,
+        sshConfig,
         swift,
-        toml,
+        systemd,
         terraform,
+        tex,
+        toml,
         tsx,
         typescript,
+        vb,
         xml,
         yaml,
       ],

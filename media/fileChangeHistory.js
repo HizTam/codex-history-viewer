@@ -47,6 +47,7 @@
   const RESTORE_COVER_MIN_VISIBLE_MS = 220;
   const RESTORE_COVER_MAX_WAIT_MS = 900;
   const RESTORE_COVER_STABLE_FRAMES = 3;
+  const MAX_SHIKI_DIFF_CHARACTERS = 200000;
 
   let i18n = {};
   let dateTime = {};
@@ -729,7 +730,8 @@
     if (stats.childElementCount > 0) cardEl.appendChild(stats);
 
     const details = el("details", { className: "diffDetails" });
-    details.open = !isHugeDiff(card);
+    const hugeDiff = isHugeDiff(card);
+    details.open = !hugeDiff;
     const summary = el("summary", { className: "diffDetailsSummary" });
     const summaryPath = el("span", { className: "diffDetailsPath" });
     summaryPath.textContent = card.displayPath || "";
@@ -739,12 +741,12 @@
     summaryCounts.appendChild(countBadge(card.removed, "removed"));
     summary.appendChild(summaryCounts);
     details.appendChild(summary);
-    details.appendChild(renderDiff(card.entry || {}));
+    details.appendChild(renderDiff(card.entry || {}, hugeDiff ? "" : inferFileChangeLanguage(card)));
     cardEl.appendChild(details);
     return cardEl;
   }
 
-  function renderDiff(entry) {
+  function renderDiff(entry, entryLanguage) {
     const wrap = el("div", { className: "diffWrap" });
     const hunks = Array.isArray(entry.hunks) ? entry.hunks : [];
     if (hunks.length === 0) {
@@ -772,19 +774,20 @@
 
       const rows = Array.isArray(hunk.rows) ? hunk.rows : [];
       const blocks = el("div", { className: "patchDiffBlocks" });
-      blocks.appendChild(renderPatchBlock(rows, "left"));
-      blocks.appendChild(renderPatchBlock(rows, "right"));
+      blocks.appendChild(renderPatchBlock(rows, "left", entryLanguage));
+      blocks.appendChild(renderPatchBlock(rows, "right", entryLanguage));
       hunkEl.appendChild(blocks);
       wrap.appendChild(hunkEl);
     }
     return wrap;
   }
 
-  function renderPatchBlock(rows, side) {
+  function renderPatchBlock(rows, side, entryLanguage) {
     const block = el("section", { className: `patchDiffBlock patchDiffBlock-${side}` });
     const lineColumn = el("div", { className: `patchDiffLineColumn patchDiffLineColumn-${side}` });
     const viewport = el("div", { className: `patchDiffViewport patchDiffViewport-${side}` });
     const textColumn = el("div", { className: `patchDiffTextColumn patchDiffTextColumn-${side}` });
+    const highlightedLines = createHighlightedPatchLines(rows, side, entryLanguage);
 
     rows.forEach((row, index) => {
       const kind = row && typeof row.kind === "string" ? row.kind : "context";
@@ -805,7 +808,7 @@
             ? row.rightText
             : "";
       lineColumn.appendChild(renderPatchLineNumber(lineValue, side, kind, index));
-      textColumn.appendChild(renderPatchTextCell(textValue, side, kind, index));
+      textColumn.appendChild(renderPatchTextCell(textValue, side, kind, index, highlightedLines?.[index]));
     });
 
     viewport.appendChild(textColumn);
@@ -821,11 +824,143 @@
     return cell;
   }
 
-  function renderPatchTextCell(value, side, kind, rowIndex) {
+  function renderPatchTextCell(value, side, kind, rowIndex, highlightedLine) {
     const cell = el("div", { className: `patchDiffText patchDiffText-${side} patchDiffText-${kind}` });
     cell.dataset.rowIndex = String(rowIndex);
-    cell.textContent = typeof value === "string" && value ? value : " ";
+    const safeText = typeof value === "string" ? value : "";
+    if (safeText && highlightedLine && typeof highlightedLine.html === "string") {
+      const codeEl = el("code", { className: "patchDiffCode" });
+      if (typeof highlightedLine.className === "string" && highlightedLine.className.trim()) {
+        for (const className of highlightedLine.className.split(/\s+/)) {
+          if (className) codeEl.classList.add(className);
+        }
+      }
+      if (typeof highlightedLine.style === "string" && highlightedLine.style.trim()) {
+        codeEl.style.cssText = highlightedLine.style;
+        codeEl.style.backgroundColor = "transparent";
+      }
+      codeEl.innerHTML = highlightedLine.html;
+      codeEl.setAttribute("dir", "ltr");
+      if (registerPageSearchTextUnit(codeEl, safeText, "direct")) {
+        cell.appendChild(codeEl);
+        return cell;
+      }
+    }
+    cell.textContent = safeText || " ";
+    if (safeText) registerPageSearchTextUnit(cell, safeText, "direct");
     return cell;
+  }
+
+  function createHighlightedPatchLines(rows, side, entryLanguage) {
+    if (!entryLanguage || !Array.isArray(rows) || rows.length === 0) return null;
+    const shiki = getShikiHighlighter();
+    if (!shiki || typeof shiki.highlightCodeToHtml !== "function") return null;
+
+    const codeEntries = [];
+    rows.forEach((row, rowIndex) => {
+      const lineNumber = side === "left" ? row && row.leftLine : row && row.rightLine;
+      if (!Number.isSafeInteger(lineNumber) || lineNumber < 1) return;
+      const text =
+        side === "left"
+          ? row && typeof row.leftText === "string"
+            ? row.leftText
+            : ""
+          : row && typeof row.rightText === "string"
+            ? row.rightText
+            : "";
+      codeEntries.push({ rowIndex, text });
+    });
+    if (codeEntries.length === 0) return null;
+    const codeLines = codeEntries.map((entry) => entry.text);
+    let codeCharacterCount = Math.max(0, codeLines.length - 1);
+    for (const line of codeLines) {
+      if (line.length > MAX_SHIKI_DIFF_CHARACTERS - codeCharacterCount) return null;
+      codeCharacterCount += line.length;
+    }
+    const codeText = codeLines.join("\n");
+    if (
+      !codeText ||
+      codeText.length !== codeCharacterCount ||
+      codeText.length > MAX_SHIKI_DIFF_CHARACTERS
+    ) {
+      return null;
+    }
+
+    let html = "";
+    try {
+      html = shiki.highlightCodeToHtml(codeText, entryLanguage) || "";
+    } catch {
+      return null;
+    }
+    if (!html) return null;
+
+    const temporary = el("div", {});
+    temporary.innerHTML = html.trim();
+    const highlightedPre = temporary.firstElementChild;
+    if (!(highlightedPre instanceof HTMLElement) || highlightedPre.tagName.toLowerCase() !== "pre") return null;
+    const highlightedCode = highlightedPre.querySelector("code");
+    if (!(highlightedCode instanceof HTMLElement)) return null;
+    const lineElements = Array.from(highlightedCode.children);
+    if (lineElements.some((element) => !(element instanceof HTMLElement) || !element.classList.contains("line"))) {
+      return null;
+    }
+    if (lineElements.length !== codeLines.length) return null;
+    if (lineElements.some((line, index) => (line.textContent || "") !== codeLines[index])) return null;
+
+    const className = highlightedPre.className;
+    const style = highlightedPre.getAttribute("style") || "";
+    const highlightedLines = Array.from({ length: rows.length }, () => null);
+    codeEntries.forEach((entry, index) => {
+      highlightedLines[entry.rowIndex] = {
+        className,
+        html: lineElements[index].innerHTML,
+        style,
+      };
+    });
+    return highlightedLines;
+  }
+
+  function inferFileChangeLanguage(card) {
+    const support = globalThis.codexHistoryViewerCodeLanguageSupport;
+    if (!support || typeof support.inferLanguageFromPath !== "function") return "";
+    const entry = card && card.entry && typeof card.entry === "object" ? card.entry : {};
+    const candidates = [
+      card && card.path,
+      card && card.movePath,
+      card && card.displayPath,
+      card && card.moveDisplayPath,
+      entry.path,
+      entry.movePath,
+      entry.displayPath,
+      entry.moveDisplayPath,
+      model && model.target && model.target.fsPath,
+    ];
+    for (const candidate of candidates) {
+      if (typeof candidate !== "string" || !candidate.trim()) continue;
+      try {
+        const language = support.inferLanguageFromPath(candidate);
+        if (typeof language === "string" && language) return language;
+      } catch {
+        continue;
+      }
+    }
+    return "";
+  }
+
+  function getShikiHighlighter() {
+    const candidate = globalThis.codexHistoryViewerShiki;
+    if (!candidate || typeof candidate !== "object") return null;
+    return candidate;
+  }
+
+  function registerPageSearchTextUnit(element, sourceText, mode) {
+    const core = getPageSearchCore();
+    if (!core || typeof core.registerTextUnit !== "function") return false;
+    try {
+      return core.registerTextUnit(element, String(sourceText ?? ""), { mode }) === true;
+    } catch {
+      return false;
+    }
   }
 
   function renderLoadControls() {
@@ -978,7 +1113,6 @@
       while (walker.nextNode()) textNodes.push(walker.currentNode);
     }
 
-    const occurrenceCountsByCardId = new Map();
     for (const textNode of textNodes) {
       const sourceText = textNode.textContent || "";
       const matches = compiled.findAll(sourceText);
@@ -1001,12 +1135,13 @@
       textNode.parentNode.replaceChild(fragment, textNode);
 
       for (const pending of pendingMarks) {
-        pageSearchResults.push(
-          buildPageSearchResult(pending.mark, sourceText, pending.start, pending.length, occurrenceCountsByCardId),
-        );
+        pageSearchResults.push(buildPageSearchResult(pending.mark, sourceText, pending.start, pending.length));
       }
     }
 
+    collectLogicalPageSearchResults(compiled, roots);
+    pageSearchResults.sort(comparePageSearchResultDocumentOrder);
+    assignPageSearchOccurrenceIndexes();
     renderPageSearchResults();
     if (pageSearchResults.length === 0) {
       updatePageSearchStatus();
@@ -1023,51 +1158,163 @@
     if (!value.trim()) return false;
     const parent = node.parentElement;
     if (!(parent instanceof HTMLElement)) return false;
-    if (parent.closest("#pageSearchBar, .dateGuide")) return false;
-    if (parent.closest("[data-page-search-ignore='true']")) return false;
-    if (parent.closest("script, style, textarea, input, select, button")) return false;
-    if (parent.closest("mark.pageSearchMatch")) return false;
-    if (parent.closest("[hidden]")) return false;
+    if (findRegisteredPageSearchTextUnit(parent)) return false;
+    return shouldAcceptPageSearchElement(parent);
+  }
 
-    const closedDetails = parent.closest("details:not([open])");
+  function shouldAcceptPageSearchElement(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    if (element.closest("#pageSearchBar, .dateGuide")) return false;
+    if (element.closest("[data-page-search-ignore='true']")) return false;
+    if (element.closest("script, style, textarea, input, select, button")) return false;
+    if (element.closest("mark.pageSearchMatch")) return false;
+    if (element.closest("[hidden]")) return false;
+
+    const closedDetails = element.closest("details:not([open])");
     if (closedDetails) {
-      const summary = parent.closest("summary");
+      const summary = element.closest("summary");
       if (!(summary instanceof HTMLElement) || summary.parentElement !== closedDetails) return false;
     }
 
-    if (parent.getClientRects().length === 0 && !parent.closest("summary")) return false;
+    if (element.getClientRects().length === 0 && !element.closest("summary")) return false;
     return true;
   }
 
+  function collectLogicalPageSearchResults(compiled, roots) {
+    const core = getPageSearchCore();
+    if (
+      !core ||
+      typeof core.getTextUnit !== "function" ||
+      typeof core.highlightTextUnit !== "function" ||
+      typeof core.textUnitSelector !== "string"
+    ) {
+      return;
+    }
+
+    const units = [];
+    const seen = new Set();
+    for (const root of roots) {
+      if (!(root instanceof HTMLElement)) continue;
+      const candidates = [];
+      if (root.matches(core.textUnitSelector)) candidates.push(root);
+      candidates.push(...root.querySelectorAll(core.textUnitSelector));
+      for (const candidate of candidates) {
+        if (!(candidate instanceof HTMLElement) || seen.has(candidate)) continue;
+        seen.add(candidate);
+        const record = core.getTextUnit(candidate);
+        if (!record || typeof record.sourceText !== "string") continue;
+        if (!shouldAcceptPageSearchElement(candidate)) continue;
+        units.push({ element: candidate, sourceText: record.sourceText });
+      }
+    }
+
+    for (const unit of units) {
+      const matches = compiled.findAll(unit.sourceText);
+      if (!Array.isArray(matches) || matches.length === 0) continue;
+      let groups = null;
+      try {
+        groups = core.highlightTextUnit(unit.element, matches);
+      } catch {
+        groups = null;
+      }
+      if (!Array.isArray(groups) || groups.length !== matches.length) {
+        groups = matches.map(() => ({ marks: [] }));
+      }
+
+      for (let index = 0; index < matches.length; index += 1) {
+        const match = matches[index];
+        const marks = Array.isArray(groups[index] && groups[index].marks)
+          ? groups[index].marks.filter(
+              (mark) => mark instanceof HTMLElement && mark.matches("mark.pageSearchMatch") && unit.element.contains(mark),
+            )
+          : [];
+        pageSearchMatches.push(...marks);
+        pageSearchResults.push(
+          buildPageSearchResult(marks[0] || unit.element, unit.sourceText, match.start, match.length, {
+            kind: "logical",
+            marks,
+            orderElement: unit.element,
+            revealElement: unit.element,
+            sourceOffset: match.start,
+          }),
+        );
+      }
+    }
+  }
+
+  function findRegisteredPageSearchTextUnit(element) {
+    const core = getPageSearchCore();
+    if (!core || typeof core.findTextUnit !== "function") return null;
+    try {
+      const unit = core.findTextUnit(element);
+      return unit instanceof HTMLElement ? unit : null;
+    } catch {
+      return null;
+    }
+  }
+
   function clearPageSearchHighlights() {
-    for (const match of Array.from(document.querySelectorAll("mark.pageSearchMatch"))) {
-      const textNode = document.createTextNode(match.textContent || "");
-      const parent = match.parentNode;
-      if (!parent) continue;
-      parent.replaceChild(textNode, match);
-      if (parent instanceof HTMLElement) parent.normalize();
+    const core = getPageSearchCore();
+    let cleared = false;
+    if (core && typeof core.clearHighlights === "function") {
+      try {
+        cleared = core.clearHighlights(document) === true;
+      } catch {
+        cleared = false;
+      }
+    }
+    if (!cleared) {
+      const parents = new Set();
+      for (const match of Array.from(document.querySelectorAll("mark.pageSearchMatch"))) {
+        const textNode = document.createTextNode(match.textContent || "");
+        const parent = match.parentNode;
+        if (!parent) continue;
+        parent.replaceChild(textNode, match);
+        parents.add(parent);
+      }
+      for (const parent of parents) {
+        if (parent && typeof parent.normalize === "function") parent.normalize();
+      }
+      for (const unit of document.querySelectorAll(".pageSearchLogicalMatch-active")) {
+        if (unit instanceof HTMLElement) unit.classList.remove("pageSearchLogicalMatch-active");
+      }
     }
     pageSearchMatches = [];
     pageSearchResults = [];
     activePageSearchResultIndex = -1;
   }
 
-  function buildPageSearchResult(mark, sourceText, start, length, occurrenceCountsByCardId) {
-    const card = mark.closest(".diffCard");
+  function buildPageSearchResult(target, sourceText, start, length, options = {}) {
+    const configuredMarks = Array.isArray(options.marks)
+      ? options.marks.filter((mark) => mark instanceof HTMLElement)
+      : [];
+    const fallbackMark = target instanceof HTMLElement && target.matches("mark.pageSearchMatch") ? target : null;
+    const marks = configuredMarks.length > 0 ? configuredMarks : fallbackMark ? [fallbackMark] : [];
+    const mark = marks[0] || null;
+    const revealElement = options.revealElement instanceof HTMLElement ? options.revealElement : mark || target;
+    const orderElement = options.orderElement instanceof HTMLElement ? options.orderElement : mark || revealElement;
+    const contextTarget = mark || revealElement;
+    const card = contextTarget instanceof HTMLElement ? contextTarget.closest(".diffCard") : null;
     const title = getElementText(card && card.querySelector(".cardTitleBlock h2")) || text("pageSearchTitle", "Find");
     const meta = getElementText(card && card.querySelector(".diffDetailsPath")) || "";
     const cardId = card instanceof HTMLElement ? card.id || "" : "";
     const cardNumber = card instanceof HTMLElement ? normalizePositiveInteger(card.dataset.cardNumber) : 0;
-    const lineBadge = getDiffLineSearchResultBadge(mark);
-    const matchText = mark.textContent || sourceText.slice(start, start + length);
+    const lineBadge = getDiffLineSearchResultBadge(contextTarget);
+    const matchText = sourceText.slice(start, start + length);
     return {
+      collectionOrder: pageSearchResults.length,
+      kind: typeof options.kind === "string" && options.kind ? options.kind : "dom",
       mark,
+      marks,
+      orderElement,
+      revealElement,
+      ...(Number.isFinite(Number(options.sourceOffset)) ? { sourceOffset: Math.max(0, Math.floor(Number(options.sourceOffset))) } : {}),
       cardId,
       cardNumber,
       side: lineBadge && lineBadge.side ? lineBadge.side : "",
       lineNumber: lineBadge && lineBadge.lineNumber ? lineBadge.lineNumber : "",
       matchText,
-      occurrenceIndex: getNextPageSearchOccurrenceIndex(cardId, occurrenceCountsByCardId),
+      occurrenceIndex: 0,
       title,
       meta,
       badges: buildSearchResultBadges(cardNumber, lineBadge),
@@ -1092,6 +1339,7 @@
   }
 
   function getDiffLineSearchResultBadge(mark) {
+    if (!(mark instanceof HTMLElement)) return null;
     const patchText = mark.closest(".patchDiffText");
     if (patchText instanceof HTMLElement && patchText.dataset.rowIndex) {
       const block = patchText.closest(".patchDiffBlock");
@@ -1112,6 +1360,33 @@
     const count = normalizeNonNegativeInteger(occurrenceCountsByCardId.get(cardId));
     occurrenceCountsByCardId.set(cardId, count + 1);
     return count;
+  }
+
+  function comparePageSearchResultDocumentOrder(left, right) {
+    const leftOrder = left && left.orderElement;
+    const rightOrder = right && right.orderElement;
+    if (leftOrder === rightOrder) {
+      const leftOffset = Number(left && left.sourceOffset);
+      const rightOffset = Number(right && right.sourceOffset);
+      if (Number.isFinite(leftOffset) && Number.isFinite(rightOffset) && leftOffset !== rightOffset) {
+        return leftOffset - rightOffset;
+      }
+      return Number((left && left.collectionOrder) || 0) - Number((right && right.collectionOrder) || 0);
+    }
+    if (!(leftOrder instanceof Node) || !(rightOrder instanceof Node)) {
+      return Number((left && left.collectionOrder) || 0) - Number((right && right.collectionOrder) || 0);
+    }
+    const position = leftOrder.compareDocumentPosition(rightOrder);
+    if (position & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+    if (position & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+    return Number((left && left.collectionOrder) || 0) - Number((right && right.collectionOrder) || 0);
+  }
+
+  function assignPageSearchOccurrenceIndexes() {
+    const occurrenceCountsByCardId = new Map();
+    for (const result of pageSearchResults) {
+      result.occurrenceIndex = getNextPageSearchOccurrenceIndex(result.cardId, occurrenceCountsByCardId);
+    }
   }
 
   function captureActivePageSearchResultAnchor() {
@@ -1502,17 +1777,38 @@
     for (const match of pageSearchMatches) {
       if (match instanceof HTMLElement) match.classList.remove("pageSearchMatch-active");
     }
+    for (const unit of document.querySelectorAll(".pageSearchLogicalMatch-active")) {
+      if (unit instanceof HTMLElement) unit.classList.remove("pageSearchLogicalMatch-active");
+    }
     const safeIndex = Math.max(0, Math.min(index, pageSearchResults.length - 1));
     activePageSearchResultIndex = safeIndex;
     const result = pageSearchResults[safeIndex];
-    if (result && result.mark) result.mark.classList.add("pageSearchMatch-active");
+    const activeMarks = getPageSearchResultMarks(result);
+    for (const mark of activeMarks) mark.classList.add("pageSearchMatch-active");
+    const activeTarget = getPageSearchResultTargetElement(result);
+    if (activeMarks.length === 0 && result && result.kind === "logical" && activeTarget) {
+      activeTarget.classList.add("pageSearchLogicalMatch-active");
+    }
     renderPageSearchResults();
     scrollActivePageSearchResultIntoList();
     if (options.focusResult === true) focusPageSearchResultItem(safeIndex);
     updatePageSearchStatus();
-    if (reveal && result && result.mark) {
-      result.mark.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+    if (reveal && activeTarget) {
+      activeTarget.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
     }
+  }
+
+  function getPageSearchResultTargetElement(result) {
+    const marks = getPageSearchResultMarks(result);
+    if (marks.length > 0) return marks[0];
+    return result && result.revealElement instanceof HTMLElement ? result.revealElement : null;
+  }
+
+  function getPageSearchResultMarks(result) {
+    if (Array.isArray(result && result.marks)) {
+      return result.marks.filter((mark) => mark instanceof HTMLElement);
+    }
+    return result && result.mark instanceof HTMLElement ? [result.mark] : [];
   }
 
   function moveFocusedPageSearchResult(delta) {
