@@ -20,7 +20,11 @@ import {
   extractClaudeLocalCommandOutputContent,
   extractClaudeRequestInterruptionContent,
   isCodexTurnAbortedContent,
+  selectClaudeControlContent,
 } from "../chat/chatAttachments";
+import { createClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
+import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
+import { extractCodexToolOutputText } from "../chat/codexResponseItems";
 import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/projectPathMapper";
 import type { SearchIndexReadSnapshot } from "../services/searchIndexService";
@@ -316,7 +320,7 @@ async function parseCodexSession(
 
       if (obj?.type === "response_item" && isCodexToolCallOutput(obj?.payload?.type)) {
         const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-        const outputText = typeof obj?.payload?.output === "string" ? obj.payload.output : undefined;
+        const outputText = extractCodexToolOutputText(obj?.payload?.output) || undefined;
         if (callId && isApplyPatchFailureOutput(outputText)) {
           diffStats.codexApplyPatchFailedSkipped += pendingApplyPatchEntries.get(callId)?.length ?? 0;
           pendingApplyPatchEntries.delete(callId);
@@ -384,6 +388,9 @@ async function parseClaudeSession(
 ): Promise<ParsedPatchEntriesResult> {
   const out: ParsedPatchEntry[] = [];
   const diffStats = createDiffStats();
+  throwIfCancelled(token);
+  const pastedPromptResolver = await createClaudePastedPromptResolver(session.fsPath);
+  throwIfCancelled(token);
   const stream = fs.createReadStream(session.fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   let messageIndex = 0;
@@ -399,10 +406,16 @@ async function parseClaudeSession(
       if (!obj) continue;
       const role = detectClaudeMessageRole(obj);
       if (!role) continue;
+      if (isClaudeCrossSessionInboundRecord(obj)) {
+        messageIndex += 1;
+        continue;
+      }
 
       const rawContent = getClaudeMessageContent(obj);
-      if (role === "user" && extractClaudeRequestInterruptionContent(rawContent)) continue;
-      if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) continue;
+      const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
+      const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+      if (role === "user" && extractClaudeRequestInterruptionContent(controlContent)) continue;
+      if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
       const parsed = parseClaudeMessageContent(rawContent);
       if (normalizeWhitespace(parsed.messageText)) messageIndex += 1;
       const timestampIso = resolveClaudeDiffTimestamp(obj, session);

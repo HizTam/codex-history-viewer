@@ -26,6 +26,11 @@ export interface ImagesConfig {
   thumbnailSize: ImageThumbnailSize;
 }
 
+export interface SessionRowConfig {
+  showTimestamp: boolean;
+  showProject: boolean;
+}
+
 export interface CodexHistoryViewerConfig {
   sessionsRoot: string;
   codexArchivedSessionsRoot: string;
@@ -50,6 +55,7 @@ export interface CodexHistoryViewerConfig {
   resumeClaudeMethod: ResumeMethod;
   historyDateBasis: HistoryDateBasis;
   historyTitleSource: HistoryTitleSource;
+  sessionRow: SessionRowConfig;
   autoRefresh: AutoRefreshConfig;
   images: ImagesConfig;
   chatOpenPosition: ChatOpenPosition;
@@ -143,6 +149,10 @@ function parseBoundedNumber(value: unknown, fallback: number, min: number, max: 
   return Math.min(max, Math.max(min, Math.floor(n)));
 }
 
+function parseBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 export function getConfig(): CodexHistoryViewerConfig {
   const cfg = vscode.workspace.getConfiguration("codexHistoryViewer");
   const sessionsRootRaw = (cfg.get<string>("sessionsRoot") ?? "").trim();
@@ -220,6 +230,10 @@ export function getConfig(): CodexHistoryViewerConfig {
     resumeClaudeMethod,
     historyDateBasis,
     historyTitleSource,
+    sessionRow: {
+      showTimestamp: parseBoolean(cfg.get<unknown>("sessionRow.showTimestamp"), true),
+      showProject: parseBoolean(cfg.get<unknown>("sessionRow.showProject"), true),
+    },
     autoRefresh,
     images,
     chatOpenPosition,

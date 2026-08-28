@@ -41,12 +41,14 @@
   const mermaidPaneRootEl = document.getElementById("mermaidPaneRoot");
 
   const md = createMarkdownRenderer();
+  const markdownTableSourceByElement = new WeakMap();
   const CODE_COMMENT_DIRECTIVE_PREFIX = "::code-comment{";
   const MAX_CODE_COMMENT_DIRECTIVES_PER_MESSAGE = 50;
   const MAX_CODE_COMMENT_DIRECTIVE_LENGTH = 20000;
   const MAX_CODE_COMMENT_FILE_LENGTH = 4096;
   const MAX_CODE_COMMENT_TITLE_LENGTH = 512;
   const MAX_CODE_COMMENT_BODY_LENGTH = 20000;
+  const MAX_CROSS_SESSION_MESSAGE_CHARS = 64000;
   const MAX_SHIKI_DIFF_CHARACTERS = 200000;
   const MAX_PAGE_SEARCH_HISTORY_CANDIDATES = 20;
   const MAX_BRANCH_OVERLAY_CARDS = 200;
@@ -154,6 +156,8 @@
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 3A1.75 1.75 0 0 0 1 4.75v6.5C1 12.216 1.784 13 2.75 13h5.7a.75.75 0 0 0 0-1.5h-5.7a.25.25 0 0 1-.25-.25v-6.5c0-.14.11-.25.25-.25h3.12l1.5 1.5h1.88a.25.25 0 0 1 .25.25v1.2a.75.75 0 0 0 1.5 0v-1.2A1.75 1.75 0 0 0 9.25 4.5H7.99L6.49 3H2.75Zm9.82 5.6a2.6 2.6 0 1 1-1.84 4.44l-1.7 1.7a.75.75 0 1 1-1.06-1.06l1.7-1.7A2.6 2.6 0 0 1 12.57 8.6Zm0 1.5a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2Z"/></svg>',
     grep:
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M6.75 2a4.75 4.75 0 1 1 0 9.5 4.75 4.75 0 0 1 0-9.5Zm0 1.5a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5Zm4.9 6.83 2.13 2.14a.75.75 0 1 1-1.06 1.06l-2.14-2.13a.75.75 0 1 1 1.07-1.07Zm-5.9-4.08h2.8a.75.75 0 0 1 0 1.5h-2.8a.75.75 0 0 1 0-1.5Z"/></svg>',
+    imageGeneration:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 2h10.5C14.216 2 15 2.784 15 3.75v8.5c0 .966-.784 1.75-1.75 1.75H2.75A1.75 1.75 0 0 1 1 12.25v-8.5C1 2.784 1.784 2 2.75 2Zm0 1.5a.25.25 0 0 0-.25.25v6.12l2.35-2.35a.75.75 0 0 1 1.06 0l1.46 1.46 2.21-2.21a.75.75 0 0 1 1.06 0l2.61 2.61V3.75a.25.25 0 0 0-.25-.25H2.75Zm10.5 9a.25.25 0 0 0 .25-.25v-.75l-3.14-3.14-2.21 2.21a.75.75 0 0 1-1.06 0L5.63 9.11 2.5 12.24v.01c0 .14.11.25.25.25h10.5ZM5.25 4.5a1.25 1.25 0 1 1 0 2.5 1.25 1.25 0 0 1 0-2.5Z"/></svg>',
     read:
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 1.75h6.7c.4 0 .78.16 1.06.44l1.8 1.8c.28.28.44.66.44 1.06v7.7c0 .97-.78 1.75-1.75 1.75h-8A1.75 1.75 0 0 1 1.75 12.75v-9c0-.97.78-1.75 1.75-1.75Zm0 1.5a.25.25 0 0 0-.25.25v9c0 .14.11.25.25.25h8a.25.25 0 0 0 .25-.25V5.56L9.69 3.75H3.25Zm1.5 3.5h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1 0-1.5Zm0 2.5h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1 0-1.5Z"/></svg>',
     unknown:
@@ -1483,6 +1487,10 @@
       showToast(i18n.copied || "Copied.", { key: "copied" });
       return;
     }
+    if (msg.type === "copyFailed") {
+      showToast(i18n.copyFailed || "Could not copy to the clipboard.", { key: "copyFailed" });
+      return;
+    }
     if (msg.type === "sessionInfoActionResult") {
       const revision = Number(msg.revision);
       if (
@@ -1706,7 +1714,10 @@
   function applyResumeSnapshot(value, options = {}) {
     const normalized = normalizeResumeSnapshot(value);
     if (!normalized) {
-      if (options.fromSessionData === true && (resumeSessionDataPending || resumeRevision === 0)) {
+      if (
+        (options.fromSessionData === true || options.sessionDataComplete === true) &&
+        (resumeSessionDataPending || resumeRevision === 0)
+      ) {
         resumeSnapshot = null;
         resumePresentationPending = false;
         resumeSessionDataPending = false;
@@ -5535,7 +5546,7 @@
       !autoPerformanceToastShown
     ) {
       autoPerformanceToastShown = true;
-      showToast(getSafeUiText(i18n.performanceLargeHistoryToast, "Using simplified view for this large history."), {
+      showToast(getSafeUiText(i18n.performanceLargeHistoryToast, "Using Lightweight View for this large history."), {
         durationMs: 3600,
         key: "performanceMode",
       });
@@ -5557,8 +5568,8 @@
       return getSafeUiText(i18n.performanceSwitchedAuto, "Set this view's performance mode to Auto.");
     }
     return temporaryPerformanceMode === "simplified"
-      ? getSafeUiText(i18n.performanceSwitchedSimplified, "Set this view's performance mode to Simplified.")
-      : getSafeUiText(i18n.performanceSwitchedNormal, "Set this view's performance mode to Normal.");
+      ? getSafeUiText(i18n.performanceSwitchedSimplified, "Set this view's performance mode to Lightweight View.")
+      : getSafeUiText(i18n.performanceSwitchedNormal, "Set this view's performance mode to Normal View.");
   }
 
   function resolveEffectivePerformanceMode() {
@@ -5569,18 +5580,18 @@
   }
 
   function getPerformanceTooltip() {
-    if (temporaryPerformanceMode === "normal") return getSafeUiText(i18n.performanceNormal, "Performance: Normal");
-    if (temporaryPerformanceMode === "simplified") return getSafeUiText(i18n.performanceSimplified, "Performance: Simplified");
+    if (temporaryPerformanceMode === "normal") return getSafeUiText(i18n.performanceNormal, "Performance: Normal View");
+    if (temporaryPerformanceMode === "simplified") return getSafeUiText(i18n.performanceSimplified, "Performance: Lightweight View");
     if (temporaryPerformanceMode === "auto") {
       return effectivePerformanceMode === "simplified"
-        ? getSafeUiText(i18n.performanceAutoSimplified, "Performance: Auto (Simplified)")
-        : getSafeUiText(i18n.performanceAutoNormal, "Performance: Auto (Normal)");
+        ? getSafeUiText(i18n.performanceAutoSimplified, "Performance: Auto (Lightweight View)")
+        : getSafeUiText(i18n.performanceAutoNormal, "Performance: Auto (Normal View)");
     }
-    if (configuredPerformanceMode === "normal") return getSafeUiText(i18n.performanceNormal, "Performance: Normal");
-    if (configuredPerformanceMode === "simplified") return getSafeUiText(i18n.performanceSimplified, "Performance: Simplified");
+    if (configuredPerformanceMode === "normal") return getSafeUiText(i18n.performanceNormal, "Performance: Normal View");
+    if (configuredPerformanceMode === "simplified") return getSafeUiText(i18n.performanceSimplified, "Performance: Lightweight View");
     return effectivePerformanceMode === "simplified"
-      ? getSafeUiText(i18n.performanceAutoSimplified, "Performance: Auto (Simplified)")
-      : getSafeUiText(i18n.performanceAutoNormal, "Performance: Auto (Normal)");
+      ? getSafeUiText(i18n.performanceAutoSimplified, "Performance: Auto (Lightweight View)")
+      : getSafeUiText(i18n.performanceAutoNormal, "Performance: Auto (Normal View)");
   }
 
   function getSelectedPerformanceMode() {
@@ -6991,7 +7002,7 @@
         continue;
       }
       if (item.type === "tool") {
-        if (shouldRenderToolCard()) roles.add("tool");
+        if (shouldRenderToolCard(item)) roles.add("tool");
         continue;
       }
       if (item.type === "patchGroup") {
@@ -7832,6 +7843,23 @@
     const toolCard = mark instanceof HTMLElement ? mark.closest(".toolCard") : null;
     if (toolCard instanceof HTMLElement) {
       return describeToolCardSearchContext(toolCard);
+    }
+
+    const crossSessionCard = mark instanceof HTMLElement ? mark.closest(".crossSessionMessageCard") : null;
+    if (crossSessionCard instanceof HTMLElement) {
+      const rawMessageIndex = crossSessionCard.dataset.messageIndex
+        ? Number(crossSessionCard.dataset.messageIndex)
+        : undefined;
+      const messageIndex = Number.isSafeInteger(rawMessageIndex) && rawMessageIndex > 0 ? rawMessageIndex : undefined;
+      return {
+        title: [
+          getSafeUiText(i18n.crossSessionMessageTitle, "Cross-session message"),
+          typeof messageIndex === "number" ? `#${messageIndex}` : "",
+        ].filter(Boolean).join(" "),
+        meta: getElementText(crossSessionCard.querySelector(".crossSessionMessageSender")),
+        lineNumber: "",
+        messageIndex,
+      };
     }
 
     const bubble = mark instanceof HTMLElement ? mark.closest(".bubble") : null;
@@ -9972,9 +10000,10 @@
     const itemType = item && typeof item.type === "string" ? item.type : "note";
     let rendered = null;
     if (item.type === "message") rendered = renderMessage(item, cardKey, itemIndex);
+    else if (item.type === "crossSessionMessage") rendered = renderCrossSessionMessage(item, cardKey);
     else if (item.type === "protocolContext") rendered = renderProtocolContext(item, cardKey);
     else if (item.type === "patchGroup") rendered = renderPatchGroup(item, itemIndex, cardKey);
-    else if (item.type === "tool") rendered = shouldRenderToolCard() ? renderTool(item, cardKey) : null;
+    else if (item.type === "tool") rendered = shouldRenderToolCard(item) ? renderTool(item, cardKey) : null;
     else if (item.type === "systemEvent") rendered = renderSystemEvent(item, cardKey);
     else if (item.type === "usage") rendered = showDetails ? renderUsage(item, cardKey) : null;
     else if (item.type === "environment") rendered = showDetails ? renderEnvironment(item, cardKey) : null;
@@ -9993,7 +10022,9 @@
 
   function getTimeGuideTargetElement(rendered) {
     if (!(rendered instanceof HTMLElement)) return null;
-    const bubble = rendered.querySelector(".bubble, .protocolContextCard, .systemEventCard, .usageCard, .environmentCard");
+    const bubble = rendered.querySelector(
+      ".bubble, .crossSessionMessageCard, .protocolContextCard, .systemEventCard, .usageCard, .environmentCard",
+    );
     return bubble instanceof HTMLElement ? bubble : rendered;
   }
 
@@ -10252,6 +10283,12 @@
       const baseTitle = [role, messageIndex].filter(Boolean).join(" ");
       return attachmentSummary ? `${baseTitle} (${attachmentSummary})` : baseTitle;
     }
+    if (item.type === "crossSessionMessage") {
+      const messageIndex = typeof item.messageIndex === "number" ? `#${item.messageIndex}` : "";
+      return [getSafeUiText(i18n.crossSessionMessageTitle, "Cross-session message"), messageIndex]
+        .filter(Boolean)
+        .join(" ");
+    }
     if (item.type === "patchGroup") {
       return formatTemplate(i18n.patchGroupCount || "{0} changes", item.entryCount || 0);
     }
@@ -10265,6 +10302,97 @@
     if (item.type === "systemEvent") return getSystemEventBadgeText(item);
     if (item.type === "note" && typeof item.title === "string" && item.title.trim()) return item.title.trim();
     return `${getSafeUiText(i18n.roleMessage, "Message")} #${itemIndex + 1}`;
+  }
+
+  function renderCrossSessionMessage(item, cardKey) {
+    if (!item || typeof item.body !== "string") return null;
+    const bodyText = item.body.slice(0, MAX_CROSS_SESSION_MESSAGE_CHARS);
+    if (!bodyText.trim()) return null;
+    const bodyTruncated = item.truncated === true || item.body.length > MAX_CROSS_SESSION_MESSAGE_CHARS;
+    const messageIndex = Number.isSafeInteger(item.messageIndex) && item.messageIndex > 0 ? item.messageIndex : null;
+    const row = el("div", { className: "row crossSessionMessage" });
+    const titleText = getSafeUiText(i18n.crossSessionMessageTitle, "Cross-session message");
+    const card = el("div", {
+      className: "crossSessionMessageCard",
+      role: "group",
+    });
+    card.setAttribute("aria-label", titleText);
+    applyTimelineCardWidthState(card, cardKey);
+
+    if (typeof messageIndex === "number") {
+      card.id = `msg-${messageIndex}`;
+      card.dataset.messageIndex = String(messageIndex);
+      card.addEventListener("click", () => {
+        selectedMessageIndex = messageIndex;
+        clearHighlights();
+        card.classList.add("highlight");
+      });
+    }
+
+    const header = el("div", { className: "crossSessionMessageHeader" });
+    const summary = el("div", { className: "crossSessionMessageSummary" });
+    summary.appendChild(
+      el("span", {
+        className: "crossSessionMessageBadge",
+        textContent: getSafeUiText(i18n.crossSessionMessageBadge, "Other session"),
+      }),
+    );
+    summary.appendChild(el("span", { className: "crossSessionMessageTitle", textContent: titleText }));
+    if (typeof messageIndex === "number") {
+      summary.appendChild(
+        el("span", {
+          className: "crossSessionMessageMeta",
+          textContent: `#${messageIndex}`,
+        }),
+      );
+    }
+    if (typeof item.timestampIso === "string" && item.timestampIso.trim()) {
+      const timestamp = el("span", {
+        className: "crossSessionMessageMeta",
+        textContent: formatIsoYmdHms(item.timestampIso),
+      });
+      timestamp.title = item.timestampIso;
+      summary.appendChild(timestamp);
+    }
+    header.appendChild(summary);
+
+    const actions = el("div", { className: "cardHeaderActions" });
+    const copyButton = el("button", { type: "button", className: "iconBtn" });
+    const copyLabel = i18n.copyMessageTooltip || i18n.copy || "Copy";
+    copyButton.title = copyLabel;
+    copyButton.setAttribute("aria-label", copyLabel);
+    copyButton.innerHTML = COPY_ICON_SVG;
+    copyButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      vscode.postMessage({ type: "copy", text: bodyText });
+    });
+    actions.appendChild(copyButton);
+    actions.appendChild(createTimelineCardWidthButton(cardKey, card));
+    header.appendChild(actions);
+    card.appendChild(header);
+
+    const senderName = typeof item.senderName === "string" ? item.senderName.trim().slice(0, 128) : "";
+    if (senderName) {
+      card.appendChild(
+        el("div", {
+          className: "crossSessionMessageSender",
+          textContent: formatTemplate(i18n.crossSessionMessageFrom || "From: {0}", senderName),
+        }),
+      );
+    }
+    card.appendChild(el("pre", { className: "crossSessionMessageBody", textContent: bodyText }));
+    if (bodyTruncated) {
+      card.appendChild(
+        el("div", {
+          className: "crossSessionMessageTruncated",
+          textContent: getSafeUiText(i18n.crossSessionMessageTruncated, "Message truncated for display."),
+        }),
+      );
+    }
+
+    row.appendChild(card);
+    return row;
   }
 
   function renderSystemEvent(item, cardKey) {
@@ -13401,6 +13529,13 @@
       bubble.appendChild(metaLine);
     }
 
+    const attachments = Array.isArray(item.attachments)
+      ? item.attachments.filter((attachment) => attachment && typeof attachment === "object")
+      : [];
+    if (attachments.length > 0) {
+      bubble.appendChild(renderMessageAttachments(attachments, item));
+    }
+
     if (showDetails) {
       if (item.detailsOmitted) {
         bubble.appendChild(renderLazyDetailsPlaceholder());
@@ -13415,8 +13550,10 @@
     return row;
   }
 
-  function shouldRenderToolCard() {
-    return toolDisplayMode === "compactCards" || showDetails;
+  function shouldRenderToolCard(item) {
+    const hasImageAttachment = Array.isArray(item?.attachments)
+      && item.attachments.some((attachment) => attachment?.type === "image");
+    return toolDisplayMode === "compactCards" || showDetails || hasImageAttachment;
   }
 
   function appendToolExecutionMetaTags(container, execution) {
@@ -13815,6 +13952,9 @@
     const type = item && typeof item.type === "string" && item.type.trim() ? item.type.trim() : "item";
     const safeIndex = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex : 0;
     if (type === "message" && item && typeof item.messageIndex === "number") return `message:${item.messageIndex}`;
+    if (type === "crossSessionMessage" && item && typeof item.messageIndex === "number") {
+      return `cross-session-message:${Math.max(0, Math.floor(item.messageIndex))}`;
+    }
     if (type === "protocolContext" && item && typeof item.messageIndex === "number") {
       return `protocol-context:${Math.max(0, Math.floor(item.messageIndex))}`;
     }
@@ -14872,8 +15012,115 @@
       container.appendChild(textBlock);
       return;
     }
-    container.innerHTML = md.render(String(markdownText ?? ""));
+    const source = String(markdownText ?? "");
+    const env = {};
+    const tokens = md.parse(source, env);
+    const tableSources = extractMarkdownTableSources(source, tokens);
+    container.innerHTML = md.renderer.render(tokens, md.options, env);
+    enhanceMarkdownTables(container, tableSources);
     enhanceMarkdownCodeBlocks(container, renderContext);
+  }
+
+  function buildMarkdownSourceLineOffsets(source) {
+    const text = String(source ?? "");
+    const offsets = [0];
+    for (let index = 0; index < text.length; index += 1) {
+      const code = text.charCodeAt(index);
+      if (code === 0x0d) {
+        if (text.charCodeAt(index + 1) === 0x0a) index += 1;
+        offsets.push(index + 1);
+      } else if (code === 0x0a) {
+        offsets.push(index + 1);
+      }
+    }
+    return offsets;
+  }
+
+  function removeSingleTerminalLineEnding(value) {
+    const text = String(value ?? "");
+    if (text.endsWith("\r\n")) return text.slice(0, -2);
+    if (text.endsWith("\n") || text.endsWith("\r")) return text.slice(0, -1);
+    return text;
+  }
+
+  function extractMarkdownTableSources(markdownSource, tokens) {
+    const source = String(markdownSource ?? "");
+    if (!Array.isArray(tokens)) return [];
+    const tableTokens = tokens.filter((token) => token && token.type === "table_open");
+    if (tableTokens.length === 0) return [];
+    const lineOffsets = buildMarkdownSourceLineOffsets(source);
+    const sources = [];
+    for (const token of tableTokens) {
+      const range = token.map;
+      if (
+        !Array.isArray(range) ||
+        range.length !== 2 ||
+        !Number.isSafeInteger(range[0]) ||
+        !Number.isSafeInteger(range[1]) ||
+        range[0] < 0 ||
+        range[1] <= range[0] ||
+        range[0] >= lineOffsets.length ||
+        range[1] > lineOffsets.length
+      ) {
+        sources.push(null);
+        continue;
+      }
+      const startOffset = lineOffsets[range[0]];
+      const endOffset = range[1] < lineOffsets.length ? lineOffsets[range[1]] : source.length;
+      if (
+        !Number.isSafeInteger(startOffset) ||
+        !Number.isSafeInteger(endOffset) ||
+        startOffset < 0 ||
+        endOffset <= startOffset ||
+        endOffset > source.length
+      ) {
+        sources.push(null);
+        continue;
+      }
+      const tableSource = removeSingleTerminalLineEnding(source.slice(startOffset, endOffset));
+      sources.push(tableSource.trim().length > 0 ? tableSource : null);
+    }
+    return sources;
+  }
+
+  function enhanceMarkdownTables(root, tableSources) {
+    const tables = Array.from(root.querySelectorAll("table"));
+    const hasReliableMapping = Array.isArray(tableSources) && tableSources.length === tables.length;
+    for (let index = 0; index < tables.length; index += 1) {
+      const table = tables[index];
+      if (!(table instanceof HTMLTableElement)) continue;
+      if (table.closest(".markdownTableContainer")) continue;
+
+      const container = el("div", { className: "markdownTableContainer" });
+      const scroller = el("div", { className: "markdownTableScroller" });
+      table.replaceWith(container);
+      scroller.appendChild(table);
+      container.appendChild(scroller);
+
+      const source = hasReliableMapping ? tableSources[index] : null;
+      if (typeof source !== "string" || !source) continue;
+      markdownTableSourceByElement.set(table, source);
+
+      const actions = el("div", { className: "markdownTableActions" });
+      actions.setAttribute("data-page-search-ignore", "true");
+      const button = el("button", { type: "button", className: "markdownTableCopyBtn iconBtn" });
+      const copyLabel = i18n.copyTableTooltip || i18n.copy || "Copy";
+      button.innerHTML = COPY_ICON_SVG;
+      button.title = copyLabel;
+      button.setAttribute("aria-label", copyLabel);
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const currentSource = markdownTableSourceByElement.get(table);
+        if (typeof currentSource !== "string" || !currentSource) {
+          showToast(i18n.copyFailed || "Could not copy to the clipboard.", { key: "copyFailed" });
+          return;
+        }
+        vscode.postMessage({ type: "copy", text: currentSource });
+      });
+      actions.appendChild(button);
+      container.appendChild(actions);
+    }
   }
 
   function renderAssistantMarkdownInto(container, markdownText, options) {

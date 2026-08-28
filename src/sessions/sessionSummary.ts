@@ -15,7 +15,12 @@ import {
   extractClaudeLocalCommandOutputContent,
   extractClaudeMessageContent,
   extractCodexCompactUserText,
+  extractCodexMessageContent,
+  isCodexProtocolContextContent,
+  selectClaudeControlContent,
 } from "../chat/chatAttachments";
+import { createClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
+import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
 import type { ChatAttachment } from "../chat/chatTypes";
 import type {
   PreviewMessage,
@@ -100,17 +105,6 @@ function inferYmdFromPath(sessionsRoot: string, fsPath: string): { year: number;
   return { year, month, day };
 }
 
-function buildCodexPreviewText(content: unknown): string {
-  if (!Array.isArray(content)) return "";
-  const texts: string[] = [];
-  for (const item of content) {
-    if (!item || typeof item !== "object") continue;
-    const maybeText = (item as { text?: unknown }).text;
-    if (typeof maybeText === "string") texts.push(maybeText);
-  }
-  return texts.join("");
-}
-
 function buildClaudePreviewText(content: unknown): string {
   if (typeof content === "string") return content;
   const items = Array.isArray(content) ? content : content && typeof content === "object" ? [content] : [];
@@ -127,7 +121,7 @@ function buildClaudePreviewText(content: unknown): string {
   return texts.join("");
 }
 
-function buildClaudePreviewAttachmentText(attachments: readonly ChatAttachment[]): string {
+function buildPreviewAttachmentText(attachments: readonly ChatAttachment[]): string {
   return buildAttachmentSummaryLines(attachments, { mode: "resume" }).join("\n");
 }
 
@@ -157,7 +151,16 @@ function parseTimestampIso(value: unknown): string | undefined {
 function extractCodexActivityTimestampIso(obj: any): string | undefined {
   if (obj?.type !== "response_item") return undefined;
   const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
-  if (payloadType !== "message" && payloadType !== "function_call" && payloadType !== "function_call_output") {
+  if (
+    payloadType !== "message" &&
+    payloadType !== "function_call" &&
+    payloadType !== "custom_tool_call" &&
+    payloadType !== "function_call_output" &&
+    payloadType !== "custom_tool_call_output" &&
+    payloadType !== "local_shell_call" &&
+    payloadType !== "web_search_call" &&
+    payloadType !== "image_generation_call"
+  ) {
     return undefined;
   }
   return parseTimestampIso(obj?.timestamp);
@@ -266,6 +269,7 @@ function toTimeLabel(date: Date, timeZone: string): string {
 }
 
 export async function readPreviewMessages(fsPath: string, maxMessages: number): Promise<PreviewMessage[]> {
+  const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
@@ -286,11 +290,17 @@ export async function readPreviewMessages(fsPath: string, maxMessages: number): 
         const role = obj?.payload?.role;
         if (role !== "user" && role !== "assistant") continue;
 
-        const textRaw = buildCodexPreviewText(obj?.payload?.content);
-        const textNormalized = normalizeWhitespace(textRaw);
+        const content = obj?.payload?.content;
+        if (role === "user" && isCodexProtocolContextContent(content)) continue;
+        const extracted = await extractCodexMessageContent(content, undefined, { enabled: false });
+        const cleanText = normalizeWhitespace(extracted.text);
+        const attachmentSummary = buildPreviewAttachmentText(extracted.attachments);
+        const textNormalized = normalizeWhitespace([cleanText, attachmentSummary].filter(Boolean).join("\n"));
         if (!textNormalized) continue;
         const userText =
-          role === "user" ? extractCodexCompactUserText(obj?.payload?.content, textNormalized) : null;
+          role === "user"
+            ? extractCodexCompactUserText(content, cleanText) ?? (attachmentSummary || null)
+            : null;
         if (role === "user" && !userText) continue;
         const text = role === "user" ? userText! : textNormalized;
 
@@ -301,11 +311,14 @@ export async function readPreviewMessages(fsPath: string, maxMessages: number): 
 
       const role = detectClaudeMessageRole(obj);
       if (!role) continue;
+      if (isClaudeCrossSessionInboundRecord(obj)) continue;
 
       const rawContent = getClaudeMessageContent(obj);
-      if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) continue;
-      const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role });
-      const attachmentSummary = buildClaudePreviewAttachmentText(extracted.attachments);
+      const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
+      const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+      if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
+      const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
+      const attachmentSummary = buildPreviewAttachmentText(extracted.attachments);
       const textRaw = [buildClaudePreviewText(extracted.text), attachmentSummary].filter(Boolean).join("\n");
       const textNormalized = normalizeWhitespace(textRaw);
       if (!textNormalized) continue;

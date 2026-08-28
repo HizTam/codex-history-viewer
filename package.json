@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.11.1",
+  "version": "2.12.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -33,7 +33,8 @@
   "activationEvents": [
     "onWebviewPanel:codexHistoryViewer.chat",
     "onWebviewPanel:codexHistoryViewer.fileChangeHistory",
-    "onWebviewPanel:codexHistoryViewer.historyInsights"
+    "onWebviewPanel:codexHistoryViewer.historyInsights",
+    "onWebviewPanel:codexHistoryViewer.settings"
   ],
   "repository": {
     "type": "git",
@@ -5736,6 +5737,20 @@
           "scope": "application",
           "order": 86
         },
+        "codexHistoryViewer.sessionRow.showTimestamp": {
+          "type": "boolean",
+          "default": true,
+          "description": "%cfg.sessionRowShowTimestamp%",
+          "scope": "application",
+          "order": 87
+        },
+        "codexHistoryViewer.sessionRow.showProject": {
+          "type": "boolean",
+          "default": true,
+          "description": "%cfg.sessionRowShowProject%",
+          "scope": "application",
+          "order": 88
+        },
         "codexHistoryViewer.fileChangeHistory.explorerContextMenu.enabled": {
           "type": "boolean",
           "default": false,
@@ -6073,7 +6088,7 @@
     "watch:webview": "node scripts/build-webview-shiki.mjs --watch",
     "watch": "tsc -watch -p .",
     "package": "vsce package --allow-missing-repository",
-    "lint": "npm run -s check:l10n && node --check media/codeLanguageSupport.js && node --check media/pageSearchCore.js && node --check media/chatView.js && node --check media/fileChangeHistory.js && node --check media/historyInsights.js",
+    "lint": "npm run -s check:l10n && node --check media/codeLanguageSupport.js && node --check media/pageSearchCore.js && node --check media/chatView.js && node --check media/fileChangeHistory.js && node --check media/historyInsights.js && node --check media/settingsPanel.js",
     "check:l10n": "node scripts/check-l10n-garbled.js",
     "typecheck": "tsc -p . --noEmit"
   },

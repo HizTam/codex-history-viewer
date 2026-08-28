@@ -48,7 +48,11 @@ export class TranscriptDocumentLinkProvider implements vscode.DocumentLinkProvid
         const rawTarget = extractMarkdownLinkDestination(match[1]);
         if (!rawTarget || !tryParseLocalFileLink(rawTarget)) continue;
 
-        const resolved = await resolveLocalFileLinkTarget(rawTarget, { baseDirs, projectPathMappings });
+        const resolved = await resolveLocalFileLinkTarget(rawTarget, {
+          baseDirs,
+          projectPathMappings,
+          claudeSessionFsPath: meta?.historySource === "claude" ? sessionFsPath : undefined,
+        });
         if (!resolved) continue;
 
         const range = new vscode.Range(

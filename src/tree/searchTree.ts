@@ -17,7 +17,10 @@ import {
 import { t } from "../i18n";
 import { getConfig } from "../settings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
-import { buildSessionDescription } from "./sessionDescriptionUtils";
+import {
+  buildSessionDescriptionPresentation,
+  buildSessionRowLabelPresentation,
+} from "./sessionDescriptionUtils";
 import {
   appendCodexAgentTooltipLines,
   appendFullSessionTooltipActions,
@@ -119,19 +122,27 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       const agentPresentation = config.agentRunsEnabled && element.session.source === "codex"
         ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"))
         : undefined;
-      const label = `${element.session.localDate} ${element.session.timeLabel} ${shortTitle} (${element.hits.length})`;
+      const titleWithHitCount = `${shortTitle} (${element.hits.length})`;
+      const timestamp = `${element.session.localDate} ${element.session.timeLabel}`;
+      const rowLabel = buildSessionRowLabelPresentation(
+        timestamp,
+        titleWithHitCount,
+        config.sessionRow.showTimestamp,
+      );
       const item = new vscode.TreeItem(
-        label,
+        rowLabel.label,
         vscode.TreeItemCollapsibleState.Collapsed,
       );
-      item.description = buildSessionDescription(
+      const descriptionPresentation = buildSessionDescriptionPresentation(
         element.session,
         annotation?.tags ?? [],
         projectAlias,
         projectDisplayCwd,
         agentPresentation,
         hidden,
+        config.sessionRow.showProject,
       );
+      item.description = descriptionPresentation.rowDescription || undefined;
       const node = new SessionNode(element.session, pinned);
       item.contextValue = toTreeItemContextValue(
         node,
@@ -147,7 +158,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       );
 
       // Clicking the title opens the reusable viewer or a session tab depending on the preview setting.
-      const previewOnSelection = getConfig().previewOpenOnSelection;
+      const previewOnSelection = config.previewOpenOnSelection;
       item.command = {
         command: previewOnSelection ? "codexHistoryViewer.openSessionReusable" : "codexHistoryViewer.openSession",
         title: "",
@@ -157,8 +168,8 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         element,
         annotation?.tags ?? [],
         annotation?.note ?? "",
-        label,
-        typeof item.description === "string" ? item.description : undefined,
+        rowLabel.tooltipLabel,
+        descriptionPresentation.tooltipDescription,
         projectAlias,
         projectDisplayCwd,
         agentPresentation,

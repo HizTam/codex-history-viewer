@@ -1,3 +1,5 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/projectPathMapper";
@@ -34,6 +36,7 @@ export async function resolveLocalFileLinkTarget(
     requestedColumn?: number;
     baseDirs?: readonly string[];
     projectPathMappings?: readonly ProjectPathMapping[];
+    claudeSessionFsPath?: string;
   },
 ): Promise<LinkedFileTarget | null> {
   const parsed = splitPathAndLocation(rawFsPath);
@@ -79,6 +82,17 @@ export async function resolveLocalFileLinkTarget(
     if (!(await pathExists(candidate))) continue;
     return {
       fsPath: candidate,
+      line: requestedLine ?? parsed.line,
+      column: requestedColumn ?? parsed.column,
+    };
+  }
+
+  const claudeTempCandidate = isStandardClaudeProjectSessionPath(options?.claudeSessionFsPath)
+    ? await resolveClaudeTempRelativeLink(parsed.fsPath)
+    : null;
+  if (claudeTempCandidate) {
+    return {
+      fsPath: claudeTempCandidate,
       line: requestedLine ?? parsed.line,
       column: requestedColumn ?? parsed.column,
     };
@@ -234,4 +248,57 @@ function safeDecodeURIComponent(s: string): string {
   } catch {
     return s;
   }
+}
+
+async function resolveClaudeTempRelativeLink(relativePath: string): Promise<string | null> {
+  if (process.platform !== "win32") return null;
+
+  const segments = String(relativePath ?? "").split(/[\\/]+/u);
+  let firstSuffixIndex = 0;
+  while (segments[firstSuffixIndex] === "..") firstSuffixIndex += 1;
+  if (firstSuffixIndex === 0 || firstSuffixIndex >= segments.length) return null;
+
+  const suffix = segments.slice(firstSuffixIndex);
+  if (suffix.some((segment) => !isSafeWindowsPathSegment(segment))) return null;
+
+  const claudeTempRoot = path.resolve(os.tmpdir(), "claude");
+  const driveRoot = path.parse(claudeTempRoot).root;
+  if (!driveRoot) return null;
+
+  const candidate = path.resolve(driveRoot, ...suffix);
+  if (!isStrictPathDescendant(claudeTempRoot, candidate)) return null;
+
+  try {
+    const stat = await fs.lstat(candidate);
+    if (!stat.isFile() || stat.isSymbolicLink()) return null;
+    const [realClaudeTempRoot, realCandidate] = await Promise.all([
+      fs.realpath(claudeTempRoot),
+      fs.realpath(candidate),
+    ]);
+    return isStrictPathDescendant(realClaudeTempRoot, realCandidate) ? realCandidate : null;
+  } catch {
+    return null;
+  }
+}
+
+function isStrictPathDescendant(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return !!relative && relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+}
+
+function isSafeWindowsPathSegment(segment: string): boolean {
+  if (!segment || segment === "." || segment === "..") return false;
+  if (/[<>:"|?*\u0000-\u001f]/u.test(segment)) return false;
+  return !segment.endsWith(" ") && !segment.endsWith(".");
+}
+
+function isStandardClaudeProjectSessionPath(sessionFsPath: string | undefined): boolean {
+  const rawPath = String(sessionFsPath ?? "").trim();
+  if (!rawPath) return false;
+  const resolved = path.resolve(rawPath);
+  const projectDirectory = path.dirname(resolved);
+  const projectsRoot = path.dirname(projectDirectory);
+  if (path.basename(projectsRoot).toLowerCase() !== "projects") return false;
+  const relativeParts = path.relative(projectsRoot, resolved).split(path.sep).filter(Boolean);
+  return relativeParts.length === 2 && path.extname(relativeParts[1] ?? "").toLowerCase() === ".jsonl";
 }

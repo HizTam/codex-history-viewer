@@ -11,6 +11,15 @@ import {
   extractClaudeMessageContent,
   extractCodexMessageContent,
 } from "../chat/chatAttachments";
+import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
+import {
+  extractClaudeCrossSessionMessage,
+  isClaudeCrossSessionInboundRecord,
+} from "../chat/claudeCrossSessionMessage";
+import {
+  extractCodexToolOutput,
+  projectCodexStandaloneResponseItem,
+} from "../chat/codexResponseItems";
 
 // Reads session JSONL and renders the session transcript as Markdown.
 export async function renderTranscript(
@@ -29,6 +38,7 @@ export async function renderTranscript(
 
   const meta = await tryReadSessionMeta(fsPath);
   const historySource = detectHistorySource(meta?.historySource, fsPath);
+  const pastedPromptResolver = historySource === "claude" ? await createClaudePastedPromptResolver(fsPath) : undefined;
   // Read metadata first, then open the body stream.
   // In reverse order, readline can consume data first and leave the body empty.
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
@@ -87,6 +97,7 @@ export async function renderTranscript(
         timeZone,
         msgIndex,
         lastToolCallId,
+        pastedPromptResolver,
       });
       if (claudeResult.handled) {
         msgIndex = claudeResult.msgIndex;
@@ -144,11 +155,24 @@ async function renderCodexRecord(
     return { handled: true, msgIndex, lastToolCallId };
   }
 
-  if (obj?.payload?.type === "function_call") {
-    const name = typeof obj?.payload?.name === "string" ? obj.payload.name : "function_call";
+  if (obj?.payload?.type === "function_call" || obj?.payload?.type === "custom_tool_call") {
+    const payloadType = obj.payload.type;
+    const name =
+      typeof obj?.payload?.name === "string"
+        ? obj.payload.name
+        : payloadType === "custom_tool_call"
+          ? "custom_tool_call"
+          : "function_call";
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-    const argsRaw = typeof obj?.payload?.arguments === "string" ? obj.payload.arguments : "";
-    const args = formatJsonIfPossible(argsRaw);
+    const argsRaw =
+      payloadType === "custom_tool_call"
+        ? typeof obj?.payload?.input === "string"
+          ? obj.payload.input
+          : ""
+        : typeof obj?.payload?.arguments === "string"
+          ? obj.payload.arguments
+          : "";
+    const args = formatJsonIfPossible(argsRaw) ?? argsRaw;
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
 
     lines.push(`## [tool] ${name}`);
@@ -157,7 +181,7 @@ async function renderCodexRecord(
     lines.push(``);
     if (args) {
       lines.push(`### Arguments`);
-      lines.push("```json");
+      lines.push(looksLikeJson(args) ? "```json" : "```");
       lines.push(args);
       lines.push("```");
       lines.push(``);
@@ -166,10 +190,12 @@ async function renderCodexRecord(
     return { handled: true, msgIndex, lastToolCallId };
   }
 
-  if (obj?.payload?.type === "function_call_output") {
+  if (obj?.payload?.type === "function_call_output" || obj?.payload?.type === "custom_tool_call_output") {
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-    const outRaw = typeof obj?.payload?.output === "string" ? obj.payload.output : "";
+    const extracted = await extractCodexToolOutput(obj?.payload?.output, undefined, { enabled: false });
+    const outRaw = extracted.text;
     const out = formatJsonIfPossible(outRaw) ?? outRaw;
+    const attachmentLines = buildAttachmentSummaryLines(extracted.attachments);
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
 
     if (callId && lastToolCallId && callId === lastToolCallId) {
@@ -181,10 +207,44 @@ async function renderCodexRecord(
       lines.push(``);
       lines.push(`### Output`);
     }
-    lines.push("```");
-    lines.push(out);
-    lines.push("```");
+    for (const attachmentLine of attachmentLines) lines.push(attachmentLine);
+    if (attachmentLines.length > 0 && out) lines.push("");
+    if (out) {
+      lines.push(looksLikeJson(out) ? "```json" : "```");
+      lines.push(out);
+      lines.push("```");
+    }
     lines.push(``);
+    return { handled: true, msgIndex, lastToolCallId };
+  }
+
+  const standalone = await projectCodexStandaloneResponseItem(obj?.payload, { enabled: false });
+  if (standalone) {
+    const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    lines.push(`## [tool] ${standalone.name}`);
+    if (standalone.callId) lines.push(`- Call ID: \`${standalone.callId}\``);
+    if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``);
+    if (standalone.execution?.status) lines.push(`- Status: \`${standalone.execution.status}\``);
+    lines.push(``);
+
+    const args = standalone.argumentsText
+      ? formatJsonIfPossible(standalone.argumentsText) ?? standalone.argumentsText
+      : "";
+    if (args) {
+      lines.push(`### Arguments`);
+      lines.push(looksLikeJson(args) ? "```json" : "```");
+      lines.push(args);
+      lines.push("```");
+      lines.push(``);
+    }
+
+    const attachmentLines = buildAttachmentSummaryLines(standalone.attachments);
+    if (attachmentLines.length > 0) {
+      lines.push(`### Output`);
+      for (const attachmentLine of attachmentLines) lines.push(attachmentLine);
+      lines.push(``);
+    }
+    lastToolCallId = standalone.callId;
     return { handled: true, msgIndex, lastToolCallId };
   }
 
@@ -194,7 +254,13 @@ async function renderCodexRecord(
 async function renderClaudeRecord(
   lines: string[],
   messageLineMap: Map<number, number>,
-  params: { obj: any; timeZone: string; msgIndex: number; lastToolCallId?: string },
+  params: {
+    obj: any;
+    timeZone: string;
+    msgIndex: number;
+    lastToolCallId?: string;
+    pastedPromptResolver?: ClaudePastedPromptResolver;
+  },
 ): Promise<{ handled: boolean; msgIndex: number; lastToolCallId?: string }> {
   const { obj, timeZone } = params;
   let { msgIndex, lastToolCallId } = params;
@@ -202,9 +268,28 @@ async function renderClaudeRecord(
   const role = detectClaudeMessageRole(obj);
   if (!role) return { handled: false, msgIndex, lastToolCallId };
 
+  if (isClaudeCrossSessionInboundRecord(obj)) {
+    msgIndex += 1;
+    const crossSessionMessage = extractClaudeCrossSessionMessage(obj);
+    if (!crossSessionMessage) return { handled: true, msgIndex, lastToolCallId };
+
+    messageLineMap.set(msgIndex, lines.length + 1);
+    lines.push(`## [#${msgIndex}] Cross-session message`);
+    const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``);
+    if (crossSessionMessage.senderName) {
+      lines.push(`- From: ${escapeMarkdownInline(crossSessionMessage.senderName)}`);
+    }
+    lines.push("");
+    appendPlainTextCodeBlock(lines, crossSessionMessage.body);
+    lastToolCallId = undefined;
+    return { handled: true, msgIndex, lastToolCallId };
+  }
+
   const rawContent = getClaudeMessageContent(obj);
   const parsed = parseClaudeMessageContent(rawContent);
-  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role });
+  const pastedPrompt = role === "user" ? await params.pastedPromptResolver?.resolve(obj, rawContent) : undefined;
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
   const text = normalizeWhitespace(extracted.text);
   const attachmentLines = buildAttachmentSummaryLines(extracted.attachments);
   const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
@@ -270,6 +355,16 @@ function appendMessageBodyLines(lines: string[], attachmentLines: readonly strin
   if (attachmentLines.length > 0 && text) lines.push("");
   if (text) lines.push(text);
   lines.push("");
+}
+
+function appendPlainTextCodeBlock(lines: string[], text: string): void {
+  for (const line of text.split("\n")) lines.push(`    ${line}`);
+  lines.push("");
+}
+
+function escapeMarkdownInline(value: string): string {
+  const specialCharacters = "\\`*_{}[]<>()#+-.!|>";
+  return Array.from(value, (character) => specialCharacters.includes(character) ? `\\${character}` : character).join("");
 }
 
 function parseClaudeMessageContent(content: unknown): {

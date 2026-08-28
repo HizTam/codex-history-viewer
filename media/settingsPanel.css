@@ -1,0 +1,1222 @@
+:root {
+  color-scheme: light dark;
+  --panel-border: var(--vscode-widget-border, var(--vscode-contrastBorder, transparent));
+  --muted: var(--vscode-descriptionForeground);
+  --surface: var(--vscode-sideBar-background, var(--vscode-editorWidget-background));
+  --hover: var(--vscode-list-hoverBackground);
+  --active: var(--vscode-list-activeSelectionBackground);
+  --active-foreground: var(--vscode-list-activeSelectionForeground);
+  --modified-indicator: var(
+    --vscode-settings-modifiedItemIndicator,
+    var(--vscode-focusBorder, var(--vscode-foreground))
+  );
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex="0"]:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.settings-app {
+  display: grid;
+  width: min(1440px, 100%);
+  height: 100vh;
+  grid-template-rows: auto minmax(0, 1fr);
+  margin: 0 auto;
+  overflow: hidden;
+  padding: 24px 24px 36px;
+}
+
+.page-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px 28px;
+  align-items: end;
+  margin-bottom: 22px;
+}
+
+.page-brand {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 15px;
+}
+
+.page-brand-icon {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  color: var(--vscode-foreground);
+}
+
+.title-block {
+  min-width: 0;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.page-metadata {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.target-selector {
+  display: grid;
+  min-width: 220px;
+  gap: 5px;
+}
+
+.target-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.global-status {
+  grid-column: 1 / -1;
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.global-status.error {
+  color: var(--vscode-errorForeground);
+}
+
+.settings-layout {
+  display: grid;
+  min-height: 0;
+  grid-template-columns: 210px minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  overflow: hidden;
+  transition: grid-template-columns 140ms ease, gap 140ms ease;
+}
+
+.navigation-collapsed .settings-layout {
+  grid-template-columns: 52px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.page-navigation {
+  position: relative;
+  height: 100%;
+  min-width: 0;
+  padding: 0 12px 18px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--panel-border);
+  scrollbar-gutter: stable;
+}
+
+.navigation-controls {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.navigation-toggle,
+.mobile-close-button,
+.mobile-menu-button,
+.setting-icon-button,
+.path-browse-button {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--vscode-foreground);
+  background: transparent;
+  cursor: pointer;
+}
+
+.navigation-toggle:hover:not(:disabled),
+.mobile-close-button:hover:not(:disabled),
+.mobile-menu-button:hover:not(:disabled),
+.setting-icon-button:hover:not(:disabled),
+.path-browse-button:hover:not(:disabled) {
+  border-color: var(--panel-border);
+  background: var(--hover);
+}
+
+.button-icon {
+  width: 17px;
+  height: 17px;
+}
+
+.mobile-close-button,
+.mobile-menu-button {
+  display: none;
+}
+
+.navigation-group + .navigation-group {
+  margin-top: 17px;
+  padding-top: 13px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.navigation-group-label {
+  margin: 0 9px 7px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.navigation-list {
+  display: grid;
+  gap: 3px;
+}
+
+.navigation-item {
+  position: relative;
+  display: grid;
+  width: 100%;
+  min-height: 38px;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: center;
+  padding: 7px 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  color: var(--vscode-foreground);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.navigation-item::before {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 0;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  content: "";
+}
+
+.navigation-item:hover {
+  background: var(--hover);
+}
+
+.navigation-item.active {
+  color: var(--active-foreground);
+  background: var(--active);
+  font-weight: 600;
+}
+
+.navigation-item.active::before {
+  background: currentColor;
+}
+
+.navigation-item-icon {
+  width: 19px;
+  height: 19px;
+  justify-self: center;
+}
+
+.navigation-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.navigation-count {
+  min-width: 23px;
+  padding: 1px 6px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.72;
+  text-align: center;
+}
+
+.navigation-collapsed .page-navigation {
+  padding-right: 8px;
+}
+
+.navigation-collapsed .navigation-controls {
+  justify-content: center;
+}
+
+.navigation-collapsed .navigation-group-label,
+.navigation-collapsed .navigation-item-label,
+.navigation-collapsed .navigation-count {
+  display: none;
+}
+
+.navigation-collapsed .navigation-group + .navigation-group {
+  margin-top: 11px;
+  padding-top: 11px;
+}
+
+.navigation-collapsed .navigation-item {
+  display: flex;
+  width: 38px;
+  justify-content: center;
+  margin: 0 auto;
+  padding: 7px;
+}
+
+.page-content {
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 4px 24px 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.page-content.about-page {
+  padding-bottom: 0;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.content-heading {
+  margin-bottom: 18px;
+}
+
+.content-title {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.content-description {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.settings-cards,
+.maintenance-cards {
+  display: grid;
+  gap: 16px;
+}
+
+.about-content {
+  height: 100%;
+  min-height: 0;
+}
+
+.settings-card,
+.maintenance-card,
+.about-card {
+  margin: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.card-title {
+  margin: 0;
+  padding: 12px 17px;
+  border-bottom: 1px solid var(--panel-border);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.setting-row {
+  position: relative;
+  padding: 16px 17px 9px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.setting-row.modified::before {
+  position: absolute;
+  top: 7px;
+  bottom: 7px;
+  left: 0;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: var(--modified-indicator);
+  content: "";
+  pointer-events: none;
+}
+
+.setting-row:last-child {
+  border-bottom: 0;
+}
+
+.setting-row:focus-within {
+  z-index: 3;
+}
+
+.setting-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, auto);
+  gap: 22px;
+  align-items: center;
+}
+
+.setting-text {
+  min-width: 0;
+}
+
+.setting-label-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.setting-label {
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.setting-description,
+.setting-disabled-reason,
+.maintenance-description {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.setting-disabled-reason {
+  color: var(--vscode-disabledForeground);
+}
+
+.setting-badge {
+  padding: 1px 7px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.setting-badge.experimental {
+  color: var(--vscode-charts-purple);
+  border-color: currentColor;
+}
+
+.setting-badge.source.codex {
+  color: var(--vscode-charts-blue, var(--vscode-foreground));
+  border-color: currentColor;
+}
+
+.setting-badge.source.claude {
+  color: var(--vscode-charts-orange, var(--vscode-foreground));
+  border-color: currentColor;
+}
+
+.setting-badge.invalid {
+  color: var(--vscode-errorForeground);
+  border-color: currentColor;
+}
+
+.setting-badge.overridden {
+  color: var(--vscode-charts-orange);
+  border-color: currentColor;
+}
+
+.setting-resource-indicator {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  color: var(--vscode-charts-green, var(--vscode-foreground));
+}
+
+.setting-resource-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.setting-control-area {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, auto) 30px;
+  gap: 7px;
+  align-items: center;
+  justify-content: end;
+}
+
+.setting-action-slot {
+  width: 30px;
+  min-height: 30px;
+}
+
+.select-control-stack + .setting-action-slot,
+.multi-select + .setting-action-slot {
+  align-self: start;
+}
+
+.select-control,
+.text-control,
+.multi-trigger {
+  min-height: 31px;
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, var(--panel-border)));
+  border-radius: 5px;
+  color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+}
+
+.select-control {
+  min-width: 190px;
+  padding: 4px 28px 4px 9px;
+}
+
+.select-control-stack {
+  width: min(310px, 35vw);
+  min-width: 210px;
+  display: grid;
+  gap: 5px;
+}
+
+.setting-select {
+  width: 100%;
+}
+
+.selected-option-description {
+  max-width: 310px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.text-control {
+  padding: 4px 8px;
+}
+
+.text-control:disabled,
+.select-control:disabled,
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.switch-control {
+  position: relative;
+  display: inline-block;
+  width: 38px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+
+.switch-control input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.switch-slider {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: var(--vscode-input-background);
+  cursor: pointer;
+  transition: background-color 120ms ease;
+}
+
+.switch-slider::after {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--vscode-foreground);
+  content: "";
+  transition: transform 120ms ease;
+}
+
+.switch-control input:checked + .switch-slider {
+  border-color: var(--vscode-button-background);
+  background: var(--vscode-button-background);
+}
+
+.switch-control input:checked + .switch-slider::after {
+  transform: translateX(16px);
+  background: var(--vscode-button-foreground);
+}
+
+.switch-control input:focus-visible + .switch-slider {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.switch-control input:disabled + .switch-slider {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.multi-select {
+  position: relative;
+  width: min(300px, 34vw);
+  min-width: 210px;
+}
+
+.multi-trigger {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.multi-trigger-tokens {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+
+.multi-token {
+  min-width: 0;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--vscode-focusBorder) 36%, var(--panel-border));
+  border-radius: 999px;
+  color: var(--vscode-foreground);
+  background: color-mix(in srgb, var(--vscode-focusBorder) 10%, var(--vscode-input-background));
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-trigger-chevron {
+  width: 15px;
+  height: 15px;
+  transition: transform 120ms ease;
+}
+
+.multi-trigger[aria-expanded="true"] .multi-trigger-chevron {
+  transform: rotate(180deg);
+}
+
+.multi-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  width: max(100%, 230px);
+  max-height: 240px;
+  padding: 4px;
+  overflow: auto;
+  border: 1px solid var(--vscode-dropdown-border, var(--panel-border));
+  border-radius: 6px;
+  background: var(--vscode-dropdown-background, var(--vscode-editorWidget-background));
+  box-shadow: 0 6px 18px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.25));
+}
+
+.multi-popover-option {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.multi-popover-option:hover,
+.multi-popover-option:focus-visible {
+  background: var(--hover);
+}
+
+.multi-popover-option.selected {
+  color: var(--active-foreground);
+  background: var(--active);
+}
+
+.multi-check {
+  width: 17px;
+  height: 17px;
+}
+
+.multi-option-copy {
+  display: grid;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.multi-option-label,
+.multi-option-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-option-description {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.multi-popover-option.selected .multi-option-description {
+  color: inherit;
+  opacity: 0.78;
+}
+
+.number-control,
+.path-control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.number-input {
+  width: 105px;
+}
+
+.path-field {
+  display: grid;
+  width: min(360px, 38vw);
+  grid-template-columns: minmax(0, 1fr) 31px;
+  overflow: hidden;
+  border: 1px solid var(--vscode-input-border, var(--panel-border));
+  border-radius: 5px;
+  background: var(--vscode-input-background);
+}
+
+.path-input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.path-input:focus-visible {
+  outline-offset: -1px;
+}
+
+.path-browse-button {
+  width: 31px;
+  height: 31px;
+  border: 0;
+  border-left: 1px solid var(--vscode-input-border, var(--panel-border));
+  border-radius: 0;
+}
+
+.setting-unit {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.setting-status {
+  min-height: 17px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+}
+
+.setting-status.error {
+  color: var(--vscode-errorForeground);
+}
+
+.maintenance-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 22px;
+  align-items: center;
+  padding: 15px 17px;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.maintenance-row:last-child {
+  border-bottom: 0;
+}
+
+.maintenance-label {
+  font-weight: 600;
+}
+
+.action-button {
+  min-width: 104px;
+  min-height: 31px;
+  padding: 5px 12px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 5px;
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+  cursor: pointer;
+}
+
+.action-button:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.action-button.warning {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+  border-color: color-mix(in srgb, currentColor 55%, transparent);
+  background: transparent;
+}
+
+.action-button.danger {
+  color: var(--vscode-errorForeground);
+  border-color: color-mix(in srgb, currentColor 55%, transparent);
+  background: transparent;
+}
+
+.action-button.warning:hover:not(:disabled),
+.action-button.danger:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.about-card {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.about-tab-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.about-tab-panel[hidden] {
+  display: none;
+}
+
+.about-version-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 28px;
+  background: var(--vscode-editor-background);
+}
+
+.about-product-icon {
+  width: 58px;
+  height: 58px;
+  flex: 0 0 auto;
+  color: var(--vscode-foreground);
+}
+
+.about-product-name {
+  margin: 0 0 6px;
+  font-size: 17px;
+}
+
+.about-product-meta,
+.about-product-copyright {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.about-sponsor-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 16px;
+  padding: 7px 11px;
+  border: 1px solid var(--panel-border);
+  border-radius: 6px;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, transparent);
+  cursor: pointer;
+}
+
+.about-sponsor-button:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--hover));
+}
+
+.about-sponsor-icon {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.license-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 7px 9px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.license-tab {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 8px 11px 9px;
+  border: 0;
+  color: var(--muted);
+  background: transparent;
+  cursor: pointer;
+}
+
+.license-tab::after {
+  position: absolute;
+  right: 8px;
+  bottom: -1px;
+  left: 8px;
+  height: 2px;
+  background: transparent;
+  content: "";
+}
+
+.license-tab:hover {
+  color: var(--vscode-foreground);
+}
+
+.license-tab.active {
+  color: var(--vscode-foreground);
+  font-weight: 600;
+}
+
+.license-tab.active::after {
+  background: var(--vscode-focusBorder);
+}
+
+.license-document {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 17px;
+  overflow: auto;
+  color: var(--vscode-editor-foreground);
+  background: var(--vscode-editor-background);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, 12px);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.navigation-backdrop {
+  display: none;
+}
+
+@media (max-width: 900px) {
+  .setting-header {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .setting-control-area {
+    justify-content: start;
+  }
+
+  .multi-select,
+  .path-field {
+    width: min(440px, calc(100vw - 150px));
+  }
+}
+
+@media (max-width: 760px) {
+  body {
+    overflow: auto;
+  }
+
+  .settings-app {
+    display: block;
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+    padding: 20px 17px 32px;
+  }
+
+  .page-header {
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 12px 10px;
+    align-items: center;
+  }
+
+  .page-brand-icon {
+    width: 34px;
+    height: 34px;
+  }
+
+  .page-title {
+    font-size: 21px;
+  }
+
+  .page-metadata {
+    font-size: 11px;
+  }
+
+  .mobile-menu-button {
+    display: inline-flex;
+  }
+
+  .target-selector,
+  .global-status {
+    grid-column: 1 / -1;
+  }
+
+  .settings-layout,
+  .navigation-collapsed .settings-layout {
+    display: block;
+    overflow: visible;
+  }
+
+  .page-content {
+    height: auto;
+    padding-right: 0;
+    overflow: visible;
+  }
+
+  .page-content.about-page {
+    overflow: visible;
+  }
+
+  .page-navigation,
+  .navigation-collapsed .page-navigation {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    display: block;
+    width: min(280px, calc(100vw - 44px));
+    height: auto;
+    padding: 14px 12px;
+    overflow: auto;
+    border: 0;
+    border-right: 1px solid var(--panel-border);
+    background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+    box-shadow: 7px 0 22px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.3));
+    transform: translateX(-105%);
+    transition: transform 140ms ease;
+  }
+
+  .page-navigation.mobile-open {
+    transform: translateX(0);
+  }
+
+  .navigation-controls,
+  .navigation-collapsed .navigation-controls {
+    justify-content: flex-end;
+  }
+
+  .navigation-toggle {
+    display: none;
+  }
+
+  .mobile-close-button {
+    display: inline-flex;
+  }
+
+  .navigation-collapsed .navigation-group-label,
+  .navigation-collapsed .navigation-item-label,
+  .navigation-collapsed .navigation-count {
+    display: block;
+  }
+
+  .navigation-collapsed .navigation-item,
+  .navigation-item {
+    display: grid;
+    width: 100%;
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    justify-content: initial;
+    margin: 0;
+    padding: 7px 8px;
+  }
+
+  .navigation-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: rgba(0, 0, 0, 0.42);
+    cursor: default;
+  }
+
+  .setting-control-area {
+    grid-template-columns: minmax(0, 1fr) 30px;
+    width: 100%;
+  }
+
+  .setting-select,
+  .select-control-stack,
+  .multi-select,
+  .path-control,
+  .path-field {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .multi-popover {
+    right: auto;
+    left: 0;
+  }
+
+  .maintenance-row {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .action-button {
+    justify-self: start;
+  }
+
+  .about-content,
+  .about-card {
+    height: auto;
+  }
+
+  .about-tab-panel,
+  .license-document {
+    height: auto;
+    overflow: visible;
+  }
+
+  .about-version-panel {
+    align-items: flex-start;
+    padding: 20px;
+  }
+}
+
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --panel-border: var(--vscode-contrastBorder);
+  --modified-indicator: var(
+    --vscode-settings-modifiedItemIndicator,
+    var(--vscode-contrastBorder, var(--vscode-foreground))
+  );
+}
+
+body.vscode-high-contrast .settings-card,
+body.vscode-high-contrast .maintenance-card,
+body.vscode-high-contrast .about-card,
+body.vscode-high-contrast .setting-resource-indicator,
+body.vscode-high-contrast .about-sponsor-button,
+body.vscode-high-contrast .page-navigation,
+body.vscode-high-contrast .multi-popover,
+body.vscode-high-contrast .switch-slider,
+body.vscode-high-contrast-light .settings-card,
+body.vscode-high-contrast-light .maintenance-card,
+body.vscode-high-contrast-light .about-card,
+body.vscode-high-contrast-light .setting-resource-indicator,
+body.vscode-high-contrast-light .about-sponsor-button,
+body.vscode-high-contrast-light .page-navigation,
+body.vscode-high-contrast-light .multi-popover,
+body.vscode-high-contrast-light .switch-slider {
+  border-color: var(--vscode-contrastBorder);
+}
+
+body.vscode-high-contrast .navigation-item.active,
+body.vscode-high-contrast .multi-popover-option.selected,
+body.vscode-high-contrast-light .navigation-item.active,
+body.vscode-high-contrast-light .multi-popover-option.selected {
+  outline: 1px solid var(--vscode-focusBorder, var(--vscode-contrastBorder));
+}
+
+body.vscode-high-contrast .switch-control input:checked + .switch-slider,
+body.vscode-high-contrast-light .switch-control input:checked + .switch-slider {
+  border-color: var(--vscode-contrastBorder);
+}
+
+@media (forced-colors: active) {
+  .setting-row.modified::before {
+    background: CanvasText;
+  }
+
+  .page-brand-icon,
+  .about-product-icon,
+  .setting-resource-indicator {
+    color: CanvasText;
+  }
+
+  .settings-card,
+  .maintenance-card,
+  .about-card,
+  .setting-resource-indicator,
+  .about-sponsor-button,
+  .page-navigation,
+  .multi-popover,
+  .switch-slider,
+  .switch-control input:checked + .switch-slider {
+    border-color: CanvasText;
+  }
+
+  .navigation-item.active,
+  .multi-popover-option.selected {
+    outline: 1px solid Highlight;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-layout,
+  .page-navigation,
+  .switch-slider,
+  .switch-slider::after,
+  .multi-trigger-chevron {
+    transition: none;
+  }
+}

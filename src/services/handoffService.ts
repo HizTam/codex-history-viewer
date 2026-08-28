@@ -12,8 +12,11 @@ import {
   extractClaudeMessageContent,
   extractCodexMessageContent,
   isCodexProtocolContextContent,
+  selectClaudeControlContent,
 } from "../chat/chatAttachments";
 import type { ChatAttachment } from "../chat/chatTypes";
+import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
+import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "./projectPathMapper";
 import { normalizeProjectKey } from "../utils/fsUtils";
 
@@ -303,6 +306,7 @@ export function buildHandoffPrompt(handoffPath: string): string {
 }
 
 async function parseSessionForHandoff(session: SessionSummary): Promise<ParsedSessionContext> {
+  const pastedPromptResolver = await createClaudePastedPromptResolver(session.fsPath);
   const stream = fs.createReadStream(session.fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   const messages: HandoffMessage[] = [];
@@ -327,7 +331,7 @@ async function parseSessionForHandoff(session: SessionSummary): Promise<ParsedSe
         collectCodexDiffBlocks(obj, diffBlocks);
         continue;
       }
-      await collectClaudeMessage(obj, messages);
+      await collectClaudeMessage(obj, messages, pastedPromptResolver);
       collectClaudeDiffBlocks(obj, diffBlocks);
       collectCodexDiffBlocks(obj, diffBlocks);
     }
@@ -362,13 +366,20 @@ async function collectCodexMessage(obj: any, messages: HandoffMessage[]): Promis
   return true;
 }
 
-async function collectClaudeMessage(obj: any, messages: HandoffMessage[]): Promise<boolean> {
+async function collectClaudeMessage(
+  obj: any,
+  messages: HandoffMessage[],
+  pastedPromptResolver?: ClaudePastedPromptResolver,
+): Promise<boolean> {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
+  if (isClaudeCrossSessionInboundRecord(obj)) return true;
 
   const rawContent = getClaudeMessageContent(obj);
-  if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) return true;
-  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role });
+  const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
+  const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+  if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) return true;
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
   const text = sanitizeMessageText(combineHandoffText(buildHandoffAttachmentSummary(extracted.attachments), extracted.text));
   if (!text) return true;
 
@@ -409,6 +420,7 @@ function isPatchApplyEndFailure(obj: any): boolean {
 
 function collectClaudeDiffBlocks(obj: any, diffBlocks: HandoffDiffBlock[]): void {
   if (diffBlocks.length >= MAX_DIFF_BLOCKS) return;
+  if (isClaudeCrossSessionInboundRecord(obj)) return;
   if (!detectClaudeMessageRole(obj)) return;
 
   const toolCalls = extractClaudeToolCalls(getClaudeMessageContent(obj));

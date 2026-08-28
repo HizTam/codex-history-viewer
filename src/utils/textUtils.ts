@@ -43,14 +43,13 @@ export function safeDisplayPath(fsPath: string, maxLen: number): string {
 export function extractMyRequestForCodex(text: string): string | null {
   const s = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   const lines = s.split("\n");
-  const marker = /^(?:#+\s*)?My request for Codex:\s*$/i;
+  const marker = /^(?:#+\s*)?My request(?: for Codex)?:\s*$/i;
 
   let markerIndex = -1;
   for (let i = 0; i < lines.length; i += 1) {
     const line = (lines[i] ?? "").trim();
     if (marker.test(line)) {
       markerIndex = i;
-      break;
     }
   }
   if (markerIndex < 0) return null;

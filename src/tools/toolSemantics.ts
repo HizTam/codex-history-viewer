@@ -13,6 +13,7 @@ const TOOL_KIND_ALIASES: Record<NormalizedToolKind, readonly string[]> = {
   glob: ["glob", "find_files", "search_files", "list_files"],
   webSearch: ["web_search", "search_query", "image_query", "websearch"],
   webFetch: ["web_fetch", "fetch", "open", "open_url"],
+  imageGeneration: ["image_generation", "image_generation_call", "imagegen"],
   agent: ["agent", "spawn_agent", "send_input", "wait_agent", "resume_agent", "close_agent", "update_plan"],
   unknown: [],
 };
@@ -33,6 +34,8 @@ const COMMAND_KEYS = ["command", "cmd", "script"] as const;
 const WORKDIR_KEYS = ["workdir", "cwd", "working_directory"] as const;
 const QUERY_KEYS = ["q", "query", "pattern", "search", "search_query"] as const;
 const URL_KEYS = ["url", "uri", "href", "ref_id"] as const;
+const MAX_PRESENTATION_LIST_ITEMS = 32;
+const MAX_PRESENTATION_LIST_CHARS = 4096;
 
 export function buildToolPresentation(tool: ChatToolItem): ChatToolPresentation {
   const normalizedName = normalizeToolName(tool.name);
@@ -47,7 +50,7 @@ export function buildToolPresentation(tool: ChatToolItem): ChatToolPresentation 
       return {
         toolKind,
         title: fallbackTitle,
-        primaryText: firstNonEmpty(extractString(parsedArgs, COMMAND_KEYS), primaryFallback),
+        primaryText: firstNonEmpty(extractCommand(parsedArgs), primaryFallback),
         secondaryText: buildShellSecondary(parsedArgs),
         badgeText: buildShellBadge(parsedOutput, tool.outputText),
         severity: detectShellSeverity(parsedOutput, tool.outputText),
@@ -108,7 +111,12 @@ export function buildToolPresentation(tool: ChatToolItem): ChatToolPresentation 
       return {
         toolKind,
         title: fallbackTitle,
-        primaryText: firstNonEmpty(extractString(parsedArgs, QUERY_KEYS), primaryFallback),
+        primaryText: firstNonEmpty(
+          extractString(parsedArgs, QUERY_KEYS),
+          extractStringArray(parsedArgs, ["queries"]),
+          extractString(parsedArgs, URL_KEYS),
+          primaryFallback,
+        ),
         messageIndex: tool.messageIndex,
       };
     case "webFetch":
@@ -116,6 +124,13 @@ export function buildToolPresentation(tool: ChatToolItem): ChatToolPresentation 
         toolKind,
         title: fallbackTitle,
         primaryText: firstNonEmpty(extractString(parsedArgs, URL_KEYS), primaryFallback),
+        messageIndex: tool.messageIndex,
+      };
+    case "imageGeneration":
+      return {
+        toolKind,
+        title: fallbackTitle,
+        primaryText: firstNonEmpty(extractString(parsedArgs, ["prompt", "revised_prompt"]), primaryFallback),
         messageIndex: tool.messageIndex,
       };
     case "agent":
@@ -164,6 +179,8 @@ function getLocalizedTitle(toolKind: NormalizedToolKind): string {
       return t("chat.toolCard.title.webSearch");
     case "webFetch":
       return t("chat.toolCard.title.webFetch");
+    case "imageGeneration":
+      return t("chat.toolCard.title.imageGeneration");
     case "agent":
       return t("chat.toolCard.title.agent");
     default:
@@ -262,6 +279,45 @@ function buildUnknownSecondary(tool: ChatToolItem): string | undefined {
 
 function extractFilePath(parsedArgs: JsonLikeRecord | null): string | undefined {
   return extractString(parsedArgs, FILE_PATH_KEYS);
+}
+
+function extractCommand(parsedArgs: JsonLikeRecord | null): string | undefined {
+  if (!parsedArgs) return undefined;
+  for (const key of COMMAND_KEYS) {
+    const value = parsedArgs[key];
+    if (Array.isArray(value)) {
+      const command = joinBoundedStringArray(value, " ");
+      if (command) return command;
+      continue;
+    }
+    const normalized = normalizeUnknownText(value);
+    if (normalized) return normalized;
+  }
+  return undefined;
+}
+
+function extractStringArray(parsedArgs: JsonLikeRecord | null, keys: readonly string[]): string | undefined {
+  if (!parsedArgs) return undefined;
+  for (const key of keys) {
+    const value = parsedArgs[key];
+    if (!Array.isArray(value)) continue;
+    const text = joinBoundedStringArray(value, " | ");
+    if (text) return text;
+  }
+  return undefined;
+}
+
+function joinBoundedStringArray(value: readonly unknown[], separator: string): string {
+  const parts: string[] = [];
+  let remainingChars = MAX_PRESENTATION_LIST_CHARS;
+  for (const item of value.slice(0, MAX_PRESENTATION_LIST_ITEMS)) {
+    if (remainingChars <= 0 || typeof item !== "string") continue;
+    const text = normalizeInlineText(item.slice(0, MAX_PRESENTATION_LIST_CHARS)).slice(0, remainingChars);
+    if (!text) continue;
+    parts.push(text);
+    remainingChars -= text.length + separator.length;
+  }
+  return parts.join(separator).slice(0, MAX_PRESENTATION_LIST_CHARS);
 }
 
 function extractString(parsedArgs: JsonLikeRecord | null, keys: readonly string[]): string | undefined {

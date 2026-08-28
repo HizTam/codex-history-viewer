@@ -16,11 +16,23 @@ import {
   extractCodexMessageContent,
   isCodexProtocolContextContent,
   isCodexTurnAbortedContent,
+  selectClaudeControlContent,
 } from "../chat/chatAttachments";
+import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
+import {
+  CLAUDE_CROSS_SESSION_SEARCH_CHARS,
+  extractClaudeCrossSessionMessage,
+  isClaudeCrossSessionInboundRecord,
+  projectClaudeCrossSessionBody,
+} from "../chat/claudeCrossSessionMessage";
 import { splitTrailingMemoryCitationBlock } from "../chat/memoryCitation";
+import {
+  extractCodexToolOutput,
+  projectCodexStandaloneResponseItem,
+} from "../chat/codexResponseItems";
 import type { DebugLogger } from "./logger";
 
-const SEARCH_INDEX_FILE_VERSION = 12;
+const SEARCH_INDEX_FILE_VERSION = 18;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
 
@@ -391,12 +403,14 @@ async function buildIndexedSession(
   fsPath: string,
   options: { indexToolContent: SearchIndexToolContent; token?: vscode.CancellationToken },
 ): Promise<{ messages: IndexedSearchMessage[]; fileChangeHints: IndexedFileChangeHint[] }> {
+  const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
   const state: BuildState = {
     messages: [],
     fileChangeHints: [],
     messageIndex: 0,
     toolAnchorByCallId: new Map(),
     indexToolContent: options.indexToolContent,
+    pastedPromptResolver,
   };
 
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
@@ -432,6 +446,7 @@ interface BuildState {
   messageIndex: number;
   toolAnchorByCallId: Map<string, number>;
   indexToolContent: SearchIndexToolContent;
+  pastedPromptResolver?: ClaudePastedPromptResolver;
 }
 
 async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
@@ -538,13 +553,13 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
     if (!shouldIndexToolOutputs(state.indexToolContent)) return true;
 
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : "";
+    const extracted = await extractCodexToolOutput(obj?.payload?.output, undefined, { enabled: false });
+    const attachmentText = buildAttachmentSearchText(extracted.attachments);
     const outText =
       payloadType === "custom_tool_call_output"
-        ? buildCustomToolOutputMetaText(obj?.payload)
-        : typeof obj?.payload?.output === "string"
-          ? normalizeWhitespace(obj.payload.output)
-          : "";
-    const rawOutput = payloadType === "custom_tool_call_output" ? obj?.payload?.output : obj?.payload?.output;
+        ? normalizeWhitespace([buildCustomToolOutputMetaText(obj?.payload), attachmentText].filter(Boolean).join("\n"))
+        : normalizeWhitespace([extracted.text, attachmentText].filter(Boolean).join("\n"));
+    const rawOutput = obj?.payload?.output;
     if (!outText) return true;
 
     const anchor =
@@ -567,6 +582,51 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
     return true;
   }
 
+  const standalone = await projectCodexStandaloneResponseItem(obj?.payload, { enabled: false });
+  if (standalone) {
+    const anchor = Math.max(1, state.messageIndex);
+    if (standalone.callId) state.toolAnchorByCallId.set(standalone.callId, anchor);
+    if (!shouldIndexToolCalls(state.indexToolContent)) return true;
+
+    const timestampIso = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    const parsedArguments = standalone.argumentsText ? tryParseJson(standalone.argumentsText) : undefined;
+    addFileChangeHint(state, {
+      messageIndex: anchor,
+      paths: collectFileChangeHintPaths(parsedArguments, standalone.name),
+      timestampIso,
+      origin: "toolArguments",
+      hasDiffLikeContent: hasDiffLikeContent(parsedArguments),
+    });
+    state.messages.push({
+      messageIndex: anchor,
+      role: "tool",
+      source: "toolArguments",
+      text: standalone.name,
+    });
+    const argumentsText = normalizeWhitespace(standalone.argumentsText ?? "");
+    if (argumentsText) {
+      state.messages.push({
+        messageIndex: anchor,
+        role: "tool",
+        source: "toolArguments",
+        text: argumentsText,
+      });
+    }
+
+    const attachmentText = shouldIndexToolOutputs(state.indexToolContent)
+      ? buildAttachmentSearchText(standalone.attachments)
+      : "";
+    if (attachmentText) {
+      state.messages.push({
+        messageIndex: anchor,
+        role: "tool",
+        source: "toolOutput",
+        text: attachmentText,
+      });
+    }
+    return true;
+  }
+
   return true;
 }
 
@@ -574,12 +634,35 @@ async function indexClaudeRecord(obj: any, state: BuildState): Promise<boolean> 
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
+  if (isClaudeCrossSessionInboundRecord(obj)) {
+    state.messageIndex += 1;
+    const crossSessionMessage = extractClaudeCrossSessionMessage(obj);
+    if (crossSessionMessage) {
+      const projected = projectClaudeCrossSessionBody(
+        crossSessionMessage.body,
+        CLAUDE_CROSS_SESSION_SEARCH_CHARS,
+      );
+      const text = normalizeWhitespace(`Cross-session message\n${projected.body}`);
+      if (text) {
+        state.messages.push({
+          messageIndex: Math.max(1, state.messageIndex),
+          role: "assistant",
+          source: "message",
+          text,
+        });
+      }
+    }
+    return true;
+  }
+
   const rawContent = getClaudeMessageContent(obj);
-  if (role === "user" && extractClaudeRequestInterruptionContent(rawContent)) return true;
-  if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) return true;
+  const pastedPrompt = role === "user" ? await state.pastedPromptResolver?.resolve(obj, rawContent) : undefined;
+  const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+  if (role === "user" && extractClaudeRequestInterruptionContent(controlContent)) return true;
+  if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) return true;
 
   const parsed = parseClaudeMessageContent(rawContent);
-  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role });
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
   const messageText = normalizeWhitespace([extracted.text, buildAttachmentSearchText(extracted.attachments)].filter(Boolean).join("\n"));
   if (messageText || extracted.attachments.length > 0) {
     state.messageIndex += 1;

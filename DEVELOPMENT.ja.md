@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-08-17
-- 対象バージョン: 2.11.1
+- 最終更新: 2026-08-28
+- 対象バージョン: 2.12.0
 
 ## 1. 概要
 
@@ -170,7 +170,7 @@
 - `both`の主操作はsource別に最後に成功した方式を`globalState`へ保存する。Codex / Claude Code各1値で初回は`extension`とし、分割ボタン経由でbase commandが`true`を返した場合だけ更新する。固定表示、Tree、direct command、archive restoreでは更新しない
 - split actionのMRU sequenceはmessageの同期検証直後、session file確認より前にsource別で採番する。非同期確認後にrevision、panel state、session、source、設定、安全条件と予約ticketを再照合し、非同期完了順で受信順が逆転しないようにする
 - 安全条件により保存方式だけが利用不能で、もう一方が利用可能な場合は一時的に主操作を切り替える。この表示だけでは保存値を書き換えない
-- panelごとのpresentation revisionで設定、保存方式、Trust、session切替をinvalidateし、再利用panelの旧session操作をhostで拒否する。`sendSessionData()`開始後は`sessionDataPending`とし、incremental snapshotが届いても対応するsessionData受信まではresume / restore UIを再表示しない。生成または配送に失敗した場合は原則として次の正常なsessionData受信まで非表示を維持し、branch `stateOverride`がcommit前に失敗して開始時panel stateとcurrent revisionが不変の場合だけ回復snapshotを許可する
+- panelごとのpresentation revisionで設定、保存方式、Trust、session切替をinvalidateし、再利用panelの旧session操作をhostで拒否する。sessionDataを伴わない設定、保存方式、Trust、History index確定の更新は、新revisionとsnapshotを単一messageで配送する。`sendSessionData()`開始後は`sessionDataPending`とし、incremental snapshotだけでは保留を解除しない。最新requestの生成または配送に失敗した場合は、current panel state / History entryが最後に正常配送したsessionの正規化path、source、identity key、archive state、root kindと一致するときだけ、current revisionの`sessionDataComplete`付きsnapshotで回復する。別session切替のcommit前失敗では画面に残る元sessionを回復できるが、commit後は旧sessionを回復しない。正常配送checkpoint自体もsession-data request sequenceでlatest-winsとし、古い`postMessage` Promise完了で新しいidentityまたは検証失敗tombstoneを上書きしない。superseded、別sessionへcommit済み、identity変更、初回配送前では次の正常なsessionData受信まで非表示を維持する
 - Resume snapshotの構築またはWebview側のresume toolbar更新に失敗してもSession Webview本文を止めない。hostはcurrent revisionを維持したfail-closed snapshotへ縮退して`sessionData`を送り、Webviewはresume groupだけを非表示にして本文の`render()`を続行する
 - split menuは既存branch menuのportal lifecycleを共用し、menu種別を分離する。Escape、外側click、resize、scroll、Arrow、Home / End、Tab / Shift+Tab、focus復帰、ARIAを扱う
 - compactでは主操作のlabelを隠し、拡張版とCLI版を異なるiconで識別する
@@ -307,7 +307,7 @@
   - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
-  - 内部 file version: 10
+  - 内部 file version: 16
   - 用途: 繰り返し検索を高速化する増分インデックス
   - `search-index.v2.json` が破損して JSON parse error になった場合は、破損内容を退避せず削除し、次回検索時に再構築する
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
@@ -324,7 +324,7 @@
     - `toolCallsAndOutputs`: メッセージ本文、ツール名 / 引数、ツール出力を保存する（互換性維持の既定値）
   - Codex の `custom_tool_call` は `toolCalls` / `toolCallsAndOutputs` のとき、tool 名、action、command、files、paths などの軽量メタだけを保存する
   - `custom_tool_call` の patch / diff 本文、巨大 JSON、base64 / data URI、secret / token / password 系キーの値は保存しない
-  - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ、取得できる場合に status / exitCode / durationMs / success / error などの短い実行メタだけを保存する
+  - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ、取得できる場合に status / exitCode / durationMs / success / error などの短い実行メタと画像添付 metadata だけを保存する。`input_text` の stdout / stderr / diff 全文は保存しない
   - ファイル履歴向けの `fileChangeHints` は関連セッションの優先付け補助として使う。最終的な diff 抽出結果の正しさは元のセッション JSONL の再解析で担保する
   - セッションの attachment metadata は label、path、MIME type、file kind を検索対象に含める
   - Claude Code text document の text は上限内だけ検索対象にし、PDF / Office / binary / base64 document の本文は検索対象にしない
@@ -335,7 +335,7 @@
   - 用途: History Insights の統計と Claude Code Branch Navigation の構造化 occurrence を共用する差分解析キャッシュ。履歴キャッシュや検索インデックスの代替にはしない
   - History Insights、Claude Code Branch Navigation、または `Rebuild Cache` を要求したときだけ lazy load / lazy build し、拡張機能の起動や通常の History / Search 表示を待たせない
   - セッションごとの `cacheKey`、source、`mtime`、`size`、parser version と、sessions root / 有効ソースを含む cache context を検証し、変更された entry だけを再解析する
-  - 2.8.0最終状態のsource parser versionはCodex / Claude Codeともに`8`とする。cache hardening後の旧entry、Codex session-start protocol contextを通常user件数へ含めていた旧Codex entry、`used_percent`の小数を欠損扱いしていた旧Codex entry、Claude Codeの`<local-command-stdout>`を通常user件数へ含めていた旧Claude Code entry、ツール名別利用回数を保持しないversion 7 entryは再解析する
+  - 現行source parser versionはCodex `9` / Claude Code `10`とする。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析する
   - 既存 Chat model builder と同じ抽出結果を使って message index、turn、usage、file change、ツール名別呼び出し回数を集計し、解析側で独自の message index を採番しない
   - 同一セッションの重複解析を共有し、全体の更新、保存、clear は直列化する。進捗通知とキャンセルに対応する
   - 破損 JSON は削除して次回要求時に再生成し、権限エラーなどの read error では既存ファイルを削除しない
@@ -431,13 +431,22 @@
   - PDF は PDF document card として表示し、初期 Webview model へ base64 payload を渡さない
   - text document は text document card として表示し、プレビュー表示には上限内の抜粋だけを使う
   - unknown document は generic document card として表示する
+- 標準配置 `<configRoot>/projects/<project>/<session>.jsonl` の Claude Code user message は、同じ config root の `history.jsonl` にある `sessionId` / project / timestamp / 展開本文が一意に一致する場合だけ、`[Pasted text #N ...]` と `[...Truncated text #N ...]` を text document card へ変換する
+- Claude Code の paste-cache は `contentHash` が SHA-256 先頭16桁形式、`paste-cache/<hash>.txt` が非 symlink の通常file、size上限内、実content hash一致の場合だけ読む。cacheが失効していてもprimary JSONLの前後境界から本文を一意に復元できる場合は利用し、曖昧なら展開済みprimary textを残す
+- Claude Code の `[Image #N]` はprompt-historyまたはboundedな`imagePasteIds`の根拠がある場合だけ対応image cardへ変換する。通常本文の同名literal、未確認のAudio placeholder、補助fileを持たないexport/import sessionは推測でカード化しない
+- Claude prompt-historyのsession ID / project / timestamp不一致でstrict card化候補から外れた場合は、recordまたはprimary filenameのsession IDに加えてprojectか5分window内timestampが一致し、inlineまたはhash検証済みの全paste内容からprimary本文と完全一致する未使用候補が1件だけある場合に限り、card化しない`preserveSessionText`状態にする。この状態は全consumerのcontrol判定とinline attachment抽出を止めてprimary本文を保持する。候補なし、9件以上、複数一致、cache欠損時は通常抽出を維持する
+- Claude pasted/truncated resolver は Chat、履歴preview、Search、Markdown transcript、Resume、Handoff、Session Analysisのraw graph照合で共有し、File AI Change Historyでも外側control判定に同じclean displayを使う。Searchだけは既存text-document上限までpayloadを索引し、その他の派生出力はattachment summaryまたはclean message textを使う
 - Claude Code の `<ide_opened_file>` / `<ide_selection>` は本文から除去し、file reference / selection reference card として表示する
 - Claude Code の `<task-notification>` は user message の通常本文ではなく task notification attachment として扱う。`summary` / `result` / `usage` はカード、検索、Markdown transcript、Resume / Handoff の用途別 policy に従って使い、`taskId` / `toolUseId` / `outputFile` / system preamble / 定型 `note` は通常表示や Webview model へ出さない
+- Claude Codeの`isMeta === true`かつ`origin.kind === "peer"`、または`origin.kind === "task-notification"`かつ`origin.subkind === "peer-send-message"`のmaterialized user recordは、利用者入力ではなくクロスセッション受信として扱う。検証済み`origin.body`またはwrapper本文だけを専用timeline cardへ表示し、session preview、Resume、Handoff、Session Analysisのhuman candidateから除外する。malformedな分類済みrecordを通常user messageへ戻さない
 - Claude Code の assistant message に raw text として残る `<invoke name="...">` は tool invocation attachment として扱う。Markdown の fenced code / inline code / blockquote 内に引用された `<invoke>` は抽出せず、壊れた block や境界が曖昧な block は raw text として残す
 - `<task-notification>` / `<invoke>` の共通 scanner は open / close 候補を tag 種別ごとに一度だけ列挙し、close 欠落や malformed open が大量にある履歴でも open ごとに EOF まで再走査しない
 - Claude Code の `queue-operation` / `attachment.type = "queued_command"` に含まれる task notification / invoke 風 text は、メッセージとして materialize された user / assistant item ではないためカード化しない
-- Codex の `# Files mentioned by the user:` block は、message 先頭または IDE context 後ろの本文途中から file reference card に変換し、raw block と `## My request for Codex:` ヘッダーは除去して前置 context と依頼本文を残す
-- Codex の `## My request for Codex:` がない variant は、安全に file block と本文の境界を判定できる場合だけ分離する
+- Codex の旧 `# Files mentioned by the user:` と現行 `# Files pasted by the user:` block は、message 先頭または IDE context 後ろの本文途中から file reference card に変換し、raw block と `## My request for Codex:` / `## My request:` ヘッダーは除去して前置 context と依頼本文を残す
+- 現行 pasted 形式のlabelはJSON stringとしてdecodeし、label内の`: `とWindows drive prefixを混同しないようpath側から区切る。旧形式と現行形式が連続する場合は出現順に統合し、複数のrequest headerがある場合は本家と同様に最後のheaderより後ろを依頼本文とする
+- 本家が入力欄の空時にpasted blockへ付与する`Pasted text contains the user's request.`は、pasted file行の後ろかつrequest headerの直前に完全一致する場合だけprotocol metadataとして除去する。request本文が空でもattachmentだけのuser messageとして残し、参照先ファイル本文は読み込まない
+- Chat modelの`text` / `requestText`と履歴previewは共通extractorのclean textを使う。pasted request固定文と空のrequest headerだけを持つmessageでは`text` / `requestText`を空にしてfile reference cardだけを表示し、履歴previewにはraw protocolではなくfile reference summaryを残す。attachment summaryだけをResumeのtask title候補にはしない
+- Codex のrequest headerがないvariantは、安全にfile blockと本文の境界を判定できる場合だけ分離する。不正なlabel、相対path、制御文字、上限超過、空blockがある場合は部分採用せずraw本文を保持する
 - Codex file reference は参照先ファイルを自動で読まず、履歴に保存された label / path / line 情報だけを表示する
 - Word / Excel / PowerPoint / PDF / zip / 任意拡張子は file reference として扱い、内容 preview はしない
 - document / file reference / selection card は、file kind badge、ファイル名、必要な action icon を中心にした compact card とする
@@ -448,6 +457,7 @@
 - preview を開いた場合は同じ card 内の下段に full-width panel として展開する
 - embedded document の Save As は Webview から `saveAttachment` message を送り、extension host 側の payload store から保存する
 - local file reference の Open は Webview から `openAttachment` message を送り、extension host 側で VS Code API 経由で開く。shell command は使わない
+- Windowsで通常のbase directory候補がすべて失敗したClaude Code相対linkは、標準Claude session callerに限り、先頭`..`を除いたdrive-root相対候補が現在の`os.tmpdir()/claude`配下にあり、`lstat`で非symlinkの通常file、`realpath`後も同じ境界内と確認できる場合だけ補完する。一般の別drive相対path、Temp外、directory、missing fileは探索・補完しない
 - 本文が空で添付だけの user message も、詳細非表示時に context / empty message と誤判定せず表示する
 - `attachments` は抽出時点から履歴 content の出現順を保つ。Webview 側でも kind 別に並べ替えず、連続する画像だけを image group としてまとめる
 - structured attachment の抽出は source offset で merge し、Claude Code IDE reference、task notification、invoke、image placeholder などを種類別に並べ替えない
@@ -698,7 +708,16 @@
 - ファイル履歴 Webviewはnonce付きで既存Shiki bundleと`media/codeLanguageSupport.js`を読み込む。diff本文はhunkの左右単位で実在する行だけをまとめて色分けし、各行でhighlighterを再実行しない。既存`isHugeDiff()`に該当するcard、片側が200,000文字を超える場合、Shiki出力の行数または各行本文が入力と一致しない場合、初期化・解析に失敗した場合はプレーンテキストへfallbackする
 - ファイル履歴はSession Webviewと同じShiki / Mermaid共通bundleを再利用してVSIX内の文法重複を避けるため、初回表示には同bundleの読み込み・初期化コストが加わる
 - Shikiで分割されたtoken `span`はWebview内page searchの検索単位にしない。`media/pageSearchCore.js`が元コードをDOM属性やhidden要素ではなくWeakMapで保持し、コードブロック全体またはdiff一行を論理検索単位として検索する。token境界をまたぐ語句も一件として数え、snippet、anchor、File AI Change Historyのcard内occurrenceは元コードとDOM順から生成する。元コードと表示DOMを写像できないShiki出力は描画時にプレーンテキストへfallbackし、登録後の写像失敗時もmarkなしの論理検索結果として本文と件数を失わない
+- Session WebviewのShikiコードブロックでは、空の`code > .line`要素にCSSで`1lh`の最小高さを与え、元コードの先頭・途中・末尾および連続する空行を各1行分表示する。疑似要素や空白文字をDOMへ追加せず、`textContent`、コピー元文字列、Webview内検索の論理テキストとoffsetを変更しない
 - info string は既存どおり文字列化、前後空白除去、小文字化、固定alias mapの順で処理する。コード本文を実行せず、本文、session ID、session pathをログへ追加しない。Mermaidの`mermaid` / `mmd` fence、GFM、KaTeX、code block header / copyの既存経路は変更しない
+
+### 3.6.8 assistant Markdown 表
+
+- Session Webview のassistant Markdown表は、見出しを太字と下罫線、データ行を見出しより広い上下余白と控えめな行間罫線で表示する。列間は24pxとし、表全体はメッセージ幅を使い、収まらない場合は表の範囲だけ横スクロールできる
+- 表の右上にはhoverまたは`focus-within`で表示するコピーbuttonを置く。buttonは非表示時もtab順から外さず、localized tooltipと`aria-label`を持ち、`prefers-reduced-motion`ではopacity transitionを無効にする。High Contrastでは見出し・行・buttonに`contrastBorder`を使う
+- コピー内容は表の表示文字列やHTMLではなく、元assistantメッセージ内の当該表だけのMarkdown原文とする。`markdown-it`の`table_open.map`と元文字列のline offsetから範囲を求め、末尾の改行を1つだけ除く。複数表と`::code-comment{...}`で分割されたMarkdown segmentはそれぞれ独立して対応付ける
+- 表原文はDOM属性、hidden DOM、永続stateへ複製せず、表要素をkeyとする`WeakMap`で保持する。tokenとDOM表の対応数またはline mapが不正な場合は表の表示を維持してcopy buttonだけを出さない
+- copyは既存のtext-only clipboard messageを使う。Extension Hostは空でない文字列だけを受け付け、clipboard書き込み失敗時は本文、path、例外詳細をログへ出さず、Webviewへ失敗通知を返してlocalized toastを表示する。HTML / TSV / CSVコピーは対象外とする
 
 ### 3.7 設定（`codexHistoryViewer.*`）
 
@@ -722,6 +741,8 @@
 - `webview.restoreAfterReload`
 - `history.dateBasis`
 - `history.titleSource`
+- `sessionRow.showTimestamp`
+- `sessionRow.showProject`
 - `autoRefresh.enabled`
 - `autoRefresh.debounceMs`
 - `autoRefresh.minIntervalMs`
@@ -743,6 +764,8 @@
 - `ui.timeGuide.enabled`
 - `ui.alwaysShowHeaderActions`
 - `debug.logging.enabled`
+
+`sessionRow.showTimestamp` / `sessionRow.showProject` はapplication scopeのbooleanで、既定値はいずれも`true`とする。不正値または未設定値は`true`へ戻す。History、Pinned、Searchのセッション親行だけに適用し、Search hit行、missing pin、Project / date / group nodeには適用しない。日時を非表示にしてもSearchのhit件数は残し、Projectを非表示にしてもAgent情報、Archived、Hidden、タグは残す。関連付け済みセッションのProject表示は従来どおり関連付け後のalias / display CWDを使う。`full` / `compact` tooltipのmetadataと、`titleOnly` tooltipへ渡す完全な行表示には非表示情報を保持する。設定変更時は現在の検索結果を再検索・消去せず、3ビューだけを再描画する。
 
 CLI 再開用の実行ファイルパス設定は追加しない。CLI executableの存在やPATH可用性は事前判定せず、新しい統合ターミナルへ再開コマンドを入力する。CLIがない場合のエラーは、利用者がEnterを押した後のterminal / shellへ委ねる。
 
@@ -778,6 +801,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `writeJson()` は同一ディレクトリの一時ファイルへ書いてから rename し、rename 失敗時は `beforeCommit` を再確認してから直接書き込みへフォールバックする。フォールバックの成功 / 失敗にかかわらず一時ファイルを best-effort で削除する
 - `src/services/historyService.ts`
   - `cache.v9.json` を読み書きする。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
+  - `SUMMARY_CACHE_ALGO_VERSION = 18`とし、現行Codex pasted-file形式、Claude pasted / truncated inputの本文／添付分離、本文保持専用照合の修正前、Claude cross-session受信の除外前、Codex standalone response itemのactivity timestamp対応前に生成した要約は、ファイル自体が未変更でも再生成する。outer cache versionとファイル名は変更しない
   - 有効な cache context から `HistoryIndex` を復元し、初回表示を先に完了できるようにする
   - cache 読み込み時の parse error は cache を削除して `null` 扱いにし、read error は削除せず `null` 扱いにする
   - 変更のないファイルはキャッシュ済み `summary` を再利用する
@@ -837,7 +861,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 - `src/services/searchIndexService.ts`
   - `search-index.v2.json` を管理する。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
-  - `SEARCH_INDEX_FILE_VERSION = 12` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering 追加前の既存インデックスは再構築対象にする
+  - `SEARCH_INDEX_FILE_VERSION = 18` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item対応前に生成した既存インデックスは再構築対象にする
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
   - 検索インデックス読み込み時の parse error はインデックスを削除して `null` 扱いにし、次回検索時に再構築する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
@@ -845,7 +869,9 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - JSONL をストリーミングで読み、検索対象メッセージ列を構築する
   - `search.indexToolContent` に応じてツール名 / 引数 / 出力を検索インデックスへ入れる範囲を変える
   - Codex の `custom_tool_call` は既存 tool 検索と同じ `role: tool` / `source: toolArguments` 粒度で、軽量メタだけを入れる
-  - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ `role: tool` / `source: toolOutput` として短い実行メタを入れる
+  - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ `role: tool` / `source: toolOutput` として短い実行メタと画像添付metadataを入れる。配列内`input_text`の全文は入れない
+  - Codex の通常 `function_call_output` は string と `input_text` / `input_image` 配列を共通抽出し、`toolCallsAndOutputs` のときに本文と画像添付metadataを入れる
+  - Codex の `local_shell_call` / `web_search_call` / `image_generation_call` は許可した action/prompt metadataをtool callとして扱い、shellの`env` / `user`と生成画像のBase64は保存しない
   - `conversationOnly` のときは `custom_tool_call` の callId 紐付けだけを維持し、検索用メタ生成は行わない
   - `extractCodexMessageContent()` / `extractClaudeMessageContent()` を使い、clean text と attachment metadata を検索対象へ入れる
   - `buildAttachmentSearchText()` は attachment label、path、MIME type、file kind、Claude Code text document の上限内 text を返す
@@ -1126,8 +1152,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - Codex は `patch_apply_end` の `unified_diff` を復元可能なファイル変更として取り込む
   - Claude Code は `Edit` / `MultiEdit` / `Write` から復元可能な synthetic diff を作る
   - tool call / tool output 本文は Handoff ファイルへ含めない
-  - Codex の `Files mentioned by the user` block と Claude Code の IDE tag は raw のまま再出力せず、clean text と attachment summary を使う
-  - Codex 向け Handoff / Resume でも `# Files mentioned by the user:` block は再生成しない
+  - Codex の `Files mentioned by the user` / `Files pasted by the user` block と Claude Code の IDE tag は raw のまま再出力せず、clean text と attachment summary を使う
+  - Codex 向け Handoff / Resume でも `# Files mentioned by the user:` / `# Files pasted by the user:` block は再生成しない
   - バイナリ添付や参照先ファイルは再添付 / 自動読み込みせず、過去セッションに存在した添付 / 参照の summary として扱う
   - プロジェクト関連付けがある場合は、関連付け後の表示 CWD とパス変換情報を Handoff 内容へ反映する
   - secret / token / password 系に見える値は Handoff 用テキストへ入れる前に伏せる
@@ -1194,6 +1220,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `ChatPanelManager` は Mermaid theme / 保存形式の変更messageを検証して`MermaidPreferenceStore`へ渡し、保存成功後に同じExtension Host内の全Session Webviewへ現在値を配信する。保存失敗時は永続値を要求元へ戻して通知する
   - `ChatPanelManager` は Webview からの `openAttachment` message を受け取り、file reference を VS Code API 経由で開く
   - `ChatPanelManager` は Webview からの `manageCustomTitle` message を受け取り、共通の `codexHistoryViewer.manageCustomTitle` コマンドを実行する
+  - `ChatPanelManager` は汎用copy messageの文字列と空値を検証し、clipboard書き込み成功時は成功、失敗時は失敗messageをWebviewへ返す。診断ログにはcopy本文を含めない
   - `ChatPanelManager` は表示詳細を `summary` / `full` で管理し、`summary` では tool 引数 / tool 出力 / patch diff 行を Webview model から省略する
   - `patchEntry` reveal target で開く場合は、`revealMessageIndex` があっても `summary` を維持する
   - `ChatPanelManager` は対応画像の data URI をパネル単位で保持し、Webview からの `requestImageData` に応じて必要な画像データだけ返す
@@ -1210,10 +1237,14 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `chatModelBuilder.ts` は turn_id なしの `task_started` で古い active turn への帰属を解除し、非 active の environment-only turn は空の turn marker として表示しない。一方、live 観測中の active turn は environment だけを持つ段階でも running 表示用に保持する
   - `chatModelBuilder.ts` は Claude Code の `message.model` / `message.usage` から usage 行を生成し、連続する同一 usage の重複表示を抑制する
   - `chatModelBuilder.ts` は `session_meta` などから CWD / Git ブランチ / Git コミット / dirty 状態を environment 行に変換し、同一 snapshot の重複表示を抑制する
-  - `chatModelBuilder.ts` は Codex の `custom_tool_call` / `custom_tool_call_output` も tool カードとして扱う
+  - `chatModelBuilder.ts` は Codex の `custom_tool_call` / `custom_tool_call_output`、`local_shell_call`、`web_search_call`、`image_generation_call` を tool カードとして扱う
+  - `codexResponseItems.ts` は string / 配列 tool output と standalone response itemをboundedに検証し、`input_image`と`image_generation_call.result`を既存画像添付へ正規化する。shellの`env` / `user`、暗号化content、unknown fieldは投影しない
   - `chatModelBuilder.ts` は Codex の `exec_command_end`、tool output の JSON / plain text、Claude Code の tool result から tool 実行メタ情報を抽出する
-  - `chatModelBuilder.ts` は `extractCodexMessageContent()` / `extractClaudeMessageContent()` の結果から clean text と `attachments` を message item へ設定する
-  - `chatTypes.ts` は `ChatImageAttachment` / `ChatDocumentAttachment` / `ChatFileReferenceAttachment` / `ChatSelectionReferenceAttachment` を `ChatAttachment` として定義する
+  - `chatModelBuilder.ts` は `extractCodexMessageContent()` / `extractClaudeMessageContent()` の結果から clean text と `attachments` を message item へ設定し、Codex tool output由来の画像はtool itemへ設定する
+  - `chatTypes.ts` は画像、document、file / selection reference、task notification、invokeを`ChatAttachment`として定義し、message itemとtool itemが同じattachment modelを利用する
+  - tool itemの画像はmessage添付と同じ遅延転送、thumbnail、preview、前後移動、Save Asを使い、画像付きtool cardは詳細表示設定にかかわらず表示する
+  - 同一 turn 内でも別々の tool output として記録された画像は、中間生成画像と変換・確認後画像を推測で統合または除外せず、履歴順に個別表示する。本家 UI の正規化済み `ImageView` 限定表示は模倣せず、JSONL に保存された履歴の確認可能性を優先する
+  - `transcriptRenderer.ts` は同じCodex tool output / standalone response item投影を使ってtextと画像metadataだけをMarkdown化し、生成画像やtool画像のBase64/data URIは出力しない
   - `chatAttachments.ts` は画像、Claude Code document、Claude Code IDE tag、Codex `Files mentioned by the user` block を統合して抽出する
   - `chatAttachments.ts` は Claude Code の materialized message 判定を `detectClaudeMaterializedMessageRole()` に集約し、`queue-operation` と `attachment.type = "queued_command"` を chat / search / transcript / resume / handoff の本文化対象から除外する
   - `chatAttachments.ts` は Claude Code task notification / invoke を共通の bounded block scanner と Markdown safe-context map で抽出する。fenced code、inline code、blockquote 内の引用例は抽出せず、外側閉じタグや parameter / result 境界が曖昧な block は raw text として残す
@@ -1222,6 +1253,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `chatAttachments.ts` は `sanitizeAttachmentForChannel()` で Webview / Markdown / Search / Resume / Handoff 用 attachment projection を一元化し、task notification の `taskId` / `toolUseId` / `outputFile` / `systemPreamble` / `note` / `rawStatus` や invoke の `harnessPreamble` を通常 channel に載せない
   - `chatAttachments.ts` は content item を出現順に走査し、image / document attachment の順序を保つ。IDE tag 由来の file / selection reference は clean text 抽出後の attachment として扱う
   - `chatAttachments.ts` は `localimage` / `imageassetpointer` などの image-like type を patch detail 側の attachment-like 判定にも含め、messageIndex のドリフトを防ぐ
+  - `claudeCrossSessionMessage.ts` はcross-session inboundのorigin分類とbounded本文検証を一元化する。Chatは専用`crossSessionMessage` item、Searchはassistant roleの検索entry、Markdownは専用sectionへ投影し、Resume / Handoff / previewでは除外する。wrapper文字列だけでは分類しない
   - Codex `Files mentioned by the user` block は message 先頭または IDE context 後ろの本文途中から file reference に変換し、raw block は本文に残さない
   - Claude Code `<ide_opened_file>` / `<ide_selection>` は file reference / selection reference に変換し、raw tag は本文に残さない
   - Claude Code text document は表示用抜粋と検索用テキストをそれぞれの上限内で保持し、Save As 用 payload は panel 側 store へ置く
@@ -1231,9 +1263,10 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `chatImageAttachments.ts` は `enabled: false` の抽出でも payload を読まずに MIME type / label などの metadata を保持し、検索や summary に利用できるようにする
   - `chatImageAttachments.ts` は Claude Code `type: "document"` を image extraction から除外し、MIME type 欠落 base64 document の二重抽出を防ぐ
   - 未対応 / 欠損 / remote-only / サイズ超過 / 設定無効の画像は表示不能理由としてモデル化する
-  - `media/chatView.js` は `attachments` の順序を維持し、連続する画像だけを image group として描画する
+  - `media/chatView.js` は `attachments` の順序を維持し、連続する画像だけを image group として描画する。Codexの旧mentioned形式と現行pasted形式は同じfile reference cardで表示し、source種別を画面へ露出しない
   - `media/chatView.js` は Code / Image reference の file kind badge を dedicated l10n label で表示し、generic file label へフォールバックさせない
   - `media/chatView.js` は assistant message 内の `::code-comment{...}` directive を Markdown 本文から分離し、レビューコメントカードとして表示する
+  - `media/chatView.js` はassistant Markdownを`parse()`とrendererで1回だけtokenize / 描画し、`table_open.map`から表ごとの元Markdownを切り出す。表は横スクロールcontainerへ包み、元Markdownは`WeakMap`に保持して既存copy messageへ渡す
   - `media/chatView.js` は Mermaid fenced blockを遅延描画し、Hostから配信された全体Light / Dark選択と保存形式、安全化済みSVGのinline表示、非モーダル拡大ペイン、テーマ固定背景付きSVG / PNGと`.mmd`の保存データ生成を担当する。diagram keyはsession、timeline card、message、ordinal、sourceのハッシュ化済み識別子から作り、カード幅変更後はinline overflowを再計測する。リリース前仕様のWebview stateに残るtheme / 保存形式は参照しない
   - `scripts/chatViewShiki.entry.js` は選択したShiki文法とMermaidを同じIIFE bundleへまとめ、コード言語aliasの正規化とハイライト、Mermaidの安全設定、直列描画、flowchart shapeから導出した固定role metadataを制約付きbridgeとして公開する
   - `mermaidExport.ts` は Extension Host側の保存形式、サイズ、SVG安全条件、PNG signature、固定ファイル名を検証する
@@ -1312,6 +1345,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - プロジェクト別名がある場合は、Project node、session description、tooltip、Search の session 行表示に alias を反映する
   - Project node の contextValue は CWD 有無で `codexHistoryViewer.project.withCwd` / `codexHistoryViewer.project.noCwd` に分け、CWD なしには alias menu を出さない
   - archived Codex session は description / tooltip / icon 色で通常履歴と区別する
+  - `sessionRow.showTimestamp` / `sessionRow.showProject` はセッション親行のlabel / descriptionだけを切り替える。descriptionの共通要素は1回だけ組み立て、そこから行用とtooltip用を生成する。tooltipには日時と関連付け後Projectを含む完全なlabel / descriptionを維持し、Search hit件数とProject以外のdescription要素を残す
   - History / Pinned は独立した5状態の表示対象を持ち、Search は History の表示対象に従う。`activeVisible` では archived Codex session と非表示sessionを除外し、`all` では保存場所と非表示状態を問わず対象にする
   - `preview.tooltipMode = full` のセッションツールチップ末尾には、表示文字数 0 の tooltip 専用 command link を置く。許可コマンドは内部 command だけに限定し、localized title は持たせるが新しい link label は表示しない。command URI には session identity から作った固定長の SHA-256 参照だけを入れ、現在の History Index から一意に再解決する。外部由来文字列は Markdown punctuation をエスケープし、対象行からツールチップ内へポインターが移っても VS Code が閉じない操作可能な hover として扱わせる。既存のプレビュー本文は省略せず、`compact` / `titleOnly` と Search の個別 hit tooltip は変更しない
 
@@ -1335,15 +1369,41 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 - `src/settings.ts`
   - 拡張設定の読み取りヘルパーをまとめる
-  - `codex.archivedSessions.enabled`、`codex.archivedSessionsRoot`、`preview.*`、`search.*`、`history.titleSource`、`autoRefresh.*`、`chat.openPosition`、`chat.toolDisplayMode`、`images.*`、`webview.restoreAfterReload` などの設定もここで管理する
+  - `codex.archivedSessions.enabled`、`codex.archivedSessionsRoot`、`preview.*`、`search.*`、`history.titleSource`、`sessionRow.*`、`autoRefresh.*`、`chat.openPosition`、`chat.toolDisplayMode`、`images.*`、`webview.restoreAfterReload` などの設定もここで管理する
   - 数値設定は下限 / 上限を丸め、想定外の enum 値は既定値へ戻す
-  - `webview.restoreAfterReload` は実験的な opt-in 設定として既定 `false` とし、変更は次回の Reload Window / VS Code 再起動後に反映する
+  - `webview.restoreAfterReload` は通常履歴、ファイル履歴、履歴インサイト、専用設定画面を条件付き復元する実験的なopt-in設定として既定`false`とし、変更は次回のReload Window / VS Code再起動後に反映する
   - `preview.maxMessages` は `1..50`、`search.maxResults` は `1..10000` に丸め、`package.json` の `minimum` / `maximum` と一致させる
   - `codex.archivedSessionsRoot` が空の場合は `sessionsRoot` の兄弟 `archived_sessions` を使う
   - `sources.enabled` は最上位の親設定であり、`codex` が含まれない場合は `codex.archivedSessions.enabled` が true でも archived sessions を無効扱いにする
 - `src/utils/dateTimeSettings.ts`
   - 日付時刻表示は VS Code Extension Host のタイムゾーンを使う
   - UI 言語はタイムゾーン決定に使わない
+
+#### 4.13.1 専用設定画面
+
+- `codexHistoryViewer.openSettings` は `SettingsPanelManager` が管理する singleton の editor Webview を開く。既に開いている場合は新規作成せず、既存パネルを表示する。
+- 設定は「一般」「履歴ソース」「履歴一覧」「検索」「セッション表示」「再開・連携」の6カテゴリに分類し、管理用の「メンテナンス」と情報用の「拡張機能情報」を加えた8ページ構成とする。Agent Runs、Branch Navigation、Webview 復元は利用場所に応じたカテゴリへ配置し、個別の「実験的」表示を維持する。
+- manifest の既存40設定はキー、型、既定値、scopeを変更せず、`sessionRow.showTimestamp` / `sessionRow.showProject` の2設定を追加する。専用設定画面には新規2設定を含む40設定を表示し、`ui.alwaysShowHeaderActions` と `debug.logging.enabled` はbootstrap modelおよび更新許可リストへ含めない。
+- `codex` / `claude` は保存値として維持し、表示だけを `Codex` / `Claude Code` とする。移行処理は不要で、既存の user / workspace / workspace-folder 設定をそのまま読む。
+- application scope はユーザー、window scope はユーザー／ワークスペース、resource scope はユーザー／ワークスペース／ワークスペースフォルダーで編集できる。未設定値は下位scopeから継承し、現在のscopeより上位に上書きがあれば画面に示す。
+- Webview messageは型、設定キー、scope、値のallowlist・範囲をhostで再検証する。各設定snapshotにopaqueな値トークンを付け、保存直前に対象scopeのraw値を再照合して、外部変更と競合した更新を拒否する。設定更新、一括reset、importの実行中はconfiguration changeによる途中snapshotを保留し、operation完了時の確定snapshotだけを公開する。
+- フォルダー選択はhostのfolder pickerで行い、`file` URIだけを設定へ保存する。手入力されたpathは制御文字、長さ、URI schemeを検証し、Windows drive prefixだけをscheme形式の例外として許可する。Webviewへworkspace folderの完全パスをtarget IDとして渡さず、opaque IDを使う。
+- HTMLはnonce付きCSPとローカルCSS/JavaScriptだけを許可する。Webview側は表示文字列を`textContent`で構築し、設定値をHTMLとして解釈しない。
+- 左ナビゲーションはicon付きで展開／折りたたみでき、状態をWebview stateへ保持する。狭幅ではheaderから開くdrawerへ切り替え、開いたまま760pxを超えた場合はmodal状態を解除して非表示buttonへfocusを残さない。headerは拡張機能icon、title、version／license／copyright metadataで構成する。「拡張機能情報」のcontent見出しは置かず、3tabのバージョン情報には同じcurrentColor iconを表示する。header iconはwide 42px／狭幅34px、折りたたみnavigation列は52pxとし、icon色は`foreground`へ追従する。High Contrastは`vscode-high-contrast`／`vscode-high-contrast-light` body classと`forced-colors`の双方でborder、選択outline、switchを補強する。
+- 複数選択はcheckboxの横並びやcomma区切り文字列ではなく、履歴インサイトの絞り込みと同系統のpill chipとpopoverで表示する。個別resetとfolder pickerはtooltip・`aria-label`付きicon buttonとし、操作領域の幅を揃える。
+- 設定label、description、option labelは、セッションビュー、履歴ビュー、コマンドパレット、右クリックメニューで使われる機能名と対応させ、manifest設定の説明とも実際の適用範囲、無効時に残る操作、実験機能の制約を一致させる。例として「セッションを専用タブで開く」「ファイルの AI 更新履歴」「通常表示／軽量表示」「Codex で再開」を説明内でも同じ表記にし、英語UIも`Normal View`／`Lightweight View`へ統一する。非同期復元の遅延／重複、Agent RunsのCodex限定、Branch NavigationのWorktree非対応、CLI再開時のEnter操作、削除設定がHistory／Pinned／Search／コマンドパレットへ適用され、無効時は完全削除になることを明示する。保存keyとenumは変更しない。
+- セッション表示では初期表示位置、sticky user prompt、performance、tool表示、長文folding、turn timelineを「セッションビュー」cardへ統合し、card内のlabelは「パフォーマンスモード」「ツール表示」と簡潔にする。1種類の履歴ソースだけに適用される設定はcatalogの`sourceBadge`を正本として`Codex`／`Claude Code` badgeを表示し、Agent Runsでは`実験的`と併記する。Branch Navigationは両履歴ソース対応のため限定badgeを付けない。
+- CPU、memory、disk accessなどの使用量へ影響する14設定はcatalogの`resourceImpact`を正本とし、label横へtheme追従のgauge iconを表示する。icon wrapperはlocalized tooltipと`role=img`／`aria-label`を持ち、外部assetやicon fontには依存しない。自動更新3設定、最大検索結果数、検索index内容も対象に含める。
+- OSのファイル管理アプリと区別するため、`fileChangeHistory.explorerContextMenu.enabled` は「VS Code のファイル一覧」と表示する。wide表示は最大1440px、左右24pxの外側padding、約210pxの左navigationとし、header下の左navigationと右contentを独立してscrollさせる。navigation group見出しは11pxとする。同一pageの再描画ではfocusをスクロールさせず左右それぞれのscroll座標を維持し、navigationによるpage切替時だけ右contentを新しいpageの先頭へ移動する。狭幅ではbody scrollとdrawer表示へ戻す。
+- header metadataは全pageで`v{version} · {license} · Copyright (c) {years} HizTam`を表示する。copyrightは2026年を開始年とし、2027年以降はextension hostの現在年までの範囲へ自動更新する。「拡張機能情報」はcontent見出しを表示せず、「バージョン情報」「ライセンス」「サードパーティライセンス」の3tabで構成する。3つの`tabpanel`は対応するtabの`aria-controls`先としてDOMへ常設し、非選択panelを`hidden`にする。wide表示ではtab panelだけ、狭幅ではbodyだけをscrollさせ、ライセンス文書の二重scrollを避ける。UIのtab labelは日本語／英語へ統一し、法的文書本文は原文を維持する。
+- バージョン情報tabにはheart icon付きのsecondary button「GitHub Sponsorsで支援」を表示する。Webviewは固定actionだけをhostへ送り、hostが固定URL `https://github.com/sponsors/HizTam`を`vscode.env.openExternal`で開く。WebviewからURLを受け取らず、外部widgetや外部scriptは読み込まない。
+- メンテナンスはユーザー設定初期化、scope別の設定backup、cache／検索index再作成、保存data整理、標準設定への導線を集約する。data整理の名称は既存UIと同じ「このプロジェクトの検索履歴を消去」「見つからないピン留めを解除」「引き継ぎファイルを削除」「ゴミ箱を空にする」を使う。backupはuser、現在のworkspace、明示選択したworkspace folderを別々のversioned UTF-8 JSONとしてexport / importし、extension ID、scope、key、型、enum、範囲、重複、sizeを検証する。別scope用fileは拒否し、import途中失敗時は変更済み値をrollbackする。export時の既定ファイル名にはscope種別、取得可能なworkspace／folder名、安全なUTC日時を含め、user homeの絶対pathをsave dialogの既定URIにする。workspace／folder用backupの説明では、target metadataに絶対pathまたはURIが含まれ得ることをexport前に明示する。
+- LICENSEは開発ツリーの`LICENSE`とVSIX内で改名される`LICENSE.txt`を固定候補として扱い、third-party noticeとともにpackage内の固定URIから`workspace.fs`で非同期かつ上限付きで読む。remote／virtual extension hostでも利用できるようにし、Webviewでは`textContent`だけで表示する。読込中または失敗時も設定編集は継続できる。
+- 実行時文言は `l10n/bundle.l10n.json` / `l10n/bundle.l10n.ja.json` で管理し、英語・日本語のkey parityと静的参照を検査する。廃止UIの未使用keyは残さず、メンテナンスから従来の `@ext:` 絞り込み付きVS Code設定画面を開けなかった場合は専用のlocalized errorを返す。
+- パネルは `retainContextWhenHidden` を使い、manifestへ`onWebviewPanel:codexHistoryViewer.settings`を常時宣言したうえで、extension起動時に`webview.restoreAfterReload`が有効な場合だけ`codexHistoryViewer.settings`のserializerを登録する。復元panelには通常openと同じoptions、icon、HTML、handlerを設定し、先に手動openされたpanelがある場合は遅延復元panelを閉じてsingletonを維持する。active page、navigation展開状態、About tabは既存Webview stateから復元し、設定が無効な場合はReload Window後に自動復元しない。
+- 実効値はコントロール自体で示し、「継承値」badgeは表示しない。ユーザーscopeのbooleanは通常オン／オフだけで操作し、保存値が不正な場合を除いてresetを表示しない。選択・数値・パス等のユーザーscopeでは「既定値に戻す」、workspace／workspace-folder scopeでは明示的な上書きを消す「継承に戻す」を表示する。
+- selectの選択肢説明やmulti-selectの折り返しでcontrol列が高くなっても、reset iconは先頭の操作面の真右へ固定する。変更済み設定は行ごとの`modified`をhostで確定し、左端へ絶対配置した幅2pxの疑似要素で表示するため、表示状態によって本文やcontrolを横移動させない。色はVS Code標準設定画面の`settings.modifiedItemIndicator`へ追従し、High Contrast／forced colorsではcontrast色へfallbackする。lineはraw明示値の存在ではなく現在の正規化値とreset後のscope別基準値との差を示し、userはextension既定値、workspaceはuser／既定値、workspace-folderはworkspace／user／既定値を基準にする。全controlで手動復帰時にlineを消し、基準値と同じ有効な明示値ではreset iconも隠すが、raw値は自動削除せず将来の継承固定を維持する。将来基準値との差が生じるか現在値／基準値が不正になればlineとreset iconを再表示する。現在scopeに明示値がない場合は継承値が既定値と異なっても着色しない。
+- 専用設定画面のCodex／Claude Code再開操作は、履歴ソースと同じ2項目のmulti-selectとして表示する。Hostは保存済み`extension`／`cli`／`both`を表示用配列へ展開し、Webviewから受け取る1～2件の既知かつ重複しない選択を既存enumへ戻してから検証・保存する。manifest、VS Code標準設定画面、backup、再開処理が扱う永続値は変更しない。
 
 ### 4.14 ローカライズ
 
@@ -1953,7 +2013,7 @@ npm run package
 - History Insights の解析をキャンセルしても既存表示を stale として安全に保持し、panel を閉じて開き直した場合に旧 panel の進捗、エラー、model、VS Code通知が新しい panel へ混入しない。2秒未満のloadでは通知が出ず、2秒を超える初回load／model保持refreshでは通知からキャンセルできる。完了済みcancel後の新しいopen／条件適用はloadを開始し、snapshot保存中の最後の意図がcancelなら自動loadを抑止、cancel後にretryした場合は再開する
 - 新規 storage では `session-analysis-index.v1.json` は History Insights / Claude Code Branch Navigation / `Rebuild Cache` の初回解析要求まで作成されず、通常の History / Search / Pinned / セッションタイムライン表示を待たせない
 - Session Analysis Index は cache context が一致する限り未変更セッションを再利用し、mtime / size または parser version が変わった entry だけを再解析する。root / source context が変わった場合は新しい context で対象 entry を構築する
-- Session Analysis のsource parser versionはCodex / Claude Codeともに`8`で、ツール名別利用回数を持たないversion 7 entryは再解析される
+- Session Analysis のsource parser versionはCodex `9` / Claude Code `10`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析される
 - 破損した `session-analysis-index.v1.json` は次の解析要求で安全に再生成され、read error では既存ファイルを削除しない
 - `Rebuild Cache` は確認後に履歴キャッシュ、検索インデックス、Session Analysis Index を同じ履歴集合から順番に再作成し、進捗とキャンセルが機能する。独立した Session Analysis 再構築コマンドは公開しない
 - `Rebuild Cache` をSession Analysis Index削除前にキャンセルした場合は既存indexが残り、削除後のキャンセルでは不完全なindexが保存されない。削除 / 保存失敗時は成功通知が出ない
@@ -2161,6 +2221,9 @@ npm run package
 - Webview 内検索の候補 dropdown は、非空入力で一致する候補が無くなった場合に閉じ、「検索履歴はありません」を検索結果へ重ねない
 - Search が空の状態で History 側の絞り込みを変更しても Search 結果が復活せず、既存の Search 結果がある場合だけ実効値変更時に再検索される
 - `preview.tooltipMode` を `full` / `compact` / `titleOnly` で切り替えると、ツリー項目ツールチップの表示量が変わる
+- `sessionRow.showTimestamp` / `sessionRow.showProject` のON / OFF全4組み合わせで、History / Pinned / Searchのセッション親行だけが期待どおり変わる。両方OFFでもタイトルとSearch hit件数は残り、Search hit行、missing pin、Project / date / group nodeは変わらない
+- Project表示OFFでもAgent情報、Archived、Hidden、タグは既存順で残る。Project表示ONでは`groupOnly`、`relocate`、`relocate`から`groupOnly`へ連鎖する関連付けを含め、従来の関連付け後alias / display CWDが表示される
+- 日時またはProject表示をOFFにしても、`full` / `compact` tooltipのmetadataと`titleOnly` tooltipには完全な日時とProject情報が残る。設定変更は現在のSearch結果を消去・再検索せず、履歴cache / Search indexを再作成しない
 - `full` / `compact` のツールチップでは、カスタムタイトルがなくても履歴ペイン表示と同じタイトルが表示される
 - History / Pinned / Search のセッション親行では、`full` のときだけツールチップ末尾に空ラベルの command link が含まれ、対象行からツールチップ内へポインターを移しても閉じない。新しい link label は表示せず、既存のプレビュー本文も省略しない。内部 command は対象セッションの Codex History Viewer セッションビューを開き、Codex / Claude Code の再開処理は実行しない
 - `compact` / `titleOnly` と Search の個別 hit tooltip にはセッションビューリンクが追加されず、外部由来の本文、タイトル、alias、タグ、note、検索 snippet に Markdown link 構文が含まれても別の command link を生成しない
@@ -2192,6 +2255,8 @@ npm run package
 - `conversationOnly` では Codex の `custom_tool_call` の tool 名、command、対象ファイルパスが検索にヒットしない
 - Codex の `custom_tool_call` に patch / diff 本文が含まれる場合、対象ファイルパスは検索にヒットし、diff 本文の具体行は検索にヒットしない
 - `toolCallsAndOutputs` でも Codex の `custom_tool_call_output` の stdout / stderr 全文や diff 本文は検索インデックスへ入らない
+- Codex の配列tool output内`input_image`と`image_generation_call.result`が通常の添付画像と同じUIで表示され、初期Webview model、Search、MarkdownへBase64/data URIが露出しない
+- Codex の`local_shell_call` / `web_search_call` / `image_generation_call`がChat、Search、Markdownでtoolとして認識され、shellの`env` / `user`はどの派生表示にも出ない
 - `search.indexToolContent` 変更時に検索インデックス再作成の通知が出て、`Rebuild Search Index` で検索インデックスだけ再作成できる
 - `Rebuild Cache` 実行前に確認が出て、履歴キャッシュ、検索インデックス、Session Analysis Index が同じ履歴集合から順番に再作成される。開始時snapshotが完了時にもcurrentであり、再作成全体が成功した場合だけ、開いている History Insights と Branch Navigation へ再作成結果が反映される
 - 破損した `cache.v9.json` がある状態で起動 / refresh すると、parse error として削除され、履歴キャッシュが再生成される
@@ -2282,9 +2347,19 @@ npm run package
 - Claude Code の text document が text document card として表示され、preview action icon から card 内 full-width preview を開閉できる
 - Claude Code の `<ide_opened_file>` / `<ide_selection>` が raw tag ではなく file reference / selection reference card として表示される
 - Claude Code 公式形式の `ide_opened_file` で拡張子なしファイルが file reference card として表示され、Open できる
-- Codex の `# Files mentioned by the user:` block が本文に残らず、PDF / txt / xlsx / docx などが file reference card として表示される
-- Codex の `# Files mentioned by the user:` block が IDE context 後ろにある場合も、HTML / log / JSON などが file reference card として表示される
-- Codex の `## My request for Codex:` ヘッダー自体は本文に残らず、依頼本文が表示される
+- Codex の旧 `# Files mentioned by the user:` と現行 `# Files pasted by the user:` blockが本文に残らず、PDF / txt / xlsx / docxなどがfile reference cardとして表示される。pasted labelはJSON decodeされ、label内に`: `があってもpathを正しく分離する
+- Codex の旧mentioned／現行pasted blockがIDE context後ろにある場合や両形式が同じmessageに連続する場合も、HTML / log / JSONなどが出現順のfile reference cardとして表示される
+- Codex の `## My request for Codex:` / `## My request:` ヘッダー自体は本文に残らず、最後のheader以降の依頼本文が表示される
+- Codexのpasted request固定文を含む実ログは、Chat modelの`text` / `requestText`を空にし、固定文と空のrequest headerを表示せず、file reference cardだけのuser messageになる。履歴preview、Search、Markdown、Resume、Handoffにもraw protocolを残さず、履歴previewはfile reference summaryを表示する。固定文の綴りや位置が異なる場合は元本文を保持する
+- 不正なpasted label、相対path、制御文字、上限超過、空blockを含む場合は、一部のattachmentだけを採用せずraw本文を保持する
+- 2.12.0以前または内部version 16までのRCで作成した履歴要約／検索cacheが存在し、対象JSONLのmtimeとsizeが変わっていない場合も、内部version不一致により現行Codex／Claude pasted形式、本文保持専用照合、Claude cross-session受信のrole補正で一度再解析される
+- Claude pasted / truncated textが検証済みprompt-historyと一致する場合はdocument cardになり、Chat、preview、Search、Markdown、Resume、Handoffで展開済み本文やplaceholderが重複しない。補助情報不一致、cache不正、曖昧境界ではprimary本文が残る
+- 同じClaude pasted / truncated resolverをSession Analysisのraw graph照合にも使い、Chat modelとのfingerprint不一致や`unmatchedClaudeRecords`を発生させない。Claude parser version 9以前の既存entryはversion 10で再解析する
+- pasted card内の`[Request interrupted by user]`や`<local-command-stdout>`を外側control recordと誤認せず、Chat / Search / preview / Resume / Handoff / Session Analysis / File AI Change Historyで同じrecordを通常user messageとして扱う
+- Claude Code 2.1.248の直接peer受信とcoordinator `peer-send-message`受信は、通常user bubbleやtask notification cardではなく青系の専用cross-session cardになる。Searchではassistant由来として同じmessage indexへ移動でき、session preview、Resume、Handoff、Session Analysisのhuman countには混入しない
+- `origin.body`とwrapper本文が不一致、閉じtag欠落、上限超過などのmalformed peer recordは本文を表示せず、通常user messageへも戻さない。`isMeta` / origin根拠のない通常user本文内の`<cross-session-message>`は従来どおり本文として残る
+- Claude `[Image #N]`は`imagePasteIds`とstructured imageが一致する場合だけ1枚のimage cardになり、根拠のない同名literalは本文に残る
+- 別driveを指すClaude scratchpad相対linkは現在の`Temp/claude`配下の実在通常fileだけを開き、Temp外、directory、symlink、missing fileは補完しない
 - document / file reference card では path / MIME type / byte size が本文上に常時表示されず、tooltip で確認できる
 - Codex `Files mentioned` の `.js` / `.ts` など code 系ファイル参照と `.png` / `.jpg` など image 系ファイル参照で、badge text が generic `File` ではなく `Code` / `Image` として表示される
 - 本文が空で添付だけの user message が、詳細 OFF でも表示される
@@ -2320,8 +2395,8 @@ npm run package
 - file reference の Open が VS Code API 経由で実行され、shell command を使わない
 - 検索で添付ファイル名 / path / MIME type / file kind に hit する
 - PDF / Office / binary / base64 document の本文や、Codex file reference の参照先ファイル本文が検索に入らない
-- Markdown transcript に attachment summary が出て、raw IDE tag や `Files mentioned` block が出ない
-- Resume / Handoff の context に raw tag / `Files mentioned` block が重複せず、バイナリ添付が再添付されない
+- Markdown transcript に attachment summary が出て、raw IDE tagや`Files mentioned`／`Files pasted` blockが出ない
+- Resume / Handoff のcontextにraw tagや`Files mentioned`／`Files pasted` blockが重複せず、バイナリ添付が再添付されない
 - プレビューモーダルを開いたまま別セッションを開くと、モーダルが閉じる
 - `patch_apply_end` を含むセッションで差分カードが表示される（`Show details` OFF でも出る）
 - patch group collapsed 表示では先頭 3 file rows と `あと N 個のファイルを表示` が表示され、show more 後も件数と file row が正しい
@@ -2343,6 +2418,7 @@ npm run package
 - Webview 内検索で query を空にすると、待ち時間なしで highlight と検索結果 status が消える
 - Webview 内検索で Enter / 前へ / 次へを押すと、待ち時間なしで現在 query の結果へ移動できる
 - Sessionとファイル履歴のShiki色分け領域で、`foo = bar`、`def main`などtoken境界をまたぐ語句が一件として検索され、snippetに前後文脈が残る。改行をまたぐ正規表現、CRLF、改行だけの一致も件数、前後移動、検索解除を壊さない
+- SessionのShikiコードブロックでは、元コードの空行が先頭・途中・末尾・連続のいずれでも1行ずつ表示され、コピー結果とWebview内検索の文字列・offsetには視覚用の空白が混入しない
 - attachment card の Result / Parameter details を開閉した直後、Webview 内検索の件数、highlight、active result が古い DOM のまま残らない
 - ファイル履歴 Webview の Webview 内検索で debounce pending 中に Enter / 前へ / 次へを押しても、検索 refresh が二重実行されない
 - ファイル履歴 Webview の検索結果には常に所属 card の mixed timeline 番号 `#N` が表示され、View 内の `#N` と一致する
@@ -2372,16 +2448,22 @@ npm run package
 - 範囲を特定できる壊れた `::code-comment{...}` は未解析カードへ fallback し、closing brace 欠落など範囲を特定できない場合だけ raw text fallback になる
 - code comment card の本文に HTML 風文字列が含まれても、HTML として実行されずテキスト表示になる
 - code comment card の表示ラベルが日本語 / 英語 UI でローカライズされる
+- assistant Markdown表の見出し、データ行、24pxの列間、罫線がLight / Dark / High Contrastで読み分けられ、幅が足りない場合は表だけを横スクロールできる
+- Markdown表のcopy buttonはhoverとキーボードfocusで表示され、localized tooltip / `aria-label`を持ち、Webview内検索対象にならない。`prefers-reduced-motion: reduce`では表示transitionが止まる
+- 1メッセージ内の複数表、CRLF、alignment、escape、inline Markdown、`::code-comment{...}`前後の表で、各buttonが対応する表だけの元Markdownをtextとしてコピーし、前後本文やHTMLを含めない
+- blockquote内の表は`>`を、list内の表は元のindentを保持したMarkdownとしてコピーされる
+- 不正なtable token mapまたはDOM対応不一致では表本文を失わずcopy buttonだけを省略し、clipboard失敗時はlocalized失敗toastを表示する
 - ヘッダー幅が狭くなるとラベルボタンが自動的にアイコンのみに切り替わる
-- `webview.restoreAfterReload = false` のとき、`Developer: Reload Window` 後に通常履歴 Webview とファイル履歴 Webview が自動復元されない
+- `webview.restoreAfterReload = false` のとき、`Developer: Reload Window` 後に通常履歴 Webview、ファイル履歴 Webview、履歴インサイト、専用設定画面が自動復元されない
 - `webview.restoreAfterReload = true` のとき、`Show details` を切り替えた直後に `Developer: Reload Window` を実行しても、切り替え後の詳細表示状態で復元される
 - `webview.restoreAfterReload = true` のとき、Reload 後にスクロール位置と選択メッセージが復元される
 - `webview.restoreAfterReload = true` のとき、通常履歴 Webview は Reload Window / VS Code 再起動後に最後に見ていた message 付近へ戻る
 - `webview.restoreAfterReload = true` のとき、ファイル履歴 Webview は Reload Window / VS Code 再起動後に最後に見ていた card 付近へ戻る
 - ファイル履歴 Webview 復元直後に再度 Reload Window / VS Code 再起動しても、復元前の DOM 位置で `scrollAnchor` が上書きされず、最後に見ていた card 付近へ戻る
 - `webview.restoreAfterReload = true` のとき、Reload 後に開いているカード、diff 展開、diff 折り返し、検索サイドバー状態が維持される
-- `webview.restoreAfterReload = true` のとき、通常履歴 Webview とファイル履歴 Webview を同時に開いた状態で `Developer: Reload Window` を実行しても、両方が個別に復元される
-- `webview.restoreAfterReload = true` のとき、VS Code を完全再起動しても、通常履歴 Webview とファイル履歴 Webview が保存済み state から再読み込みされる
+- `webview.restoreAfterReload = true` のとき、通常履歴 Webview、ファイル履歴 Webview、履歴インサイト、専用設定画面を同時に開いた状態で`Developer: Reload Window`を実行しても、それぞれが復元される
+- `webview.restoreAfterReload = true` のとき、VS Codeを完全再起動しても、通常履歴 Webview、ファイル履歴 Webview、履歴インサイト、専用設定画面が保存済みstateから再読み込みされる
+- 専用設定画面の遅延復元前に設定コマンドから新しいpanelを開いた場合は、手動openしたsingletonを維持して復元panelを閉じ、設定画面が2枚残らない
 - Webview 復元設定の説明から、実験的な設定であることと、復元遅延によって同じ履歴を再度開いたときにタブが重複する場合があることが分かる
 - diff カードを最大幅にした状態が、再読み込み後も同じ diff グループで維持される
 - ローカルファイルリンク（相対パス・行番号指定）が VS Code 内で正しく開く

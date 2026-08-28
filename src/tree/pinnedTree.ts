@@ -40,7 +40,10 @@ import { normalizeProjectKey } from "../utils/fsUtils";
 import { formatSessionFileSize } from "../utils/formatBytes";
 import { safeDisplayPath, truncateByDisplayWidth } from "../utils/textUtils";
 import { t } from "../i18n";
-import { buildSessionDescription } from "./sessionDescriptionUtils";
+import {
+  buildSessionDescriptionPresentation,
+  buildSessionRowLabelPresentation,
+} from "./sessionDescriptionUtils";
 import {
   buildSessionHoverTooltip,
   formatSessionDateTimeForAxis,
@@ -318,17 +321,23 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"))
         : undefined;
       const hidden = this.hiddenSessionStore.isHidden(element.session);
-      const item = new vscode.TreeItem(
-        `${formatSessionDateTimeForAxis(element.session, dateAxis)} ${shortTitle}`,
+      const timestamp = formatSessionDateTimeForAxis(element.session, dateAxis);
+      const rowLabel = buildSessionRowLabelPresentation(
+        timestamp,
+        shortTitle,
+        config.sessionRow.showTimestamp,
       );
-      item.description = buildSessionDescription(
+      const item = new vscode.TreeItem(rowLabel.label);
+      const descriptionPresentation = buildSessionDescriptionPresentation(
         element.session,
         annotation?.tags ?? [],
         projectAlias,
         projectDisplayCwd,
         agentPresentation,
         hidden,
+        config.sessionRow.showProject,
       );
+      item.description = descriptionPresentation.rowDescription || undefined;
       item.contextValue = toTreeItemContextValue(
         element,
         agentPresentation?.relation,
@@ -353,8 +362,8 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       item.tooltip = buildSessionHoverTooltip({
         session: element.session,
         annotation: annotation ? { tags: annotation.tags, note: annotation.note } : null,
-        label: String(item.label ?? ""),
-        description: typeof item.description === "string" ? item.description : undefined,
+        label: rowLabel.tooltipLabel,
+        description: descriptionPresentation.tooltipDescription,
         mode: config.previewTooltipMode,
         projectAlias,
         projectDisplayCwd,

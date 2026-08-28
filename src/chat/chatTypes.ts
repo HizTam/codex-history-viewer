@@ -29,6 +29,7 @@ export interface ChatSessionLocation {
 
 export type ChatTimelineItem =
   | ChatMessageItem
+  | ChatCrossSessionMessageItem
   | ChatProtocolContextItem
   | ChatToolItem
   | ChatSystemEventItem
@@ -119,7 +120,7 @@ export interface ChatDocumentAttachment {
 export interface ChatFileReferenceAttachment {
   id?: string;
   type: "fileReference";
-  source: "codexFilesMentioned" | "claudeIdeOpenedFile";
+  source: "codexFilesMentioned" | "codexFilesPasted" | "claudeIdeOpenedFile";
   label?: string;
   path?: string;
   line?: number;
@@ -214,6 +215,17 @@ export interface ChatMessageItem {
   isBookmarked?: boolean;
 }
 
+export interface ChatCrossSessionMessageItem {
+  type: "crossSessionMessage";
+  source: "claude";
+  provenance: "peer" | "coordinator";
+  messageIndex: number;
+  timestampIso?: string;
+  senderName?: string;
+  body: string;
+  truncated?: boolean;
+}
+
 export interface ChatProtocolContextItem {
   type: "protocolContext";
   source: "codex";
@@ -232,6 +244,7 @@ export interface ChatToolItem {
   callId?: string;
   argumentsText?: string;
   outputText?: string;
+  attachments?: ChatAttachment[];
   detailsOmitted?: boolean;
   execution?: ChatToolExecution;
   presentation?: ChatToolPresentation;

@@ -9,6 +9,7 @@ export type NormalizedToolKind =
   | "glob"
   | "webSearch"
   | "webFetch"
+  | "imageGeneration"
   | "agent"
   | "unknown";
 

@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.12.0] - 2026-08-28
+
+### Added
+
+- Added a dedicated settings page organized by category, with User, Workspace, and Workspace Folder targets where supported. **Open Settings** now opens this page.
+- Added a Maintenance page for scope-specific settings backups, cache and search-index rebuilds, cleanup actions, and access to the standard VS Code settings.
+- Added independent settings for showing or hiding timestamps and project aliases or paths in History, Pinned, and Search session rows. Existing visibility defaults are preserved, and hidden information remains available in tooltips. ([#16](https://github.com/HizTam/codex-history-viewer/issues/16))
+- Added a per-table action in the Session Viewer for copying only that table in its original Markdown form.
+- Added support for Codex array-form tool outputs and standalone local-shell, web-search, and image-generation response items. Image outputs use the existing preview and save flow, and separately recorded intermediate and final images remain visible in history order.
+
+### Changed
+
+- Improved Markdown tables in the Session Viewer with clearer spacing, separators, wrapping, and table-local horizontal scrolling.
+- Updated internal history and search caches and the Codex / Claude Code analysis parsers for the new formats. Existing cache and analysis entries are rebuilt once after updating, so the first history refresh, search, or analysis may take longer for very large histories.
+
+### Fixed
+
+- Fixed current Codex pasted-file references, including attachment-only requests, so they render as attachment cards instead of raw protocol Markdown while keeping only explicit user request text in the message body.
+- Fixed Claude Code pasted text, automatically truncated long input, and pasted-image placeholders so verified records render as attachment cards across the Session Viewer and related outputs without changing Session Analysis matching. If prompt history cannot be verified, the primary session text remains visible.
+- Fixed Claude Code peer and coordinator messages so they render as cross-session cards, remain searchable as assistant-derived content, and stay excluded from previews, Resume, Handoff, and human-message analysis.
+- Fixed Claude Code scratchpad links generated as cross-drive relative paths on Windows.
+- Fixed blank lines collapsing inside syntax-highlighted code blocks in the Session Viewer.
+- Fixed Session Viewer resume and restore controls remaining hidden after session reload, auto-refresh, or initial background history refresh. After a failed refresh, the controls reappear only when the displayed session can still be verified.
+
 ## [2.11.1] - 2026-08-17
 
 ### Added

@@ -30,6 +30,7 @@ import {
   isCodexTurnAbortedMessageText,
 } from "../utils/textUtils";
 import { inferFilePresentationKind } from "../utils/fileKind";
+import type { ClaudePastedPromptEntry, ClaudePastedPromptResolution } from "./claudePastedPrompt";
 
 export const CHAT_TEXT_DOCUMENT_PREVIEW_CHARS = 16_000;
 export const CHAT_TEXT_DOCUMENT_SEARCH_CHARS = 64_000;
@@ -55,6 +56,13 @@ const TASK_NOTIFICATION_PREAMBLE =
 const TASK_NOTIFICATION_OPEN_TAG = "<task-notification";
 const TASK_NOTIFICATION_CLOSE_TAG = "</task-notification>";
 const TASK_NOTIFICATION_OPEN_TAG_MAX_CHARS = 512;
+const CODEX_FILE_REFERENCE_LABEL_MAX_CHARS = 4_096;
+const CODEX_FILE_REFERENCE_PATH_MAX_CHARS = 32_768;
+const CODEX_FILE_REFERENCE_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
+const CODEX_PASTED_REQUEST_SENTINEL = "Pasted text contains the user's request.";
+
+type CodexFileBlockKind = "mentioned" | "pasted";
+
 export interface ExtractedMessageContent {
   text: string;
   attachments: ChatAttachment[];
@@ -75,6 +83,14 @@ export interface ClaudeLocalCommandOutputContent {
 
 export interface ClaudeMessageExtractionOptions {
   role?: Extract<ChatRole, "user" | "assistant">;
+  pastedPrompt?: ClaudePastedPromptResolution;
+}
+
+export function selectClaudeControlContent(
+  content: unknown,
+  pastedPrompt?: ClaudePastedPromptResolution,
+): unknown {
+  return pastedPrompt?.preserveSessionText ? undefined : pastedPrompt?.display ?? content;
 }
 
 export type AttachmentOutputChannel = "webview" | "markdown" | "search" | "resume" | "handoff";
@@ -208,6 +224,12 @@ export function extractCodexProtocolContextText(content: unknown): string | null
 
 export function extractCodexCompactUserText(content: unknown, extractedText: string): string | null {
   const textOnlyContent = extractCodexTextOnlyContentForContext(content);
+  if (textOnlyContent !== null) {
+    const fileReferences = extractCodexFilesMentionedFromText(textOnlyContent);
+    if (fileReferences.attachments.length > 0) {
+      return extractCompactUserText(fileReferences.text);
+    }
+  }
   const compactSource = textOnlyContent ?? extractedText;
   const compact = extractCompactUserText(compactSource);
   if (compact !== null) return compact;
@@ -380,11 +402,14 @@ export async function extractCodexMessageContent(
 function extractClaudeTextAttachmentsFromText(
   text: string,
   role: ClaudeMessageExtractionOptions["role"] | undefined,
+  additionalSpans: readonly TextAttachmentSpan[] = [],
+  detectTextAttachments = true,
 ): ExtractedMessageContent {
   const normalized = normalizeNewlines(text);
   const spans: TextAttachmentSpan[] = [
-    ...collectClaudeIdeReferenceSpans(normalized),
-    ...collectClaudeStructuredAttachmentSpans(normalized, role),
+    ...additionalSpans,
+    ...(detectTextAttachments ? collectClaudeIdeReferenceSpans(normalized) : []),
+    ...(detectTextAttachments ? collectClaudeStructuredAttachmentSpans(normalized, role) : []),
   ].sort((a, b) => a.start - b.start || b.end - a.end);
 
   if (spans.length === 0) return { text: normalized, attachments: [] };
@@ -1033,18 +1058,57 @@ export async function extractClaudeMessageContent(
 ): Promise<ExtractedMessageContent> {
   const imageOptions = normalizeImageOptions(options);
   const items = normalizeContentItems(content);
+  const pastedPrompt = claudeOptions?.role === "user" ? claudeOptions.pastedPrompt : undefined;
+  const preserveSessionText = pastedPrompt?.preserveSessionText === true;
+  const hasDirectDocument = items.some((item) => {
+    if (!item || typeof item !== "object") return false;
+    return normalizeType(readStringField(item as Record<string, unknown>, "type")) === "document";
+  });
+  const retainRawText = preserveSessionText || (!!pastedPrompt && hasDirectDocument);
+  if (pastedPrompt && !preserveSessionText && !hasDirectDocument) {
+    const projected = buildClaudePastedPromptSpans(pastedPrompt, imageOptions.enabled ? "remote" : "disabled");
+    if (projected) {
+      const extracted = extractClaudeTextAttachmentsFromText(projected.display, claudeOptions?.role, projected.spans);
+      const images: ChatImageAttachment[] = [];
+      for (const item of items) {
+        if (!item || typeof item !== "object") continue;
+        const obj = item as Record<string, unknown>;
+        const image = await extractImageAttachmentFromItem(obj, sessionCwd, imageOptions);
+        if (image) images.push(image);
+      }
+      return {
+        text: extracted.text,
+        attachments: [
+          ...materializeClaudePastedImages(
+            extracted.attachments,
+            projected.imagePlaceholderIds,
+            pastedPrompt.imagePasteIds,
+            images,
+          ),
+        ],
+      };
+    }
+  }
+
   const texts: string[] = [];
   const attachments: ChatAttachment[] = [];
   let placeholderCount = 0;
   let placeholderInsertIndex: number | undefined;
 
   if (typeof content === "string") {
-    const stripped = stripImagePlaceholders(content);
+    const stripped = retainRawText
+      ? { text: content, placeholderCount: 0 }
+      : stripImagePlaceholders(content);
     if (stripped.placeholderCount > 0) {
       placeholderInsertIndex = attachments.length;
     }
     placeholderCount += stripped.placeholderCount;
-    const extracted = extractClaudeTextAttachmentsFromText(stripped.text, claudeOptions?.role);
+    const extracted = extractClaudeTextAttachmentsFromText(
+      stripped.text,
+      claudeOptions?.role,
+      [],
+      !retainRawText,
+    );
     texts.push(extracted.text);
     attachments.push(...extracted.attachments);
   } else {
@@ -1058,12 +1122,19 @@ export async function extractClaudeMessageContent(
       }
       const itemText = readStringField(obj, "text");
       if (itemText) {
-        const stripped = stripImagePlaceholders(itemText);
+        const stripped = retainRawText
+          ? { text: itemText, placeholderCount: 0 }
+          : stripImagePlaceholders(itemText);
         if (stripped.placeholderCount > 0 && placeholderInsertIndex === undefined) {
           placeholderInsertIndex = attachments.length;
         }
         placeholderCount += stripped.placeholderCount;
-        const extracted = extractClaudeTextAttachmentsFromText(stripped.text, claudeOptions?.role);
+        const extracted = extractClaudeTextAttachmentsFromText(
+          stripped.text,
+          claudeOptions?.role,
+          [],
+          !retainRawText,
+        );
         texts.push(extracted.text);
         attachments.push(...extracted.attachments);
       }
@@ -1079,6 +1150,124 @@ export async function extractClaudeMessageContent(
     text: texts.join(""),
     attachments,
   };
+}
+
+function buildClaudePastedPromptSpans(
+  resolution: ClaudePastedPromptResolution,
+  imageUnavailableReason: ChatImageAttachmentReason,
+): {
+  display: string;
+  spans: TextAttachmentSpan[];
+  imagePlaceholderIds: ReadonlyMap<ChatAttachment, number>;
+} | null {
+  const display = normalizeNewlines(resolution.display);
+  // Keep the established XML-image path unchanged when old and new placeholder formats mix.
+  if (stripImagePlaceholders(display).placeholderCount > 0) return null;
+  const spans: TextAttachmentSpan[] = [];
+  const imagePlaceholderIds = new Map<ChatAttachment, number>();
+  let cursor = 0;
+
+  for (const entry of resolution.entries) {
+    const placeholder = normalizeNewlines(entry.placeholder);
+    if (!placeholder) return null;
+    const start = display.indexOf(placeholder, cursor);
+    if (start < 0) return null;
+    const attachment = entry.type === "image"
+      ? createClaudePlaceholderImageAttachment(entry, imageUnavailableReason)
+      : createClaudePastedTextAttachment(entry);
+    if (entry.type === "image") imagePlaceholderIds.set(attachment, entry.id);
+    spans.push({ start, end: start + placeholder.length, attachment });
+    cursor = start + placeholder.length;
+  }
+
+  return { display, spans, imagePlaceholderIds };
+}
+
+function createClaudePastedTextAttachment(entry: ClaudePastedPromptEntry): ChatDocumentAttachment {
+  const label = entry.label || entry.placeholder;
+  if (entry.content === undefined) {
+    return {
+      type: "document",
+      status: "unavailable",
+      documentKind: "text",
+      source: "reference",
+      label,
+      mimeType: "text/plain",
+      reason: "missing",
+    };
+  }
+
+  const byteLength = Buffer.byteLength(entry.content, "utf8");
+  const previewText = clampText(entry.content, CHAT_TEXT_DOCUMENT_PREVIEW_CHARS);
+  if (byteLength > CHAT_TEXT_DOCUMENT_SAVE_BYTES) {
+    return {
+      type: "document",
+      status: "unavailable",
+      documentKind: "text",
+      source: "embeddedText",
+      label,
+      mimeType: "text/plain",
+      byteLength,
+      previewText,
+      reason: "tooLarge",
+    };
+  }
+
+  return {
+    type: "document",
+    status: "available",
+    documentKind: "text",
+    source: "embeddedText",
+    label,
+    mimeType: "text/plain",
+    byteLength,
+    previewText,
+    dataOmitted: true,
+    payload: { kind: "text", text: entry.content },
+  };
+}
+
+function createClaudePlaceholderImageAttachment(
+  entry: ClaudePastedPromptEntry,
+  reason: ChatImageAttachmentReason,
+): ChatImageAttachment {
+  return {
+    type: "image",
+    status: "unavailable",
+    source: "reference",
+    label: entry.label || entry.placeholder,
+    reason,
+  };
+}
+
+function materializeClaudePastedImages(
+  attachments: readonly ChatAttachment[],
+  placeholderIds: ReadonlyMap<ChatAttachment, number>,
+  imagePasteIds: readonly number[],
+  images: readonly ChatImageAttachment[],
+): ChatAttachment[] {
+  if (imagePasteIds.length !== images.length) return [...attachments, ...images];
+  const imagesById = new Map<number, ChatImageAttachment>();
+  const consumedImages = new Set<number>();
+  for (let index = 0; index < imagePasteIds.length && index < images.length; index += 1) {
+    const id = imagePasteIds[index];
+    const image = images[index];
+    if (id === undefined || !image || imagesById.has(id)) continue;
+    imagesById.set(id, image);
+    consumedImages.add(index);
+  }
+
+  const result = attachments.map((attachment) => {
+    const id = placeholderIds.get(attachment);
+    if (id === undefined) return attachment;
+    const image = imagesById.get(id);
+    const placeholderLabel = attachment.type === "image" ? attachment.label : undefined;
+    return image ? { ...image, label: placeholderLabel || image.label } : attachment;
+  });
+  for (let index = 0; index < images.length; index += 1) {
+    if (!consumedImages.has(index)) result.push(images[index]!);
+  }
+  return result;
 }
 
 export function assignAttachmentIds(attachments: ChatAttachment[], scope: string): void {
@@ -1376,29 +1565,23 @@ export function buildAttachmentSearchText(attachments: readonly ChatAttachment[]
 
 export function extractCodexFilesMentionedFromText(text: string): ExtractedMessageContent {
   const normalized = normalizeNewlines(text);
-  const header = findCodexFilesMentionedHeader(normalized);
+  const header = findCodexFileReferenceHeader(normalized);
   if (!header) return { text, attachments: [] };
 
   const prefix = normalized.slice(0, header.start);
   const rest = normalized.slice(header.end);
-  const requestMatch = /(?:^|\n)## My request for Codex:\s*(?:\n|$)/u.exec(rest);
-  if (requestMatch) {
-    const block = rest.slice(0, requestMatch.index);
-    const parsed = parseCodexFileReferenceLines(block);
+  const requestHeaders = findCodexRequestHeaderRange(rest);
+  if (requestHeaders) {
+    const block = rest.slice(0, requestHeaders.firstStart);
+    const parsed = parseCodexFileReferenceRegion(block, header.kind, false);
     if (parsed.attachments.length === 0 || parsed.failed) return { text, attachments: [] };
-    if (prefix.trim().length > 0) {
-      return {
-        text: joinCodexTextAroundFilesBlock(prefix, rest.slice(requestMatch.index + requestMatch[0].length)),
-        attachments: parsed.attachments,
-      };
-    }
     return {
-      text: rest.slice(requestMatch.index + requestMatch[0].length),
+      text: joinCodexTextAroundFilesBlock(prefix, rest.slice(requestHeaders.lastEnd)),
       attachments: parsed.attachments,
     };
   }
 
-  const parsed = parseCodexFileReferencePrefix(rest);
+  const parsed = parseCodexFileReferenceRegion(rest, header.kind, true);
   if (parsed.attachments.length === 0 || parsed.failed) return { text, attachments: [] };
   return {
     text: joinCodexTextAroundFilesBlock(prefix, parsed.remainingText),
@@ -1406,14 +1589,30 @@ export function extractCodexFilesMentionedFromText(text: string): ExtractedMessa
   };
 }
 
-function findCodexFilesMentionedHeader(text: string): { start: number; end: number } | null {
-  const match = /(^|\n)[ \t]*# Files mentioned by the user:[ \t]*(?:\n|$)/u.exec(text);
+function findCodexFileReferenceHeader(
+  text: string,
+): { start: number; end: number; kind: CodexFileBlockKind } | null {
+  const match = /(^|\n)[ \t]*# Files (mentioned|pasted) by the user:[ \t]*(?:\n|$)/u.exec(text);
   if (!match) return null;
   const leadingNewline = match[1] ?? "";
   return {
     start: match.index + leadingNewline.length,
     end: match.index + match[0].length,
+    kind: match[2] === "pasted" ? "pasted" : "mentioned",
   };
+}
+
+function findCodexRequestHeaderRange(text: string): { firstStart: number; lastEnd: number } | null {
+  const pattern = /^[ \t]*## My request(?: for Codex)?:[ \t]*(?:\n|$)/gmu;
+  let first: RegExpExecArray | null = null;
+  let last: RegExpExecArray | null = null;
+  for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+    first ??= match;
+    last = match;
+  }
+  return first && last
+    ? { firstStart: first.index, lastEnd: last.index + last[0].length }
+    : null;
 }
 
 function joinCodexTextAroundFilesBlock(prefix: string, suffix: string): string {
@@ -1424,77 +1623,158 @@ function joinCodexTextAroundFilesBlock(prefix: string, suffix: string): string {
   return `${cleanPrefix}\n\n${cleanSuffix}`;
 }
 
-function parseCodexFileReferencePrefix(text: string): {
+function parseCodexFileReferenceRegion(
+  text: string,
+  initialKind: CodexFileBlockKind,
+  allowTrailingText: boolean,
+): {
   attachments: ChatFileReferenceAttachment[];
   remainingText: string;
   failed: boolean;
 } {
   const lines = text.split("\n");
-  const blockLines: string[] = [];
+  const attachments: ChatFileReferenceAttachment[] = [];
   let index = 0;
-  let sawFile = false;
+  let currentKind = initialKind;
+  let sawFileInCurrentBlock = false;
 
   while (index < lines.length) {
     const line = lines[index] ?? "";
     if (!line.trim()) {
-      blockLines.push(line);
       index += 1;
       continue;
     }
-    if (!line.trimStart().startsWith("## ")) break;
-    if (!parseCodexFileReferenceLine(line)) {
+
+    const nextKind = parseCodexFileBlockHeaderLine(line);
+    if (nextKind) {
+      if (!sawFileInCurrentBlock) {
+        return { attachments: [], remainingText: text, failed: true };
+      }
+      currentKind = nextKind;
+      sawFileInCurrentBlock = false;
+      index += 1;
+      continue;
+    }
+
+    if (line === CODEX_PASTED_REQUEST_SENTINEL) {
+      if (allowTrailingText || currentKind !== "pasted" || !sawFileInCurrentBlock) {
+        return { attachments: [], remainingText: text, failed: true };
+      }
+      index += 1;
+      while (index < lines.length && !(lines[index] ?? "").trim()) index += 1;
+      if (index !== lines.length) {
+        return { attachments: [], remainingText: text, failed: true };
+      }
+      break;
+    }
+
+    if (!line.trimStart().startsWith("##")) {
+      if (allowTrailingText) break;
       return { attachments: [], remainingText: text, failed: true };
     }
-    sawFile = true;
-    blockLines.push(line);
+
+    const attachment = parseCodexFileReferenceLine(line, currentKind);
+    if (!attachment) {
+      return { attachments: [], remainingText: text, failed: true };
+    }
+    sawFileInCurrentBlock = true;
+    attachments.push(attachment);
     index += 1;
   }
 
-  if (!sawFile) return { attachments: [], remainingText: text, failed: true };
-  const parsed = parseCodexFileReferenceLines(blockLines.join("\n"));
-  if (parsed.failed) return { attachments: [], remainingText: text, failed: true };
+  if (!sawFileInCurrentBlock || attachments.length === 0) {
+    return { attachments: [], remainingText: text, failed: true };
+  }
   return {
-    attachments: parsed.attachments,
+    attachments,
     remainingText: lines.slice(index).join("\n").replace(/^\n+/u, ""),
     failed: false,
   };
 }
 
-function parseCodexFileReferenceLines(text: string): { attachments: ChatFileReferenceAttachment[]; failed: boolean } {
-  const attachments: ChatFileReferenceAttachment[] = [];
-  for (const line of text.split("\n")) {
-    if (!line.trim()) continue;
-    const parsed = parseCodexFileReferenceLine(line);
-    if (!parsed) return { attachments: [], failed: true };
-    attachments.push(parsed);
-  }
-  return { attachments, failed: false };
+function parseCodexFileBlockHeaderLine(line: string): CodexFileBlockKind | null {
+  const match = /^[ \t]*# Files (mentioned|pasted) by the user:[ \t]*$/u.exec(line);
+  if (!match) return null;
+  return match[1] === "pasted" ? "pasted" : "mentioned";
 }
 
-function parseCodexFileReferenceLine(line: string): ChatFileReferenceAttachment | null {
+function parseCodexFileReferenceLine(
+  line: string,
+  kind: CodexFileBlockKind,
+): ChatFileReferenceAttachment | null {
   const text = line.trim();
-  if (!text.startsWith("## ")) return null;
-  const body = text.slice(3).trim();
-  const separator = body.indexOf(": ");
-  if (separator <= 0) return null;
+  const heading = /^##\s+(.+)$/u.exec(text);
+  const body = heading?.[1]?.trim() ?? "";
+  if (!body) return null;
 
-  const label = body.slice(0, separator).trim();
-  const rawPath = body.slice(separator + 2).trim();
-  if (!label || !rawPath) return null;
+  for (
+    let separator = body.lastIndexOf(": ");
+    separator > 0;
+    separator = body.lastIndexOf(": ", separator - 1)
+  ) {
+    const rawLabel = body.slice(0, separator).trim();
+    const rawPath = body.slice(separator + 2).trim();
+    if (!rawLabel || !rawPath || rawLabel.length > CODEX_FILE_REFERENCE_LABEL_MAX_CHARS) continue;
 
-  const lineInfo = parseLineSuffix(rawPath);
-  const fsPath = lineInfo.text.trim();
-  if (!fsPath) return null;
+    const lineInfo = parseLineSuffix(rawPath);
+    const fsPath = lineInfo.text.trim();
+    if (!isSupportedCodexFileReferencePath(fsPath)) continue;
 
-  return {
-    type: "fileReference",
-    source: "codexFilesMentioned",
-    label,
-    path: fsPath,
-    ...(lineInfo.line ? { line: lineInfo.line } : {}),
-    ...(lineInfo.endLine ? { endLine: lineInfo.endLine } : {}),
-    fileKind: inferFileKind(fsPath, label),
-  };
+    const label = parseCodexFileReferenceLabel(rawLabel, kind);
+    if (!label) return null;
+
+    return {
+      type: "fileReference",
+      source: kind === "pasted" ? "codexFilesPasted" : "codexFilesMentioned",
+      label,
+      path: fsPath,
+      ...(lineInfo.line ? { line: lineInfo.line } : {}),
+      ...(lineInfo.endLine ? { endLine: lineInfo.endLine } : {}),
+      fileKind: inferFileKind(fsPath, label),
+    };
+  }
+
+  return null;
+}
+
+function parseCodexFileReferenceLabel(rawLabel: string, kind: CodexFileBlockKind): string | null {
+  let label: unknown = rawLabel;
+  if (kind === "pasted") {
+    try {
+      label = JSON.parse(rawLabel);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof label !== "string") return null;
+  const normalized = label.trim();
+  if (
+    !normalized ||
+    normalized.length > CODEX_FILE_REFERENCE_LABEL_MAX_CHARS ||
+    CODEX_FILE_REFERENCE_CONTROL_CHARACTERS.test(normalized)
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function isSupportedCodexFileReferencePath(value: string): boolean {
+  if (
+    !value ||
+    value.length > CODEX_FILE_REFERENCE_PATH_MAX_CHARS ||
+    CODEX_FILE_REFERENCE_CONTROL_CHARACTERS.test(value)
+  ) {
+    return false;
+  }
+  const isWindowsDriveAbsolute = /^[A-Za-z]:[\\/]/u.test(value);
+  const isWindowsUnc = value.startsWith("\\\\");
+  return (
+    isWindowsDriveAbsolute ||
+    isWindowsUnc ||
+    path.posix.isAbsolute(value) ||
+    value.startsWith("~/") ||
+    value.startsWith("~\\")
+  );
 }
 
 function buildClaudeOpenedFileAttachment(body: string): ChatFileReferenceAttachment {

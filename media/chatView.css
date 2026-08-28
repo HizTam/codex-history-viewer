@@ -3473,6 +3473,10 @@ body.vscode-high-contrast-light .branchTreeViewport {
   justify-content: flex-start;
 }
 
+.row.crossSessionMessage {
+  justify-content: flex-start;
+}
+
 .row.protocolContext {
   justify-content: flex-start;
 }
@@ -3814,6 +3818,10 @@ body.vscode-high-contrast-light .branchTreeViewport {
 }
 
 .toolCard.toolCard-kind-agent {
+  --tool-accent: var(--vscode-terminal-ansiMagenta, #c586c0);
+}
+
+.toolCard.toolCard-kind-imageGeneration {
   --tool-accent: var(--vscode-terminal-ansiMagenta, #c586c0);
 }
 
@@ -5219,6 +5227,89 @@ body.vscode-high-contrast-light .imagePreviewOverlay {
   text-align: left;
 }
 
+.crossSessionMessageCard {
+  width: min(760px, 92%);
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 72%, transparent 28%);
+  border-left: 3px solid color-mix(in srgb, var(--vscode-textLink-foreground) 72%, var(--chv-border) 28%);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--chv-tool-bg) 66%, var(--chv-assistant-bg) 34%);
+  color: var(--chv-fg);
+  text-align: left;
+}
+
+.crossSessionMessageHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 9px;
+  border-bottom: 1px solid color-mix(in srgb, var(--chv-border) 62%, transparent 38%);
+}
+
+.crossSessionMessageSummary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.crossSessionMessageBadge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 1px 7px;
+  border: 1px solid color-mix(in srgb, var(--vscode-textLink-foreground) 52%, var(--chv-border) 48%);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--vscode-textLink-foreground) 12%, transparent);
+  color: var(--chv-fg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.crossSessionMessageTitle {
+  min-width: 0;
+  color: var(--chv-fg);
+  font-weight: 600;
+}
+
+.crossSessionMessageMeta,
+.crossSessionMessageSender,
+.crossSessionMessageTruncated {
+  color: var(--chv-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.crossSessionMessageSender {
+  padding: 7px 10px 0;
+  overflow-wrap: anywhere;
+}
+
+.crossSessionMessageBody {
+  max-height: 520px;
+  margin: 0;
+  padding: 9px 10px;
+  overflow: auto;
+  color: var(--chv-fg);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: var(--vscode-editor-font-size, 12px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.crossSessionMessageTruncated {
+  padding: 0 10px 8px;
+  font-style: italic;
+}
+
 .systemEventSummary {
   display: flex;
   align-items: center;
@@ -5395,6 +5486,119 @@ body.vscode-high-contrast-light .imagePreviewOverlay {
 
 .markdownSegment > :last-child {
   margin-bottom: 0;
+}
+
+.markdown .markdownTableContainer {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  margin: 0 0 8px;
+}
+
+.markdown > .markdownTableContainer:last-child,
+.markdownSegment > .markdownTableContainer:last-child {
+  margin-bottom: 0;
+}
+
+.markdown .markdownTableScroller {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.markdown .markdownTableScroller > table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: auto;
+}
+
+.markdown .markdownTableScroller th,
+.markdown .markdownTableScroller td {
+  box-sizing: border-box;
+  padding-inline: 0 24px;
+  text-align: start;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.markdown .markdownTableScroller th {
+  padding-block: 8px;
+  border-bottom: 1px solid var(--chv-border);
+  color: var(--chv-fg);
+  font-weight: 600;
+}
+
+.markdown .markdownTableScroller th:last-child {
+  padding-inline-end: 40px;
+}
+
+.markdown .markdownTableScroller td {
+  padding-block: 10px;
+}
+
+.markdown .markdownTableScroller td:last-child {
+  padding-inline-end: 0;
+}
+
+.markdown .markdownTableScroller tbody tr:not(:last-child) > td {
+  border-bottom: 1px solid color-mix(in srgb, var(--chv-border) 68%, transparent);
+}
+
+.markdown .markdownTableActions {
+  position: absolute;
+  top: 4px;
+  inset-inline-end: 4px;
+  z-index: 1;
+  display: flex;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.markdown .markdownTableContainer:hover > .markdownTableActions,
+.markdown .markdownTableContainer:focus-within > .markdownTableActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.markdown .markdownTableCopyBtn.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 28px;
+  height: 26px;
+  padding: 3px 6px;
+  background: var(--chv-assistant-bg);
+}
+
+.markdown .markdownTableCopyBtn.iconBtn:focus-visible {
+  outline: 1px solid var(--chv-accent);
+  outline-offset: 1px;
+}
+
+body.vscode-high-contrast .markdown .markdownTableScroller th,
+body.vscode-high-contrast-light .markdown .markdownTableScroller th,
+body.vscode-high-contrast .markdown .markdownTableScroller tbody tr:not(:last-child) > td,
+body.vscode-high-contrast-light .markdown .markdownTableScroller tbody tr:not(:last-child) > td,
+body.vscode-high-contrast .markdown .markdownTableCopyBtn.iconBtn,
+body.vscode-high-contrast-light .markdown .markdownTableCopyBtn.iconBtn {
+  border-color: var(--vscode-contrastBorder, var(--chv-border));
+}
+
+body.vscode-high-contrast .markdown .markdownTableCopyBtn.iconBtn:focus-visible,
+body.vscode-high-contrast-light .markdown .markdownTableCopyBtn.iconBtn:focus-visible {
+  outline-width: 2px;
+  outline-color: var(--vscode-contrastBorder, var(--chv-accent));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .markdown .markdownTableActions {
+    transition: none;
+  }
 }
 
 .markdown p {
@@ -5622,6 +5826,10 @@ pre {
 
 .codeBlock .shiki .line {
   display: block;
+}
+
+.codeBlock .shiki .line:empty {
+  min-height: 1lh;
 }
 
 body.vscode-dark .codeBlock .shiki {

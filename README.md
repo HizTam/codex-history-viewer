@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.11.1** (2026-08-17).
+Latest release: **2.12.0** (2026-08-28).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -20,7 +20,8 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Optionally include Codex `archived_sessions`, hide sessions without changing provider files, and switch among active, archived, and hidden display targets.
 - Show valid cached History and Pinned data immediately at startup while local session files refresh in the background.
 - Search across prompts, responses, tool output, tags, notes, and attachment metadata, with shared search history.
-- View sessions in the Session Viewer with Markdown, including GFM task lists, Mermaid diagrams, code highlighting, math rendering, tool cards, and file-change diffs.
+- View sessions in the Session Viewer with Markdown, including individually copyable tables, GFM task lists, Mermaid diagrams, code highlighting, math rendering, tool cards, and file-change diffs.
+- Manage the extension's primary settings from a categorized settings page, with supported User, Workspace, and Workspace Folder targets, scope-specific JSON backups, and maintenance actions.
 - Enable an opt-in Codex turn timeline to see turn boundaries, turn summaries, completed-turn folding, and running state in live mode.
 - Use Agent Runs to distinguish Codex sub-agent sessions and inspect parent, sibling, and descendant relationships in a right-side tree. (Experimental; disabled by default.)
 - Use Branch Navigation to inspect and switch between locally forked Codex histories and Claude Code **Fork conversation** histories in their respective session views. (Experimental; disabled by default.)
@@ -31,7 +32,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Show supported image attachments, Claude Code documents, and file references from Codex / Claude Code sessions as compact cards.
 - Organize sessions with pins, tags, notes, custom titles, project aliases, project associations, saved searches, search history, display modes, and filters.
 - Keep Pinned filters independent from History/Search, including project scope, source, visibility, tags, and saved sort preferences.
-- Experimental opt-in restoration for session tabs, File AI Change History, and History Insights after Reload Window or VS Code restart.
+- Experimental opt-in restoration for session tabs, File AI Change History, History Insights, and the dedicated settings page after Reload Window or VS Code restart.
 - Resume past sessions through the official Codex and Claude Code VS Code extensions or prepare commands for resuming them with the CLI.
 - Copy session IDs and session file paths from the Session Viewer or tree context menus, and reveal session files in their containing folders.
 - Export and restore original session data together with extension-managed metadata such as tags, notes, custom titles, hidden state, pins, and timeline bookmarks.
@@ -40,7 +41,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 ## Quick Start
 
 1. Open the Activity Bar and select **Codex History**.
-2. Use **Control** for global actions such as settings, import, rebuild cache, empty trash, and search defaults.
+2. Use **Control** for global actions such as opening settings, importing sessions, configuring default search roles, rebuilding the cache, and emptying the trash. **Open Settings** opens the categorized settings page; use its **Maintenance** page for settings backups and access to the standard VS Code settings.
 3. Browse sessions under **History** and switch between date-grouped/session-list layouts, List/Project display, All/Current Project Group scope, visibility targets, and saved sort preferences.
 4. Use **Show History Insights** from the History header when you want an aggregate view of the current History target.
 5. Select a session to open the reusable session tab. Use **Open Session in Dedicated Tab** to keep a session assigned to its own tab, or **Open Session as Markdown** for a virtual transcript document named after the session, such as `Review release candidate.md`. The virtual document does not create a file unless you explicitly save it.
@@ -66,9 +67,13 @@ History, Pinned, and History Insights can target **Active Only**, **Active + Arc
 
 Pinned has its own project scope, source, visibility target, date, tag filters, and saved sort preference. It does not follow History/Search filter state, so saved sessions can stay focused on a different project or source while you browse and search elsewhere. History can sort by started date, last activity date, name, or source session file size. Pinned can sort by pinned time, started date, last activity date, name, or source session file size. When Tooltip Mode is set to Compact or Detailed, History and Pinned session tooltips also show the source session file size.
 
+Use **Show timestamp** and **Show project/path** under **History List > Session rows** to simplify session rows in History, Pinned, and Search. The two elements can be hidden independently, while their full timestamp and project information remain available in session tooltips.
+
 ## Session Viewer
 
 The Session Viewer renders local session files as readable timelines. It supports Markdown, Mermaid diagrams, syntax-highlighted fenced code blocks, KaTeX-compatible math, assistant usage metadata, environment snapshots, tool execution metadata, and grouped file-change cards from patch activity. GFM task-list markers render as read-only checkboxes without modifying the stored session content.
+
+Markdown tables use clearer cell spacing and separators, wrap long content, and scroll horizontally within the table when needed. Each table has an action for copying only that table in its original Markdown form.
 
 Fenced `mermaid` blocks render as inline diagrams. Each diagram can switch between Light and Dark display modes, open in a non-modal right-side pane for fit-to-view, zoom, scroll, drag-to-pan, and keyboard navigation, and be saved as SVG, PNG, or Mermaid source (`.mmd`).
 
@@ -86,19 +91,25 @@ Patch group cards can show compact file summaries and an in-place **Open all dif
 
 Request interruptions from Codex and Claude Code render as dedicated timeline cards. When available, details include reason, duration, turn ID, rollback state, and rolled-back turn count.
 
-Session tabs preserve useful state across reload and auto-refresh, including scroll position, selected message, expanded cards/diffs, detail visibility, diff wrapping, and in-page search state. The experimental opt-in **Restore Webview Tabs After Reload** setting can also restore session, File AI Change History, and History Insights panels after **Developer: Reload Window** or VS Code restart. It is disabled by default because VS Code can defer Webview restoration and may occasionally create duplicate tabs when the same history is opened again.
+Claude Code peer and coordinator messages received from other sessions render as dedicated cross-session cards. They remain searchable as assistant-derived content and are excluded from previews, Resume, Handoff, and human-message analysis.
+
+Session tabs preserve useful state across reload and auto-refresh, including scroll position, selected message, expanded cards/diffs, detail visibility, diff wrapping, and in-page search state. The experimental opt-in **Restore Webview Tabs After Reload** setting can also restore session tabs, File AI Change History, History Insights, and the dedicated settings page after **Developer: Reload Window** or VS Code restart. It is disabled by default because VS Code can defer Webview restoration and may occasionally create duplicate tabs when the same history is opened again.
 
 The session timeline can keep the current user prompt visible at the top while you scroll. Codex memory citation information is rendered as a collapsible section instead of being left as raw metadata in the message body. Session runtime context and local-command output are likewise shown as collapsed cards instead of raw user messages.
+
+Codex array-form tool outputs and standalone `local_shell_call`, `web_search_call`, and `image_generation_call` response items render as tool cards. Their arguments and outputs are projected through bounded, type-specific fields instead of exposing arbitrary protocol data.
 
 ## Attachments and References
 
 The Session Viewer keeps attachments and file references out of the message body and renders them as cards instead.
 
-- Supported images from Codex / Claude Code sessions are loaded on demand and can be previewed or saved.
+- Supported images from Codex / Claude Code sessions, including Codex tool-output and image-generation images, are loaded on demand and can be previewed or saved. Separately recorded intermediate and final images remain visible in history order.
 - Claude Code PDF, text, and generic documents render as document cards. Text document previews open inside the card, and embedded payloads are saved on demand.
+- Claude Code pasted text and automatically truncated long input render as text document cards when the local prompt-history record can be matched unambiguously. Pasted-image placeholders use the corresponding session image metadata. If the auxiliary record cannot be verified, the primary session text remains visible.
 - Claude Code IDE opened-file and selection markers render as file/selection reference cards instead of raw inline tags.
-- Codex mentioned-file blocks render as file reference cards while the actual request body remains as message text, including blocks that appear after IDE context.
+- Codex mentioned- and pasted-file blocks render as file reference cards while only an explicit request remains as message text. Attachment-only pasted requests remain card-only, including blocks that appear after IDE context.
 - File reference cards can open local files through VS Code. Referenced files are not read automatically for rendering, search, resume, or handoff.
+- On Windows, Claude Code scratchpad links under the current user's local Claude temporary directory can still open when the generated relative link crosses drives.
 - Card metadata such as path, MIME type, and size is available from tooltips instead of taking over the session timeline.
 - Markdown transcripts, resume text, and handoff files use clean text plus attachment summaries instead of repeating raw tags or file blocks.
 
@@ -122,7 +133,7 @@ The search index can be tuned with `codexHistoryViewer.search.indexToolContent`:
 - `toolCalls`
 - `toolCallsAndOutputs`
 
-Attachment indexing includes labels, paths, MIME types, file kinds, and bounded text from Claude Code text documents. PDF / Office / binary / base64 document contents and Codex referenced-file contents are not indexed.
+Attachment indexing includes labels, paths, MIME types, file kinds, and bounded text from Claude Code text documents. PDF / Office / binary / base64 document contents, raw image Base64 or data URI payloads, and Codex referenced-file contents are not indexed.
 
 ## Codex Archived Sessions
 
@@ -198,7 +209,9 @@ Enable `codexHistoryViewer.branchNavigation.enabled` to use this feature. For Co
 
 ## Configuration
 
-Most settings are available from VS Code Settings under **Codex History Viewer**. Common settings include:
+Run **Open Settings** from **Control** or the Command Palette to open the categorized settings page. Settings can be edited at the User, Workspace, or Workspace Folder level when supported by their scope. The **Maintenance** page can reset managed user settings, export or import scope-specific JSON settings backups, rebuild the history cache or search index, run cleanup actions, and open the standard VS Code settings for advanced editing.
+
+Common settings include:
 
 - `codexHistoryViewer.sources.enabled`: enable `codex` (Codex), `claude` (Claude Code), or both. VS Code Settings and `settings.json` use the stored identifiers `codex` and `claude`.
 - `codexHistoryViewer.sessionsRoot`: Codex sessions root.
@@ -211,6 +224,8 @@ Most settings are available from VS Code Settings under **Codex History Viewer**
 - `codexHistoryViewer.resume.claudeMethod`: choose Extension, CLI, or Extension and CLI for resuming Claude Code sessions.
 - `codexHistoryViewer.preview.tooltipMode`: choose Detailed, Compact, or Title Only for session tree item tooltips.
 - `codexHistoryViewer.preview.maxMessages`: set the maximum number of user/assistant messages collected for Detailed tooltips. This is not a guaranteed visible count; VS Code limits tooltip height to approximately 50% of the window, so some collected messages may be outside the visible area.
+- `codexHistoryViewer.sessionRow.showTimestamp`: show or hide timestamps in History, Pinned, and Search session rows while keeping them available in tooltips.
+- `codexHistoryViewer.sessionRow.showProject`: show or hide project aliases or paths in History, Pinned, and Search session rows while keeping them available in tooltips.
 - `codexHistoryViewer.search.indexToolContent`: control search index tool-content scope.
 - `codexHistoryViewer.fileChangeHistory.explorerContextMenu.enabled`: show File AI Change History in Explorer.
 - `codexHistoryViewer.autoRefresh.enabled`: watch local session files and refresh the History tree and opted-in session tabs when the VS Code window is focused and the History tree is visible or an opted-in session tab is open.
@@ -218,7 +233,7 @@ Most settings are available from VS Code Settings under **Codex History Viewer**
 - `codexHistoryViewer.chat.stickyUserPrompt`: keep the current user prompt visible while scrolling the session timeline.
 - `codexHistoryViewer.chat.performanceMode`: choose the default session rendering performance mode.
 - `codexHistoryViewer.chat.turnTimeline.mode`: enable the opt-in Codex turn timeline with `off`, `basic`, or `live`.
-- `codexHistoryViewer.webview.restoreAfterReload`: experimental opt-in to restoring session tabs, File AI Change History, and History Insights after Reload Window or VS Code restart.
+- `codexHistoryViewer.webview.restoreAfterReload`: experimental opt-in to restoring session tabs, File AI Change History, History Insights, and the dedicated settings page after Reload Window or VS Code restart.
 - `codexHistoryViewer.images.enabled`: show supported image attachments.
 - `codexHistoryViewer.ui.timeGuide.enabled`: enable compact date guides and bookmark controls.
 - `codexHistoryViewer.ui.language`: choose `auto`, `en`, or `ja`.
@@ -235,12 +250,13 @@ The defaults are designed for regular use. These settings are useful starting po
 | Agent Runs                                          | Enable `codexHistoryViewer.agentRuns.enabled` to navigate stored parent and sub-agent sessions in the session view.                                       |
 | Branch Navigation                                   | Enable `codexHistoryViewer.branchNavigation.enabled` to navigate locally forked Codex histories and Claude Code Fork conversation histories. |
 | Faster, narrower search                              | Use `codexHistoryViewer.search.indexToolContent: toolCalls` instead of `toolCallsAndOutputs`, and lower `codexHistoryViewer.search.maxResults` if needed. |
+| More compact session rows                            | Turn off `codexHistoryViewer.sessionRow.showTimestamp`, `codexHistoryViewer.sessionRow.showProject`, or both. Hidden details remain available in tooltips. |
 | Long sessions, bookmarks, or frequent timeline jumps | Enable `codexHistoryViewer.ui.timeGuide.enabled`.                                                                                                         |
 | Frequent image-heavy sessions                        | Lower `codexHistoryViewer.images.thumbnailSize` or `codexHistoryViewer.images.maxSizeMB`.                                                                 |
 | Live-updating session files                          | Enable `codexHistoryViewer.autoRefresh.enabled` when you want the History tree and opted-in session tabs to refresh while the VS Code window is focused.  |
-| Restoring session tabs after reload                  | Enable `codexHistoryViewer.webview.restoreAfterReload` only if you accept the experimental duplicate-tab caveat.                                          |
+| Restoring extension tabs after reload                | Enable `codexHistoryViewer.webview.restoreAfterReload` only if you accept the experimental duplicate-tab caveat.                                          |
 
-If history, search, or analysis results look stale, run **Control > Rebuild Cache**. After confirmation, it recreates the history cache, search index, and analysis data. A successful **Rebuild Cache** refreshes open History Insights and Branch Navigation only when its starting configuration is still current.
+If history, search, or analysis results look stale, run **Open Settings > Maintenance > Rebuild Cache** or **Control > Rebuild Cache**. After confirmation, it recreates the history cache, search index, and analysis data. A successful **Rebuild Cache** refreshes open History Insights and Branch Navigation only when its starting configuration is still current.
 
 ## Commands
 
@@ -256,11 +272,18 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.11.1
+## What's New in 2.12.0
 
-- Expanded syntax highlighting in the Session Viewer to cover additional code block languages and file types in file-change diffs.
-- Added syntax highlighting to File AI Change History diffs when the language can be determined from the file path.
-- Improved in-page search so phrases spanning syntax-highlighted tokens are found correctly in code blocks and file-change diffs.
+- Added a new settings page that organizes settings by category and provides settings backups and maintenance actions. The standard VS Code settings remain available from **Maintenance**.
+- Added settings to independently hide timestamps and project aliases or paths in History, Pinned, and Search session rows.
+- Added a per-table action in the Session Viewer to copy only that table in its original Markdown form.
+- Improved Markdown table presentation with clearer spacing, separators, wrapping, and table-local horizontal scrolling.
+- Added support for Codex array-form tool outputs and standalone local-shell, web-search, and image-generation response items.
+- Fixed current Codex pasted-file records and verified Claude Code pasted and automatically truncated input so they render as attachment cards.
+- Fixed Claude Code cross-session peer and coordinator messages so they render as dedicated cross-session message cards.
+- Fixed Claude Code scratchpad links generated as cross-drive relative paths on Windows.
+- Fixed blank lines collapsing inside syntax-highlighted code blocks in the Session Viewer.
+- Fixed Session Viewer resume and restore controls sometimes remaining hidden after session reload, auto-refresh, or initial background history refresh.
 
 ## Changelog
 
@@ -272,11 +295,13 @@ See [SECURITY](SECURITY.md) for details. Use Codex History Viewer v2.11.0 or lat
 
 ## Privacy
 
-This extension reads local session files and renders them inside VS Code. It does not implement any network communication and does not send session content anywhere.
+This extension reads local session files and renders them inside VS Code. For Claude Code sessions in the standard local project layout, it can also read matching entries from `.claude/history.jsonl` and hash-verified text files from `.claude/paste-cache` to identify pasted or truncated input. These auxiliary files remain local, and unverifiable data is ignored. The extension does not implement any network communication and does not send session content anywhere.
 
 If you use **Copy Quick Prompt** or **Copy Handoff Prompt to Clipboard**, this extension copies session context to your clipboard. Data is only sent externally if you paste it into another tool or extension.
 
 When you open a session as a Markdown transcript, the generated transcript includes local paths such as the session file path and CWD. Review before sharing.
+
+Settings backup JSON files exported from the **Maintenance** page may contain configured local folder paths. Workspace- and folder-scoped backups may also contain the current workspace or selected folder's absolute path or URI in target metadata. Review them before sharing.
 
 ## Project Scope
 

@@ -14,7 +14,7 @@ Notes:
 | Refresh Pinned | `codexHistoryViewer.refreshPinned` | Refreshes only the Pinned view. |
 | Refresh History | `codexHistoryViewer.refreshHistoryPane` | Refreshes only the History view. |
 | Refresh Status | `codexHistoryViewer.refreshStatusPane` | Refreshes only the Status view. |
-| Open Settings | `codexHistoryViewer.openSettings` | Opens extension settings in the VS Code Settings UI. |
+| Open Settings | `codexHistoryViewer.openSettings` | Opens the categorized settings page. Its Maintenance page provides scope-specific settings backups and access to VS Code Settings for advanced editing. |
 | Rebuild Cache | `codexHistoryViewer.rebuildCache` | Rebuilds the history, search, and analysis caches from the current source sessions. |
 | Rebuild Search Index | `codexHistoryViewer.rebuildSearchIndex` | Rebuilds only the local search index from source files. |
 | Remove Missing Pins | `codexHistoryViewer.cleanupMissingPins` | Removes pinned entries whose source files no longer exist. |

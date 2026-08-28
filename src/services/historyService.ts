@@ -28,7 +28,7 @@ interface CacheEntryV1 {
   codexAgentMetadataVersion?: 1;
 }
 
-const SUMMARY_CACHE_ALGO_VERSION = 12;
+const SUMMARY_CACHE_ALGO_VERSION = 18;
 const HISTORY_REFRESH_CONCURRENCY = 4;
 
 interface CacheFileV9 {
@@ -1013,6 +1013,7 @@ function cloneHistoryConfig(config: CodexHistoryViewerConfig): CodexHistoryViewe
       ? Object.freeze({ ...config.autoRefresh })
       : config.autoRefresh,
     images: config.images ? Object.freeze({ ...config.images }) : config.images,
+    sessionRow: config.sessionRow ? Object.freeze({ ...config.sessionRow }) : config.sessionRow,
   };
   return Object.freeze(snapshot);
 }

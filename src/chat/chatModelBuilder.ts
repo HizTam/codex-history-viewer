@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import type {
+  ChatAttachment,
   ChatEnvironmentItem,
   ChatMessageItem,
   ChatMemoryCitation,
@@ -43,11 +44,21 @@ import {
   extractCodexMessageContent,
   extractCodexProtocolContextText,
   extractCodexSessionStartContextText,
-  hasClaudeAttachmentLikeContent,
   isCodexTurnAbortedContent,
+  selectClaudeControlContent,
 } from "./chatAttachments";
-import { stripImagePlaceholders } from "./chatImageAttachments";
+import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "./claudePastedPrompt";
+import {
+  extractClaudeCrossSessionMessage,
+  isClaudeCrossSessionInboundRecord,
+  projectClaudeCrossSessionBody,
+} from "./claudeCrossSessionMessage";
 import { normalizeMemoryCitationPayload, splitTrailingMemoryCitationBlock } from "./memoryCitation";
+import {
+  extractCodexToolOutput,
+  extractCodexToolOutputText,
+  projectCodexStandaloneResponseItem,
+} from "./codexResponseItems";
 import {
   buildClaudePatchBookmarkGroupId,
   buildCodexPatchBookmarkGroupId,
@@ -125,6 +136,7 @@ async function readTimelineItems(
   sessionCwd: string | undefined,
   options: ChatSessionModelBuildOptions,
 ): Promise<ChatTimelineBuildResult> {
+  const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
@@ -205,6 +217,7 @@ async function readTimelineItems(
           sessionCwd,
           options,
           lineIndex,
+          pastedPromptResolver,
         )
       ) {
         continue;
@@ -233,6 +246,7 @@ async function readPatchEntryDetails(
   sessionCwd: string | undefined,
   target: ChatPatchEntryDetailTarget,
 ): Promise<ChatPatchEntry | null> {
+  const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   const pendingApplyPatchEntries = new Map<string, ChatPatchEntry[]>();
@@ -275,7 +289,7 @@ async function readPatchEntryDetails(
 
       if (obj?.type === "response_item" && isCodexToolCallOutput(obj?.payload?.type)) {
         const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-        const outputText = typeof obj?.payload?.output === "string" ? obj.payload.output : undefined;
+        const outputText = extractCodexToolOutputText(obj?.payload?.output) || undefined;
         if (callId && isApplyPatchFailureOutput(outputText)) pendingApplyPatchEntries.delete(callId);
         continue;
       }
@@ -299,12 +313,18 @@ async function readPatchEntryDetails(
 
       const role = detectClaudeMessageRole(obj);
       if (!role) continue;
+      if (isClaudeCrossSessionInboundRecord(obj)) {
+        messageIndex += 1;
+        continue;
+      }
       const rawContent = getClaudeMessageContent(obj);
-      if (role === "user" && extractClaudeRequestInterruptionContent(rawContent)) continue;
-      if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) continue;
+      const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
+      const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+      if (role === "user" && extractClaudeRequestInterruptionContent(controlContent)) continue;
+      if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
       const parsed = parseClaudeMessageContent(rawContent);
-      const stripped = stripImagePlaceholders(parsed.messageText);
-      if (normalizeText(stripped.text) || hasClaudeAttachmentLikeContent(rawContent)) messageIndex += 1;
+      const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, { enabled: false }, { role, pastedPrompt });
+      if (normalizeText(extracted.text) || extracted.attachments.length > 0) messageIndex += 1;
       for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
         const toolCall = parsed.toolCalls[toolCallIndex]!;
         const callId = resolveClaudeToolCallId(toolCall.callId, lineIndex, toolCallIndex);
@@ -483,8 +503,18 @@ async function indexCodexTimelineRecord(
 
   if (payloadType === "function_call_output" || payloadType === "custom_tool_call_output") {
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-    const outputText = typeof obj?.payload?.output === "string" ? obj.payload.output : undefined;
+    const extracted = await extractCodexToolOutput(
+      obj?.payload?.output,
+      sessionCwd,
+      toImageExtractionOptions(options.images),
+    );
+    const outputText = extracted.text || undefined;
+    assignAttachmentIds(extracted.attachments, `tool${lineIndex}`);
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    const fallbackName =
+      payloadType === "custom_tool_call_output" && typeof obj?.payload?.name === "string" && obj.payload.name.trim()
+        ? obj.payload.name.trim().slice(0, 256)
+        : payloadType;
     const execution = extractToolExecutionFromText(outputText);
     if (callId && isApplyPatchFailureOutput(outputText)) {
       removePendingApplyPatchGroup(items, pendingPatchGroups, callId);
@@ -496,10 +526,37 @@ async function indexCodexTimelineRecord(
       fallbackMessageIndex: currentMessageIndex(),
       turnId,
       timestampIso: ts,
-      fallbackName: payloadType,
+      fallbackName,
       includeDetails: shouldIncludeDetails(options),
       execution,
+      attachments: extracted.attachments,
     });
+    observeCodexItemTurn(turnState, turnId, ts);
+    return true;
+  }
+
+  const standalone = await projectCodexStandaloneResponseItem(
+    obj?.payload,
+    toImageExtractionOptions(options.images),
+  );
+  if (standalone) {
+    const includeDetails = shouldIncludeDetails(options);
+    const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    assignAttachmentIds(standalone.attachments, `tool${lineIndex}`);
+    const tool: ChatToolItem = {
+      type: "tool",
+      messageIndex: currentMessageIndex(),
+      ...(turnId ? { turnId } : {}),
+      timestampIso: ts,
+      name: standalone.name,
+      callId: standalone.callId,
+      ...(includeDetails && standalone.argumentsText ? { argumentsText: standalone.argumentsText } : {}),
+      ...(!includeDetails && hasText(standalone.argumentsText) ? { detailsOmitted: true } : {}),
+      ...(standalone.execution ? { execution: standalone.execution } : {}),
+      ...(standalone.attachments.length > 0 ? { attachments: standalone.attachments } : {}),
+    };
+    if (!includeDetails) tool.presentation = buildToolPresentation({ ...tool, argumentsText: standalone.argumentsText });
+    items.push(tool);
     observeCodexItemTurn(turnState, turnId, ts);
     return true;
   }
@@ -675,12 +732,35 @@ async function indexClaudeTimelineRecord(
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
   lineIndex = 0,
+  pastedPromptResolver?: ClaudePastedPromptResolver,
 ): Promise<boolean> {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
+  if (isClaudeCrossSessionInboundRecord(obj)) {
+    const idx = nextMessageIndex();
+    const crossSessionMessage = extractClaudeCrossSessionMessage(obj);
+    if (crossSessionMessage) {
+      const projected = projectClaudeCrossSessionBody(crossSessionMessage.body);
+      const ts = readTimestampIso(obj);
+      items.push({
+        type: "crossSessionMessage",
+        source: "claude",
+        provenance: crossSessionMessage.provenance,
+        messageIndex: idx,
+        ...(ts ? { timestampIso: ts } : {}),
+        ...(crossSessionMessage.senderName ? { senderName: crossSessionMessage.senderName } : {}),
+        body: projected.body,
+        ...(projected.truncated ? { truncated: true } : {}),
+      });
+    }
+    return true;
+  }
+
   const rawContent = getClaudeMessageContent(obj);
-  const interruption = role === "user" ? extractClaudeRequestInterruptionContent(rawContent) : null;
+  const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
+  const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+  const interruption = role === "user" ? extractClaudeRequestInterruptionContent(controlContent) : null;
   if (interruption) {
     const ts = readTimestampIso(obj);
     items.push({
@@ -693,7 +773,7 @@ async function indexClaudeTimelineRecord(
     return true;
   }
 
-  const localCommandOutput = role === "user" ? extractClaudeLocalCommandOutputContent(rawContent) : null;
+  const localCommandOutput = role === "user" ? extractClaudeLocalCommandOutputContent(controlContent) : null;
   if (localCommandOutput) {
     const ts = readTimestampIso(obj);
     items.push({
@@ -707,7 +787,10 @@ async function indexClaudeTimelineRecord(
   }
 
   const parsed = parseClaudeMessageContent(rawContent);
-  const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, toImageExtractionOptions(options.images), { role });
+  const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, toImageExtractionOptions(options.images), {
+    role,
+    pastedPrompt,
+  });
   const attachments = extracted.attachments;
   const text = normalizeText(extracted.text);
   const ts = readTimestampIso(obj);
@@ -2015,13 +2098,25 @@ function attachOrPushToolOutput(
     fallbackName: string;
     includeDetails: boolean;
     execution?: ChatToolExecution;
+    attachments?: ChatAttachment[];
   },
 ): void {
-  const { callId, outputText, fallbackMessageIndex, turnId, timestampIso, fallbackName, includeDetails, execution } = params;
+  const {
+    callId,
+    outputText,
+    fallbackMessageIndex,
+    turnId,
+    timestampIso,
+    fallbackName,
+    includeDetails,
+    execution,
+    attachments = [],
+  } = params;
   if (callId && toolByCallId.has(callId)) {
     const tool = toolByCallId.get(callId)!;
     if (includeDetails) tool.outputText = outputText;
     else if (hasText(outputText)) tool.detailsOmitted = true;
+    if (attachments.length > 0) tool.attachments = [...(tool.attachments ?? []), ...attachments];
     mergeToolExecutionIntoItem(tool, execution ?? extractToolExecutionFromText(outputText));
     if (!tool.timestampIso) tool.timestampIso = timestampIso;
     if (typeof tool.messageIndex !== "number" && typeof fallbackMessageIndex === "number") {
@@ -2042,6 +2137,7 @@ function attachOrPushToolOutput(
     ...(includeDetails && outputText ? { outputText } : {}),
     ...(!includeDetails && hasText(outputText) ? { detailsOmitted: true } : {}),
     ...(resolvedExecution ? { execution: resolvedExecution } : {}),
+    ...(attachments.length > 0 ? { attachments } : {}),
   };
   if (!includeDetails) tool.presentation = buildToolPresentation(tool);
   items.push(tool);

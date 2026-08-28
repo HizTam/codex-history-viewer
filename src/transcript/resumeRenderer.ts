@@ -14,7 +14,10 @@ import {
   extractCodexCompactUserText,
   extractCodexMessageContent,
   isCodexProtocolContextContent,
+  selectClaudeControlContent,
 } from "../chat/chatAttachments";
+import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
+import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
 
 type ResumeRole = "user" | "assistant";
 
@@ -40,6 +43,7 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
 
   const meta = await tryReadSessionMeta(fsPath);
   const historySource = detectHistorySource(meta?.historySource, fsPath);
+  const pastedPromptResolver = historySource === "claude" ? await createClaudePastedPromptResolver(fsPath) : undefined;
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
@@ -63,7 +67,7 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
       if (await collectCodexResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty)) {
         continue;
       }
-      await collectClaudeResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty);
+      await collectClaudeResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty, pastedPromptResolver);
     }
   } finally {
     rl.close();
@@ -203,13 +207,17 @@ async function collectClaudeResumeMessage(
   recent: ResumeMessage[],
   maxMessages: number,
   setTask: (task: string) => void,
+  pastedPromptResolver?: ClaudePastedPromptResolver,
 ): Promise<boolean> {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
+  if (isClaudeCrossSessionInboundRecord(obj)) return true;
 
   const rawContent = getClaudeMessageContent(obj);
-  if (role === "user" && extractClaudeLocalCommandOutputContent(rawContent)) return true;
-  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role });
+  const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
+  const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+  if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) return true;
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
   const textNormalized = normalizeWhitespace(extracted.text);
   const attachmentSummary = buildResumeAttachmentSummary(extracted.attachments);
   const combinedText = combineResumeText(attachmentSummary, textNormalized);

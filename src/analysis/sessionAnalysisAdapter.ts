@@ -9,6 +9,7 @@ import {
   extractClaudeLocalCommandOutputContent,
   extractClaudeMessageContent,
   extractClaudeRequestInterruptionContent,
+  selectClaudeControlContent,
 } from "../chat/chatAttachments";
 import type {
   ChatMessageItem,
@@ -21,6 +22,8 @@ import type {
   ChatTurnSummary,
   ChatUsageItem,
 } from "../chat/chatTypes";
+import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
+import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { stableTextSha256 } from "../utils/stableTextHash";
@@ -749,6 +752,7 @@ function normalizeRateLimitValue(
 }
 
 async function scanJsonl(fsPath: string, collectClaudeRecords: boolean, sessionCwd?: string): Promise<JsonlScanResult> {
+  const pastedPromptResolver = collectClaudeRecords ? await createClaudePastedPromptResolver(fsPath) : undefined;
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const reader = readline.createInterface({ input: stream, crlfDelay: Infinity });
   let malformedLineCount = 0;
@@ -781,7 +785,7 @@ async function scanJsonl(fsPath: string, collectClaudeRecords: boolean, sessionC
         claudeGraphRecordsTruncated = true;
         continue;
       }
-      const builtRecord = await buildRawClaudeRecord(obj, recordOrdinal, sessionCwd);
+      const builtRecord = await buildRawClaudeRecord(obj, recordOrdinal, sessionCwd, pastedPromptResolver);
       if (builtRecord.invalidGraphIdentifier) claudeGraphIdentifierInvalid = true;
       claudeRecords.push(builtRecord.record);
     }
@@ -820,21 +824,28 @@ async function buildRawClaudeRecord(
   obj: any,
   recordOrdinal: number,
   sessionCwd?: string,
+  pastedPromptResolver?: ClaudePastedPromptResolver,
 ): Promise<RawClaudeRecordBuildResult> {
   const role = detectClaudeMaterializedMessageRole(obj);
   const rawContent = getClaudeMessageContent(obj);
+  const isCrossSessionInbound = isClaudeCrossSessionInboundRecord(obj);
+  const pastedPrompt = role === "user" && !isCrossSessionInbound
+    ? await pastedPromptResolver?.resolve(obj, rawContent)
+    : undefined;
+  const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
   let humanCandidate: RawClaudeRecord["humanCandidate"];
   if (
     role === "user" &&
+    !isCrossSessionInbound &&
     obj?.isMeta !== true &&
-    !extractClaudeRequestInterruptionContent(rawContent) &&
-    !extractClaudeLocalCommandOutputContent(rawContent)
+    !extractClaudeRequestInterruptionContent(controlContent) &&
+    !extractClaudeLocalCommandOutputContent(controlContent)
   ) {
     const extracted = await extractClaudeMessageContent(
       rawContent,
       sessionCwd,
       { enabled: false, maxBytes: 1024 * 1024 },
-      { role: "user" },
+      { role: "user", pastedPrompt },
     );
     const compact = extractCompactUserText(extracted.text);
     if (compact || extracted.attachments.length > 0) {

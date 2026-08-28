@@ -126,6 +126,7 @@ export type ChatPanelKind = "reusable" | "session" | "branch";
 export type ChatWebviewAutoRefreshMode = "off" | "preserve" | "follow";
 type ChatPanelState = {
   fsPath: string;
+  historySource?: "codex" | "claude";
   sessionId?: string;
   sessionInfoRevision?: number;
   revealMessageIndex?: number;
@@ -141,6 +142,13 @@ type ChatPanelState = {
   pathMode?: ChatWebviewPathMode;
   pathModeEnabled?: boolean;
   pendingAutoRefresh: boolean;
+};
+type ResumePresentationCheckpoint = {
+  sessionPathKey: string;
+  source: ResumeSource;
+  identityKey: string;
+  archiveState: SessionSummary["storage"]["archiveState"];
+  rootKind: SessionSummary["storage"]["rootKind"];
 };
 type SessionInfoAction = "copySessionId" | "copySessionFilePath" | "revealSessionFile";
 type SearchHistoryWebviewCandidate = SearchHistoryEntry & { key: string };
@@ -288,6 +296,9 @@ export class ChatPanelManager implements vscode.Disposable {
     new WeakMap<vscode.WebviewPanel, ChatSessionDataTransitionReservation>();
   private readonly sessionDataCommitSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private readonly resumeRevisionByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly resumePresentationCheckpointByPanel =
+    new WeakMap<vscode.WebviewPanel, ResumePresentationCheckpoint>();
+  private readonly resumePresentationDeliverySequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private reusableOpenGeneration = 0;
   private codexAgentRunsLoading = false;
   public readonly onDidChangeAutoRefreshConsumerVisibility = this.autoRefreshConsumerVisibilityEmitter.event;
@@ -473,7 +484,7 @@ export class ChatPanelManager implements vscode.Disposable {
   public refreshResumePresentation(): void {
     for (const panel of this.getOpenPanels()) {
       if (!this.readyByPanel.get(panel)) continue;
-      const revision = this.invalidateResumePresentation(panel);
+      const revision = this.advanceResumeRevision(panel);
       void panel.webview.postMessage({
         type: "resumePresentation",
         snapshot: this.buildCliResumeSnapshot(panel, revision),
@@ -554,12 +565,17 @@ export class ChatPanelManager implements vscode.Disposable {
     return this.resumeRevisionByPanel.get(panel) ?? 0;
   }
 
+  private advanceResumeRevision(panel: vscode.WebviewPanel): number {
+    const revision = this.getResumeRevision(panel) + 1;
+    this.resumeRevisionByPanel.set(panel, revision);
+    return revision;
+  }
+
   private invalidateResumePresentation(
     panel: vscode.WebviewPanel,
     options: { sessionDataPending?: boolean } = {},
   ): number {
-    const revision = this.getResumeRevision(panel) + 1;
-    this.resumeRevisionByPanel.set(panel, revision);
+    const revision = this.advanceResumeRevision(panel);
     if (this.readyByPanel.get(panel)) {
       void panel.webview.postMessage({
         type: "resumePresentationInvalidated",
@@ -568,6 +584,81 @@ export class ChatPanelManager implements vscode.Disposable {
       });
     }
     return revision;
+  }
+
+  private rememberDeliveredResumePresentation(
+    panel: vscode.WebviewPanel,
+    state: ChatPanelState,
+    model: ChatSessionModel,
+    summary: SessionSummary | undefined,
+    deliverySequence: number,
+  ): void {
+    const previousSequence = this.resumePresentationDeliverySequenceByPanel.get(panel) ?? 0;
+    if (deliverySequence < previousSequence) return;
+    // Keep the newest delivery as a tombstone even when its identity cannot be checkpointed.
+    this.resumePresentationDeliverySequenceByPanel.set(panel, deliverySequence);
+    const source = model.meta?.historySource;
+    const location = model.sessionLocation;
+    const modelSessionId = typeof model.meta?.id === "string" ? model.meta.id : undefined;
+    const summarySessionId = typeof summary?.meta.id === "string" ? summary.meta.id : undefined;
+    if (
+      !summary ||
+      (source !== "codex" && source !== "claude") ||
+      state.historySource !== source ||
+      normalizeCacheKey(summary.fsPath) !== normalizeCacheKey(state.fsPath) ||
+      summary.source !== source ||
+      modelSessionId !== summarySessionId ||
+      !location ||
+      location.archiveState !== summary.storage.archiveState ||
+      location.rootKind !== summary.storage.rootKind
+    ) {
+      this.resumePresentationCheckpointByPanel.delete(panel);
+      return;
+    }
+    this.resumePresentationCheckpointByPanel.set(panel, {
+      sessionPathKey: normalizeCacheKey(state.fsPath),
+      source,
+      identityKey: summary.identityKey,
+      archiveState: summary.storage.archiveState,
+      rootKind: summary.storage.rootKind,
+    });
+  }
+
+  private canRecoverResumePresentation(
+    panel: vscode.WebviewPanel,
+    request: ChatSessionDataRequest,
+    options: ChatSessionDataOptions | undefined,
+  ): boolean {
+    if (!this.readyByPanel.get(panel)) return false;
+    if (this.sessionDataRequestSequenceByPanel.get(panel) !== request.sequence) return false;
+    const transitionReservation = this.sessionDataTransitionByPanel.get(panel);
+    if (
+      request.transition
+        ? transitionReservation?.sequence !== request.sequence
+        : transitionReservation !== undefined
+    ) {
+      return false;
+    }
+    if (options?.isRequestCurrent && !options.isRequestCurrent()) return false;
+
+    const checkpoint = this.resumePresentationCheckpointByPanel.get(panel);
+    const state = this.stateByPanel.get(panel);
+    if (
+      !checkpoint ||
+      !state ||
+      normalizeCacheKey(state.fsPath) !== checkpoint.sessionPathKey ||
+      state.historySource !== checkpoint.source
+    ) {
+      return false;
+    }
+    const session = this.historyService.findByFsPath(state.fsPath);
+    return Boolean(
+      session &&
+      session.source === checkpoint.source &&
+      session.identityKey === checkpoint.identityKey &&
+      session.storage.archiveState === checkpoint.archiveState &&
+      session.storage.rootKind === checkpoint.rootKind
+    );
   }
 
   public refreshProjectAssociations(): void {
@@ -848,6 +939,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
     const nextState: ChatPanelState = {
       fsPath: session.fsPath,
+      historySource: session.source,
       revealMessageIndex: options.revealMessageIndex,
       revealTarget: options.revealTarget,
       pageSearchSeed: sanitizePageSearchSeed(options.pageSearchSeed),
@@ -982,6 +1074,8 @@ export class ChatPanelManager implements vscode.Disposable {
       this.sessionDataRequestSequenceByPanel.delete(panel);
       this.sessionDataTransitionByPanel.delete(panel);
       this.sessionDataCommitSequenceByPanel.delete(panel);
+      this.resumePresentationCheckpointByPanel.delete(panel);
+      this.resumePresentationDeliverySequenceByPanel.delete(panel);
       this.notifyAutoRefreshConsumerVisibilityChanged();
     });
   }
@@ -1038,8 +1132,10 @@ export class ChatPanelManager implements vscode.Disposable {
     }
 
     this.initializePanel(panel);
+    const session = this.historyService.findByFsPath(restored.fsPath);
     this.stateByPanel.set(panel, {
       fsPath: restored.fsPath,
+      historySource: session?.source,
       revealMessageIndex: restored.revealMessageIndex,
       revealTarget: restored.revealTarget,
       restoreScrollY: restored.scrollY,
@@ -1050,7 +1146,6 @@ export class ChatPanelManager implements vscode.Disposable {
       pathMode: restored.pathMode,
       pendingAutoRefresh: false,
     });
-    const session = this.historyService.findByFsPath(restored.fsPath);
     if (session) {
       panel.title = buildPanelTitle(session);
       panel.iconPath = this.resolveSessionIconPath(session, restored.kind);
@@ -1254,8 +1349,22 @@ export class ChatPanelManager implements vscode.Disposable {
       case "copy": {
         const text = typeof msg?.text === "string" ? msg.text : "";
         if (!text) return;
-        await vscode.env.clipboard.writeText(text);
-        panel.webview.postMessage({ type: "copied" });
+        try {
+          await vscode.env.clipboard.writeText(text);
+        } catch {
+          this.logger?.debug("chat.copy failed");
+          try {
+            await panel.webview.postMessage({ type: "copyFailed" });
+          } catch {
+            this.logger?.debug("chat.copy failure delivery failed");
+          }
+          return;
+        }
+        try {
+          await panel.webview.postMessage({ type: "copied" });
+        } catch {
+          this.logger?.debug("chat.copy success delivery failed");
+        }
         return;
       }
       case "copySessionId": {
@@ -2949,6 +3058,7 @@ export class ChatPanelManager implements vscode.Disposable {
     }
     const candidate: ChatPanelState = {
       fsPath: session.fsPath,
+      historySource: session.source,
       revealMessageIndex,
       kind: "branch",
       autoRefreshMode: DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE,
@@ -3049,18 +3159,14 @@ export class ChatPanelManager implements vscode.Disposable {
       );
       return sent;
     } finally {
+      const recoverResumePresentation =
+        !sent && this.canRecoverResumePresentation(panel, request, options);
+      const recoveryRevision = this.getResumeRevision(panel);
       this.completeSessionDataRequest(panel, request);
-      if (
-        !sent &&
-        options?.stateOverride !== undefined &&
-        currentState !== undefined &&
-        this.stateByPanel.get(panel) === currentState &&
-        this.readyByPanel.get(panel) &&
-        this.getResumeRevision(panel) === resumeRevision
-      ) {
+      if (recoverResumePresentation) {
         void panel.webview.postMessage({
           type: "resumePresentation",
-          snapshot: this.buildCliResumeSnapshot(panel, resumeRevision),
+          snapshot: this.buildCliResumeSnapshot(panel, recoveryRevision),
           sessionDataComplete: true,
         });
       }
@@ -3131,7 +3237,7 @@ export class ChatPanelManager implements vscode.Disposable {
     if (!isCurrent()) return false;
 
     const sessionCwd = typeof model.meta?.cwd === "string" ? model.meta.cwd : undefined;
-    const historySource = model.meta?.historySource;
+    const historySource = model.meta?.historySource ?? state.historySource;
     const sessionId =
       historySource === "codex" || historySource === "claude"
         ? validateCliResumeSessionId(model.meta?.id, historySource) ?? undefined
@@ -3145,6 +3251,7 @@ export class ChatPanelManager implements vscode.Disposable {
     );
     const nextState: ChatPanelState = {
       ...state,
+      historySource,
       sessionId,
       sessionInfoRevision: request.sequence,
       sessionCwd,
@@ -3212,6 +3319,7 @@ export class ChatPanelManager implements vscode.Disposable {
         ),
       ),
     );
+    const cliResume = this.buildCliResumeSnapshot(panel, resumeRevision);
     const delivery = panel.webview.postMessage({
       type: "sessionData",
       model: {
@@ -3239,7 +3347,7 @@ export class ChatPanelManager implements vscode.Disposable {
         fileName: path.basename(committedState.fsPath),
         filePath: committedState.fsPath,
       },
-      cliResume: this.buildCliResumeSnapshot(panel, resumeRevision),
+      cliResume,
       bookmarks: bookmarkState.bookmarkKeys,
       i18n: this.buildI18n(),
       mermaidPreferences: this.mermaidPreferenceStore.get(),
@@ -3286,6 +3394,9 @@ export class ChatPanelManager implements vscode.Disposable {
     this.scheduleBranchNavigation(panel);
     this.publishCodexAgentRuns(panel);
     const delivered = await delivery;
+    if (delivered) {
+      this.rememberDeliveredResumePresentation(panel, committedState, webviewModel, summary, request.sequence);
+    }
     if (!delivered || this.sessionDataCommitSequenceByPanel.get(panel) !== request.sequence) return false;
     const latestState = this.stateByPanel.get(panel);
     return Boolean(
@@ -3698,6 +3809,7 @@ export class ChatPanelManager implements vscode.Disposable {
         ...(vscode.workspace.workspaceFolders ?? []).map((folder) => folder.uri.fsPath),
       ),
       projectPathMappings: buildChatProjectPathMappings(state),
+      claudeSessionFsPath: state.historySource === "claude" ? state.fsPath : undefined,
     });
 
     if (!target) {
@@ -3884,6 +3996,7 @@ export class ChatPanelManager implements vscode.Disposable {
       sessionStartContextDescription: t("chat.sessionStartContext.description"),
       timeGuideDates: t("fileChangeHistory.guide.dates"),
       copied: t("chat.toast.copied"),
+      copyFailed: t("chat.toast.copyFailed"),
       restoredLastPosition: t("chat.toast.restoredLastPosition"),
       autoRefreshOffToast: t("chat.toast.autoRefreshOff"),
       autoRefreshPreserveToast: t("chat.toast.autoRefreshPreserve"),
@@ -3975,6 +4088,10 @@ export class ChatPanelManager implements vscode.Disposable {
       systemEventDetailDuration: t("chat.systemEvent.detail.duration"),
       systemEventDetailTurnId: t("chat.systemEvent.detail.turnId"),
       systemEventDetailRolledBackTurns: t("chat.systemEvent.detail.rolledBackTurns"),
+      crossSessionMessageBadge: t("chat.crossSession.badge"),
+      crossSessionMessageTitle: t("chat.crossSession.title"),
+      crossSessionMessageFrom: t("chat.crossSession.from"),
+      crossSessionMessageTruncated: t("chat.crossSession.truncated"),
       roleUser: t("chat.role.user"),
       roleAssistant: t("chat.role.assistant"),
       roleDeveloper: t("chat.role.developer"),
@@ -4062,6 +4179,7 @@ export class ChatPanelManager implements vscode.Disposable {
       stickyUserOpenOriginal: t("chat.stickyUser.openOriginal"),
       copyMessageTooltip: t("chat.tooltip.copyMessage"),
       copyCodeTooltip: t("chat.tooltip.copyCode"),
+      copyTableTooltip: t("chat.tooltip.copyTable"),
       expandCardWidthTooltip: t("chat.tooltip.expandCardWidth"),
       restoreCardWidthTooltip: t("chat.tooltip.restoreCardWidth"),
       patchWrapOn: t("chat.patch.wrapOn"),
@@ -4820,6 +4938,7 @@ function toWebviewDocumentAttachment(document: ChatDocumentAttachment): ChatDocu
 function toFullToolItem(item: ChatToolItem): ChatToolItem {
   return {
     ...item,
+    attachments: item.attachments?.map((attachment) => toWebviewAttachment(attachment)),
     presentation: item.presentation ? { ...item.presentation } : undefined,
   };
 }
@@ -4834,6 +4953,7 @@ function toSummaryToolItem(item: ChatToolItem): ChatToolItem {
     timestampIso: item.timestampIso,
     name: item.name,
     callId: item.callId,
+    attachments: item.attachments?.map((attachment) => toWebviewAttachment(attachment)),
     execution: item.execution ? { ...item.execution } : undefined,
     presentation: item.presentation ? { ...item.presentation } : undefined,
     ...(hasHeavyDetails ? { detailsOmitted: true } : {}),
@@ -4895,8 +5015,18 @@ async function buildChatPerformanceStats(fsPath: string, model: ChatSessionModel
   }
 
   for (const item of Array.isArray(model.items) ? model.items : []) {
+    if (item.type === "crossSessionMessage") {
+      stats.messageChars += typeof item.body === "string" ? item.body.length : 0;
+      continue;
+    }
     if (item.type === "message") {
       stats.messageChars += typeof item.text === "string" ? item.text.length : 0;
+      stats.imageCount += Array.isArray(item.attachments)
+        ? item.attachments.filter((attachment) => attachment?.type === "image").length
+        : 0;
+      continue;
+    }
+    if (item.type === "tool") {
       stats.imageCount += Array.isArray(item.attachments)
         ? item.attachments.filter((attachment) => attachment?.type === "image").length
         : 0;
@@ -4921,8 +5051,10 @@ function hasNonEmptyString(value: unknown): boolean {
 function collectSaveableImages(model: ChatSessionModel): Map<string, SaveableChatImage> {
   const images = new Map<string, SaveableChatImage>();
   for (const item of model.items) {
-    if (item.type !== "message" || !Array.isArray(item.attachments)) continue;
-    for (const image of item.attachments.filter((attachment): attachment is ChatImageAttachment => attachment?.type === "image")) {
+    if (item.type !== "message" && item.type !== "tool") continue;
+    const attachments = item.attachments;
+    if (!Array.isArray(attachments)) continue;
+    for (const image of attachments.filter((attachment): attachment is ChatImageAttachment => attachment?.type === "image")) {
       const saveable = toSaveableImage(image);
       if (!saveable) continue;
       images.set(image.id!, saveable);
@@ -4934,8 +5066,10 @@ function collectSaveableImages(model: ChatSessionModel): Map<string, SaveableCha
 function collectSaveableDocuments(model: ChatSessionModel): Map<string, SaveableChatDocument> {
   const documents = new Map<string, SaveableChatDocument>();
   for (const item of model.items) {
-    if (item.type !== "message" || !Array.isArray(item.attachments)) continue;
-    for (const document of item.attachments.filter(
+    if (item.type !== "message" && item.type !== "tool") continue;
+    const attachments = item.attachments;
+    if (!Array.isArray(attachments)) continue;
+    for (const document of attachments.filter(
       (attachment): attachment is ChatDocumentAttachment => attachment?.type === "document",
     )) {
       const saveable = toSaveableDocument(document);

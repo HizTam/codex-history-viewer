@@ -128,6 +128,7 @@ import { FileChangeHistoryService } from "./fileHistory/fileChangeHistoryService
 import { SessionAnalysisCancelledError, SessionAnalysisIndexService } from "./analysis/sessionAnalysisIndexService";
 import { HistoryInsightsPanelManager } from "./insights/historyInsightsPanelManager";
 import type { HistoryInsightsSnapshot } from "./insights/historyInsightsTypes";
+import { SettingsPanelManager } from "./settingsPanel/settingsPanelManager";
 import { ClaudeBranchNavigationService } from "./branchMap/claudeBranchNavigationService";
 import { CodexForkNavigationService } from "./branchMap/codexForkNavigationService";
 import { getDateScopeValue, isSameDateScope, sanitizeDateScope, type DateScope } from "./types/dateScope";
@@ -509,10 +510,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     searchHistoryStore,
     logger,
   );
+  const settingsPanel = new SettingsPanelManager(context);
   chatPanels.setSearchHistoryPeerRefresh(() => fileChangeHistoryPanels.refreshSearchHistoryCandidates());
   if (config.webviewRestoreAfterReload) {
     chatPanels.registerSerializer(context.subscriptions);
     fileChangeHistoryPanels.registerSerializer(context.subscriptions);
+    settingsPanel.registerSerializer(context.subscriptions);
   }
   context.subscriptions.push(
     pinStore,
@@ -523,6 +526,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     cliResumeProbeScheduler,
     chatPanels,
     fileChangeHistoryPanels,
+    settingsPanel,
   );
   context.subscriptions.push(
     vscode.workspace.onDidGrantWorkspaceTrust(() => {
@@ -2247,6 +2251,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         e.affectsConfiguration("codexHistoryViewer.claudeSessionsRoot");
       const historyDateBasisChanged = e.affectsConfiguration("codexHistoryViewer.history.dateBasis");
       const historyTitleSourceChanged = e.affectsConfiguration("codexHistoryViewer.history.titleSource");
+      const sessionRowDisplayChanged =
+        e.affectsConfiguration("codexHistoryViewer.sessionRow.showTimestamp") ||
+        e.affectsConfiguration("codexHistoryViewer.sessionRow.showProject");
       const previewMaxMessagesChanged = e.affectsConfiguration("codexHistoryViewer.preview.maxMessages");
       const previewTooltipModeChanged = e.affectsConfiguration("codexHistoryViewer.preview.tooltipMode");
       const autoRefreshChanged = e.affectsConfiguration("codexHistoryViewer.autoRefresh");
@@ -2279,6 +2286,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         !sessionsRootChanged &&
         !historyDateBasisChanged &&
         !historyTitleSourceChanged &&
+        !sessionRowDisplayChanged &&
         !previewMaxMessagesChanged &&
         !previewTooltipModeChanged &&
         !autoRefreshChanged &&
@@ -5127,10 +5135,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexHistoryViewer.openSettings", async () => {
-      // Open the VS Code Settings UI filtered to this extension.
-      const extId = context.extension.id;
-      await vscode.commands.executeCommand("workbench.action.openSettings", `@ext:${extId}`);
+    vscode.commands.registerCommand("codexHistoryViewer.openSettings", () => {
+      settingsPanel.open();
     }),
   );
 
@@ -8074,6 +8080,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         refreshViews();
         controlProvider.refresh();
         chatPanels.refreshTitles();
+        chatPanels.refreshResumePresentation();
       } catch (error) {
         logger.debug(`history.backgroundRefresh failed error=${sanitizeDebugError(error)}`);
       } finally {
