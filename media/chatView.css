@@ -97,6 +97,27 @@ body {
   overflow: hidden;
 }
 
+body.viewLayoutWidthRetained {
+  width: var(--chv-retained-layout-width);
+  min-width: var(--chv-retained-layout-width);
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  background: var(--chv-bg);
+  opacity: 0;
+  pointer-events: none;
+  will-change: opacity;
+}
+
+body.viewLayoutAtomicMask::after {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 body.chatTimeGuideEnabled {
   --chv-sticky-user-right-reserve: 88px;
 }
@@ -105,28 +126,6 @@ body.chatTimeGuideEnabled {
   body.chatTimeGuideEnabled {
     --chv-sticky-user-right-reserve: 48px;
   }
-}
-
-#restoreCover {
-  position: fixed;
-  top: var(--chv-toolbar-height, 44px);
-  right: 0;
-  bottom: 0;
-  left: 0;
-  z-index: 2147483000;
-  pointer-events: none;
-  background: var(--chv-bg);
-  opacity: 0;
-  transition: opacity 140ms ease;
-}
-
-#restoreCover[hidden] {
-  display: none;
-}
-
-body.restoreCoverActive #restoreCover {
-  pointer-events: auto;
-  opacity: 0.94;
 }
 
 .chatToastContainer {
@@ -3067,11 +3066,50 @@ body.branchOverlayResizing .branchOverlaySurface {
   color: var(--vscode-inputValidation-warningForeground, var(--chv-fg));
 }
 
+.branchOverlayPaging {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.branchOverlayPageButton {
+  min-height: 24px;
+  border: 1px solid var(--chv-border);
+  border-radius: 5px;
+  padding: 2px 8px;
+  color: var(--chv-fg);
+  background: var(--vscode-button-secondaryBackground, transparent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.branchOverlayPageButton:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--vscode-focusBorder) 58%, var(--chv-border));
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.branchOverlayPageButton:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+}
+
+.branchOverlayPageButton:disabled {
+  cursor: wait;
+  opacity: .55;
+}
+
 .branchOverlayActions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 3px;
+}
+
+body.vscode-high-contrast .branchOverlayPageButton,
+body.vscode-high-contrast-light .branchOverlayPageButton {
+  border-color: var(--vscode-contrastBorder, var(--chv-border));
 }
 
 .branchTreeViewport {
@@ -3211,7 +3249,7 @@ body.vscode-high-contrast-light .branchTreeViewport {
   min-height: inherit;
   border: 0;
   border-radius: 9px;
-  padding: 11px 76px 11px 12px;
+  padding: 11px 12px;
   color: var(--chv-fg);
   text-align: left;
   background: transparent;
@@ -3222,6 +3260,12 @@ body.vscode-high-contrast-light .branchTreeViewport {
   background: color-mix(in srgb, var(--vscode-list-hoverBackground) 72%, transparent);
 }
 
+.branchTreeNodePrimary-static,
+.branchTreeNodePrimary.branchTreeNodePrimary-static:hover:not(:disabled) {
+  background: transparent;
+  cursor: default;
+}
+
 .branchTreeNodePrimary:disabled {
   cursor: default;
   opacity: 1;
@@ -3229,6 +3273,10 @@ body.vscode-high-contrast-light .branchTreeViewport {
 
 .branchTreeNode-collapsed .branchTreeNodePrimary {
   padding-right: 12px;
+}
+
+.branchTreeNode-collapsed .branchTreeNodeBadges {
+  padding-right: 0;
 }
 
 .branchTreeNode-collapsed .branchTreeNodePrimary:disabled {
@@ -3243,10 +3291,13 @@ body.vscode-high-contrast-light .branchTreeViewport {
 
 .branchTreeNodeBadges {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  box-sizing: border-box;
   gap: 5px;
   min-width: 0;
   min-height: 20px;
+  padding-right: 64px;
 }
 
 .branchTreeNodeMarker,
@@ -3298,6 +3349,13 @@ body.vscode-high-contrast-light .branchTreeViewport {
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   white-space: pre-wrap;
+  color: color-mix(in srgb, var(--chv-fg) 94%, var(--chv-muted));
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.branchTreeNodeTerminal {
+  overflow-wrap: anywhere;
   color: color-mix(in srgb, var(--chv-fg) 94%, var(--chv-muted));
   font-weight: 600;
   line-height: 1.45;
@@ -4078,13 +4136,11 @@ body.vscode-high-contrast-light .branchTreeViewport {
 }
 
 .patchEntryBody-deferred,
-.patchEntryBody-rendering,
-.patchEntryBody-hibernated {
+.patchEntryBody-rendering {
   contain: layout paint;
 }
 
-.patchEntryBody-deferred::before,
-.patchEntryBody-hibernated::before {
+.patchEntryBody-deferred::before {
   content: "";
   display: block;
   min-height: 56px;

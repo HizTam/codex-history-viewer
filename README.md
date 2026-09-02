@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.12.0** (2026-08-28).
+Latest release: **2.13.0** (2026-09-02).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -21,7 +21,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Show valid cached History and Pinned data immediately at startup while local session files refresh in the background.
 - Search across prompts, responses, tool output, tags, notes, and attachment metadata, with shared search history.
 - View sessions in the Session Viewer with Markdown, including individually copyable tables, GFM task lists, Mermaid diagrams, code highlighting, math rendering, tool cards, and file-change diffs.
-- Manage the extension's primary settings from a categorized settings page, with supported User, Workspace, and Workspace Folder targets, scope-specific JSON backups, and maintenance actions.
+- Manage the extension's primary settings from a categorized settings page, with supported User, Workspace, and Workspace Folder targets, scope-specific JSON backups, maintenance actions, and project resource links.
 - Enable an opt-in Codex turn timeline to see turn boundaries, turn summaries, completed-turn folding, and running state in live mode.
 - Use Agent Runs to distinguish Codex sub-agent sessions and inspect parent, sibling, and descendant relationships in a right-side tree. (Experimental; disabled by default.)
 - Use Branch Navigation to inspect and switch between locally forked Codex histories and Claude Code **Fork conversation** histories in their respective session views. (Experimental; disabled by default.)
@@ -272,18 +272,17 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.12.0
+## What's New in 2.13.0
 
-- Added a new settings page that organizes settings by category and provides settings backups and maintenance actions. The standard VS Code settings remain available from **Maintenance**.
-- Added settings to independently hide timestamps and project aliases or paths in History, Pinned, and Search session rows.
-- Added a per-table action in the Session Viewer to copy only that table in its original Markdown form.
-- Improved Markdown table presentation with clearer spacing, separators, wrapping, and table-local horizontal scrolling.
-- Added support for Codex array-form tool outputs and standalone local-shell, web-search, and image-generation response items.
-- Fixed current Codex pasted-file records and verified Claude Code pasted and automatically truncated input so they render as attachment cards.
-- Fixed Claude Code cross-session peer and coordinator messages so they render as dedicated cross-session message cards.
-- Fixed Claude Code scratchpad links generated as cross-drive relative paths on Windows.
-- Fixed blank lines collapsing inside syntax-highlighted code blocks in the Session Viewer.
-- Fixed Session Viewer resume and restore controls sometimes remaining hidden after session reload, auto-refresh, or initial background history refresh.
+- Added support for Codex paginated sessions that use `history_base`.
+- Fixed an issue where the Codex running state and session auto-refresh could become stale when an active Codex session file changed without updating its modification time (`mtime`).
+- Fixed Session Viewer resume controls briefly disappearing and reappearing during auto-refresh of the same session.
+- Fixed large Session Viewer tabs recalculating their layout against VS Code's temporary narrow viewport when returning to them.
+- Improved Branch Navigation terminal routes so a history that ends at a Fork point no longer repeats the shared message as a duplicate card.
+- Fixed unreadable text and lines in Light Mermaid sequence diagrams that use explicitly dark opaque `box` or `rect` backgrounds.
+- Updated the bundled Mermaid renderer from 11.16.1 to 11.17.2 and the Shiki syntax highlighter from 4.3.1 to 4.4.3.
+- Updated the distributed Markdown renderer from `markdown-it@14.3.0` to `markdown-it@14.3.1`, incorporating upstream linkification security fixes.
+- Updated the bundled KaTeX renderer from 0.16.8 to 0.18.5, incorporating upstream security fixes and hardening.
 
 ## Changelog
 
@@ -291,11 +290,13 @@ See [CHANGELOG](CHANGELOG.md).
 
 ## Security
 
-See [SECURITY](SECURITY.md) for details. Use Codex History Viewer v2.11.0 or later, preferably the latest published release. Do not install or redistribute v1.2.1 or earlier VSIX files.
+See [SECURITY](SECURITY.md) for details. Use Codex History Viewer v2.13.0 or later. Do not install or redistribute v1.2.1 or earlier VSIX files.
 
 ## Privacy
 
 This extension reads local session files and renders them inside VS Code. For Claude Code sessions in the standard local project layout, it can also read matching entries from `.claude/history.jsonl` and hash-verified text files from `.claude/paste-cache` to identify pasted or truncated input. These auxiliary files remain local, and unverifiable data is ignored. The extension does not implement any network communication and does not send session content anywhere.
+
+Buttons for GitHub, GitHub Sponsors, and project resources open fixed GitHub pages in your external browser only when selected. The extension does not add session content or local paths to those URLs.
 
 If you use **Copy Quick Prompt** or **Copy Handoff Prompt to Clipboard**, this extension copies session context to your clipboard. Data is only sent externally if you paste it into another tool or extension.
 

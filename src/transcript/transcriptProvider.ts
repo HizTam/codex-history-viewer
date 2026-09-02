@@ -104,6 +104,8 @@ export class TranscriptContentProvider implements vscode.TextDocumentContentProv
         tags: ann?.tags ?? [],
         note: ann?.note ?? "",
       },
+      sessionInventory:
+        this.historyService.getIndex().historySources ?? this.historyService.getIndex().sessions,
     });
   }
 

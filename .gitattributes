@@ -8,3 +8,6 @@
 *.txt text eol=lf
 *.css text eol=lf
 *.svg text eol=lf
+
+# Keep the vendored KaTeX distribution byte-identical to the npm package.
+media/vendor/katex/** -text

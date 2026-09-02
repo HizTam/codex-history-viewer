@@ -157,7 +157,7 @@ export function createSessionMetadataBackup(
   index: HistoryIndex,
   stores: SessionMetadataStores,
   sessions: readonly SessionSummary[] = index.sessions,
-  extensionVersion = "2.12.0",
+  extensionVersion = "2.13.0",
 ): SessionMetadataBackupFile {
   if (sessions.length > MAX_BACKUP_SESSIONS) {
     throw new Error("Too many sessions for a complete metadata sidecar.");
@@ -236,7 +236,7 @@ export function createSessionMetadataBackup(
     format: SESSION_METADATA_BACKUP_FORMAT,
     version: SESSION_METADATA_BACKUP_VERSION,
     generatedAtIso: new Date().toISOString(),
-    extensionVersion: isBoundedExtensionVersion(extensionVersion) ? extensionVersion : "2.12.0",
+    extensionVersion: isBoundedExtensionVersion(extensionVersion) ? extensionVersion : "2.13.0",
     scope: sessions === index.sessions ? "all" : "selection",
     sessions: output,
   };
@@ -1185,18 +1185,16 @@ async function resolveRestoreBookmarks(
 ): Promise<number> {
   let invalidBookmarks = 0;
   let scannedSessions = 0;
+  const bookmarkInventory = entries.map(toBookmarkScanSession);
   await mapWithConcurrency(entries, 4, async (resolved) => {
     if (options?.token?.isCancellationRequested) throw new vscode.CancellationError();
     const requested = resolved.entry.bookmarks ?? [];
     if (requested.length > 0) {
-      const scanSession = resolved.bookmarkSourcePath
-        ? {
-            ...resolved.session,
-            fsPath: resolved.bookmarkSourcePath,
-            cacheKey: normalizeCacheKey(resolved.bookmarkSourcePath),
-          }
-        : resolved.session;
-      const scanned = await scanSessionBookmarkTargets(scanSession);
+      const scanSession = toBookmarkScanSession(resolved);
+      const scanned = await scanSessionBookmarkTargets(
+        scanSession,
+        bookmarkInventory,
+      );
       if (!scanned.stable) {
         invalidBookmarks += requested.length;
         resolved.bookmarksComplete = false;
@@ -1249,6 +1247,15 @@ async function resolveRestoreBookmarks(
     if (scannedSessions % 100 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
   });
   return invalidBookmarks;
+}
+
+function toBookmarkScanSession(resolved: ResolvedRestoreEntry): SessionSummary {
+  if (!resolved.bookmarkSourcePath) return resolved.session;
+  return {
+    ...resolved.session,
+    fsPath: resolved.bookmarkSourcePath,
+    cacheKey: normalizeCacheKey(resolved.bookmarkSourcePath),
+  };
 }
 
 function toBackupBookmark(value: BookmarkEntry): SessionMetadataBackupBookmark | null {

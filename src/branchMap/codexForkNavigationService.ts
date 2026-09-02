@@ -5,6 +5,8 @@ import {
 import type { ChatSessionModel } from "../chat/chatTypes";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { stableTextSha256 } from "../utils/stableTextHash";
+import { resolveCodexLogicalHistoryPlan } from "../sessions/codexHistoryBase";
+import { getInitialBranchOverlayGroupPageSize } from "./branchOverlayPaging";
 import type {
   ClaudeBranchCommonRange,
   ClaudeBranchMessageAnchor,
@@ -46,7 +48,6 @@ const MAX_LOAD_EVIDENCE_MESSAGES = 500_000;
 const MAX_SESSION_FILE_SIZE = 256 * 1024 * 1024;
 const MAX_CHAT_BRANCH_GROUPS = 500;
 const MAX_CONTROL_CHOICES = 20;
-const INITIAL_GROUP_PAGE_SIZE = 2;
 const GROUP_PAGE_SIZE = 2;
 const INITIAL_CHOICE_PAGE_SIZE = 20;
 const CHOICE_PAGE_SIZE = 20;
@@ -65,6 +66,11 @@ interface EvidenceLoadResult {
   cacheHit: boolean;
   rebuilt: boolean;
   failed: boolean;
+}
+
+interface CodexForkSessionFileState {
+  signature: string;
+  logicalSize: number;
 }
 
 interface PresentationBuildResult {
@@ -109,7 +115,10 @@ export class CodexForkNavigationService {
   private readonly relationService = new CodexForkRelationService();
   private readonly evidenceCache = new Map<string, EvidenceCacheEntry>();
   private readonly statFile: (fsPath: string) => Promise<{ mtimeMs: number; size: number }>;
-  private readonly buildChatModel: (fsPath: string) => Promise<ChatSessionModel>;
+  private readonly buildChatModel: (
+    fsPath: string,
+    sessionInventory?: readonly SessionSummary[],
+  ) => Promise<ChatSessionModel>;
   private readonly getPresentationState: (
     session: SessionSummary,
     branchStart: ClaudeBranchMessageAnchor,
@@ -347,10 +356,8 @@ export class CodexForkNavigationService {
       }
       try {
         const current = await this.statFile(currentSession.fsPath);
-        return (
-          buildInventorySignature(expected.cacheKey, current.mtimeMs, current.size) ===
-          expected.signature
-        );
+        const currentState = await this.captureSessionFileState(currentSession, current);
+        return currentState.signature === expected.signature;
       } catch {
         return false;
       }
@@ -378,8 +385,9 @@ export class CodexForkNavigationService {
       ) {
         return { session, cacheHit: false, rebuilt: false, failed: true };
       }
-      const signature = buildInventorySignature(session.cacheKey, before.mtimeMs, before.size);
-      if (before.size > MAX_SESSION_FILE_SIZE) {
+      const beforeState = await this.captureSessionFileState(session, before);
+      const signature = beforeState.signature;
+      if (beforeState.logicalSize > MAX_SESSION_FILE_SIZE) {
         return {
           session,
           inventory: {
@@ -413,7 +421,10 @@ export class CodexForkNavigationService {
       let model: ChatSessionModel | undefined;
       let buildFailed = false;
       try {
-        model = await this.buildChatModel(session.fsPath);
+        model = await this.buildChatModel(
+          session.fsPath,
+          this.historyService.getIndex().historySources ?? this.historyService.getIndex().sessions,
+        );
       } catch {
         buildFailed = true;
       }
@@ -424,8 +435,8 @@ export class CodexForkNavigationService {
       } catch {
         throw new CodexForkNavigationSupersededError();
       }
-      const afterSignature = buildInventorySignature(session.cacheKey, after.mtimeMs, after.size);
-      if (afterSignature !== signature) {
+      const afterState = await this.captureSessionFileState(session, after);
+      if (afterState.signature !== signature) {
         if (attempt === 0) continue;
         throw new CodexForkNavigationSupersededError();
       }
@@ -474,14 +485,42 @@ export class CodexForkNavigationService {
       } catch {
         throw new CodexForkNavigationSupersededError();
       }
-      if (
-        buildInventorySignature(session.cacheKey, current.mtimeMs, current.size) !==
-        expected.signature
-      ) {
+      const currentState = await this.captureSessionFileState(session, current);
+      if (currentState.signature !== expected.signature) {
         throw new CodexForkNavigationSupersededError();
       }
     });
     this.assertCurrent(capturedIndex, capturedGeneration, options);
+  }
+
+  private async captureSessionFileState(
+    session: SessionSummary,
+    leafStat: { mtimeMs: number; size: number },
+  ): Promise<CodexForkSessionFileState> {
+    const leafSignature = buildInventorySignature(
+      session.cacheKey,
+      leafStat.mtimeMs,
+      leafStat.size,
+    );
+    if (!session.meta.codexHistoryBase) {
+      return { signature: leafSignature, logicalSize: leafStat.size };
+    }
+    try {
+      const index = this.historyService.getIndex();
+      const plan = await resolveCodexLogicalHistoryPlan(
+        session.fsPath,
+        index.historySources ?? index.sessions,
+      );
+      return {
+        signature: stableTextSha256(`${leafSignature}\u0000${plan.signature}`).slice(0, 32),
+        logicalSize: getLogicalHistorySize(plan.segments),
+      };
+    } catch {
+      return {
+        signature: stableTextSha256(`${leafSignature}\u0000history-base-unresolved`).slice(0, 32),
+        logicalSize: leafStat.size,
+      };
+    }
   }
 
   private takeCachedEvidence(signature: string): CodexForkSessionEvidence | undefined {
@@ -613,7 +652,9 @@ export function buildCodexForkBranchOverlayPage(
           activeSession.identityKey,
           options.activeChatMessageIndex,
         );
-  const pageSize = options.cursor ? GROUP_PAGE_SIZE : INITIAL_GROUP_PAGE_SIZE;
+  const pageSize = options.cursor
+    ? GROUP_PAGE_SIZE
+    : getInitialBranchOverlayGroupPageSize(allGroups);
   const currentIndex = Math.max(0, allGroups.findIndex((group) => group.id === currentGroupId));
   const requestedOffset = options.cursor
     ? decodeCursor(snapshot, options.cursor, "group", "tree")
@@ -888,7 +929,9 @@ function buildPresentation(
   }
 
   const targetById = new Map<string, CodexForkNavigationTarget>();
-  const mutableGroups = Array.from(groupByKey.values());
+  const mutableGroups = coalesceRebasedSameAnchorGroups(
+    Array.from(groupByKey.values()),
+  );
   for (const group of mutableGroups) {
     const parent = sessionByIdentity.get(group.parentSessionIdentityKey);
     const firstEdge = group.childEdges[0];
@@ -952,17 +995,21 @@ function buildPresentation(
   for (const groups of groupsByParentIdentity.values()) {
     groups.sort(compareMutableGroups);
   }
-  const childChoiceOwner = new Map<string, { groupId: string; choiceId: string }>();
+  const childChoiceOwner = new Map<
+    string,
+    { group: MutablePresentationGroup; choice: CodexForkPresentationChoice }
+  >();
   for (const group of usableGroups) {
     for (const choice of group.choices) {
       if (choice.kind === "child") {
         childChoiceOwner.set(choice.sessionIdentityKey, {
-          groupId: group.id,
-          choiceId: choice.id,
+          group,
+          choice,
         });
       }
     }
   }
+  let hasDetachedRebasedGroup = false;
   for (const groups of groupsByParentIdentity.values()) {
     for (let index = 0; index < groups.length; index += 1) {
       const group = groups[index]!;
@@ -976,8 +1023,15 @@ function buildPresentation(
       }
       const owner = childChoiceOwner.get(group.parentSessionIdentityKey);
       if (owner) {
-        group.parentGroupId = owner.groupId;
-        group.parentChoiceId = owner.choiceId;
+        if (
+          group.anchorMessageIndex <
+          owner.choice.occurrence.branchStart.chatMessageIndex
+        ) {
+          hasDetachedRebasedGroup = true;
+          continue;
+        }
+        group.parentGroupId = owner.group.id;
+        group.parentChoiceId = owner.choice.id;
       }
     }
   }
@@ -1013,9 +1067,63 @@ function buildPresentation(
     partial:
       anchoredEdges.length !== component.forkCount ||
       hasIncompleteChoices ||
+      hasDetachedRebasedGroup ||
       usableGroups.length !== mutableGroups.length ||
       usableGroups.length > orderedGroups.length,
   };
+}
+
+function coalesceRebasedSameAnchorGroups(
+  groups: readonly MutablePresentationGroup[],
+): MutablePresentationGroup[] {
+  const retained = new Set(groups);
+  while (true) {
+    const ownerByChildIdentity = new Map<
+      string,
+      { group: MutablePresentationGroup; edge: CodexForkRelationEdge }
+    >();
+    for (const group of groups) {
+      if (!retained.has(group)) continue;
+      for (const edge of group.childEdges) {
+        if (!edge.anchor || ownerByChildIdentity.has(edge.childIdentityKey)) continue;
+        ownerByChildIdentity.set(edge.childIdentityKey, { group, edge });
+      }
+    }
+
+    let merged = false;
+    for (const group of groups) {
+      if (!retained.has(group)) continue;
+      const firstEdge = group.childEdges[0];
+      const owner = ownerByChildIdentity.get(group.parentSessionIdentityKey);
+      if (
+        !firstEdge?.anchor ||
+        !owner?.edge.anchor ||
+        owner.group === group
+      ) {
+        continue;
+      }
+      const parentStart =
+        firstEdge.anchor.parentContinuation ?? firstEdge.anchor.parent;
+      const ownerStart =
+        owner.edge.anchor.childBranchStart ?? owner.edge.anchor.child;
+      if (
+        !anchorsShareRoleAndIndex([
+          firstEdge.anchor.parent,
+          owner.edge.anchor.child,
+        ]) ||
+        !anchorsShareRoleAndIndex([parentStart, ownerStart])
+      ) {
+        continue;
+      }
+
+      owner.group.childEdges.push(...group.childEdges);
+      retained.delete(group);
+      merged = true;
+      break;
+    }
+    if (!merged) break;
+  }
+  return groups.filter((group) => retained.has(group));
 }
 
 function buildPresentationChoice(input: {
@@ -1251,6 +1359,12 @@ function resolveCurrentChoiceIndex(
   const visited = new Set<string>();
   while (cursor && !visited.has(cursor)) {
     visited.add(cursor);
+    const routeChoiceIndex = group.choices.findIndex(
+      (choice) =>
+        choice.kind === "child" &&
+        choice.sessionIdentityKey === cursor,
+    );
+    if (routeChoiceIndex >= 0) return routeChoiceIndex;
     const parent = lookup.parentByChildIdentity.get(cursor);
     if (!parent) return -1;
     if (parent === group.parentSessionIdentityKey) {
@@ -1506,6 +1620,20 @@ function buildInventorySignature(
   return stableTextSha256(`${cacheKey}\u0000${mtimeMs}\u0000${size}`).slice(0, 32);
 }
 
+function getLogicalHistorySize(
+  segments: readonly { size: number; endByteOffset?: number }[],
+): number {
+  let total = 0;
+  for (const segment of segments) {
+    const bytes = segment.endByteOffset ?? segment.size;
+    if (!Number.isSafeInteger(bytes) || bytes < 0 || total > MAX_SESSION_FILE_SIZE - bytes) {
+      return MAX_SESSION_FILE_SIZE + 1;
+    }
+    total += bytes;
+  }
+  return total;
+}
+
 function buildInventoryFingerprint(
   sessions: readonly SessionSummary[],
   inventoryByCacheKey: ReadonlyMap<string, CodexForkFileInventoryEntry>,
@@ -1538,11 +1666,15 @@ async function defaultStatFile(
   return { mtimeMs: result.mtimeMs, size: result.size };
 }
 
-async function defaultBuildChatModel(fsPath: string): Promise<ChatSessionModel> {
+async function defaultBuildChatModel(
+  fsPath: string,
+  sessionInventory?: readonly SessionSummary[],
+): Promise<ChatSessionModel> {
   return buildChatSessionModel(fsPath, {
     includeDetails: false,
     turnTimelineMode: "basic",
     images: { enabled: false, maxSizeMB: 1, thumbnailSize: "small" },
+    sessionInventory,
   });
 }
 

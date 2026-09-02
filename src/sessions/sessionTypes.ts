@@ -30,6 +30,7 @@ export interface SessionMetaInfo {
   historySource?: SessionSource;
   codexAgent?: CodexAgentMetadata;
   codexFork?: CodexForkMetadata;
+  codexHistoryBase?: CodexHistoryBaseMetadata;
 }
 
 export interface CodexAgentMetadata {
@@ -42,6 +43,13 @@ export interface CodexAgentMetadata {
 
 export interface CodexForkMetadata {
   parentThreadId: string;
+}
+
+export interface CodexHistoryBaseMetadata {
+  sourceRolloutId: string;
+  endOrdinalExclusive: number;
+  endByteOffset: number;
+  firstOrdinal: number;
 }
 
 export type ChatRole = "user" | "assistant";
@@ -81,6 +89,7 @@ export interface HistoryIndex {
   sessionsRoot: string;
   roots: HistoryRoots;
   sessions: SessionSummary[];
+  historySources?: SessionSummary[];
   byCacheKey: Map<string, SessionSummary>;
   byIdentityKey: Map<string, SessionSummary>;
   byYmd: Map<string, SessionSummary[]>; // key: YYYY-MM-DD

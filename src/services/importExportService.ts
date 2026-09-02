@@ -9,6 +9,7 @@ import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { renderTranscript } from "../transcript/transcriptRenderer";
 import { t } from "../i18n";
+import { collectCodexHistoryDependencies } from "../sessions/codexHistoryBase";
 
 export interface ExportSessionsResult {
   destinationDir: string;
@@ -125,12 +126,17 @@ const MAX_EXPORT_MANIFEST_FILES = 200_000;
 
 export async function exportSessions(params: {
   sessions: readonly SessionSummary[];
+  sessionInventory?: readonly SessionSummary[];
   codexSessionsRoot: string;
   claudeSessionsRoot: string;
   createMetadata?: (exportedSessions: readonly SessionSummary[]) => unknown;
 }): Promise<ExportSessionsResult | null> {
   const { sessions, codexSessionsRoot, claudeSessionsRoot } = params;
   if (sessions.length === 0) return null;
+  const dependencies = params.sessionInventory
+    ? await collectCodexHistoryDependencies(sessions, params.sessionInventory)
+    : [];
+  const sessionsToExport = dedupeSessionsByCacheKey([...sessions, ...dependencies]);
 
   const picked = await vscode.window.showOpenDialog({
     canSelectMany: false,
@@ -153,7 +159,7 @@ export async function exportSessions(params: {
   const manifestFiles: ExportManifestFileEntryV1[] = [];
   const exportedSessions: SessionSummary[] = [];
 
-  for (const session of sessions) {
+  for (const session of sessionsToExport) {
     const relativeFromSource = buildRelativePathForSession(session, {
       codexSessionsRoot,
       claudeSessionsRoot,
@@ -239,6 +245,7 @@ export async function exportSessions(params: {
 
 export async function exportMaskedTranscripts(params: {
   sessions: readonly SessionSummary[];
+  sessionInventory?: readonly SessionSummary[];
 }): Promise<ExportSessionsResult | null> {
   const { sessions } = params;
   if (sessions.length === 0) return null;
@@ -268,6 +275,7 @@ export async function exportMaskedTranscripts(params: {
       const rendered = await renderTranscript(s.fsPath, {
         timeZone,
         locationLabel: s.storage.archiveState === "archived" ? t("session.location.archived") : t("session.location.active"),
+        sessionInventory: params.sessionInventory,
       });
       const masked = sanitizeText(rendered.content);
       await fs.writeFile(outPath, masked, { encoding: "utf8" });
@@ -278,6 +286,17 @@ export async function exportMaskedTranscripts(params: {
   }
 
   return { destinationDir, exported, skipped, failed, metadataStatus: "none" };
+}
+
+function dedupeSessionsByCacheKey(sessions: readonly SessionSummary[]): SessionSummary[] {
+  const result: SessionSummary[] = [];
+  const seen = new Set<string>();
+  for (const session of sessions) {
+    if (seen.has(session.cacheKey)) continue;
+    seen.add(session.cacheKey);
+    result.push(session);
+  }
+  return result;
 }
 
 export async function importSessions(params: {

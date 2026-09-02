@@ -1,9 +1,8 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
-import * as readline from "node:readline";
 import { normalizeWhitespace } from "../utils/textUtils";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
-import type { SessionSource } from "../sessions/sessionTypes";
+import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
+import { readSessionJsonlRecords } from "../sessions/codexHistoryBase";
 import { formatYmdHmInTimeZone, formatYmdHmsInTimeZone } from "../utils/dateUtils";
 import {
   buildAttachmentSummaryLines,
@@ -29,6 +28,7 @@ export async function renderTranscript(
     annotation?: { tags?: readonly string[]; note?: string };
     locationLabel?: string;
     displayCwd?: string | null;
+    sessionInventory?: readonly SessionSummary[];
   },
 ): Promise<{ content: string; messageLineMap: Map<number, number> }> {
   const timeZone = options.timeZone;
@@ -39,10 +39,6 @@ export async function renderTranscript(
   const meta = await tryReadSessionMeta(fsPath);
   const historySource = detectHistorySource(meta?.historySource, fsPath);
   const pastedPromptResolver = historySource === "claude" ? await createClaudePastedPromptResolver(fsPath) : undefined;
-  // Read metadata first, then open the body stream.
-  // In reverse order, readline can consume data first and leave the body empty.
-  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   lines.push(`# ${historySource === "claude" ? "Claude Code" : "Codex"} Session`);
   lines.push(``);
@@ -70,43 +66,34 @@ export async function renderTranscript(
   let msgIndex = 0;
   let lastToolCallId: string | undefined;
 
-  try {
-    for await (const line of rl) {
-      if (!line) continue;
-      let obj: any;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        continue;
-      }
+  for await (const record of readSessionJsonlRecords(fsPath, historySource, {
+    sessionInventory: options.sessionInventory,
+  })) {
+    const obj = record.value;
 
-      const codexResult = await renderCodexRecord(lines, messageLineMap, {
-        obj,
-        timeZone,
-        msgIndex,
-        lastToolCallId,
-      });
-      if (codexResult.handled) {
-        msgIndex = codexResult.msgIndex;
-        lastToolCallId = codexResult.lastToolCallId;
-        continue;
-      }
-
-      const claudeResult = await renderClaudeRecord(lines, messageLineMap, {
-        obj,
-        timeZone,
-        msgIndex,
-        lastToolCallId,
-        pastedPromptResolver,
-      });
-      if (claudeResult.handled) {
-        msgIndex = claudeResult.msgIndex;
-        lastToolCallId = claudeResult.lastToolCallId;
-      }
+    const codexResult = await renderCodexRecord(lines, messageLineMap, {
+      obj,
+      timeZone,
+      msgIndex,
+      lastToolCallId,
+    });
+    if (codexResult.handled) {
+      msgIndex = codexResult.msgIndex;
+      lastToolCallId = codexResult.lastToolCallId;
+      continue;
     }
-  } finally {
-    rl.close();
-    stream.close();
+
+    const claudeResult = await renderClaudeRecord(lines, messageLineMap, {
+      obj,
+      timeZone,
+      msgIndex,
+      lastToolCallId,
+      pastedPromptResolver,
+    });
+    if (claudeResult.handled) {
+      msgIndex = claudeResult.msgIndex;
+      lastToolCallId = claudeResult.lastToolCallId;
+    }
   }
 
   if (msgIndex === 0) {

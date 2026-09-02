@@ -1,4 +1,5 @@
 import type { SessionSummary } from "../sessions/sessionTypes";
+import { resolveCodexLogicalHistoryPlan } from "../sessions/codexHistoryBase";
 import { buildChatSessionModel } from "../chat/chatModelBuilder";
 import type { ChatTimelineItem } from "../chat/chatTypes";
 import { statSafe } from "../utils/fsUtils";
@@ -40,14 +41,30 @@ export function buildTimelineBookmarkTarget(
   };
 }
 
-export async function scanSessionBookmarkTargets(session: SessionSummary): Promise<SessionBookmarkTargetScan> {
+export async function scanSessionBookmarkTargets(
+  session: SessionSummary,
+  sessionInventory?: readonly SessionSummary[],
+): Promise<SessionBookmarkTargetScan> {
   const before = await statSafe(session.fsPath);
   if (!before) return { targets: [], stable: false };
   try {
-    const model = await buildChatSessionModel(session.fsPath, { includeDetails: false });
+    const historyPlan = session.source === "codex" && session.meta.codexHistoryBase && sessionInventory
+      ? await resolveCodexLogicalHistoryPlan(session.fsPath, sessionInventory)
+      : undefined;
+    const model = await buildChatSessionModel(session.fsPath, {
+      includeDetails: false,
+      sessionInventory,
+      historyPlan,
+    });
     const after = await statSafe(session.fsPath);
     if (!after || before.size !== after.size || before.mtimeMs !== after.mtimeMs) {
       return { targets: [], stable: false };
+    }
+    if (historyPlan && sessionInventory) {
+      const currentPlan = await resolveCodexLogicalHistoryPlan(session.fsPath, sessionInventory);
+      if (currentPlan.signature !== historyPlan.signature) {
+        return { targets: [], stable: false };
+      }
     }
     return {
       targets: model.items

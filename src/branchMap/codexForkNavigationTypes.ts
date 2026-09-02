@@ -86,7 +86,10 @@ export interface CodexForkOverlayPageOptions {
 
 export interface CodexForkNavigationDependencies {
   statFile?: (fsPath: string) => Promise<{ mtimeMs: number; size: number }>;
-  buildChatModel?: (fsPath: string) => Promise<ChatSessionModel>;
+  buildChatModel?: (
+    fsPath: string,
+    sessionInventory?: readonly SessionSummary[],
+  ) => Promise<ChatSessionModel>;
   getPresentationState?: (
     session: SessionSummary,
     branchStart: ClaudeBranchMessageAnchor,

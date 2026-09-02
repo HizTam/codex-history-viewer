@@ -1,8 +1,7 @@
-import * as fs from "fs";
 import * as path from "path";
-import * as readline from "readline";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
-import type { SessionSource } from "../sessions/sessionTypes";
+import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
+import { readSessionJsonlRecords } from "../sessions/codexHistoryBase";
 import { formatYmdHmInTimeZone, formatYmdHmsInTimeZone } from "../utils/dateUtils";
 import { extractCompactUserText, extractTaskSectionText, extractUserRequestText, normalizeWhitespace } from "../utils/textUtils";
 import type { ChatAttachment } from "../chat/chatTypes";
@@ -32,6 +31,7 @@ export interface ResumeRenderOptions {
   maxMessages?: number;
   maxChars?: number;
   includeContext?: boolean;
+  sessionInventory?: readonly SessionSummary[];
 }
 
 // Build a resume excerpt text from a history session.
@@ -44,8 +44,6 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
   const meta = await tryReadSessionMeta(fsPath);
   const historySource = detectHistorySource(meta?.historySource, fsPath);
   const pastedPromptResolver = historySource === "claude" ? await createClaudePastedPromptResolver(fsPath) : undefined;
-  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   let taskText: string | null = null;
   const recent: ResumeMessage[] = [];
@@ -53,25 +51,15 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
     if (!taskText) taskText = nextTask;
   };
 
-  try {
-    for await (const line of rl) {
-      if (!line) continue;
+  for await (const record of readSessionJsonlRecords(fsPath, historySource, {
+    sessionInventory: options.sessionInventory,
+  })) {
+    const obj = record.value;
 
-      let obj: any;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        continue;
-      }
-
-      if (await collectCodexResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty)) {
-        continue;
-      }
-      await collectClaudeResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty, pastedPromptResolver);
+    if (await collectCodexResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty)) {
+      continue;
     }
-  } finally {
-    rl.close();
-    stream.close();
+    await collectClaudeResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty, pastedPromptResolver);
   }
 
   const taskCandidate = (taskText ?? "").trim();

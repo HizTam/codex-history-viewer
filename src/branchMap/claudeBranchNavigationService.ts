@@ -16,6 +16,7 @@ import type { SessionAnnotationStore } from "../services/sessionAnnotationStore"
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { getConfig } from "../settings";
 import { normalizeCacheKey } from "../utils/fsUtils";
+import { getInitialBranchOverlayGroupPageSize } from "./branchOverlayPaging";
 import type {
   ClaudeBranchCommonRange,
   ClaudeBranchGroup,
@@ -36,7 +37,6 @@ const MAX_CACHED_OCCURRENCES = 500_000;
 const MAX_CHAT_BRANCH_GROUPS = 500;
 const MAX_CONTROL_CHOICES = 20;
 const MAX_CONTROL_OCCURRENCES = 20;
-const INITIAL_GROUP_PAGE_SIZE = 2;
 const GROUP_PAGE_SIZE = 2;
 const INITIAL_CHOICE_PAGE_SIZE = 20;
 const CHOICE_PAGE_SIZE = 20;
@@ -146,6 +146,8 @@ export class ClaudeBranchNavigationService {
     const result = await this.analysisIndex.ensureEntries({
       sessions,
       activeSessions: this.historyService.getIndex().sessions,
+      historyInventory:
+        this.historyService.getIndex().historySources ?? this.historyService.getIndex().sessions,
       config,
       token: options.token,
       onProgress: options.onProgress,
@@ -343,7 +345,9 @@ export function buildClaudeBranchOverlayPage(
   const currentGroupId = options.focusGroupId && allGroups.some((group) => group.id === options.focusGroupId)
     ? options.focusGroupId
     : resolveCurrentGroupId(snapshot, allGroups, currentLaneId, options.activeChatMessageIndex);
-  const pageSize = options.cursor ? GROUP_PAGE_SIZE : INITIAL_GROUP_PAGE_SIZE;
+  const pageSize = options.cursor
+    ? GROUP_PAGE_SIZE
+    : getInitialBranchOverlayGroupPageSize(allGroups);
   const currentIndex = Math.max(0, allGroups.findIndex((group) => group.id === currentGroupId));
   const requestedOffset = options.cursor
     ? decodeCursor(snapshot, options.cursor, "group", "tree")

@@ -33,6 +33,10 @@ import { resolvePreviewSessionTitleCandidate } from "./sessionTitleResolver";
 import { extractCodexAgentMetadata } from "../agents/codexAgentMetadata";
 import { extractCodexForkMetadata } from "../branchMap/codexForkMetadata";
 import { boundSessionIdentityKey } from "./sessionIdentity";
+import {
+  extractCodexHistoryBaseMetadata,
+  readSessionJsonlRecords,
+} from "./codexHistoryBase";
 
 const META_SCAN_LINE_LIMIT = 400;
 
@@ -43,6 +47,7 @@ export async function tryReadSessionMeta(fsPath: string): Promise<SessionMetaInf
 
   const claudeMeta: SessionMetaInfo = { historySource: "claude" };
   let scanned = 0;
+  let hasParsedRecord = false;
 
   try {
     for await (const line of rl) {
@@ -56,11 +61,16 @@ export async function tryReadSessionMeta(fsPath: string): Promise<SessionMetaInf
         if (scanned >= META_SCAN_LINE_LIMIT) break;
         continue;
       }
+      const isFirstParsedRecord = !hasParsedRecord;
+      hasParsedRecord = true;
 
       if (obj?.type === "session_meta" && obj?.payload && typeof obj.payload === "object") {
         const payload = obj.payload as Record<string, unknown>;
         const codexAgent = extractCodexAgentMetadata(payload.source);
         const codexFork = extractCodexForkMetadata(payload);
+        const codexHistoryBase = isFirstParsedRecord
+          ? extractCodexHistoryBaseMetadata(payload, obj?.ordinal)
+          : undefined;
         return {
           id: typeof payload.id === "string" ? payload.id : undefined,
           timestampIso: typeof payload.timestamp === "string" ? payload.timestamp : undefined,
@@ -72,6 +82,7 @@ export async function tryReadSessionMeta(fsPath: string): Promise<SessionMetaInf
           historySource: "codex",
           ...(codexAgent ? { codexAgent } : {}),
           ...(codexFork ? { codexFork } : {}),
+          ...(codexHistoryBase ? { codexHistoryBase } : {}),
         };
       }
 
@@ -268,73 +279,98 @@ function toTimeLabel(date: Date, timeZone: string): string {
   return formatTimeHmInTimeZone(date, timeZone);
 }
 
-export async function readPreviewMessages(fsPath: string, maxMessages: number): Promise<PreviewMessage[]> {
+export async function readPreviewMessages(
+  fsPath: string,
+  maxMessages: number,
+  options: {
+    sessionInventory?: readonly SessionSummary[];
+    source?: SessionSource;
+    token?: { readonly isCancellationRequested: boolean };
+  } = {},
+): Promise<PreviewMessage[]> {
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
-  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const source = options.source ?? detectSessionSource({}, fsPath);
 
   const result: PreviewMessage[] = [];
-  try {
-    for await (const line of rl) {
-      if (result.length >= maxMessages) break;
-      if (!line) continue;
+  for await (const record of readSessionJsonlRecords(fsPath, source, {
+    sessionInventory: options.sessionInventory,
+    token: options.token,
+  })) {
+    if (result.length >= maxMessages) break;
+    const obj = record.value;
 
-      let obj: any;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        continue;
-      }
+    if (obj?.type === "response_item" && obj?.payload?.type === "message") {
+      const role = obj?.payload?.role;
+      if (role !== "user" && role !== "assistant") continue;
 
-      if (obj?.type === "response_item" && obj?.payload?.type === "message") {
-        const role = obj?.payload?.role;
-        if (role !== "user" && role !== "assistant") continue;
-
-        const content = obj?.payload?.content;
-        if (role === "user" && isCodexProtocolContextContent(content)) continue;
-        const extracted = await extractCodexMessageContent(content, undefined, { enabled: false });
-        const cleanText = normalizeWhitespace(extracted.text);
-        const attachmentSummary = buildPreviewAttachmentText(extracted.attachments);
-        const textNormalized = normalizeWhitespace([cleanText, attachmentSummary].filter(Boolean).join("\n"));
-        if (!textNormalized) continue;
-        const userText =
-          role === "user"
-            ? extractCodexCompactUserText(content, cleanText) ?? (attachmentSummary || null)
-            : null;
-        if (role === "user" && !userText) continue;
-        const text = role === "user" ? userText! : textNormalized;
-
-        const trimmed = text.length > 1200 ? `${text.slice(0, 1199)}...` : text;
-        result.push({ role, text: trimmed });
-        continue;
-      }
-
-      const role = detectClaudeMessageRole(obj);
-      if (!role) continue;
-      if (isClaudeCrossSessionInboundRecord(obj)) continue;
-
-      const rawContent = getClaudeMessageContent(obj);
-      const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
-      const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
-      if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
-      const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
+      const content = obj?.payload?.content;
+      if (role === "user" && isCodexProtocolContextContent(content)) continue;
+      const extracted = await extractCodexMessageContent(content, undefined, { enabled: false });
+      const cleanText = normalizeWhitespace(extracted.text);
       const attachmentSummary = buildPreviewAttachmentText(extracted.attachments);
-      const textRaw = [buildClaudePreviewText(extracted.text), attachmentSummary].filter(Boolean).join("\n");
-      const textNormalized = normalizeWhitespace(textRaw);
+      const textNormalized = normalizeWhitespace([cleanText, attachmentSummary].filter(Boolean).join("\n"));
       if (!textNormalized) continue;
-      const userText = role === "user" ? extractCompactUserText(textNormalized) : null;
+      const userText =
+        role === "user"
+          ? extractCodexCompactUserText(content, cleanText) ?? (attachmentSummary || null)
+          : null;
       if (role === "user" && !userText) continue;
       const text = role === "user" ? userText! : textNormalized;
 
       const trimmed = text.length > 1200 ? `${text.slice(0, 1199)}...` : text;
       result.push({ role, text: trimmed });
+      continue;
     }
-  } finally {
-    rl.close();
-    stream.close();
+
+    const role = detectClaudeMessageRole(obj);
+    if (!role) continue;
+    if (isClaudeCrossSessionInboundRecord(obj)) continue;
+
+    const rawContent = getClaudeMessageContent(obj);
+    const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
+    const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+    if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
+    const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
+    const attachmentSummary = buildPreviewAttachmentText(extracted.attachments);
+    const textRaw = [buildClaudePreviewText(extracted.text), attachmentSummary].filter(Boolean).join("\n");
+    const textNormalized = normalizeWhitespace(textRaw);
+    if (!textNormalized) continue;
+    const userText = role === "user" ? extractCompactUserText(textNormalized) : null;
+    if (role === "user" && !userText) continue;
+    const text = role === "user" ? userText! : textNormalized;
+
+    const trimmed = text.length > 1200 ? `${text.slice(0, 1199)}...` : text;
+    result.push({ role, text: trimmed });
   }
 
   return result;
+}
+
+export async function rebuildCodexHistoryBasePreview(
+  summary: SessionSummary,
+  sessionInventory: readonly SessionSummary[],
+  maxMessages: number,
+  token?: { readonly isCancellationRequested: boolean },
+): Promise<SessionSummary> {
+  if (summary.source !== "codex" || !summary.meta.codexHistoryBase) return summary;
+  try {
+    const previewMessages = await readPreviewMessages(summary.fsPath, maxMessages, {
+      source: "codex",
+      sessionInventory,
+      token,
+    });
+    const snippetSource = resolvePreviewSessionTitleCandidate(previewMessages);
+    const snippet = snippetSource ? singleLineSnippet(snippetSource, 70) : path.basename(summary.fsPath);
+    return {
+      ...summary,
+      previewMessages,
+      snippet,
+      displayTitle: summary.customTitle ?? summary.originalTitle ?? summary.nativeTitle ?? snippet,
+    };
+  } catch (error) {
+    if (token?.isCancellationRequested) throw error;
+    return summary;
+  }
 }
 
 export async function buildSessionSummary(params: {

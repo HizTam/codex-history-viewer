@@ -788,16 +788,66 @@
       element("div", "about-product-meta", about.licenseLabel + " " + about.licenseName),
       element("div", "about-product-copyright", about.copyright)
     );
-    const sponsorButton = button(about.sponsorLabel, "about-sponsor-button");
+    const supportActions = element("div", "about-support-actions");
+    const starButton = button(about.starLabel, "about-support-button");
+    starButton.title = about.starTooltip;
+    setFocusIdentity(starButton, "about-action", "repository");
+    const starIcon = createIcon("star", "about-star-icon");
+    starIcon.setAttribute("aria-hidden", "true");
+    starButton.prepend(starIcon);
+    starButton.addEventListener("click", () => {
+      vscode.postMessage({ type: "openAboutResource", resourceId: "repository" });
+    });
+    const sponsorButton = button(about.sponsorLabel, "about-support-button");
+    sponsorButton.title = about.sponsorTooltip;
+    setFocusIdentity(sponsorButton, "about-action", "sponsor");
     const sponsorIcon = createIcon("heart", "about-sponsor-icon");
     sponsorIcon.setAttribute("aria-hidden", "true");
     sponsorButton.prepend(sponsorIcon);
     sponsorButton.addEventListener("click", () => {
       vscode.postMessage({ type: "openSponsor" });
     });
-    copy.append(sponsorButton);
+    supportActions.append(starButton, sponsorButton);
+    const resources = element("nav", "about-resource-section");
+    const resourcesHeading = element("h4", "about-resource-heading", about.resourcesLabel);
+    resourcesHeading.id = "about-resource-heading";
+    resources.setAttribute("aria-labelledby", resourcesHeading.id);
+    const resourceLinks = element("div", "about-resource-links");
+    resourceLinks.append(
+      createAboutResourceButton(
+        "securityPolicy",
+        about.securityPolicyLabel,
+        about.securityPolicyTooltip
+      ),
+      createAboutResourceButton(
+        "reportVulnerability",
+        about.reportVulnerabilityLabel,
+        about.reportVulnerabilityTooltip
+      ),
+      createAboutResourceButton("changelog", about.changelogLabel, about.changelogTooltip),
+      createAboutResourceButton(
+        "commandReference",
+        about.commandReferenceLabel,
+        about.commandReferenceTooltip
+      )
+    );
+    resources.append(resourcesHeading, resourceLinks);
+    copy.append(supportActions, resources);
     panel.append(mark, copy);
     return panel;
+  }
+
+  function createAboutResourceButton(id, label, tooltip) {
+    const result = button(label, "about-resource-button");
+    result.title = tooltip;
+    setFocusIdentity(result, "about-action", id);
+    const icon = createIcon("external-link", "about-resource-icon");
+    icon.setAttribute("aria-hidden", "true");
+    result.append(icon);
+    result.addEventListener("click", () => {
+      vscode.postMessage({ type: "openAboutResource", resourceId: id });
+    });
+    return result;
   }
 
   function createLicenseDocumentPanel(about, id) {
@@ -976,7 +1026,9 @@
       reset: ["M4 12a8 8 0 1 0 2.3-5.7", "M4 4v5h5"],
       folder: ["M3 6h7l2 2h9v10H3z"],
       gauge: ["M4 17a8 8 0 0 1 16 0", "M12 17l4-5", "M7 20h10"],
+      star: ["M12 3l2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2-4.5-4.4 6.2-.9z"],
       heart: ["M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.6l-1-1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8z"],
+      "external-link": ["M14 5h5v5", "M10 14l9-9", "M19 13v6H5V5h6"],
       "chevron-down": ["M7 10l5 5 5-5"],
       check: ["M5 12l4 4L19 6"],
       blank: []
@@ -1117,7 +1169,19 @@
       "versionTab",
       "licenseTab",
       "thirdPartyTab",
+      "starLabel",
+      "starTooltip",
       "sponsorLabel",
+      "sponsorTooltip",
+      "resourcesLabel",
+      "securityPolicyLabel",
+      "securityPolicyTooltip",
+      "reportVulnerabilityLabel",
+      "reportVulnerabilityTooltip",
+      "changelogLabel",
+      "changelogTooltip",
+      "commandReferenceLabel",
+      "commandReferenceTooltip",
       "licenseText",
       "thirdPartyText"
     ].every((key) => typeof value[key] === "string");

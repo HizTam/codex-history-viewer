@@ -862,6 +862,10 @@ button:disabled {
   color: var(--vscode-foreground);
 }
 
+.about-product-copy {
+  min-width: 0;
+}
+
 .about-product-name {
   margin: 0 0 6px;
   font-size: 17px;
@@ -874,11 +878,17 @@ button:disabled {
   font-size: 12px;
 }
 
-.about-sponsor-button {
+.about-support-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.about-support-button {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  margin-top: 16px;
   padding: 7px 11px;
   border: 1px solid var(--panel-border);
   border-radius: 6px;
@@ -887,13 +897,57 @@ button:disabled {
   cursor: pointer;
 }
 
-.about-sponsor-button:hover {
+.about-support-button:hover {
   background: var(--vscode-button-secondaryHoverBackground, var(--hover));
 }
 
+.about-star-icon,
 .about-sponsor-icon {
   width: 16px;
   height: 16px;
+  flex: 0 0 auto;
+}
+
+.about-resource-section {
+  margin-top: 22px;
+}
+
+.about-resource-heading {
+  margin: 0 0 9px;
+  color: var(--vscode-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.about-resource-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+
+.about-resource-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  border: 0;
+  color: var(--vscode-textLink-foreground, var(--vscode-foreground));
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.about-resource-button:hover {
+  color: var(
+    --vscode-textLink-activeForeground,
+    var(--vscode-textLink-foreground, var(--vscode-foreground))
+  );
+  text-decoration: underline;
+}
+
+.about-resource-icon {
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
 }
 
@@ -1155,7 +1209,7 @@ body.vscode-high-contrast .settings-card,
 body.vscode-high-contrast .maintenance-card,
 body.vscode-high-contrast .about-card,
 body.vscode-high-contrast .setting-resource-indicator,
-body.vscode-high-contrast .about-sponsor-button,
+body.vscode-high-contrast .about-support-button,
 body.vscode-high-contrast .page-navigation,
 body.vscode-high-contrast .multi-popover,
 body.vscode-high-contrast .switch-slider,
@@ -1163,11 +1217,16 @@ body.vscode-high-contrast-light .settings-card,
 body.vscode-high-contrast-light .maintenance-card,
 body.vscode-high-contrast-light .about-card,
 body.vscode-high-contrast-light .setting-resource-indicator,
-body.vscode-high-contrast-light .about-sponsor-button,
+body.vscode-high-contrast-light .about-support-button,
 body.vscode-high-contrast-light .page-navigation,
 body.vscode-high-contrast-light .multi-popover,
 body.vscode-high-contrast-light .switch-slider {
   border-color: var(--vscode-contrastBorder);
+}
+
+body.vscode-high-contrast .about-resource-button,
+body.vscode-high-contrast-light .about-resource-button {
+  text-decoration: underline;
 }
 
 body.vscode-high-contrast .navigation-item.active,
@@ -1193,11 +1252,17 @@ body.vscode-high-contrast-light .switch-control input:checked + .switch-slider {
     color: CanvasText;
   }
 
+  .about-resource-button,
+  .about-resource-button:hover {
+    color: LinkText;
+    text-decoration: underline;
+  }
+
   .settings-card,
   .maintenance-card,
   .about-card,
   .setting-resource-indicator,
-  .about-sponsor-button,
+  .about-support-button,
   .page-navigation,
   .multi-popover,
   .switch-slider,

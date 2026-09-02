@@ -858,11 +858,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     {
       waitForCurrentHistoryIndex: async (isRequestCurrent, requireAuthoritative) => {
         if (!requireAuthoritative) {
-          return waitForCurrentHistorySearchIndex({
+          const snapshot = await waitForCurrentHistorySearchIndex({
             refreshState: Object.freeze({ queue: historyRefreshQueue }),
             config: Object.freeze({ ...getConfig() }),
             historyService,
             isRequestCurrent,
+          });
+          if (!snapshot) return null;
+          return Object.freeze({
+            config: snapshot.config,
+            sessions: snapshot.sessions,
+            historySources: Object.freeze(Array.from(
+              snapshot.index.historySources ?? snapshot.sessions,
+            )),
           });
         }
         await initialAuthoritativeHistoryRefreshSettled.promise;
@@ -887,6 +895,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return Object.freeze({
           config: currentConfig,
           sessions: Object.freeze(Array.from(index.sessions)),
+          historySources: Object.freeze(Array.from(index.historySources ?? index.sessions)),
         });
       },
       getCurrentSnapshot: () =>
@@ -2993,6 +3002,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         target,
         sourceSessionsRoot,
         pathRewrite,
+        sessionInventory:
+          historyService.getIndex().historySources ?? historyService.getIndex().sessions,
       });
     } catch {
       void vscode.window.showErrorMessage(t("handoff.createFailed"));
@@ -3842,6 +3853,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.window.onDidChangeWindowState((e) => {
       autoRefreshService?.setFocused(e.focused);
+      if (e.focused) chatPanels.flushPendingAutoRefreshPanels();
     }),
   );
 
@@ -4709,6 +4721,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         await sessionAnalysisIndex.rebuildAll({
           sessions: inventory.sessions,
           activeSessions: inventory.sessions,
+          historyInventory:
+            historySnapshot.index.historySources ?? inventory.sessions,
           config: inventory.searchSnapshot.config,
           token,
           onProgress: (value) => {
@@ -4998,6 +5012,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           maxMessages: RESUME_MAX_MESSAGES,
           maxChars: RESUME_MAX_CHARS,
           includeContext: false,
+          sessionInventory:
+            historyService.getIndex().historySources ?? historyService.getIndex().sessions,
         });
         await vscode.env.clipboard.writeText(excerpt);
         void vscode.window.showInformationMessage(t("app.copyResumePromptDone"));
@@ -5522,9 +5538,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const result =
         mode.value === "masked"
-          ? await exportMaskedTranscripts({ sessions })
+          ? await exportMaskedTranscripts({
+              sessions,
+              sessionInventory:
+                historyService.getIndex().historySources ?? historyService.getIndex().sessions,
+            })
           : await exportSessions({
               sessions,
+              sessionInventory:
+                historyService.getIndex().historySources ?? historyService.getIndex().sessions,
               codexSessionsRoot: getConfig().sessionsRoot,
               claudeSessionsRoot: getConfig().claudeSessionsRoot,
               createMetadata: (exportedSessions) =>
@@ -7733,9 +7755,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         pushUndoAction(
           t("undo.label.delete", result.deleted),
           async () => {
-            for (const item of result.undoItems) {
-              if (!item.backupFsPath) continue;
-              if (await pathExists(item.originalFsPath)) continue;
+            const restoredPathKeys = new Set<string>();
+            let restoreFailed = 0;
+            for (const item of [...result.undoItems].reverse()) {
+              let prerequisitesAvailable = true;
+              for (const prerequisiteFsPath of item.restorePrerequisiteFsPaths ?? []) {
+                if (await pathExists(prerequisiteFsPath)) continue;
+                prerequisitesAvailable = false;
+                break;
+              }
+              if (!prerequisitesAvailable) {
+                restoreFailed += 1;
+                continue;
+              }
+              if (await pathExists(item.originalFsPath)) {
+                restoredPathKeys.add(normalizeCacheKey(item.originalFsPath));
+                continue;
+              }
+              if (!item.backupFsPath) {
+                restoreFailed += 1;
+                continue;
+              }
               try {
                 await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(item.originalFsPath)));
                 await vscode.workspace.fs.copy(
@@ -7743,20 +7783,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                   vscode.Uri.file(item.originalFsPath),
                   { overwrite: false },
                 );
+                restoredPathKeys.add(normalizeCacheKey(item.originalFsPath));
               } catch {
-                // Continue restoring remaining files.
+                restoreFailed += 1;
               }
             }
 
             await metadataMutationCoordinator.runExclusive(async () => {
               for (const fsPath of deletedPaths) {
+                if (!restoredPathKeys.has(normalizeCacheKey(fsPath))) continue;
                 const before = removedMetadata.previousAnnotations.get(normalizeCacheKey(fsPath)) ?? null;
                 if (!before) continue;
                 await annotationStore.set(fsPath, { tags: before.tags, note: before.note });
               }
-              await bookmarkStore.restore(removedMetadata.previousBookmarks);
-              await hiddenSessionStore.restore(removedMetadata.previousHiddenSessions);
+              await bookmarkStore.restore(
+                removedMetadata.previousBookmarks.filter((entry) =>
+                  restoredPathKeys.has(entry.sessionCacheKey),
+                ),
+              );
+              await hiddenSessionStore.restore(
+                removedMetadata.previousHiddenSessions.filter((entry) =>
+                  restoredPathKeys.has(entry.cacheKey),
+                ),
+              );
             });
+            if (restoreFailed > 0) {
+              void vscode.window.showErrorMessage(t("app.undoDeleteRestoreIncomplete", restoreFailed));
+            }
           },
           async (reason) => {
             await cleanupDeletedSessionUndoBackups(result.undoItems, {

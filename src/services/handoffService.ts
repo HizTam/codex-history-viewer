@@ -1,7 +1,5 @@
 import * as crypto from "node:crypto";
-import * as fs from "node:fs";
 import * as path from "node:path";
-import * as readline from "node:readline";
 import * as vscode from "vscode";
 import { t } from "../i18n";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
@@ -19,6 +17,7 @@ import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } fro
 import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "./projectPathMapper";
 import { normalizeProjectKey } from "../utils/fsUtils";
+import { readSessionJsonlLines } from "../sessions/codexHistoryBase";
 
 export type HandoffTarget = "codex" | "claude";
 
@@ -28,6 +27,7 @@ export interface CreateHandoffOptions {
   target: HandoffTarget;
   sourceSessionsRoot: string;
   pathRewrite?: HandoffPathRewriteContext;
+  sessionInventory?: readonly SessionSummary[];
 }
 
 export interface HandoffResult {
@@ -154,7 +154,7 @@ export async function createHandoff(options: CreateHandoffOptions): Promise<Hand
   await vscode.workspace.fs.createDirectory(directoryUri);
   const pathRewrite = normalizeHandoffPathRewriteContext(options.pathRewrite);
 
-  const context = await parseSessionForHandoff(options.session);
+  const context = await parseSessionForHandoff(options.session, options.sessionInventory);
   const markdown = clampText(
     buildHandoffMarkdown({
       session: options.session,
@@ -305,39 +305,38 @@ export function buildHandoffPrompt(handoffPath: string): string {
   ].join("\n");
 }
 
-async function parseSessionForHandoff(session: SessionSummary): Promise<ParsedSessionContext> {
+async function parseSessionForHandoff(
+  session: SessionSummary,
+  sessionInventory?: readonly SessionSummary[],
+): Promise<ParsedSessionContext> {
   const pastedPromptResolver = await createClaudePastedPromptResolver(session.fsPath);
-  const stream = fs.createReadStream(session.fsPath, { encoding: "utf8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   const messages: HandoffMessage[] = [];
   const diffBlocks: HandoffDiffBlock[] = [];
   let invalidJsonLines = 0;
   let totalLines = 0;
 
-  try {
-    for await (const line of rl) {
-      totalLines += 1;
-      if (!line.trim()) continue;
+  for await (const record of readSessionJsonlLines(session.fsPath, session.source, {
+    sessionInventory,
+  })) {
+    const { line } = record;
+    totalLines += 1;
+    if (!line.trim()) continue;
 
-      let obj: any;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        invalidJsonLines += 1;
-        continue;
-      }
-
-      if (await collectCodexMessage(obj, messages)) {
-        collectCodexDiffBlocks(obj, diffBlocks);
-        continue;
-      }
-      await collectClaudeMessage(obj, messages, pastedPromptResolver);
-      collectClaudeDiffBlocks(obj, diffBlocks);
-      collectCodexDiffBlocks(obj, diffBlocks);
+    let obj: any;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      invalidJsonLines += 1;
+      continue;
     }
-  } finally {
-    rl.close();
-    stream.close();
+
+    if (await collectCodexMessage(obj, messages)) {
+      collectCodexDiffBlocks(obj, diffBlocks);
+      continue;
+    }
+    await collectClaudeMessage(obj, messages, pastedPromptResolver);
+    collectClaudeDiffBlocks(obj, diffBlocks);
+    collectCodexDiffBlocks(obj, diffBlocks);
   }
 
   return { messages, diffBlocks, invalidJsonLines, totalLines };

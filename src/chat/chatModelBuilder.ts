@@ -1,6 +1,4 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
-import * as readline from "node:readline";
 import type {
   ChatAttachment,
   ChatEnvironmentItem,
@@ -64,11 +62,23 @@ import {
   buildCodexPatchBookmarkGroupId,
   resolveClaudeToolCallId,
 } from "../services/bookmarkIdentity";
+import {
+  createChatSourceActivityEvidence,
+  observeChatSourceActivityRecord,
+  type ChatSourceActivityEvidence,
+} from "./liveActivity";
+import type { SessionSummary } from "../sessions/sessionTypes";
+import {
+  readSessionJsonlRecords,
+  type CodexLogicalHistoryPlan,
+} from "../sessions/codexHistoryBase";
 
 export interface ChatSessionModelBuildOptions {
   images?: ImagesConfig;
   includeDetails?: boolean;
   turnTimelineMode?: ChatTurnTimelineMode;
+  sessionInventory?: readonly SessionSummary[];
+  historyPlan?: CodexLogicalHistoryPlan;
 }
 
 export interface ChatPatchEntryDetailTarget {
@@ -81,11 +91,17 @@ export interface ChatPatchEntryDetailTarget {
   changeType?: ChatPatchChangeType;
 }
 
+export interface ChatSessionModelWithActivityEvidence {
+  model: ChatSessionModel;
+  activityEvidence: ChatSourceActivityEvidence;
+}
+
 interface ChatTimelineBuildResult {
   items: ChatTimelineItem[];
   turns?: ChatTurnSummary[];
   activeTurnId?: string;
   latestTurnId?: string;
+  activityEvidence?: ChatSourceActivityEvidence;
 }
 
 // Parse a session JSONL and build a session-view model.
@@ -93,9 +109,31 @@ export async function buildChatSessionModel(
   fsPath: string,
   options: ChatSessionModelBuildOptions = {},
 ): Promise<ChatSessionModel> {
+  return (await buildChatSessionModelInternal(fsPath, options, false)).model;
+}
+
+// Builds the same public model while retaining bounded source activity metadata for the live panel.
+export async function buildChatSessionModelWithActivityEvidence(
+  fsPath: string,
+  options: ChatSessionModelBuildOptions = {},
+): Promise<ChatSessionModelWithActivityEvidence> {
+  return buildChatSessionModelInternal(fsPath, options, true);
+}
+
+async function buildChatSessionModelInternal(
+  fsPath: string,
+  options: ChatSessionModelBuildOptions,
+  collectActivityEvidence: boolean,
+): Promise<ChatSessionModelWithActivityEvidence> {
   const meta = await readSessionMeta(fsPath);
-  const timeline = await readTimelineItems(fsPath, meta.cwd, options);
-  return {
+  const timeline = await readTimelineItems(
+    fsPath,
+    meta.historySource ?? detectHistorySourceFromPath(fsPath),
+    meta.cwd,
+    options,
+    collectActivityEvidence,
+  );
+  const model: ChatSessionModel = {
     fsPath,
     meta,
     items: timeline.items,
@@ -103,17 +141,28 @@ export async function buildChatSessionModel(
     ...(timeline.activeTurnId ? { activeTurnId: timeline.activeTurnId } : {}),
     ...(timeline.latestTurnId ? { latestTurnId: timeline.latestTurnId } : {}),
   };
+  return {
+    model,
+    activityEvidence: timeline.activityEvidence ?? createChatSourceActivityEvidence(),
+  };
 }
 
 export async function buildChatPatchEntryDetails(
   fsPath: string,
   target: ChatPatchEntryDetailTarget,
+  sessionInventory?: readonly SessionSummary[],
 ): Promise<ChatPatchEntry | null> {
   const entryId = typeof target.entryId === "string" ? target.entryId.trim() : "";
   if (!entryId) return null;
 
   const meta = await readSessionMeta(fsPath);
-  return readPatchEntryDetails(fsPath, meta.cwd, { ...target, entryId });
+  return readPatchEntryDetails(
+    fsPath,
+    meta.historySource ?? detectHistorySourceFromPath(fsPath),
+    meta.cwd,
+    { ...target, entryId },
+    sessionInventory,
+  );
 }
 
 async function readSessionMeta(fsPath: string): Promise<ChatSessionMeta> {
@@ -133,12 +182,12 @@ async function readSessionMeta(fsPath: string): Promise<ChatSessionMeta> {
 
 async function readTimelineItems(
   fsPath: string,
+  source: "codex" | "claude",
   sessionCwd: string | undefined,
   options: ChatSessionModelBuildOptions,
+  collectActivityEvidence: boolean,
 ): Promise<ChatTimelineBuildResult> {
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
-  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   const items: ChatTimelineItem[] = [];
   const toolByCallId = new Map<string, ChatToolItem>();
@@ -149,110 +198,105 @@ async function readTimelineItems(
   const memoryCitationState: MemoryCitationBuildState = {};
   const interruptionState: InterruptionBuildState = {};
   const turnState: TurnBuildState | undefined = shouldBuildTurnTimeline(options) ? createTurnBuildState() : undefined;
+  const activityEvidence = collectActivityEvidence ? createChatSourceActivityEvidence() : undefined;
   let messageIndex = 0;
-  let lineIndex = 0;
+  for await (const record of readSessionJsonlRecords(fsPath, source, {
+    sessionInventory: options.sessionInventory,
+    plan: options.historyPlan,
+  })) {
+    const obj = record.value;
+    const lineIndex = record.lineIndex;
 
-  try {
-    for await (const line of rl) {
-      lineIndex += 1;
-      if (!line) continue;
-      let obj: any;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        continue;
-      }
-
-      flushPendingClaudeUsageIfNeeded(obj, items, usageState);
-      appendEnvironmentSnapshotIfChanged(obj, items, environmentState, () => messageIndex, () => turnState?.activeTurnId);
-      if (updateCodexTurnMeta(obj, codexTurnMeta, turnState)) {
-        continue;
-      }
-      if (
-        await indexCodexTimelineRecord(
-          obj,
-          items,
-          toolByCallId,
-          pendingPatchGroups,
-          () => (messageIndex += 1),
-          () => messageIndex,
-          codexTurnMeta,
-          memoryCitationState,
-          interruptionState,
-          turnState,
-          sessionCwd,
-          options,
-          lineIndex,
-        )
-      ) {
-        continue;
-      }
-      if (
-        indexCodexEventRecord(
-          obj,
-          items,
-          toolByCallId,
-          pendingPatchGroups,
-          () => messageIndex,
-          codexTurnMeta,
-          memoryCitationState,
-          usageState,
-          interruptionState,
-          turnState,
-          sessionCwd,
-          options,
-          lineIndex,
-        )
-      ) {
-        continue;
-      }
-      if (
-        await indexClaudeTimelineRecord(
-          obj,
-          items,
-          toolByCallId,
-          () => (messageIndex += 1),
-          () => messageIndex,
-          usageState,
-          sessionCwd,
-          options,
-          lineIndex,
-          pastedPromptResolver,
-        )
-      ) {
-        continue;
-      }
+    if (activityEvidence && record.isLeaf) {
+      observeChatSourceActivityRecord(activityEvidence, obj, record.physicalLineIndex);
     }
-  } finally {
-    rl.close();
-    stream.close();
+
+    flushPendingClaudeUsageIfNeeded(obj, items, usageState);
+    appendEnvironmentSnapshotIfChanged(obj, items, environmentState, () => messageIndex, () => turnState?.activeTurnId);
+    if (updateCodexTurnMeta(obj, codexTurnMeta, turnState)) {
+      continue;
+    }
+    if (
+      await indexCodexTimelineRecord(
+        obj,
+        items,
+        toolByCallId,
+        pendingPatchGroups,
+        () => (messageIndex += 1),
+        () => messageIndex,
+        codexTurnMeta,
+        memoryCitationState,
+        interruptionState,
+        turnState,
+        sessionCwd,
+        options,
+        lineIndex,
+      )
+    ) {
+      continue;
+    }
+    if (
+      indexCodexEventRecord(
+        obj,
+        items,
+        toolByCallId,
+        pendingPatchGroups,
+        () => messageIndex,
+        codexTurnMeta,
+        memoryCitationState,
+        usageState,
+        interruptionState,
+        turnState,
+        sessionCwd,
+        options,
+        lineIndex,
+      )
+    ) {
+      continue;
+    }
+    if (
+      await indexClaudeTimelineRecord(
+        obj,
+        items,
+        toolByCallId,
+        () => (messageIndex += 1),
+        () => messageIndex,
+        usageState,
+        sessionCwd,
+        options,
+        lineIndex,
+        pastedPromptResolver,
+      )
+    ) {
+      continue;
+    }
   }
 
   flushPendingPatchGroups(items, pendingPatchGroups, turnState);
   flushPendingClaudeUsage(items, usageState);
   finalizeTimelineItems(items);
-  if (!turnState) return { items };
+  if (!turnState) return { items, ...(activityEvidence ? { activityEvidence } : {}) };
   const turnResult = finalizeCodexTurns(items, turnState);
   return {
     items,
     ...(turnResult.turns.length > 0 ? { turns: turnResult.turns } : {}),
     ...(turnResult.activeTurnId ? { activeTurnId: turnResult.activeTurnId } : {}),
     ...(turnResult.latestTurnId ? { latestTurnId: turnResult.latestTurnId } : {}),
+    ...(activityEvidence ? { activityEvidence } : {}),
   };
 }
 
 async function readPatchEntryDetails(
   fsPath: string,
+  source: "codex" | "claude",
   sessionCwd: string | undefined,
   target: ChatPatchEntryDetailTarget,
+  sessionInventory: readonly SessionSummary[] | undefined,
 ): Promise<ChatPatchEntry | null> {
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
-  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   const pendingApplyPatchEntries = new Map<string, ChatPatchEntry[]>();
   const entriesByGroup = new Map<string, ChatPatchEntry[]>();
   let messageIndex = 0;
-  let lineIndex = 0;
 
   const appendGroupEntries = (groupKey: string, entries: ChatPatchEntry[]): void => {
     if (entries.length === 0) return;
@@ -261,88 +305,81 @@ async function readPatchEntryDetails(
     else entriesByGroup.set(groupKey, [...entries]);
   };
 
-  try {
-    for await (const line of rl) {
-      lineIndex += 1;
-      if (!line) continue;
-      let obj: any;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        continue;
-      }
+  for await (const record of readSessionJsonlRecords(fsPath, source, { sessionInventory })) {
+    const obj = record.value;
+    const lineIndex = record.lineIndex;
 
-      if (obj?.type === "response_item" && obj?.payload?.type === "message") {
-        const role = obj?.payload?.role;
-        if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) continue;
-        if (role === "user" || role === "assistant") messageIndex += 1;
-        continue;
-      }
-
-      const customApplyPatchInput = readCodexCustomApplyPatchInput(obj);
-      if (customApplyPatchInput !== undefined) {
-        const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : `apply_patch:${lineIndex}`;
-        const entries = buildCodexApplyPatchEntriesForDetailTarget(customApplyPatchInput, sessionCwd, callId, target);
-        if (entries.length > 0) pendingApplyPatchEntries.set(callId, entries);
-        continue;
-      }
-
-      if (obj?.type === "response_item" && isCodexToolCallOutput(obj?.payload?.type)) {
-        const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-        const outputText = extractCodexToolOutputText(obj?.payload?.output) || undefined;
-        if (callId && isApplyPatchFailureOutput(outputText)) pendingApplyPatchEntries.delete(callId);
-        continue;
-      }
-
-      if (obj?.type === "event_msg") {
-        const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
-        if (payloadType === "patch_apply_end") {
-          const rawCallId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-          const callId = rawCallId ?? `patch:${lineIndex}`;
-          const groupKey = buildPatchGroupKey(obj, lineIndex);
-          if (rawCallId) pendingApplyPatchEntries.delete(rawCallId);
-          if (isPatchApplyEndFailure(obj)) continue;
-          appendGroupEntries(
-            groupKey,
-            buildCodexPatchEntriesForDetailTarget(obj?.payload?.changes, sessionCwd, callId, target),
-          );
-          continue;
-        }
-        continue;
-      }
-
-      const role = detectClaudeMessageRole(obj);
-      if (!role) continue;
-      if (isClaudeCrossSessionInboundRecord(obj)) {
-        messageIndex += 1;
-        continue;
-      }
-      const rawContent = getClaudeMessageContent(obj);
-      const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
-      const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
-      if (role === "user" && extractClaudeRequestInterruptionContent(controlContent)) continue;
-      if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
-      const parsed = parseClaudeMessageContent(rawContent);
-      const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, { enabled: false }, { role, pastedPrompt });
-      if (normalizeText(extracted.text) || extracted.attachments.length > 0) messageIndex += 1;
-      for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
-        const toolCall = parsed.toolCalls[toolCallIndex]!;
-        const callId = resolveClaudeToolCallId(toolCall.callId, lineIndex, toolCallIndex);
-        const entries = buildClaudeToolUsePatchEntries(toolCall, sessionCwd, callId, true).filter((entry) =>
-          isPatchEntryDetailCandidate(entry, target),
-        );
-        appendGroupEntries(buildClaudePatchBookmarkGroupId(toolCall.callId, lineIndex, toolCallIndex, messageIndex), entries);
-      }
+    if (obj?.type === "response_item" && obj?.payload?.type === "message") {
+      const role = obj?.payload?.role;
+      if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) continue;
+      if (role === "user" || role === "assistant") messageIndex += 1;
+      continue;
     }
-  } finally {
-    rl.close();
-    stream.close();
+
+    const customApplyPatchInput = readCodexCustomApplyPatchInput(obj);
+    if (customApplyPatchInput !== undefined) {
+      const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : `apply_patch:${lineIndex}`;
+      const entries = buildCodexApplyPatchEntriesForDetailTarget(customApplyPatchInput, sessionCwd, callId, target);
+      if (entries.length > 0) pendingApplyPatchEntries.set(callId, entries);
+      continue;
+    }
+
+    if (obj?.type === "response_item" && isCodexToolCallOutput(obj?.payload?.type)) {
+      const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
+      const outputText = extractCodexToolOutputText(obj?.payload?.output) || undefined;
+      if (callId && isApplyPatchFailureOutput(outputText)) pendingApplyPatchEntries.delete(callId);
+      continue;
+    }
+
+    if (obj?.type === "event_msg") {
+      const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
+      if (payloadType === "patch_apply_end") {
+        const rawCallId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
+        const callId = rawCallId ?? `patch:${lineIndex}`;
+        const groupKey = buildPatchGroupKey(obj, lineIndex);
+        if (rawCallId) pendingApplyPatchEntries.delete(rawCallId);
+        if (isPatchApplyEndFailure(obj)) continue;
+        appendGroupEntries(
+          groupKey,
+          buildCodexPatchEntriesForDetailTarget(obj?.payload?.changes, sessionCwd, callId, target),
+        );
+        continue;
+      }
+      continue;
+    }
+
+    const role = detectClaudeMessageRole(obj);
+    if (!role) continue;
+    if (isClaudeCrossSessionInboundRecord(obj)) {
+      messageIndex += 1;
+      continue;
+    }
+    const rawContent = getClaudeMessageContent(obj);
+    const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
+    const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+    if (role === "user" && extractClaudeRequestInterruptionContent(controlContent)) continue;
+    if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
+    const parsed = parseClaudeMessageContent(rawContent);
+    const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, { enabled: false }, { role, pastedPrompt });
+    if (normalizeText(extracted.text) || extracted.attachments.length > 0) messageIndex += 1;
+    for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
+      const toolCall = parsed.toolCalls[toolCallIndex]!;
+      const callId = resolveClaudeToolCallId(toolCall.callId, lineIndex, toolCallIndex);
+      const entries = buildClaudeToolUsePatchEntries(toolCall, sessionCwd, callId, true).filter((entry) =>
+        isPatchEntryDetailCandidate(entry, target),
+      );
+      appendGroupEntries(buildClaudePatchBookmarkGroupId(toolCall.callId, lineIndex, toolCallIndex, messageIndex), entries);
+    }
   }
 
   for (const [key, entries] of pendingApplyPatchEntries.entries()) {
     appendGroupEntries(`apply:${key}`, entries);
   }
   return selectPatchEntryDetail(entriesByGroup, target);
+}
+
+function detectHistorySourceFromPath(fsPath: string): "codex" | "claude" {
+  return path.basename(fsPath).toLowerCase().startsWith("rollout-") ? "codex" : "claude";
 }
 
 async function indexCodexTimelineRecord(

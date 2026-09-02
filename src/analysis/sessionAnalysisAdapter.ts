@@ -1,6 +1,4 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
-import * as readline from "node:readline";
 import {
   buildChatSessionModel,
 } from "../chat/chatModelBuilder";
@@ -25,6 +23,10 @@ import type {
 import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
 import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
 import type { SessionSummary } from "../sessions/sessionTypes";
+import {
+  readSessionJsonlLines,
+  type CodexLogicalHistoryPlan,
+} from "../sessions/codexHistoryBase";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { stableTextSha256 } from "../utils/stableTextHash";
 import { extractCompactUserText, safeDisplayPath } from "../utils/textUtils";
@@ -67,6 +69,9 @@ export interface SessionAnalysisAdapterInput {
   mtimeMs: number;
   size: number;
   claudeSessionsRoot: string;
+  sessionInventory?: readonly SessionSummary[];
+  historyPlan?: CodexLogicalHistoryPlan;
+  historySignature?: string;
 }
 
 interface JsonlScanResult {
@@ -183,13 +188,28 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
       includeDetails: false,
       turnTimelineMode: "basic",
       images: { enabled: false, maxSizeMB: 1, thumbnailSize: "small" },
+      sessionInventory: input.sessionInventory,
+      historyPlan: input.historyPlan,
     });
-    const scan = await scanJsonl(session.fsPath, session.source === "claude", session.meta.cwd);
+    const scan = await scanJsonl(
+      session.fsPath,
+      session.source,
+      session.source === "claude",
+      session.meta.cwd,
+      input.sessionInventory,
+      input.historyPlan,
+    );
     if (scan.malformedLineCount > 0) warnings.push(`malformedLines:${scan.malformedLineCount}`);
+    if (input.historyPlan && !input.historyPlan.complete) {
+      warnings.push(`historyBase:${input.historyPlan.issue ?? "unresolved"}`);
+    }
     if (scan.claudeGraphRecordsTruncated) warnings.push("claudeGraphRecordLimitReached");
     if (scan.claudeGraphIdentifierInvalid) warnings.push("graphIdentifierInvalid");
 
-    const availability: AnalysisAvailability = scan.malformedLineCount > 0 ? "partial" : "available";
+    const availability: AnalysisAvailability =
+      scan.malformedLineCount > 0 || (input.historyPlan !== undefined && !input.historyPlan.complete)
+        ? "partial"
+        : "available";
     const usageResult = buildUsageStats(model.items, session.source, scan.latestCodexCumulativeUsage, availability);
     if (usageResult.modelUsageTruncated) warnings.push(`modelUsageLimit:${MAX_MODEL_USAGE}`);
     if (usageResult.modelEffortUsageTruncated) warnings.push(`modelEffortUsageLimit:${MAX_MODEL_EFFORT_USAGE}`);
@@ -244,6 +264,7 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
       ...(lastActivityAtIso ? { lastActivityAtIso } : {}),
       mtimeMs: input.mtimeMs,
       size: input.size,
+      ...(input.historySignature ? { historySignature: input.historySignature } : {}),
       parserVersion:
         session.source === "codex" ? SESSION_ANALYSIS_CODEX_PARSER_VERSION : SESSION_ANALYSIS_CLAUDE_PARSER_VERSION,
       completeness:
@@ -258,6 +279,7 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
         timestampInvalid ||
         projectCwdInvalid ||
         warnings.includes("graphSessionIdInvalid") ||
+        warnings.some((warning) => warning.startsWith("historyBase:")) ||
         warnings.includes("toolNameTruncated") ||
         warnings.some((warning) => warning.startsWith("toolUsageLimit:"))
           ? "partial"
@@ -751,10 +773,15 @@ function normalizeRateLimitValue(
     : { invalidValue };
 }
 
-async function scanJsonl(fsPath: string, collectClaudeRecords: boolean, sessionCwd?: string): Promise<JsonlScanResult> {
+async function scanJsonl(
+  fsPath: string,
+  source: "codex" | "claude",
+  collectClaudeRecords: boolean,
+  sessionCwd?: string,
+  sessionInventory?: readonly SessionSummary[],
+  historyPlan?: CodexLogicalHistoryPlan,
+): Promise<JsonlScanResult> {
   const pastedPromptResolver = collectClaudeRecords ? await createClaudePastedPromptResolver(fsPath) : undefined;
-  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
-  const reader = readline.createInterface({ input: stream, crlfDelay: Infinity });
   let malformedLineCount = 0;
   let invalidTimestamp = false;
   let latestCodexCumulativeUsage: ChatTokenUsage | undefined;
@@ -763,35 +790,33 @@ async function scanJsonl(fsPath: string, collectClaudeRecords: boolean, sessionC
   let claudeGraphRecordsTruncated = false;
   let claudeGraphIdentifierInvalid = false;
   const claudeRecords: RawClaudeRecord[] = [];
-  let recordOrdinal = 0;
-  try {
-    for await (const line of reader) {
-      recordOrdinal += 1;
-      if (!line.trim()) continue;
-      let obj: any;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        malformedLineCount += 1;
-        continue;
-      }
-      if (hasInvalidRawTimestamp(obj)) invalidTimestamp = true;
-      const cumulative = extractTokenUsage(obj?.payload?.info?.total_token_usage);
-      if (cumulative) latestCodexCumulativeUsage = cumulative;
-      if (!collectClaudeRecords) continue;
-      if (obj?.isSidechain === true) observedSidechainTrue = true;
-      else if (obj?.isSidechain === false) observedSidechainFalse = true;
-      if (claudeRecords.length >= MAX_GRAPH_RECORDS) {
-        claudeGraphRecordsTruncated = true;
-        continue;
-      }
-      const builtRecord = await buildRawClaudeRecord(obj, recordOrdinal, sessionCwd, pastedPromptResolver);
-      if (builtRecord.invalidGraphIdentifier) claudeGraphIdentifierInvalid = true;
-      claudeRecords.push(builtRecord.record);
+  for await (const record of readSessionJsonlLines(fsPath, source, {
+    sessionInventory,
+    plan: historyPlan,
+  })) {
+    const recordOrdinal = record.lineIndex;
+    const { line } = record;
+    if (!line.trim()) continue;
+    let obj: any;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      malformedLineCount += 1;
+      continue;
     }
-  } finally {
-    reader.close();
-    stream.close();
+    if (hasInvalidRawTimestamp(obj)) invalidTimestamp = true;
+    const cumulative = extractTokenUsage(obj?.payload?.info?.total_token_usage);
+    if (cumulative) latestCodexCumulativeUsage = cumulative;
+    if (!collectClaudeRecords) continue;
+    if (obj?.isSidechain === true) observedSidechainTrue = true;
+    else if (obj?.isSidechain === false) observedSidechainFalse = true;
+    if (claudeRecords.length >= MAX_GRAPH_RECORDS) {
+      claudeGraphRecordsTruncated = true;
+      continue;
+    }
+    const builtRecord = await buildRawClaudeRecord(obj, recordOrdinal, sessionCwd, pastedPromptResolver);
+    if (builtRecord.invalidGraphIdentifier) claudeGraphIdentifierInvalid = true;
+    claudeRecords.push(builtRecord.record);
   }
   return {
     malformedLineCount,
@@ -1157,6 +1182,7 @@ function buildUnavailableEntry(
     ...(lastActivityAtIso ? { lastActivityAtIso } : {}),
     mtimeMs: input.mtimeMs,
     size: input.size,
+    ...(input.historySignature ? { historySignature: input.historySignature } : {}),
     parserVersion:
       input.session.source === "codex" ? SESSION_ANALYSIS_CODEX_PARSER_VERSION : SESSION_ANALYSIS_CLAUDE_PARSER_VERSION,
     completeness,

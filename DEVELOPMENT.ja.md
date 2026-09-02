@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-08-28
-- 対象バージョン: 2.12.0
+- 最終更新: 2026-09-02
+- 対象バージョン: 2.13.0
 
 ## 1. 概要
 
@@ -29,6 +29,19 @@
 - `SECURITY.md`: セキュリティポリシーと既知アドバイザリへの対応方針
 
 ## 3. 機能仕様
+
+### 3.0 Codex paginated履歴（`history_base`）
+
+- `session_meta.payload.history_mode` が `paginated` で、有効な `history_base` を持つCodex rolloutは、参照元rolloutの`end_byte_offset`未満のprefixと現在rolloutの物理suffixを論理的な1セッションとして扱う
+- `history_base.thread_id`はパスへ変換せず、HistoryServiceが発見済みのCodex session inventory内で、session IDまたはファイル名末尾のrollout IDに一意一致するときだけ解決する
+- `end_ordinal_exclusive`、`end_byte_offset`、Fork先と参照元の先頭`session_meta`、物理開始ordinal、LF境界、境界直前レコードのordinalを検証する。境界直前のLFは64 KiB単位で後方探索し、総探索量を16 MiBに制限したうえで、LF確定後のJSON recordだけを実長で確保する。cache由来の`history_base`もplan作成時に物理先頭レコードと再照合し、参照欠落、候補重複、cycle、深度超過、不正境界では任意ファイルを探索せず、現在rolloutだけへフォールバックする
+- 多段参照は最大32段まで再帰解決する。通常JSONLは従来どおり単一ストリーム、paginated履歴もsegment単位でstream処理し、論理履歴全体を一括してメモリへ保持しない
+- 論理履歴はSession Viewer、patch詳細、一覧preview、検索、History Insights、File AI Change History、Markdown transcript、Quick Prompt、handoff、Codex Branch Navigation、sanitized exportで共有する
+- 実行中表示、auto-refresh、開始日時、最終activityは現在rolloutの物理ファイルだけを観測し、参照元のtimestampや追記を現在セッションのactivityへ混入させない
+- 検索・分析・Codex Branch Navigationのcache freshnessは、leaf statに加えて解決済みsegmentのpath、mtime、size、境界から作る履歴fingerprintを考慮する。一覧previewはinventory確定後にpaginated sessionだけ第2段階で再生成する
+- raw JSONL exportでは選択した子に必要な解決済み参照元を重複なく同梱する。raw importのしおり検証では移送元パスへ揃えたinventoryで論理履歴を再構成する。選択対象外のpaginated sessionから参照されている親だけの削除は拒否し、親子同時選択は子から親の順に処理する。子の削除失敗時は親を残す。Undoは親から子の順に復元し、親を復元できない場合は参照する子を復元しない。選択対象内の参照cycleは削除しない
+- `Promote to Today (Copy)`では完全に解決できた論理履歴を自己完結JSONLとして複製し、参照元のprefixを欠落させない
+- 詳細な検証条件と非目標は`.private-docs/codex-history-base-design.ja.md`を正本とする
 
 ### 3.1 ビュー
 
@@ -170,7 +183,7 @@
 - `both`の主操作はsource別に最後に成功した方式を`globalState`へ保存する。Codex / Claude Code各1値で初回は`extension`とし、分割ボタン経由でbase commandが`true`を返した場合だけ更新する。固定表示、Tree、direct command、archive restoreでは更新しない
 - split actionのMRU sequenceはmessageの同期検証直後、session file確認より前にsource別で採番する。非同期確認後にrevision、panel state、session、source、設定、安全条件と予約ticketを再照合し、非同期完了順で受信順が逆転しないようにする
 - 安全条件により保存方式だけが利用不能で、もう一方が利用可能な場合は一時的に主操作を切り替える。この表示だけでは保存値を書き換えない
-- panelごとのpresentation revisionで設定、保存方式、Trust、session切替をinvalidateし、再利用panelの旧session操作をhostで拒否する。sessionDataを伴わない設定、保存方式、Trust、History index確定の更新は、新revisionとsnapshotを単一messageで配送する。`sendSessionData()`開始後は`sessionDataPending`とし、incremental snapshotだけでは保留を解除しない。最新requestの生成または配送に失敗した場合は、current panel state / History entryが最後に正常配送したsessionの正規化path、source、identity key、archive state、root kindと一致するときだけ、current revisionの`sessionDataComplete`付きsnapshotで回復する。別session切替のcommit前失敗では画面に残る元sessionを回復できるが、commit後は旧sessionを回復しない。正常配送checkpoint自体もsession-data request sequenceでlatest-winsとし、古い`postMessage` Promise完了で新しいidentityまたは検証失敗tombstoneを上書きしない。superseded、別sessionへcommit済み、identity変更、初回配送前では次の正常なsessionData受信まで非表示を維持する
+- panelごとのpresentation revisionで設定、保存方式、Trust、session切替をinvalidateし、再利用panelの旧session操作をhostで拒否する。sessionDataを伴わない設定、保存方式、Trust、History index確定の更新は、新revisionとsnapshotを単一messageで配送する。`sendSessionData()`開始後は`sessionDataPending`とし、incremental snapshotだけでは保留を解除しない。target sessionが最後に正常配送したpresentation checkpointと正規化path、source、identity key、archive state、root kindまで一致する同一sessionの手動reload / 自動更新では、旧resume groupと操作可能状態を維持し、snapshot revisionを現在requestへ進める。押下時はHostがcurrent revision、panel state、現在設定、History entryからactionを再構築し、正常配送時に最新snapshotへ置き換える。checkpoint不一致、History entry欠損、初回表示、別session切替では旧snapshotを破棄して非表示にする。最新requestの生成または配送に失敗した場合は、current panel state / History entryがcheckpointと一致するときだけ、current revisionの`sessionDataComplete`付きsnapshotで回復する。別session切替のcommit前失敗では画面に残る元sessionを回復できるが、commit後は旧sessionを回復しない。正常配送checkpoint自体もsession-data request sequenceでlatest-winsとし、古い`postMessage` Promise完了で新しいidentityまたは検証失敗tombstoneを上書きしない。superseded、別sessionへcommit済み、identity変更、初回配送前では次の正常なsessionData受信まで非表示を維持する
 - Resume snapshotの構築またはWebview側のresume toolbar更新に失敗してもSession Webview本文を止めない。hostはcurrent revisionを維持したfail-closed snapshotへ縮退して`sessionData`を送り、Webviewはresume groupだけを非表示にして本文の`render()`を続行する
 - split menuは既存branch menuのportal lifecycleを共用し、menu種別を分離する。Escape、外側click、resize、scroll、Arrow、Home / End、Tab / Shift+Tab、focus復帰、ARIAを扱う
 - compactでは主操作のlabelを隠し、拡張版とCLI版を異なるiconで識別する
@@ -335,7 +348,7 @@
   - 用途: History Insights の統計と Claude Code Branch Navigation の構造化 occurrence を共用する差分解析キャッシュ。履歴キャッシュや検索インデックスの代替にはしない
   - History Insights、Claude Code Branch Navigation、または `Rebuild Cache` を要求したときだけ lazy load / lazy build し、拡張機能の起動や通常の History / Search 表示を待たせない
   - セッションごとの `cacheKey`、source、`mtime`、`size`、parser version と、sessions root / 有効ソースを含む cache context を検証し、変更された entry だけを再解析する
-  - 現行source parser versionはCodex `9` / Claude Code `10`とする。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析する
+  - 現行source parser versionはCodex `10` / Claude Code `10`とする。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析する
   - 既存 Chat model builder と同じ抽出結果を使って message index、turn、usage、file change、ツール名別呼び出し回数を集計し、解析側で独自の message index を採番しない
   - 同一セッションの重複解析を共有し、全体の更新、保存、clear は直列化する。進捗通知とキャンセルに対応する
   - 破損 JSON は削除して次回要求時に再生成し、権限エラーなどの read error では既存ファイルを削除しない
@@ -394,6 +407,8 @@
 - 有効時は Codex / Claude Code の履歴 `.jsonl` を監視する
 - Codex source と Codex archived sessions が有効な場合は archived root も監視対象に含める
 - 変更イベントは `autoRefresh.debounceMs` でまとめ、`autoRefresh.minIntervalMs` より短い間隔では refresh しない
+- 自動更新オンの開いているセッションは、既存の polling 間隔を変えずに、重複除去した対象ごとに1回の `stat` から `{mtimeMs, size}` を比較する。size の増減、または1msを超える mtime の増減を変更として扱う
+- watcher / polling の変更受付時刻を process-local に保持し、debounce の quiet deadline に使う。固定・未来・欠損 mtime を debounce clock には使わない
 - 実際の refresh 実行条件:
   - History view が表示中、または自動更新オンのセッションタブが開いている
   - VS Code ウィンドウがフォーカス中
@@ -406,6 +421,9 @@
 - 同じセッションの既存タブを再表示する場合は、そのタブの自動更新モードを維持する
 - `preserve` は現在の表示位置と UI 状態を維持して再読み込みする
 - `follow` は UI 状態を維持し、`liveRunningTurnId` / `latestTurnId` がある場合はその turn 内の live running marker、completed end marker、最後の意味ある表示カードの順にスクロール対象を選ぶ。末尾が patch group の場合は、同じ turn 内の直前の非 patch group 表示カードを優先する
+- 同一sessionの自動更新中は検証済みの再開ボタンを非表示・無効化せず、Host側の押下時再検証を維持したまま操作可能にする。別sessionまたはidentity変更では旧ボタンを維持しない
+- Hostはannotation、bookmark、session location、live running状態を反映した最終表示モデルのSHA-256 fingerprintを`sessionData`へ付加する。Webviewがready handshakeでmodel再利用protocol version 1を明示し、同じfingerprintを正常配送済みの自動更新では、モデル本体を再転送せず現在のWebviewモデルを再利用する。Webviewはcurrent fingerprintを再検証し、不一致・欠損時は再利用flagなしのreloadを1回要求して完全配送へ回復する。モデルfingerprintとi18n、日時、表示mode等から作る描画keyが最後の正常描画と一致する場合、既存timeline DOMを維持してfull renderを省略する。capability未対応、fingerprint欠損・不正・計算失敗、手動再読み込み、初回表示、session切替、branch transition、描画条件変更では従来の完全モデル配送とfull renderへ縮退する
+- 無変更renderを省略した場合も、再開ボタン、ピン留め、session info、自動更新状態、検索候補、`preserve`の位置復元、`follow`の最新位置移動に必要な内部状態は更新する。表示内容が同じtoolbar、annotation header、metadataのDOMは維持し、session infoのcopy / reveal actionは押下時に最新revisionを参照する。Branch Navigation / Agent Runsの同値再通知を含め、toolbarのicon、label、件数badge、検索role filterは表示値が同じなら子DOMを置換しない。同じfingerprintを正常配送済みの自動更新では`sessionData`後のBranch Navigation / Agent Runs再通知を重複実行しない。表示値が変わった領域だけを更新し、page search revision、temporary expansion、既存card DOMは変更しない
 - 自動更新では Search 結果を消さない
 - 自動更新では検索インデックス再構築を行わない
 
@@ -514,9 +532,12 @@
 - `chat.performanceMode` は `auto` / `normal` / `simplified` を持つ
   - `auto`: ファイルサイズ、item 数、diff entry 数、diff 行見積もり、画像数に応じて `normal` / `simplified` を選ぶ
   - `normal`: 表示状態をできるだけ保持する
-  - `simplified`: diff 本文や詳細を必要時に読み込み、タブ再表示時は重い描画済み section を一時的に軽量化する
+  - `simplified`: diff 本文や詳細を必要時に読み込む
 - セッションビューのヘッダーにあるパフォーマンスモードボタンは、この画面だけの一時設定として `auto` / `normal` / `simplified` を循環する。永続化は設定側で行う
-- タブ再表示や `visibilitychange` 復帰時は restore cover で本文領域を覆い、レイアウト安定後に cover を外す。cover 中は date guide 更新と重い diff body 復元を保留する
+- 通常のタブ切り替えでは DOM ベースの restore cover や hibernation を実行せず、保持済み DOM を再利用する。非表示中は未処理の重い deferred rendering を停止し、再表示後に viewport とtoolbar幅が連続フレームで安定してから再開する。背景色の全画面疑似要素は透明compositor layerとして常設し、Webviewの`visibilitychange=hidden`／`pagehide`で復帰paint前に同期的に準備し、Hostのrevision付きhidden通知でも冪等に補強する。復帰時の暫定viewportを遮蔽し、確定レイアウトと同じ描画フレームで解除する
+- VS Codeが所有するWebview外枠のサイズとcompositor surfaceの提示順はExtension APIから制御できない。復帰イベントより前にVS Codeが保持surfaceを提示する1 frameまで完全に遮蔽することは保証せず、拡張側では保持DOMの再構築と暫定viewportに基づくlayout再計算を防ぐ
+- 非表示中、toolbarの実測幅が0、またはタブ復帰時のlayout安定化中はcompact modeと`--chv-toolbar-height`を再計算しない。非表示直前の確定幅と既存class／高さを維持し、復帰途中の大幅に狭いviewportは安定幅として採用しない。復帰後のviewport幅・高さが直前の確定値と完全一致した場合は連続フレーム待ちを行わず即時にmaskを解除し、全layout後処理を省略してtoolbar content keyだけを確認する。異なるサイズでは連続フレームの安定判定とbounded fallbackを使う。通常のvisible resizeでは全画面マスクや幅固定を行わない。幅、font、toolbar DOMが前回計測時と同じ場合はcompact classを一時解除せず、VS Code側のタブtitle / iconも表示値が同じ場合は再代入しない
+- layout安定化対応Webviewは、表示状態の変更だけでなく`resize`の開始時にも最後に確定した幅を保持し、Hostへ`viewLayoutSuspended` / revision付き`viewLayoutReady`を通知する。WebviewとHostは古いview-state revisionを無視し、Hostはvisible panelの安定化完了までpending auto-refreshを送らず、現在revisionのready通知だけを受理する。capabilityを持たない旧Webviewは従来の更新経路へ縮退する
 - assistant の model / effort / token usage は `Show details` ON のときだけ、assistant 応答後の細い usage 行として表示する
 - usage 行は初期状態では 1 行表示とし、クリックすると入力 / 出力 / キャッシュ / 推論 / 累計 / context window / rate limit / service tier など取得できた項目だけを展開表示する
 - CWD / Git ブランチ / Git コミット / dirty 状態が取得できた場合は、`Show details` ON のときだけ environment 行として表示する
@@ -640,7 +661,10 @@
 - parent / child の正規化済み absolute `cwd` が同一の場合だけ local Fork の resolved edge とする。`新しい Worktree にフォークする`、異なる `cwd`、relative path、比較不能な `cwd` は 2.8.0 の対象外とし、通常の Fork 経路へ混在させない
 - direct Fork、同じ parent からの複数 Fork、nested Forkを current session の component 内で表示する。parent 欠落、ID 重複、self reference、cycle、上限超過は任意の別sessionへ補完せず、確認できる経路だけを partial として扱う
 - parent / child にmaterializeされた可視 user / assistant messageの共通prefixから、既存Chatと同じ1-based message indexのFork anchorを求める。Codexがコピー履歴へtimestampを再付与する場合があるため、timestampを同一messageの必須条件にしない
+- paginated nested Forkがmetadata上のparent sessionより前のancestor境界へ戻り、親sessionを生んだchoiceと同じpre-branch / branch-startを持つ場合は、検証済みedgeを同じ論理分岐点のsibling choiceへ統合する。同一anchorを証明できない早戻りgroupは後のbranch start配下へ逆向きに接続せずpartialとする
 - Codexセッションビューのヘッダー、タイムライン上の前後操作、経路ツリーoverlayはClaude Code Branch Navigationと同じ操作・paging・focus・Escape契約を共用する。経路ツリーは通常ホイールをスクロール、`Ctrl` / `Cmd` + ホイールをポインター位置基準のズーム、`0`を100%＋tree全体の中央への復帰として扱う。ヘッダーアイコンはCodexの向きに合わせて上2点から下1点へ合流する形とし、Agent Runsボタンとは併存するが両overlayは同時に開かない
+- Codex / Claude Code 共通の経路ツリーは、保守的な表示node見積もりが180件以下なら全branch groupを初期表示する。超える場合だけ2groupずつ取得し、前後の未読込分岐点は残件数とtooltipを持つ固定header buttonから取得する。group pagingをtreeの疑似cardにせず、通常node幅、stage幅、fit倍率へ含めない。1分岐点で21件以上のchoiceを省略するnodeは、実在する分岐点へのconnectorを維持する
+- 分岐後の固有messageがなくpre-branch / branch-start / history-endが同じrouteは、共通message cardを重複表示せず、「分岐先」badgeと「この分岐の履歴はここで終了」を持つ終端選択cardにする。本文領域は非操作で、右上の移動iconからそのroute固有sessionの実在する最終cardへ移動する。branch-startとhistory-endだけが同じ1-message routeは通常cardを維持する
 - 経路選択は同じセッションWebviewを`stateOverride`の二相commitで切り替える。History generation、snapshot、opaque target、対象fileの`mtime` / `size`、最新request IDを非同期境界で再検証し、stale targetでは現在表示を変更しない
 - relation node 500件、depth 64、1 sessionの可視message 100,000件、対象file 256 MiBを上限とする。evidence cacheは`cacheKey`、`mtime`、`size`へ結び付け、History更新、設定無効化、明示的cache再作成で失効させる
 - bookmark / tag / noteは各load時のpresentation stateとして反映し、relation topologyや永続cacheへ混在させない。元のCodex JSONL、workspace、Fork、注釈を作成・変更・merge・削除しない
@@ -657,7 +681,7 @@
 - 対象は同じ物理 Claude Code project folder にある top-level primary Claude Code セッションだけとし、Codex、sidechain、別 project folder のセッションは分岐関係へ含めない
 - Claude Code のセッションビューのヘッダーとタイムラインカードから分岐解析を要求できる。独立した全体マップ、セッション右クリック、Command Paletteの専用表示コマンドは設けず、現在のセッション Webview 内の切り替え操作と経路ツリー overlay で完結する
 - タイムラインカード上の前後操作は同じ分岐点の履歴を切り替え、overlay は履歴の開始、分岐直前、各履歴の分岐開始、各履歴の末尾だけを landmark node として表示する。通常メッセージのすべてを node 化しない
-- Codex / Claude Code 共通の経路ツリー node は role、#番号、秒までの timestamp を省略せず表示する。幅が不足する場合は metadata 行を折り返し、anchor と分岐前補助行の完全値を native tooltip でも確認できるようにする
+- Codex / Claude Code 共通の通常経路ツリー node は role、#番号、秒までの timestamp を省略せず表示する。幅が不足する場合は metadata 行を折り返し、anchor と分岐前補助行の完全値を native tooltip でも確認できるようにする。右上の操作領域用余白はbadge行だけに設け、metadata、preview、終端文言はcardの横幅を使う。badgeは必要時にbadge単位で折り返す。分岐点で即時終端するrouteの終端選択cardだけは、直上の共通messageとの重複を避けるためmetadataとpreviewを表示しない
 - 分岐先を選ぶと同じセッション Webview で対象セッションへ切り替え、既存のセッションタイムラインと同じ 1-based message index の位置を表示する。bookmark、annotation、Search、File AI Change History の anchor を再採番しない
 - primary candidate が 2 件未満の場合は追加解析を開始しない。分岐 0 件が確定した場合は理由を toast で通知し、解析中や遷移中は重複操作を無効化する
 - 関係解析は raw メッセージ本文を ID やログへ保存せず、確定できない関係を内容類似だけで推測しない。部分的な関係しか保証できない場合は、確認できた分岐だけを表示して warning を出す
@@ -678,12 +702,13 @@
 
 ### 3.6.6 Mermaid 図
 
-- assistant / user / developer メッセージの fenced code block が `mermaid` または `mmd` の場合、Mermaid 11.16.1 で図として表示する
+- assistant / user / developer メッセージの fenced code block が `mermaid` または `mmd` の場合、Mermaid 11.17.2 で図として表示する。class diagramは`class.defaultRenderer`を明示せず既定のv2 rendererを使い、`class`を`secure`へ含めてsession sourceからの設定上書きを防ぐ
 - 図は表示範囲付近へ入った時点で遅延描画し、1メッセージ20件、ソース100,000文字、edge 1,000件を上限とする。空ソース、文字数・図件数上限、NULは通常コードブロックへfallbackし、runtime不在、構文・edge上限・生成SVG検証エラーはMermaidカード内の共通エラーとソースfallbackで確認できるようにする。SVG描画成功時だけviewportを`role="img"`とし、loading / error時はstatus、alert、ソースを支援技術から読める状態にする
 - Mermaid の初期化は既存の Webview bundle 内の制約付き bridge に集約し、`securityLevel: strict`、`htmlLabels: false`、`startOnLoad: false`、テーマ、フォント、図種別設定を`secure`で固定する。Mermaidが認識する同一インデント／末尾空白付き区切りを含むleading frontmatter、init / initialize / config directive、click directiveは描画入力から除去し、閉じ区切りのないfrontmatterは拒否する
 - Mermaidが返したSVGは切り離したDOMで再解析し、script、foreignObject、image、iframe、object、embed、animation、discard、event handler、外部URI、危険なCSSを除去してからDOMへ挿入する。`xml:base`を含めattributeのlocal nameが`base`なら除去し、内部`#fragment`が外部resourceへ解決される経路を閉じる。Mermaidが生成するbaseなしの内部参照と `var(--vscode-...)` は許可し、外部URI schemeと混同しない。表示時と保存時のSVGは最大100,000要素、深さ512までとし、保存時は1要素あたりの属性を最大1,024件に制限する
 - Mermaid生成SVGはWebviewへの受け入れとHost保存の双方で5 MiB、PNG保存payloadは16 MiB、`.mmd`保存payloadはUTF-8 512 KiBを上限とする。表示とSVG保存に使う図の寸法は最大辺16,384px、最大64 MiPixel以内へ、PNG rasterizeは最大辺8,192px、最大16 MiPixel以内へ、それぞれ縦横比を維持して縮小する。生成後のPNGが16 MiBを超える場合は保存しない
-- Light / Dark / High Contrast に応じた色付きテーマを使い、作者指定styleのないflowchart標準nodeは、Mermaidが解析したshape metadataに基づき開始・終了、入出力、判定、通常処理、データ、特殊処理のrole別固定色で表示する。同じroleは出現順やラベル本文にかかわらず同色とし、赤を意味推測で自動適用しない。色指定のないmindmapは、Mermaid base themeのDark時に中央文字と分岐scaleが黒になる既定挙動を限定的なtheme CSSで補う。中央rootはDarkで濃青背景と白文字、Lightで薄青背景と濃紺文字を使い、文字をfont-weight 600とする。Darkの子node、label、輪郭、branch edgeにはsection別の11色を割り当て、Lightの正常な分岐配色は変更しない。Git graphと共有するtheme variableは変更せず、theme CSSに`!important`を使わないことで作者の`classDef`を優先する。sequence図の`box` / `rect`、flowchartの`classDef` / `class` / `style` / `:::`など、Mermaid構文で作者が明示した色はテーマにかかわらず変更せず、原文、表示、SVG / PNG出力の一貫性を優先する。ER図、クラス図など作者の行色指定がない表形式nodeの交互行はDarkで濃紺2色と白文字、Lightで白／薄青と濃紺文字へ固定し、Mermaidのlight theme向け自動補色を使わない
+- Light / Dark / High Contrast に応じた色付きテーマを使い、作者指定styleのないflowchart標準nodeは、Mermaidが解析したshape metadataに基づき開始・終了、入出力、判定、通常処理、データ、特殊処理のrole別固定色で表示する。同じroleは出現順やラベル本文にかかわらず同色とし、赤を意味推測で自動適用しない。色指定のないmindmapは、Mermaid base themeのDark時に中央文字と分岐scaleが黒になる既定挙動を限定的なtheme CSSで補う。中央rootはDarkで濃青背景と白文字、Lightで薄青背景と濃紺文字を使い、文字をfont-weight 600とする。Darkの子node、label、輪郭、branch edgeにはsection別の11色を割り当て、Lightの正常な分岐配色は変更しない。Git graphと共有するtheme variableは変更せず、theme CSSに`!important`を使わないことで作者の`classDef`を優先する。ER図、クラス図など作者の行色指定がない表形式nodeの交互行はDarkで濃紺2色と白文字、Lightで白／薄青と濃紺文字へ固定し、Mermaidのlight theme向け自動補色を使わない
+- sequence図では、元sourceに不透明RGB／HEXとして明示された`box` / `rect`背景だけをLight / High Contrast Lightで検査する。固定文字・signal色との4.5:1、通常線色およびactor／border色との3.5:1を下回る場合は、sanitization後の`rect.rect[fill]`を色相を残したまま白方向へ1%刻みで最小限補正する。source宣言色との一致と256領域上限を検証し、Dark系、基準を満たす色、透明色・色名、他図種、flowchartの作者styleは変更しない。補正済み表示は右ペインとSVG / PNG保存へ引き継ぎ、source copyと`.mmd`は原文を維持する
 - インラインと右ペインのLight / Darkトグルは全Session Webviewで同期し、最後の明示選択を`globalState`へ保存して別セッション、別プロジェクト、タブ再作成後も復元する。全体値が未設定の初回はVS Codeテーマに追従し、切替時は表示範囲付近の図を再描画して範囲外の図を遅延描画へ戻す。表示面は装飾用グリッドやパターンを持たない単色背景とし、SVG / PNGには描画時テーマに対応する固定背景を埋め込み、`.mmd`は変更しない
 - インライン図は会話中のpreviewとして、縦横比を維持したままviewportの横幅と高さへfitして全体構造を表示する。viewport上限は`min(560px, 66vh)`、SVGの高さ上限はviewportのpadding 32pxと追加余白8pxを除いた値とし、極端に縦長または横長でインラインの文字が小さくなる場合は右ペインで詳細を確認する。通常はscrollbarを表示せず、ブラウザのSVG intrinsic size差などで外接矩形が2pxの許容値を超えた場合だけ安全fallbackとしてcard内scrollを有効にする
 - 各図の縦線付き左矢印アイコンから非モーダルの右ペインを開ける。デスクトップでは会話領域を残し、Fork / Branch Navigation と同じ通常ホイール／矢印キーのスクロール、ドラッグパン、`+` / `-` / `0` のズーム操作、`Ctrl` / `Cmd` + ホイールのポインター位置基準ズーム、全体表示、元図表示、ソースコピーを提供する。`+` / `-` / `0` はpane open中のWebview全体shortcutとし、文字入力中または`Ctrl` / `Cmd` / `Alt`付きのkeyboard eventは除外する。keydownはForkと同じpane root、`window` capture、既存document keydownから同じhandlerへ集約し、NFKC正規化した`event.key`、既知の`event.code`、最後に曖昧操作を除いたlegacy `keyCode`の順で判定する。日本語配列の`;`単独と`Shift+0`は操作として扱わず、shiftなし`0`だけを100%＋図中央への復帰にする。先頭4 action は元図、全体表示、縮小、拡大の順とし、overflow 時は水平・垂直スクロールバーを表示する。pane内controlの操作後にtheme再描画でDOMが再構築された場合は同じactionへfocusを戻す。pane幅変更とwindow resizeはscaleを変更せず、変更前のviewport中央にある図座標をlayout後も中央へ維持する。自動fitは初回openだけとする。元図表示はsession、timeline card keyのhash、timeline card番号、message番号、ordinal、source hashから組み立てたdiagram keyまで照合し、同じassistantカード内の複数図と同じsourceを持つ複数developerカードを区別する。接続済みの対象図がある場合はtimelineを再描画せずpane展開後の幅で決まった位置へ移動する。狭幅では画面幅を使う
@@ -696,7 +721,7 @@
 
 ### 3.6.7 コードブロックのシンタックスハイライト
 
-- Session Webview のassistant / user / developer fenced code blockと差分カード、およびファイル履歴 Webviewのdiff cardは、`scripts/chatViewShiki.entry.js` へ静的登録したローカル Shiki 文法だけで色分けする。文法はネットワークから取得せず、未知言語、初期化失敗、ハイライト失敗時はコード本文を失わないプレーンテキスト表示へfallbackする
+- Session Webview のassistant / user / developer fenced code blockと差分カード、およびファイル履歴 Webviewのdiff cardは、Shiki 4.4.3と`scripts/chatViewShiki.entry.js`へ静的登録したローカル文法だけで色分けする。文法はネットワークから取得せず、未知言語、初期化失敗、ハイライト失敗時はコード本文を失わないプレーンテキスト表示へfallbackする
 - 既存文法に加え、Apache Conf、Windows Batch、Bicep、dotenv、F#、HCL、Kusto、LaTeX、Perl、PL/SQL、ASP.NET Razor、Windows Registry、SSH Config、systemd、TeX、Visual Basicを登録する。`.NET`を単一言語として扱わず、既存C# / PowerShellと追加するF# / Razor / Visual Basicで個別に対応する
 - `apacheconf` / `httpd` / `htaccess` は `apache`、`batch` / `cmd` は `bat`、`cc` / `cxx` は `cpp`、`f#` / `fs` は `fsharp`、`cshtml` は `razor`、`jscript` は `javascript`、`vba` / `vbs` / `vbscript` は `vb` へ正規化する。Visual Basic文法が内包する`cmd` aliasよりWindows Batchを優先するため、`cmd`は必ず明示的に`bat`へ正規化する
 - SQL方言のうち、`tsql` / `t-sql` / `mssql` / `sqlserver` / `mysql` / `sqlite` / `postgresql` / `pgsql` / `plpgsql` は汎用`sql`へ正規化する。`plsql`は専用文法を使用する。ASP.NET Web Formsの`aspx` / `ascx` / `master`はHTML部分の色分けとして`html`へ正規化し、埋め込みサーバーコードの完全な色分けは保証しない
@@ -801,7 +826,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `writeJson()` は同一ディレクトリの一時ファイルへ書いてから rename し、rename 失敗時は `beforeCommit` を再確認してから直接書き込みへフォールバックする。フォールバックの成功 / 失敗にかかわらず一時ファイルを best-effort で削除する
 - `src/services/historyService.ts`
   - `cache.v9.json` を読み書きする。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
-  - `SUMMARY_CACHE_ALGO_VERSION = 18`とし、現行Codex pasted-file形式、Claude pasted / truncated inputの本文／添付分離、本文保持専用照合の修正前、Claude cross-session受信の除外前、Codex standalone response itemのactivity timestamp対応前に生成した要約は、ファイル自体が未変更でも再生成する。outer cache versionとファイル名は変更しない
+  - `SUMMARY_CACHE_ALGO_VERSION = 19`とし、現行Codex pasted-file形式、Claude pasted / truncated inputの本文／添付分離、本文保持専用照合の修正前、Claude cross-session受信の除外前、Codex standalone response itemのactivity timestamp対応前、またはCodex `history_base`論理preview対応前に生成した要約は、ファイル自体が未変更でも再生成する。outer cache versionとファイル名は変更しない
   - 有効な cache context から `HistoryIndex` を復元し、初回表示を先に完了できるようにする
   - cache 読み込み時の parse error は cache を削除して `null` 扱いにし、read error は削除せず `null` 扱いにする
   - 変更のないファイルはキャッシュ済み `summary` を再利用する
@@ -836,12 +861,16 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - watcher root signature には `rootKind` を含め、通常 Codex と archived Codex の root を区別する
   - watcher イベントは即 refresh せず、変更された `fsPath` を pending 集合に入れて debounce / min interval を適用する
   - refresh callback には変更された `fsPath` の配列を渡す
+  - open auto-refresh target の polling は、normalized path で重複除去し、対象ごとに既存の1回の `stat` から mtime と size を読む。初回は baseline だけを記録し、size の増減、1msを超える mtime の増減、regular file の消失を次回 refresh の変更として扱う
+  - pending path ごとに watcher / polling を受理した process-local 時刻を保持し、`observedAt + debounceMs` を quiet deadline とする。refresh 中に到着した変更は次 generation に残し、失敗時は新しい受付時刻で再試行する
+  - polling の起動条件と間隔 (`debounceMs / 2`、下限500ms、上限2秒) は変更せず、size 比較用の追加 `stat` や全履歴 scan を行わない
   - `History` view が非表示かつ自動更新オンのセッションタブが開いていない場合、または VS Code ウィンドウが非フォーカスの場合は timer を止めて pending を保持する
   - `vscode.window.state.focused` と `onDidChangeWindowState` により、フォーカス中のウィンドウだけ自動 refresh を実行する
   - 自動 refresh は `refreshHistoryIndex(false)`、view refresh、セッションビューのタイトル更新、対象セッションタブ更新を行い、Search 結果のクリアや検索インデックス再構築は行わない
 - `src/extension.ts`
   - 自動更新 consumer は `History` view が表示中、または `ChatPanelManager` に自動更新オンの開いているセッションタブがある場合に存在するとみなす
   - `historyView.onDidChangeVisibility`、セッションビュー consumer 変更イベント、`onDidChangeWindowState` で `AutoRefreshService` の実行条件を更新する
+  - ウィンドウのフォーカス復帰時は、staleness expiry などにより保留された可視セッションタブの更新も1回だけ再開する
   - `codexHistoryViewer.manageProjectAlias` / `setProjectAlias` / `clearProjectAlias` を登録し、Project node 文脈がない direct / UI command では active project を推定せず no-op にする
   - プロジェクト別名の変更後は view description と tree view を更新し、`refreshHistoryIndex(false)` と `chatPanels.refreshTitles()` は呼ばない
 - `src/chat/chatPanelManager.ts`
@@ -850,18 +879,25 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - Webview serializer 復元時は、最後に見ていた scroll 位置も `scrollY` / `topMessageIndex` として保存し、復元後に同じ message 付近へ戻す
   - Webview 復元設定は実験的な opt-in 設定として既定無効にし、VS Code の復元遅延により同じ履歴を再度開いたときにタブが重複する場合があることを設定説明で明示する
   - serializer 復元時も通常生成と同じ `webview.options`、HTML、`onDidReceiveMessage`、`onDidChangeViewState`、`onDidDispose` を再アタッチする
-  - 開いているセッションタブは裏タブでも自動更新対象にする
+  - 開いているセッションタブは裏タブでも自動更新対象にする。readyかつ自動更新オンの保持Webviewは非表示中もlive activityを継続観測中として扱い、background refreshで`liveRunningTurnId`を可視性だけでは除去しない
   - `refreshAutoRefreshPanels(changedFsPaths)` は変更されたセッションファイルに対応するセッションタブだけ再読み込みする
   - Webview がまだ ready でない場合のみ `pendingAutoRefresh` として保持し、ready 後に 1 回反映する
+  - live turn の activity observation は normalized session path ごとに process memory だけへ保持し、auto-refresh mode が `off` の path、session switch、panel dispose、archive 移動、file missing、manager dispose で破棄する
+  - running を付与した panel には最終 activity から30分を超える時刻の one-shot expiry を設定する。新しい有効 record の進行で期限を延長し、windowフォーカス中かつreadyなら裏タブでもbackground再評価する。非フォーカス、not-ready、再読込中はpendingとして次の実行可能時に1回だけ再評価する
   - Webview 内検索は入力ごとの即時 DOM 全走査を避けるため短い debounce を入れ、Enter / 前へ / 次へ / query クリアは即時反映する
   - 新規セッションタブ、または別セッションへ差し替えた再利用タブは `off` から開始する
   - 同じセッションの既存タブは自動更新モードを維持する
+  - Webviewへ渡す最終`ChatSessionModel`を`src/chat/chatRenderFingerprint.ts`で直列化し、version付きSHA-256 fingerprintを追加する。直列化またはhash計算失敗は本文表示を失敗させずfingerprintなしで配送する
+  - HostからWebviewへ送る自動更新要求だけがboundedなbooleanをreload request / responseで往復する。Hostはstrict booleanかつpanelのauto-refresh modeが`off`ではないことを再検証し、手動再読み込みを無変更render省略の対象にしない
+- `media/chatView.js`
+  - モデルfingerprintを厳密に検証し、同一session、`preserveUiState`、transitionなし、同一描画keyの場合だけtimelineの`render()`、page search content revision更新、temporary expansion消去を省略する
+  - full renderが正常完了した時だけ現在の描画keyをcommitし、render途中の失敗や不正fingerprintからstale DOMを正当化しない
 
 ### 4.5 検索インデックス
 
 - `src/services/searchIndexService.ts`
   - `search-index.v2.json` を管理する。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
-  - `SEARCH_INDEX_FILE_VERSION = 18` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item対応前に生成した既存インデックスは再構築対象にする
+  - `SEARCH_INDEX_FILE_VERSION = 19` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item / Codex `history_base`論理履歴対応前に生成した既存インデックスは再構築対象にする
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
   - 検索インデックス読み込み時の parse error はインデックスを削除して `null` 扱いにし、次回検索時に再構築する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
@@ -1016,6 +1052,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - `src/branchMap/codexForkNavigationService.ts` / `src/branchMap/codexForkNavigationTypes.ts`
   - relation構築前にHistory cacheのCodex agent metadataを補完し、補完後のHistory generationをsnapshot基準にする。未確認entryはfail-closedで除外し、partial snapshotへ反映する
   - current componentのfile inventoryを検証しながら最大4並列でevidenceを構築し、boundedなprocess-local cache、opaque target、Claude Codeと共通shapeのinline control / overlay page / cursorへ変換する
+  - nested Forkのparent側anchor / continuationが、そのparent sessionを生んだchoiceのpre-branch / branch-startと同じsession座標で一致する場合はancestor groupへ統合する。早いanchorを証明なく後のchoice配下へ置かず、current routeは統合後のexact / nearest ancestor choiceから解決する
   - 解析中のfile変化はservice内で1回再読込し、load全体のsuperseded後に行うHost再起動も1回までに制限する。実行中JSONLが継続更新されても無制限な解析loopにせず、次の手動reload / 自動更新 / History更新で再試行する
   - History generation、file inventory、active lineage、group / choice / occurrenceの所属をHost側で再検証し、別component、stale cursor、変更済みfileへ移動しない
   - bookmark / tag / noteはload時に注入したpresentation providerから取得し、evidence cacheを再解析せず最新表示へ更新する
@@ -1225,7 +1262,9 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `patchEntry` reveal target で開く場合は、`revealMessageIndex` があっても `summary` を維持する
   - `ChatPanelManager` は対応画像の data URI をパネル単位で保持し、Webview からの `requestImageData` に応じて必要な画像データだけ返す
   - `ChatPanelManager` は usage 行のラベルを Webview i18n として渡し、表示文字列を `l10n/bundle.l10n.*` で管理する
-  - `ChatPanelManager` は Codex turn の永続状態を変更せず、`chatTurnTimelineMode=live` の場合だけ active Codex root、archive 状態、mtime、auto-refresh 観測状態を使って live 表示の `running` を `displayStatus` として付与する
+  - `ChatPanelManager` は Codex turn の永続状態を変更せず、`chatTurnTimelineMode=live` の場合だけ active Codex root、archive 状態、auto-refresh 観測状態、source activity evidence を使って live 表示の `running` を `displayStatus` として付与する
+  - `src/chat/liveActivity.ts` は bounded な record signature、`{mtimeMs, size}` fingerprint、process-local observation、bootstrap、reset、monotonic merge、freshness、expiry の pure helper を提供する。継続観測では最後の有効 record 自身の validated top-level timestamp を activity とし、未来値は観測時刻までに clamp する。末尾 record の timestamp が欠損または不正な場合だけ観測時刻を使い、mtime は有効な top-level timestamp がない初回または reset 後だけ fallback に使う
+  - `chatModelBuilder.ts` の panel 専用 `buildChatSessionModelWithActivityEvidence()` は、既存の1回の JSONL parse 中に最後の有効 record と最新の有効 top-level timestampだけを収集する。本文、tool output、raw JSON、完全 path を evidence に保持せず、公開 `ChatSessionModel` と既存 `buildChatSessionModel()` の戻り値を変更しない
   - `chatModelBuilder.ts` は Codex の `turn_context.payload.model` / `effort` を assistant メッセージと usage 行へ付与する
   - `chatModelBuilder.ts` は Codex の `event_msg.payload.type = token_count` から `last_token_usage` / `total_token_usage` / `model_context_window` / `rate_limits` を usage 行に変換する
   - `chatModelBuilder.ts` は Codex の `task_started` を turn 開始の主シグナルとし、`turn_context.payload.turn_id` は active turn と一致する場合だけ補助観測として扱う
@@ -1284,7 +1323,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - セッションビューのヘッダーにある自動更新ボタンは `btnPageSearch` と `btnReload` の間に配置する
   - Webview 側は `requestReload` / `reload` message で自動更新時のスクロール・UI 状態保持を行う
   - Webview 側は `Show details` 切り替え時にカード anchor を保持し、再描画後に同じカードまたは次の表示カードへ復元する
-  - Webview 側は performance mode に応じて heavy diff body の遅延描画、タブ復帰時の hibernation、restore cover 後の復元を行う
+  - Webview 側は performance mode に応じて heavy diff body を遅延描画する。`viewState`、`visibilitychange`、`pagehide` / `pageshow` では未処理 schedule を停止し、viewport幅が安定した後だけ再開して DOM を保持する。旧 restore cover や hibernationは実行せず、Webviewのhidden lifecycleで復帰paint前に準備し、Hostのrevision付きhidden通知でも冪等に維持する透明compositor layerにより復帰時の中間描画を遮蔽する
   - Webview 側は `lastMessage` の保存 / 復元を本文 `msg-*` アンカー単位で行い、対象が表示されていない場合は直前の描画済み本文メッセージ、なければ先頭へフォールバックする
   - Webview 側は `latest` のとき、保存位置を参照せず、ヘッダーの末尾ボタンと同じ最新の描画済み visual target へスクロールする。折りたたみ中の completed turn は勝手に展開せず、collapsed summary marker が末尾ならそこへ移動する
   - Webview 側は usage 行を折りたたみ可能カードとして描画し、展開状態を同一セッション reload 中は保持する
@@ -1396,7 +1435,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - CPU、memory、disk accessなどの使用量へ影響する14設定はcatalogの`resourceImpact`を正本とし、label横へtheme追従のgauge iconを表示する。icon wrapperはlocalized tooltipと`role=img`／`aria-label`を持ち、外部assetやicon fontには依存しない。自動更新3設定、最大検索結果数、検索index内容も対象に含める。
 - OSのファイル管理アプリと区別するため、`fileChangeHistory.explorerContextMenu.enabled` は「VS Code のファイル一覧」と表示する。wide表示は最大1440px、左右24pxの外側padding、約210pxの左navigationとし、header下の左navigationと右contentを独立してscrollさせる。navigation group見出しは11pxとする。同一pageの再描画ではfocusをスクロールさせず左右それぞれのscroll座標を維持し、navigationによるpage切替時だけ右contentを新しいpageの先頭へ移動する。狭幅ではbody scrollとdrawer表示へ戻す。
 - header metadataは全pageで`v{version} · {license} · Copyright (c) {years} HizTam`を表示する。copyrightは2026年を開始年とし、2027年以降はextension hostの現在年までの範囲へ自動更新する。「拡張機能情報」はcontent見出しを表示せず、「バージョン情報」「ライセンス」「サードパーティライセンス」の3tabで構成する。3つの`tabpanel`は対応するtabの`aria-controls`先としてDOMへ常設し、非選択panelを`hidden`にする。wide表示ではtab panelだけ、狭幅ではbodyだけをscrollさせ、ライセンス文書の二重scrollを避ける。UIのtab labelは日本語／英語へ統一し、法的文書本文は原文を維持する。
-- バージョン情報tabにはheart icon付きのsecondary button「GitHub Sponsorsで支援」を表示する。Webviewは固定actionだけをhostへ送り、hostが固定URL `https://github.com/sponsors/HizTam`を`vscode.env.openExternal`で開く。WebviewからURLを受け取らず、外部widgetや外部scriptは読み込まない。
+- バージョン情報tabにはstar icon付きのsecondary button「GitHub」、heart icon付きのsecondary button「GitHub Sponsorsで支援」の順でaction行を表示し、その下に「セキュリティ情報」／`Security Information`、脆弱性報告、変更履歴、コマンド一覧への関連リンクを表示する。6つの外部導線は、開く対象と外部ブラウザーへ遷移することを説明する英語・日本語の`title` tooltipを持つ。Copyright表示とは同じ行へ置かず、3tab構成を維持してSecurity、CHANGELOG、commandsを独立tabにはしない。セキュリティ情報linkの遷移先文書はGitHub標準の`Security Policy`見出しを維持する。WebviewはSponsorsの固定actionまたはrepositoryを含む5種類の固定resource IDだけをhostへ送り、hostがallowlist内の固定GitHub URLを`vscode.env.openExternal`で開く。WebviewからURLを受け取らず、Star状態や件数、外部widget、外部script、GitHub APIを読み込まない。
 - メンテナンスはユーザー設定初期化、scope別の設定backup、cache／検索index再作成、保存data整理、標準設定への導線を集約する。data整理の名称は既存UIと同じ「このプロジェクトの検索履歴を消去」「見つからないピン留めを解除」「引き継ぎファイルを削除」「ゴミ箱を空にする」を使う。backupはuser、現在のworkspace、明示選択したworkspace folderを別々のversioned UTF-8 JSONとしてexport / importし、extension ID、scope、key、型、enum、範囲、重複、sizeを検証する。別scope用fileは拒否し、import途中失敗時は変更済み値をrollbackする。export時の既定ファイル名にはscope種別、取得可能なworkspace／folder名、安全なUTC日時を含め、user homeの絶対pathをsave dialogの既定URIにする。workspace／folder用backupの説明では、target metadataに絶対pathまたはURIが含まれ得ることをexport前に明示する。
 - LICENSEは開発ツリーの`LICENSE`とVSIX内で改名される`LICENSE.txt`を固定候補として扱い、third-party noticeとともにpackage内の固定URIから`workspace.fs`で非同期かつ上限付きで読む。remote／virtual extension hostでも利用できるようにし、Webviewでは`textContent`だけで表示する。読込中または失敗時も設定編集は継続できる。
 - 実行時文言は `l10n/bundle.l10n.json` / `l10n/bundle.l10n.ja.json` で管理し、英語・日本語のkey parityと静的参照を検査する。廃止UIの未使用keyは残さず、メンテナンスから従来の `@ext:` 絞り込み付きVS Code設定画面を開けなかった場合は専用のlocalized errorを返す。
@@ -1428,7 +1467,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 ### 4.15 診断ログ
 
 - `src/services/logger.ts`
-  - `codexHistoryViewer.debug.logging.enabled` が `true` のときだけ OutputChannel `Codex History Viewer` に出力する
+- `codexHistoryViewer.debug.logging.enabled` が `true` のときだけ OutputChannel `Codex History Viewer` に出力する
+- セッションビューのタブ復帰診断では `viewLayout` scopeとして、イベント名、view-state revision、visibility、viewport / toolbar / scroll root幅、幅保持・mask・安定化状態だけを出力し、セッションパスや本文は含めない
   - 出力内容は件数と処理時間のみとし、セッションパス・セッションID・メッセージ本文は含めない
   - ログ時刻はローカル時刻で出力し、`Asia/Tokyo` などのタイムゾーン名は付けない
 - `src/services/historyService.ts`
@@ -1511,10 +1551,30 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 ### 5.1 セットアップ
 
+依存関係のインストール、テスト、リリース作業には Node.js 22.12.0 以降を使用する。直接同梱する KaTeX 0.18.5 のCLI用依存 `commander@15` が Node.js 22.12.0 以降を要求するためである。`commander` は開発時だけ導入され、`.vscodeignore` によりVSIXへは含めないため、VS Code拡張の実行環境要件は変更しない。
+
 ```powershell
 # 依存関係をインストールします
 npm install
 ```
+
+KaTeX は Webview 用の配布物を `media/vendor/katex/` に同梱するため、`package.json` の exact version と同梱物を別々に更新してはならない。2.13.0 の直接同梱版は `katex@0.18.5` とする。KaTeX の version を変更した後は明示的に同期し、第三者コード、CSS、LICENSE、font の差分をレビューする。
+
+```powershell
+# インストール済みKaTeXと同梱物の一致を確認します
+npm run check:katex
+
+# KaTeXのversionを変更した場合だけ同梱物を同期します
+npm run sync:katex
+```
+
+`check:katex` は `package.json`、`package-lock.json`、`node_modules/katex` の version と、JavaScript、CSS、LICENSE、全 woff2 の内容を照合する。`media/vendor/katex/**` は `.gitattributes` で Git の text 変換対象から外し、`core.autocrlf` による byte 差を防ぐ。`THIRD_PARTY_NOTICES.txt` では直接同梱する KaTeX を独立した項目として明示し、既存方針どおり公開 notice には version を重複記載せず exact version は package manifest と lockfile で管理する。`npm audit` は手動同梱物の実体を検査しないため、この確認の代用にはならない。lint と VS Code prepublish は `check:katex` を自動実行し、不一致時はファイルを変更せず失敗する。
+
+配布する Markdown renderer は `markdown-it@14.3.1` とする。14.3.1 は 15.0.1 の linkification に関する二次計算量のセキュリティ修正を v14 へ backport した版であり、Session Viewer で有効な通常 URL の linkification にも必要となる。v15 は package 構成と linkification の既定値を含む破壊的変更があるため 2.13.0 では採用せず、既存の fuzzy email / `mailto:` 自動検出無効化と link validation を維持する。
+
+KaTeX 0.18.0 では一部の内部 CSS class に `katex-` prefix が追加された。Chat Webview の独自 CSS は公開 class の `.katex` と `.katex-display` だけを参照し、内部 API も使用しない。今後も KaTeX が生成する HTML と stylesheet の class を一致させるため、JavaScript と CSS を別versionへ分離せず、同じ package から同時に同期する。内部 class へ依存する独自 selector や HTML 後処理は追加しない。
+
+直接同梱する `media/vendor/katex` とは別に、Mermaid 11.17.2 は diagram math 用に `katex@^0.16.47` を依存関係として持ち、現在の lockfile では Mermaid 配下の `katex@0.16.47` として解決される。`sync:katex` / `check:katex` の対象は root の exact dependency と `media/vendor/katex` だけとし、Mermaid の対応範囲外となる 0.18.x へ override しない。Mermaid側の KaTeX は lockfile、`npm audit`、Webview bundle再生成後の差分で検証する。
 
 ### 5.2 ビルド
 
@@ -1528,16 +1588,22 @@ npm run watch
 
 ### 5.2.1 検証
 
+- Node.js で実行する単体テストが、直接または依存モジュール経由で `vscode` を参照する場合は、対象モジュールの import より前に `import "../support/registerVscodeMock";` を記述して VS Code mock を必ず登録する。`tsconfig` の `include` に mock ファイルを追加するだけでは実行時に登録されない
+
 ```powershell
 # TypeScript の型を検証します
 npm run typecheck
 
-# ローカライズと Webview JavaScript の構文を検証します
+# ローカライズ、KaTeX同梱物、Webview JavaScriptの構文を検証します
 npm run lint
 
 # CLI 再開の単体テストをコンパイルして実行します
 npx tsc -p test/tsconfig.cli-resume.json
 node --test .test-dist/test/unit/cliResumeValidation.test.js .test-dist/test/unit/cliResumeContract.test.js
+
+# live activity と自動更新の単体・競合テストをコンパイルして実行します
+npx tsc -p test/tsconfig.live-activity.json
+node --test .test-dist/live-activity/test/unit/chatLiveActivity.test.js .test-dist/live-activity/test/unit/autoRefreshService.test.js .test-dist/live-activity/test/unit/chatPanelManagerRace.test.js
 
 # 差分に不要な空白エラーがないことを確認します
 git diff --check
@@ -1550,7 +1616,7 @@ git diff --check
 npm run package
 ```
 
-- `scripts.package` は `vsce package --allow-missing-repository` を実行する
+- `scripts.package` は `vsce package --allow-missing-repository` を実行する。VS Code prepublish は compile より前に `check:katex` を実行し、依存パッケージと同梱物が不一致なら VSIX 作成を中止する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 - README用の `media/screenshot*.png` は配布VSIXへ含めない。README内の画像はpackage時にremote URLへ変換されるため、`.vscodeignore`で除外する
 - ローカル最終確認用の `.root-review-*` は `.gitignore` と `.vscodeignore` の双方で除外する。リリース前は完成したVSIXを展開し、private docs、test、source map、別VSIX、レビュー用一時ファイルが混入していないことを確認する
@@ -1956,7 +2022,7 @@ npm run package
 - 通常履歴 Webview とファイル履歴 Webview で共通の date guide を追加した。設定 `codexHistoryViewer.ui.timeGuide.enabled` が `true` のときだけ表示する
 - date guide はマウスオーバー、手動スクロール、キーボードスクロール時に表示し、自動更新追従やカード前後移動では表示しない
 - 大きい履歴向けに `chat.performanceMode` を追加し、`auto` / `normal` / `simplified` から既定の表示負荷を選べるようにした
-- `simplified` では重い diff / 詳細の描画を必要時に遅延し、タブ復帰時のレイアウト崩れは restore cover で隠す
+- `simplified` では重い diff / 詳細の描画を必要時に遅延する。旧実装ではタブ復帰時のレイアウト崩れを restore cover で隠していたが、2.13.0ではDOMを保持し、Webviewのhidden lifecycleで復帰paint前に準備してHost通知でも冪等に補強する透明compositor layerにより復帰時の中間描画を遮蔽する
 - diff は VS Code 標準 Diff Editor ではなく、拡張機能の Webview 独自レンダリングで表示する
 - 検索インデックスの tool メタ情報をファイル履歴の関連セッション優先付け補助に使うが、最終的な diff は元のローカルセッション JSONL を読み直して生成する
 
@@ -2013,7 +2079,7 @@ npm run package
 - History Insights の解析をキャンセルしても既存表示を stale として安全に保持し、panel を閉じて開き直した場合に旧 panel の進捗、エラー、model、VS Code通知が新しい panel へ混入しない。2秒未満のloadでは通知が出ず、2秒を超える初回load／model保持refreshでは通知からキャンセルできる。完了済みcancel後の新しいopen／条件適用はloadを開始し、snapshot保存中の最後の意図がcancelなら自動loadを抑止、cancel後にretryした場合は再開する
 - 新規 storage では `session-analysis-index.v1.json` は History Insights / Claude Code Branch Navigation / `Rebuild Cache` の初回解析要求まで作成されず、通常の History / Search / Pinned / セッションタイムライン表示を待たせない
 - Session Analysis Index は cache context が一致する限り未変更セッションを再利用し、mtime / size または parser version が変わった entry だけを再解析する。root / source context が変わった場合は新しい context で対象 entry を構築する
-- Session Analysis のsource parser versionはCodex `9` / Claude Code `10`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析される
+- Session Analysis のsource parser versionはCodex `10` / Claude Code `10`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、`history_base`論理履歴を解析しないCodex version 9 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析される
 - 破損した `session-analysis-index.v1.json` は次の解析要求で安全に再生成され、read error では既存ファイルを削除しない
 - `Rebuild Cache` は確認後に履歴キャッシュ、検索インデックス、Session Analysis Index を同じ履歴集合から順番に再作成し、進捗とキャンセルが機能する。独立した Session Analysis 再構築コマンドは公開しない
 - `Rebuild Cache` をSession Analysis Index削除前にキャンセルした場合は既存indexが残り、削除後のキャンセルでは不完全なindexが保存されない。削除 / 保存失敗時は成功通知が出ない
@@ -2033,12 +2099,13 @@ npm run package
 - `source.subagent.thread_spawn` と `forked_from_id` の両方を持つdirect / nested subagentはCodex Branch Navigationへ混入せず、Agent Runsだけから到達できる。Agent Runsを無効にしてBranch Navigationだけを有効にした場合も同じ分類になる
 - agent metadataの補完が一部失敗した場合は、未確認sessionをForkと推測せず、確認済みrelationだけをpartialとして表示する
 - Codexが共有履歴のtimestampを再付与していても、role、本文・attachment fingerprint、利用可能なsource item ID / turn IDから正しい共通prefixと1-based message anchorを求める。共通prefixを証明できないedgeでは誤った位置への移動を出さない
+- paginated nested Forkで`forked_from_id`は直前のForkを指すが`history_base`は同じancestor境界へ戻る場合、同じpre-branch / branch-startを持つrouteを1分岐点のsibling choiceとして表示する。親Forkのbranch start後に古いpre-branch nodeを逆順表示せず、一致を証明できない早戻りはpartialにする
 - 親セッションとmaterializeされた各Codex Forkに同じsession-start protocol bundleがあっても、それを共通履歴の通常user evidenceやFork anchorに含めない。カード化後もraw message indexは消費し、最初の実user message以降の1-based indexを変えない
 - Codex Branch Navigation のinline操作 / overlayからtargetを選ぶと、同じセッションWebviewで対象session / messageへ移動する。History generation、file inventory、snapshot、request IDがstaleな場合や、target model構築中にcomponent fileが変化した場合は、commit直前の再検証で現在session、panel registry、表示modelを変更しない
 - Codex Forkのheader buttonは上2点から下1点へ合流する公式Codexと同じ向き、関係ありの場合は件数badge付きで表示する。toolbar右側は`自動更新 -> Agent Runs -> Branch Navigation -> Reload`の順とし、branch buttonをReloadの直前へ固定する。Agent Runs buttonと同時に存在しても、片方のoverlayを開くと他方を安全に閉じる
 - Codex Fork overlayはdirect / nested componentのlandmarkだけをbounded表示し、`新しい Worktree にフォークする`、別`cwd`、無関係なCodex session、通常タイムラインの全messageを混在させない
 - bookmark / tag / note変更後はevidenceを再parseせずFork presentationだけを更新し、同一sessionの手動reloadと自動更新`preserve` / `follow`ではoverlay open、tree scroll、stable focusを可能な範囲で維持する
-- Branch Navigationの再確認がpendingになっただけではセッションタイムライン、Webview内検索、スクロール位置を再描画しない。最終通知のinline分岐表示が同一ならセッションタイムラインは再描画せず、toolbar / controlと、開いているoverlayだけを更新する。実差分がある場合はactive検索結果をsemantic anchorで復元し、消失時は近傍へfallbackしつつ閲覧中anchorを可能な範囲で維持する
+- 同一セッションのBranch Navigation再確認では、検証済みpresentationを結果確定まで保持してpending表示へ戻さず、Host側のgeneration / History generation検証で古い操作を拒否する。別セッション、identity変更、無効化、再確認失敗では保持しない。最終通知のinline分岐表示が同一ならセッションタイムライン、Webview内検索、スクロール位置を再描画せず、表示値が変わったtoolbar / controlと開いているoverlayだけを更新する。実差分がある場合はactive検索結果をsemantic anchorで復元し、消失時は近傍へfallbackしつつ閲覧中anchorを可能な範囲で維持する
 - `codexHistoryViewer.agentRuns.enabled = false` のときは History / Pinned / Search の通常 Codex アイコンとセッションタイムライン表示が従来どおり動く。`true` へ変更すると再起動なしで metadata を準備し、利用可能な親を持つサブエージェントだけを History から抑制する一方、Pinned / Search では全サブエージェントの専用表示を維持し、セッションビューのヘッダー操作へ反映する。2.8.0 では Codex セッションだけを対象とし、Claude Code の表示と履歴には影響しない
 - Search 結果を開いたまま Agent Runs を有効化または metadata 更新しても、保持中の古い summary ではなく最新 relation presentation に従って session row の subagent アイコンが更新される
 - 設定有効時は通常の Codex セッションビューで Agent Runs アイコンが常に表示され、関係がない session では押下時に toast が出る。親、子、孫、sibling がある session では右側ペインへ同じ component だけが表示される
@@ -2160,7 +2227,9 @@ npm run package
 - `chat.performanceMode = auto` で大きい履歴が `simplified` として表示される
 - セッションビューのヘッダーにあるパフォーマンスモードボタンで、この画面だけ `auto` / `normal` / `simplified` を切り替えられる
 - `simplified` では diff entry を開くまで重い diff 本文が描画されない
-- 長い履歴のタブを切り替えて戻っても、本文領域の一瞬の縮小表示が restore cover で見えにくい
+- 長い履歴のタブを切り替えて戻っても、`viewState`、`visibilitychange`、`pagehide` / `pageshow` のいずれからも旧 restore cover や hibernation が動かず、暫定的な最小幅でtoolbar compact判定や本文の重い後処理を行わない。非表示中に準備した全画面compositor layerで縮小・欠けを見せず、安定幅の確定時に解除する。同じviewportへ戻った場合は重いlayout後処理を省略する
+- 自動更新オンの長い履歴を再表示するとき、viewport幅が安定する前にpending auto-refreshを配送せず、安定後に最新revisionの要求だけを1回処理する
+- 自動更新オンの長い履歴で無変更の`sessionData`を受信しても、timeline DOMを空にせず既存card、page search、開閉状態を維持する。`follow`ではfull renderなしでも最新visual targetへ移動する
 - Codex のみ有効 / Claude Code のみ有効 / 両方有効で履歴が正しく出る
 - HistoryとPinnedの表示対象をそれぞれ `通常のみ` / `通常＋アーカイブ` / `アーカイブのみ` / `非表示のみ` / `すべて` に切り替えると、互いの状態を変えずactive / archivedと表示 / 非表示の組み合わせが正確に反映される
 - Codex archive が利用できない場合は各ビューの表示対象が `通常のみ` / `非表示のみ` / `すべて` に縮退し、再び利用可能にしたときは各ビューに保存済みのpreferenceが復元される
@@ -2236,6 +2305,12 @@ npm run package
 - 自動更新オンのセッションタブが裏タブでも、VS Code ウィンドウがフォーカス中なら更新される
 - History view が非表示かつ自動更新オンのセッションタブが開いていないとき、自動更新は保留される
 - VS Code ウィンドウが非フォーカスのとき、自動更新は保留され、フォーカス復帰時に 1 回だけ反映される
+- open auto-refresh target の mtime が固定されたまま size が増減した場合も polling で変更を検知し、対象セッションを既存 debounce / min interval の範囲で更新する
+- watcher重複通知、フォーカス復帰、live expiry再評価で最終表示モデルが変化しなかった場合、fingerprint一致によりWebviewのtimeline全件再描画を行わない。同じ件数の本文変更、running状態、annotation、bookmark、表示設定の変更は一致扱いにせず反映する
+- live mode の active Codex session は、有効 JSONL record が進行し、末尾 record timestamp が30分以内なら mtime が30分以上固定されても running を維持する。末尾 record の timestamp が欠損または不正な場合だけ進行の観測時刻を使い、size だけ増えた不完全な末尾行や mtime だけの touch では activity 期限を延長しない。readyかつ自動更新オンの裏タブはbackground refreshでもrunningを維持し、タブ復帰時に可視性だけを理由として消さない
+- 初回または reset 後の最新有効 top-level timestamp が古い、または未来の場合は recent mtime へ逃がさず running にしない。append の末尾 timestamp は未来なら観測時刻までに clamp し、古い場合は非フォーカス復帰時の現在時刻へ切り上げない。timestamp が一件もない旧形式だけ初回の recent mtime を fallback にできる
+- terminal event は activity より優先され、`task_complete`、中断、rollback 後の turn を running に戻さない。terminal event のない未完了 turn は最終 activity から30分を超える one-shot 再評価で running から incomplete へ戻る。session-data delivery 失敗で state revision だけが進んだ場合も、同一 path / session の旧 expiry は空振りせず最新 state の再読込を一回だけ要求する
+- truncate、同一行 signature の rewrite、session ID の変化では前 file instance の process-local activity を引き継がず、並行する古い再読込結果も新しい observation を巻き戻さない
 - 起動直後の初回履歴ロード中、History に読み込み中ノードが表示され、ロード完了後に実データまたは空状態案内へ切り替わる
 - 起動直後の初回履歴ロード中、Pinned に読み込み中ノードが表示され、ロード完了後に実データ、欠損ピン、またはドロップ案内へ切り替わる
 - 履歴が 0 件の場合、History に履歴保存先確認・再読み込み・Claude Code 有効化に関する案内ノードが表示される

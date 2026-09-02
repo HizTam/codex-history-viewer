@@ -425,6 +425,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
             nextCandidateIndex: 0,
             pendingCards: [],
             limit,
+            sessionInventory: historyIndex.historySources ?? historyIndex.sessions,
             token,
           });
           loadMs = elapsedMs(loadStartedAt);
@@ -520,6 +521,8 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
         nextCandidateIndex: state.nextCandidateIndex,
         pendingCards: state.pendingCards,
         limit: FILE_CHANGE_HISTORY_PAGE_SIZE,
+        sessionInventory:
+          this.historyService.getIndex().historySources ?? this.historyService.getIndex().sessions,
         token: cancellation.token,
       });
       const nextCards = sortFileChangeHistoryCards(state.cards.concat(loaded.cards));

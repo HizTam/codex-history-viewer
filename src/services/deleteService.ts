@@ -6,10 +6,15 @@ import { t } from "../i18n";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { DayNode, MonthNode, SearchHitNode, SearchSessionNode, SessionNode, YearNode } from "../tree/treeNodes";
 import type { PinStore } from "./pinStore";
+import {
+  findCodexHistoryDeletionBlockers,
+  planCodexHistoryDeletionTargets,
+} from "../sessions/codexHistoryBase";
 
 export interface DeletedSessionUndoItem {
   originalFsPath: string;
   backupFsPath: string | null;
+  restorePrerequisiteFsPaths?: readonly string[];
 }
 
 export interface DeleteSessionsResult {
@@ -54,6 +59,22 @@ export async function deleteSessionsWithConfirmation(params: {
   const targets = selection && selection.length >= 1 ? selection : element ? [element] : [];
   const sessions = collectSessionsFromTargets(historyIndex, targets);
   if (sessions.length === 0) return null;
+  const historyInventory = historyIndex.historySources ?? historyIndex.sessions;
+  const historyBaseBlockers = findCodexHistoryDeletionBlockers(
+    sessions,
+    historyInventory,
+  );
+  if (historyBaseBlockers.length > 0) {
+    void vscode.window.showErrorMessage(
+      t("app.deleteHistoryBaseReferenced", historyBaseBlockers.length),
+    );
+    return null;
+  }
+  const deletionPlan = planCodexHistoryDeletionTargets(sessions, historyInventory);
+  if (!deletionPlan) {
+    void vscode.window.showErrorMessage(t("app.deleteHistoryBaseDependencyCycle"));
+    return null;
+  }
 
   const count = sessions.length;
   const confirmMsg = count === 1 ? t("app.deleteConfirmSingle") : t("app.deleteConfirmMulti", count);
@@ -67,8 +88,25 @@ export async function deleteSessionsWithConfirmation(params: {
   await vscode.workspace.fs.createDirectory(undoDir);
 
   let deleted = 0;
+  let dependencyBlocked = 0;
+  const failedOrSkippedKeys = new Set<string>();
+  const targetPathByKey = new Map(
+    deletionPlan.orderedTargets.map((session) => [session.cacheKey, session.fsPath] as const),
+  );
   const undoItems: DeletedSessionUndoItem[] = [];
-  for (const s of sessions) {
+  for (const s of deletionPlan.orderedTargets) {
+    const dependencyKeys = deletionPlan.dependencyKeysByTarget.get(s.cacheKey) ?? [];
+    let dependencyFailed = false;
+    for (const cacheKey of dependencyKeys) {
+      if (!failedOrSkippedKeys.has(cacheKey)) continue;
+      dependencyFailed = true;
+      break;
+    }
+    if (dependencyFailed) {
+      failedOrSkippedKeys.add(s.cacheKey);
+      dependencyBlocked += 1;
+      continue;
+    }
     const backupFsPath = await backupForUndo(undoDir, s.fsPath);
 
     let removed = false;
@@ -99,10 +137,27 @@ export async function deleteSessionsWithConfirmation(params: {
 
     if (removed) {
       deleted += 1;
-      undoItems.push({ originalFsPath: s.fsPath, backupFsPath });
+      const restorePrerequisiteFsPaths = Array.from(
+        deletionPlan.restorePrerequisiteKeysByTarget.get(s.cacheKey) ?? [],
+      ).flatMap((cacheKey) => {
+        const fsPath = targetPathByKey.get(cacheKey);
+        return fsPath ? [fsPath] : [];
+      });
+      undoItems.push({
+        originalFsPath: s.fsPath,
+        backupFsPath,
+        ...(restorePrerequisiteFsPaths.length > 0 ? { restorePrerequisiteFsPaths } : {}),
+      });
+    } else {
+      failedOrSkippedKeys.add(s.cacheKey);
     }
   }
 
+  if (dependencyBlocked > 0) {
+    void vscode.window.showErrorMessage(
+      t("app.deleteHistoryBaseDeleteBlocked", dependencyBlocked),
+    );
+  }
   void vscode.window.showInformationMessage(t("app.deleteDone", deleted));
   return { deleted, undoItems };
 }

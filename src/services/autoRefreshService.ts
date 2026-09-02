@@ -3,6 +3,11 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig } from "../settings";
 import { normalizeCacheKey, pathExists } from "../utils/fsUtils";
+import {
+  createSessionFileFingerprint,
+  hasSessionFileFingerprintChanged,
+  type SessionFileFingerprint,
+} from "../chat/liveActivity";
 import type { DebugLogger } from "./logger";
 
 interface WatchRoot {
@@ -35,7 +40,8 @@ export class AutoRefreshService implements vscode.Disposable {
   private timer: NodeJS.Timeout | null = null;
   private timerDueAt = 0;
   private pollingTimer: NodeJS.Timeout | null = null;
-  private readonly polledMtimeByKey = new Map<string, number>();
+  private readonly polledFingerprintByKey = new Map<string, SessionFileFingerprint>();
+  private readonly pendingObservedAtByKey = new Map<string, number>();
 
   constructor(
     refresh: (changedFsPaths: readonly string[]) => Promise<void>,
@@ -62,7 +68,8 @@ export class AutoRefreshService implements vscode.Disposable {
       this.rootSignature = "";
       this.clearTimer();
       this.clearPollingTimer();
-      this.polledMtimeByKey.clear();
+      this.polledFingerprintByKey.clear();
+      this.pendingObservedAtByKey.clear();
       this.disposeWatchers();
       this.logger?.debug("autoRefresh disabled");
       return;
@@ -119,6 +126,9 @@ export class AutoRefreshService implements vscode.Disposable {
     this.clearTimer();
     this.clearPollingTimer();
     this.disposeWatchers();
+    this.pendingFsPaths.clear();
+    this.pendingObservedAtByKey.clear();
+    this.polledFingerprintByKey.clear();
   }
 
   private rebuildWatchers(roots: readonly WatchRoot[]): void {
@@ -150,7 +160,7 @@ export class AutoRefreshService implements vscode.Disposable {
     if (this.disposed || !this.enabled) return;
     if (!isJsonlFileUri(uri)) return;
 
-    this.pendingFsPaths.add(uri.fsPath);
+    this.markPendingFsPath(uri.fsPath);
     this.logger?.debug(`autoRefresh event kind=${kind} file=${path.basename(uri.fsPath)}`);
 
     if (!this.canRun()) {
@@ -167,7 +177,9 @@ export class AutoRefreshService implements vscode.Disposable {
     if (this.refreshInFlight) return;
 
     const now = Date.now();
-    const dueAt = Math.max(now + this.debounceMs, this.lastRefreshAt + this.minIntervalMs, this.resumeGraceUntil);
+    const latestObservedAt = this.getLatestPendingObservedAt();
+    const debounceDueAt = (latestObservedAt ?? now) + this.debounceMs;
+    const dueAt = Math.max(debounceDueAt, this.lastRefreshAt + this.minIntervalMs, this.resumeGraceUntil);
     this.scheduleAt(dueAt);
   }
 
@@ -205,6 +217,9 @@ export class AutoRefreshService implements vscode.Disposable {
 
     const changedFsPaths = Array.from(this.pendingFsPaths);
     this.pendingFsPaths.clear();
+    for (const fsPath of changedFsPaths) {
+      this.pendingObservedAtByKey.delete(normalizeCacheKey(fsPath));
+    }
     this.refreshInFlight = true;
     try {
       await this.refresh(changedFsPaths);
@@ -212,7 +227,7 @@ export class AutoRefreshService implements vscode.Disposable {
       this.logger?.debug("autoRefresh refreshed history");
     } catch (error) {
       for (const fsPath of changedFsPaths) {
-        this.pendingFsPaths.add(fsPath);
+        this.markPendingFsPath(fsPath);
       }
       this.logger?.debug(`autoRefresh failed: ${formatError(error)}`);
     } finally {
@@ -255,41 +270,55 @@ export class AutoRefreshService implements vscode.Disposable {
   private pollOpenTargets(): void {
     if (this.disposed || !this.canRun() || !this.pollTargets) return;
 
-    const targets = this.pollTargets()
+    const targetByKey = new Map<string, string>();
+    for (const fsPath of this.pollTargets()
       .map((fsPath) => (typeof fsPath === "string" ? fsPath.trim() : ""))
-      .filter((fsPath) => fsPath && path.extname(fsPath).toLowerCase() === ".jsonl");
-    const targetKeys = new Set<string>();
-
-    for (const fsPath of targets) {
+      .filter((fsPath) => fsPath && path.extname(fsPath).toLowerCase() === ".jsonl")) {
       const key = normalizeCacheKey(fsPath);
-      targetKeys.add(key);
-      const previousMtimeMs = this.polledMtimeByKey.get(key);
+      if (!targetByKey.has(key)) targetByKey.set(key, fsPath);
+    }
+    const targetKeys = new Set(targetByKey.keys());
+
+    for (const [key, fsPath] of targetByKey) {
+      const previousFingerprint = this.polledFingerprintByKey.get(key);
 
       try {
         const stat = fs.statSync(fsPath);
-        if (!stat.isFile()) continue;
-        const nextMtimeMs = stat.mtimeMs;
-        this.polledMtimeByKey.set(key, nextMtimeMs);
-        if (previousMtimeMs !== undefined && nextMtimeMs > previousMtimeMs + 1) {
-          this.pendingFsPaths.add(fsPath);
+        const nextFingerprint = stat.isFile()
+          ? createSessionFileFingerprint(stat.mtimeMs, stat.size)
+          : undefined;
+        if (!nextFingerprint) {
+          if (previousFingerprint) {
+            this.polledFingerprintByKey.delete(key);
+            this.markPendingFsPath(fsPath);
+            this.logger?.debug(`autoRefresh poll missing file=${path.basename(fsPath)}`);
+            this.schedule();
+          }
+          continue;
+        }
+        this.polledFingerprintByKey.set(key, nextFingerprint);
+        if (previousFingerprint && hasSessionFileFingerprintChanged(previousFingerprint, nextFingerprint)) {
+          this.markPendingFsPath(fsPath);
           this.logger?.debug(`autoRefresh poll change file=${path.basename(fsPath)}`);
           this.schedule();
         }
       } catch {
-        if (previousMtimeMs !== undefined) {
-          this.polledMtimeByKey.delete(key);
-          this.pendingFsPaths.add(fsPath);
+        if (previousFingerprint) {
+          this.polledFingerprintByKey.delete(key);
+          this.markPendingFsPath(fsPath);
           this.logger?.debug(`autoRefresh poll missing file=${path.basename(fsPath)}`);
           this.schedule();
         }
       }
     }
 
-    for (const key of Array.from(this.polledMtimeByKey.keys())) {
-      if (!targetKeys.has(key)) this.polledMtimeByKey.delete(key);
+    for (const key of Array.from(this.polledFingerprintByKey.keys())) {
+      if (targetKeys.has(key)) continue;
+      this.polledFingerprintByKey.delete(key);
+      if (!this.hasPendingPathKey(key)) this.pendingObservedAtByKey.delete(key);
     }
 
-    if (targets.length > 0) this.schedulePolling(this.getPollingIntervalMs());
+    if (targetByKey.size > 0) this.schedulePolling(this.getPollingIntervalMs());
   }
 
   private getPollingIntervalMs(): number {
@@ -298,19 +327,45 @@ export class AutoRefreshService implements vscode.Disposable {
 
   private getPendingQuietDelayMs(): number {
     const now = Date.now();
-    let latestMtimeMs = 0;
-    for (const fsPath of this.pendingFsPaths) {
-      try {
-        const stat = fs.statSync(fsPath);
-        if (stat.isFile()) latestMtimeMs = Math.max(latestMtimeMs, stat.mtimeMs);
-      } catch {
-        // Deleted or inaccessible files should not block refresh.
-      }
-    }
-
-    if (latestMtimeMs <= 0) return 0;
-    const quietUntil = latestMtimeMs + this.debounceMs;
+    const latestObservedAt = this.getLatestPendingObservedAt();
+    if (latestObservedAt === undefined) return 0;
+    const quietUntil = latestObservedAt + this.debounceMs;
     return quietUntil > now ? Math.ceil(quietUntil - now) : 0;
+  }
+
+  private markPendingFsPath(fsPath: string, observedAt = Date.now()): void {
+    const trimmed = typeof fsPath === "string" ? fsPath.trim() : "";
+    if (!trimmed) return;
+    const key = normalizeCacheKey(trimmed);
+    for (const pendingFsPath of this.pendingFsPaths) {
+      if (normalizeCacheKey(pendingFsPath) !== key) continue;
+      if (pendingFsPath !== trimmed) this.pendingFsPaths.delete(pendingFsPath);
+      break;
+    }
+    this.pendingFsPaths.add(trimmed);
+    const safeObservedAt = Number.isFinite(observedAt) && observedAt >= 0 ? observedAt : Date.now();
+    const previousObservedAt = this.pendingObservedAtByKey.get(key);
+    this.pendingObservedAtByKey.set(
+      key,
+      previousObservedAt === undefined ? safeObservedAt : Math.max(previousObservedAt, safeObservedAt),
+    );
+  }
+
+  private getLatestPendingObservedAt(): number | undefined {
+    let latestObservedAt: number | undefined;
+    for (const fsPath of this.pendingFsPaths) {
+      const observedAt = this.pendingObservedAtByKey.get(normalizeCacheKey(fsPath));
+      if (observedAt === undefined) continue;
+      latestObservedAt = latestObservedAt === undefined ? observedAt : Math.max(latestObservedAt, observedAt);
+    }
+    return latestObservedAt;
+  }
+
+  private hasPendingPathKey(key: string): boolean {
+    for (const fsPath of this.pendingFsPaths) {
+      if (normalizeCacheKey(fsPath) === key) return true;
+    }
+    return false;
   }
 }
 

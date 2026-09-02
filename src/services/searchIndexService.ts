@@ -1,6 +1,4 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
-import * as readline from "node:readline";
 import * as vscode from "vscode";
 import type { SearchIndexToolContent } from "../settings";
 import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
@@ -31,8 +29,13 @@ import {
   projectCodexStandaloneResponseItem,
 } from "../chat/codexResponseItems";
 import type { DebugLogger } from "./logger";
+import {
+  readSessionJsonlRecords,
+  resolveCodexLogicalHistoryPlan,
+  type CodexLogicalHistoryPlan,
+} from "../sessions/codexHistoryBase";
 
-const SEARCH_INDEX_FILE_VERSION = 18;
+const SEARCH_INDEX_FILE_VERSION = 19;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
 
@@ -57,6 +60,7 @@ interface SearchIndexEntryV1 {
   readonly fsPath: string;
   readonly mtimeMs: number;
   readonly size: number;
+  readonly historySignature?: string;
   readonly messages: readonly IndexedSearchMessage[];
   readonly fileChangeHints?: readonly IndexedFileChangeHint[];
 }
@@ -161,6 +165,7 @@ export class SearchIndexService {
     const totalStartedAt = nowMs();
     const { index, token, progress, forceRebuild } = params;
     const sessions = params.sessionInventory ?? index.sessions;
+    const historyInventory = index.historySources ?? sessions;
     let orphanRemoved = 0;
     let statMiss = 0;
     let missingRemoved = 0;
@@ -208,11 +213,17 @@ export class SearchIndexService {
       }
 
       const cached = workingState.entries.get(session.cacheKey);
+      const historyPlan =
+        session.source === "codex" && session.meta.codexHistoryBase
+          ? await resolveCodexLogicalHistoryPlan(session.fsPath, historyInventory)
+          : undefined;
+      const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
       const unchanged =
         !!cached &&
         cached.fsPath === session.fsPath &&
         cached.mtimeMs === stat.mtime &&
-        cached.size === stat.size;
+        cached.size === stat.size &&
+        cached.historySignature === historySignature;
       if (unchanged) {
         cacheHit += 1;
         continue;
@@ -222,12 +233,16 @@ export class SearchIndexService {
       const indexed = await buildIndexedSession(session.fsPath, {
         indexToolContent: context.indexToolContent,
         token,
+        source: session.source,
+        sessionInventory: historyInventory,
+        historyPlan,
       });
       buildMs += elapsedMs(buildStartedAt);
       workingState.entries.set(session.cacheKey, freezeSearchIndexEntry({
         fsPath: session.fsPath,
         mtimeMs: stat.mtime,
         size: stat.size,
+        ...(historySignature ? { historySignature } : {}),
         messages: indexed.messages,
         fileChangeHints: indexed.fileChangeHints,
       }));
@@ -380,6 +395,7 @@ function freezeSearchIndexEntry(entry: SearchIndexEntryV1): SearchIndexEntryV1 {
     fsPath: entry.fsPath,
     mtimeMs: entry.mtimeMs,
     size: entry.size,
+    ...(entry.historySignature ? { historySignature: entry.historySignature } : {}),
     messages,
     ...(fileChangeHints ? { fileChangeHints } : {}),
   });
@@ -399,9 +415,19 @@ function elapsedMs(startedAt: number): number {
   return Math.max(0, nowMs() - startedAt);
 }
 
+function buildHistoryPlanSignature(plan: CodexLogicalHistoryPlan): string {
+  return plan.signature;
+}
+
 async function buildIndexedSession(
   fsPath: string,
-  options: { indexToolContent: SearchIndexToolContent; token?: vscode.CancellationToken },
+  options: {
+    indexToolContent: SearchIndexToolContent;
+    token?: vscode.CancellationToken;
+    source?: "codex" | "claude";
+    sessionInventory?: readonly SessionSummary[];
+    historyPlan?: CodexLogicalHistoryPlan;
+  },
 ): Promise<{ messages: IndexedSearchMessage[]; fileChangeHints: IndexedFileChangeHint[] }> {
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
   const state: BuildState = {
@@ -413,25 +439,17 @@ async function buildIndexedSession(
     pastedPromptResolver,
   };
 
-  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-  try {
-    for await (const line of rl) {
-      throwIfCancelled(options.token);
-      if (!line) continue;
-
-      let obj: any;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (await indexCodexRecord(obj, state)) continue;
-      if (await indexClaudeRecord(obj, state)) continue;
-    }
-  } finally {
-    rl.close();
-    stream.close();
+  const source = options.source ?? (path.basename(fsPath).toLowerCase().startsWith("rollout-") ? "codex" : "claude");
+  for await (const record of readSessionJsonlRecords(fsPath, source, {
+    sessionInventory: options.sessionInventory,
+    plan: options.historyPlan,
+    token: options.token,
+    cancellationErrorFactory: () => new vscode.CancellationError(),
+  })) {
+    throwIfCancelled(options.token);
+    const obj = record.value;
+    if (await indexCodexRecord(obj, state)) continue;
+    if (await indexClaudeRecord(obj, state)) continue;
   }
 
   return {
@@ -1274,6 +1292,15 @@ function isValidCacheEntry(value: unknown): value is SearchIndexEntryV1 {
   if (typeof obj.fsPath !== "string") return false;
   if (typeof obj.mtimeMs !== "number" || !Number.isFinite(obj.mtimeMs)) return false;
   if (typeof obj.size !== "number" || !Number.isFinite(obj.size)) return false;
+  if (
+    obj.historySignature !== undefined &&
+    (
+      typeof obj.historySignature !== "string" ||
+      obj.historySignature.length === 0 ||
+      obj.historySignature.length > 256 ||
+      /[\u0000-\u001f\u007f]/u.test(obj.historySignature)
+    )
+  ) return false;
   if (!Array.isArray(obj.messages)) return false;
   for (const m of obj.messages) {
     if (!m || typeof m !== "object") return false;

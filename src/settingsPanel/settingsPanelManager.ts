@@ -46,6 +46,14 @@ const SETTINGS_BACKUP_FORMAT = "codex-history-viewer-settings";
 const SETTINGS_BACKUP_VERSION = 1;
 const COPYRIGHT_START_YEAR = 2026;
 const SPONSOR_URL = "https://github.com/sponsors/HizTam";
+const ABOUT_RESOURCE_URL_BY_ID = Object.freeze({
+  repository: "https://github.com/HizTam/codex-history-viewer",
+  securityPolicy: "https://github.com/HizTam/codex-history-viewer/security/policy",
+  reportVulnerability: "https://github.com/HizTam/codex-history-viewer/security/advisories/new",
+  changelog: "https://github.com/HizTam/codex-history-viewer/blob/main/CHANGELOG.md",
+  commandReference: "https://github.com/HizTam/codex-history-viewer/blob/main/docs/commands.md"
+});
+type AboutResourceId = keyof typeof ABOUT_RESOURCE_URL_BY_ID;
 const BACKUP_METADATA_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/u;
 
 const PAGE_DEFINITIONS = [
@@ -339,6 +347,15 @@ export class SettingsPanelManager implements vscode.Disposable {
       case "openSponsor":
         await this.openSponsor(generation);
         return;
+      case "openAboutResource": {
+        const resourceId = parseAboutResourceId(message.resourceId);
+        if (!resourceId) {
+          await this.postActionFailed(undefined, t("settingsPanel.error.invalidRequest"), generation);
+          return;
+        }
+        await this.openAboutResource(resourceId, generation);
+        return;
+      }
       default:
         return;
     }
@@ -352,6 +369,30 @@ export class SettingsPanelManager implements vscode.Disposable {
       }
     } catch {
       await this.postActionFailed(undefined, t("settingsPanel.error.openSponsor"), generation);
+    }
+  }
+
+  private async openAboutResource(
+    resourceId: AboutResourceId,
+    generation: number
+  ): Promise<void> {
+    try {
+      const opened = await vscode.env.openExternal(
+        vscode.Uri.parse(ABOUT_RESOURCE_URL_BY_ID[resourceId])
+      );
+      if (!opened) {
+        await this.postActionFailed(
+          undefined,
+          t("settingsPanel.error.openAboutResource"),
+          generation
+        );
+      }
+    } catch {
+      await this.postActionFailed(
+        undefined,
+        t("settingsPanel.error.openAboutResource"),
+        generation
+      );
     }
   }
 
@@ -1447,7 +1488,7 @@ export class SettingsPanelManager implements vscode.Disposable {
 
   private buildAboutModel(): SettingsAboutModel {
     const packageJson: unknown = this.context.extension.packageJSON;
-    const version = readPackageString(packageJson, "version") ?? "2.12.0";
+    const version = readPackageString(packageJson, "version") ?? "2.13.0";
     const licenseName = readPackageString(packageJson, "license") ?? "MIT";
     const currentYear = new Date().getFullYear();
     const copyrightEndYear = Number.isSafeInteger(currentYear) && currentYear >= COPYRIGHT_START_YEAR
@@ -1468,7 +1509,19 @@ export class SettingsPanelManager implements vscode.Disposable {
       versionTab: t("settingsPanel.about.versionTab"),
       licenseTab: t("settingsPanel.about.licenseTab"),
       thirdPartyTab: t("settingsPanel.about.thirdPartyTab"),
+      starLabel: t("settingsPanel.about.star"),
+      starTooltip: t("settingsPanel.about.starTooltip"),
       sponsorLabel: t("settingsPanel.about.sponsor"),
+      sponsorTooltip: t("settingsPanel.about.sponsorTooltip"),
+      resourcesLabel: t("settingsPanel.about.resources"),
+      securityPolicyLabel: t("settingsPanel.about.securityPolicy"),
+      securityPolicyTooltip: t("settingsPanel.about.securityPolicyTooltip"),
+      reportVulnerabilityLabel: t("settingsPanel.about.reportVulnerability"),
+      reportVulnerabilityTooltip: t("settingsPanel.about.reportVulnerabilityTooltip"),
+      changelogLabel: t("settingsPanel.about.changelog"),
+      changelogTooltip: t("settingsPanel.about.changelogTooltip"),
+      commandReferenceLabel: t("settingsPanel.about.commandReference"),
+      commandReferenceTooltip: t("settingsPanel.about.commandReferenceTooltip"),
       licenseText: this.getBundledDocumentText(this.licenseText),
       thirdPartyText: this.getBundledDocumentText(this.thirdPartyText)
     };
@@ -1815,6 +1868,19 @@ function readPackageString(value: unknown, key: string): string | undefined {
   return typeof candidate === "string" && candidate.length > 0 && candidate.length <= 128
     ? candidate
     : undefined;
+}
+
+function parseAboutResourceId(value: unknown): AboutResourceId | undefined {
+  switch (value) {
+    case "repository":
+    case "securityPolicy":
+    case "reportVulnerability":
+    case "changelog":
+    case "commandReference":
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 function isSafeRequestId(value: unknown): value is number {

@@ -29,6 +29,7 @@ import type { ProjectAssociationStore } from "../services/projectAssociationStor
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/projectPathMapper";
 import type { SearchIndexReadSnapshot } from "../services/searchIndexService";
 import type { HistoryIndex, SessionSource, SessionSummary } from "../sessions/sessionTypes";
+import { readSessionJsonlRecords } from "../sessions/codexHistoryBase";
 import { formatYmdHmsInTimeZone, toYmdInTimeZone, ymdToString } from "../utils/dateUtils";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { normalizeCacheKey } from "../utils/fsUtils";
@@ -193,6 +194,7 @@ export class FileChangeHistoryService {
     nextCandidateIndex: number;
     pendingCards: readonly FileChangeHistoryCard[];
     limit: number;
+    sessionInventory?: readonly SessionSummary[];
     token?: vscode.CancellationToken;
   }): Promise<FileChangeHistoryLoadResult> {
     const cards: FileChangeHistoryCard[] = [];
@@ -215,7 +217,13 @@ export class FileChangeHistoryService {
       const candidate = params.candidates[nextCandidateIndex]!;
       nextCandidateIndex += 1;
       stats.candidateScanned += 1;
-      const parsed = await this.parseSession(candidate.session, params.target, projectPathMappings, params.token);
+      const parsed = await this.parseSession(
+        candidate.session,
+        params.target,
+        projectPathMappings,
+        params.sessionInventory ?? params.candidates.map((item) => item.session),
+        params.token,
+      );
       stats.parsedSessions += 1;
       addDiffStats(stats.diffStats, parsed.diffStats);
       if (parsed.cards.length === 0) continue;
@@ -237,11 +245,12 @@ export class FileChangeHistoryService {
     session: SessionSummary,
     target: FileChangeHistoryTarget,
     projectPathMappings: readonly ProjectPathMapping[],
+    sessionInventory: readonly SessionSummary[],
     token?: vscode.CancellationToken,
   ): Promise<ParsedSessionResult> {
     const parsed =
       session.source === "codex"
-        ? await parseCodexSession(session, target, projectPathMappings, token)
+        ? await parseCodexSession(session, target, projectPathMappings, sessionInventory, token)
         : await parseClaudeSession(session, target, projectPathMappings, token);
     const renderableEntries = parsed.entries.filter((item) => hasRenderableDiff(item.entry));
     const diffStats = cloneDiffStats(parsed.diffStats);
@@ -270,105 +279,99 @@ async function parseCodexSession(
   session: SessionSummary,
   target: FileChangeHistoryTarget,
   projectPathMappings: readonly ProjectPathMapping[],
+  sessionInventory: readonly SessionSummary[],
   token?: vscode.CancellationToken,
 ): Promise<ParsedPatchEntriesResult> {
   const out: ParsedPatchEntry[] = [];
   const diffStats = createDiffStats();
-  const stream = fs.createReadStream(session.fsPath, { encoding: "utf8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   let messageIndex = 0;
-  let lineIndex = 0;
   const pendingApplyPatchEntries = new Map<string, ParsedPatchEntry[]>();
   const mergeStateByGroup = new Map<string, Map<string, number>>();
 
-  try {
-    for await (const line of rl) {
-      throwIfCancelled(token);
-      lineIndex += 1;
-      if (!line) continue;
+  for await (const record of readSessionJsonlRecords(session.fsPath, "codex", {
+    sessionInventory,
+    token,
+    cancellationErrorFactory: () => new vscode.CancellationError(),
+  })) {
+    throwIfCancelled(token);
+    const obj = record.value;
+    const lineIndex = record.lineIndex;
 
-      const obj = parseJsonLine(line);
-      if (!obj) continue;
+    if (obj?.type === "response_item" && obj?.payload?.type === "message") {
+      const role = obj?.payload?.role;
+      if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) continue;
+      if (role === "user" || role === "assistant") messageIndex += 1;
+      continue;
+    }
 
-      if (obj?.type === "response_item" && obj?.payload?.type === "message") {
-        const role = obj?.payload?.role;
-        if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) continue;
-        if (role === "user" || role === "assistant") messageIndex += 1;
-        continue;
-      }
-
-      const customApplyPatchInput = readCodexCustomApplyPatchInput(obj);
-      if (customApplyPatchInput !== undefined) {
-        const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : `apply_patch:${lineIndex}`;
-        const timestampIso = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
-        const entries = buildCodexApplyPatchEntries(customApplyPatchInput, session.meta.cwd, target, projectPathMappings, callId);
-        if (entries.length > 0) {
-          diffStats.codexApplyPatchParsed += entries.length;
-          const bookmarkGroupId = `apply:${callId}`;
-          pendingApplyPatchEntries.set(
-            callId,
-            entries.map((entry) => ({
-              entry,
-              bookmarkGroupId,
-              messageIndex: messageIndex > 0 ? messageIndex : undefined,
-              timestampIso: timestampIso ?? session.lastActivityAtIso ?? session.startedAtIso ?? session.meta.timestampIso,
-            })),
-          );
-        }
-        continue;
-      }
-
-      if (obj?.type === "response_item" && isCodexToolCallOutput(obj?.payload?.type)) {
-        const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-        const outputText = extractCodexToolOutputText(obj?.payload?.output) || undefined;
-        if (callId && isApplyPatchFailureOutput(outputText)) {
-          diffStats.codexApplyPatchFailedSkipped += pendingApplyPatchEntries.get(callId)?.length ?? 0;
-          pendingApplyPatchEntries.delete(callId);
-        }
-        continue;
-      }
-
-      if (obj?.type !== "event_msg" || obj?.payload?.type !== "patch_apply_end") continue;
-      const rawCallId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-      const callId = rawCallId ?? `patch:${lineIndex}`;
-      const groupKey = buildCodexPatchBookmarkGroupId(obj, lineIndex);
-      const timestampIso =
-        typeof obj?.payload?.timestamp === "string"
-          ? obj.payload.timestamp
-          : typeof obj?.timestamp === "string"
-            ? obj.timestamp
-            : undefined;
-      const entries = buildCodexPatchEntries(obj?.payload?.changes, session.meta.cwd, target, projectPathMappings, callId);
-      const removedByCallIdCount = rawCallId ? pendingApplyPatchEntries.get(rawCallId)?.length ?? 0 : 0;
-      const removedByCallId = rawCallId ? pendingApplyPatchEntries.delete(rawCallId) : false;
-      if (removedByCallId) diffStats.codexDuplicatesSuppressed += removedByCallIdCount;
-      if (!removedByCallId && entries.length > 0) {
-        diffStats.codexDuplicatesSuppressed += removeMatchingPendingApplyPatchEntries(
-          pendingApplyPatchEntries,
-          entries,
-          messageIndex > 0 ? messageIndex : undefined,
-        );
-      }
-      if (isPatchApplyEndFailure(obj)) continue;
-      diffStats.codexPatchApplyEnd += entries.length;
-      for (const entry of entries) {
-        const merged = appendMergedParsedPatchEntry(
-          out,
-          {
+    const customApplyPatchInput = readCodexCustomApplyPatchInput(obj);
+    if (customApplyPatchInput !== undefined) {
+      const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : `apply_patch:${lineIndex}`;
+      const timestampIso = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+      const entries = buildCodexApplyPatchEntries(customApplyPatchInput, session.meta.cwd, target, projectPathMappings, callId);
+      if (entries.length > 0) {
+        diffStats.codexApplyPatchParsed += entries.length;
+        const bookmarkGroupId = `apply:${callId}`;
+        pendingApplyPatchEntries.set(
+          callId,
+          entries.map((entry) => ({
             entry,
-            bookmarkGroupId: groupKey,
+            bookmarkGroupId,
             messageIndex: messageIndex > 0 ? messageIndex : undefined,
             timestampIso: timestampIso ?? session.lastActivityAtIso ?? session.startedAtIso ?? session.meta.timestampIso,
-          },
-          groupKey,
-          mergeStateByGroup,
+          })),
         );
-        if (merged) diffStats.codexDuplicatesSuppressed += 1;
       }
+      continue;
     }
-  } finally {
-    rl.close();
-    stream.close();
+
+    if (obj?.type === "response_item" && isCodexToolCallOutput(obj?.payload?.type)) {
+      const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
+      const outputText = extractCodexToolOutputText(obj?.payload?.output) || undefined;
+      if (callId && isApplyPatchFailureOutput(outputText)) {
+        diffStats.codexApplyPatchFailedSkipped += pendingApplyPatchEntries.get(callId)?.length ?? 0;
+        pendingApplyPatchEntries.delete(callId);
+      }
+      continue;
+    }
+
+    if (obj?.type !== "event_msg" || obj?.payload?.type !== "patch_apply_end") continue;
+    const rawCallId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
+    const callId = rawCallId ?? `patch:${lineIndex}`;
+    const groupKey = buildCodexPatchBookmarkGroupId(obj, lineIndex);
+    const timestampIso =
+      typeof obj?.payload?.timestamp === "string"
+        ? obj.payload.timestamp
+        : typeof obj?.timestamp === "string"
+          ? obj.timestamp
+          : undefined;
+    const entries = buildCodexPatchEntries(obj?.payload?.changes, session.meta.cwd, target, projectPathMappings, callId);
+    const removedByCallIdCount = rawCallId ? pendingApplyPatchEntries.get(rawCallId)?.length ?? 0 : 0;
+    const removedByCallId = rawCallId ? pendingApplyPatchEntries.delete(rawCallId) : false;
+    if (removedByCallId) diffStats.codexDuplicatesSuppressed += removedByCallIdCount;
+    if (!removedByCallId && entries.length > 0) {
+      diffStats.codexDuplicatesSuppressed += removeMatchingPendingApplyPatchEntries(
+        pendingApplyPatchEntries,
+        entries,
+        messageIndex > 0 ? messageIndex : undefined,
+      );
+    }
+    if (isPatchApplyEndFailure(obj)) continue;
+    diffStats.codexPatchApplyEnd += entries.length;
+    for (const entry of entries) {
+      const merged = appendMergedParsedPatchEntry(
+        out,
+        {
+          entry,
+          bookmarkGroupId: groupKey,
+          messageIndex: messageIndex > 0 ? messageIndex : undefined,
+          timestampIso: timestampIso ?? session.lastActivityAtIso ?? session.startedAtIso ?? session.meta.timestampIso,
+        },
+        groupKey,
+        mergeStateByGroup,
+      );
+      if (merged) diffStats.codexDuplicatesSuppressed += 1;
+    }
   }
 
   for (const [key, entries] of pendingApplyPatchEntries.entries()) {

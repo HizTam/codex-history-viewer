@@ -20,7 +20,13 @@ import { isSessionProtocolContextTitle } from "../sessions/sessionTitleResolver"
 import { elapsedMs, formatDebugFields, nowMs, safeDebugBasename, sanitizeDebugError } from "../services/debugLogUtils";
 import { normalizeCacheKey, normalizeProjectKey } from "../utils/fsUtils";
 import { collectLocalLinkBaseDirs, openLinkedFileInEditor, resolveLocalFileLinkTarget } from "../utils/localFileLinks";
-import { buildChatPatchEntryDetails, buildChatSessionModel, type ChatPatchEntryDetailTarget } from "./chatModelBuilder";
+import {
+  buildChatPatchEntryDetails,
+  buildChatSessionModel,
+  buildChatSessionModelWithActivityEvidence,
+  type ChatPatchEntryDetailTarget,
+} from "./chatModelBuilder";
+import { createChatRenderFingerprint } from "./chatRenderFingerprint";
 import { sanitizeAttachmentForChannel } from "./chatAttachments";
 import {
   buildMermaidExportFileName,
@@ -94,6 +100,17 @@ import {
   type MermaidPreferenceStore,
   type MermaidPreferences,
 } from "../services/mermaidPreferenceStore";
+import {
+  buildLiveSessionObservation,
+  createSessionFileFingerprint,
+  getLiveActivityExpiryAtMs,
+  isLiveActivityFresh,
+  mergeLiveSessionObservation,
+  resolveLiveActivityBootstrap,
+  type ChatSourceActivityEvidence,
+  type LiveSessionObservation,
+  type SessionFileFingerprint,
+} from "./liveActivity";
 
 type SaveableChatImage = {
   src: string;
@@ -220,6 +237,7 @@ type ChatSessionDataOptions = {
   restoreSelectedMessageIndex?: number;
   preserveUiState?: boolean;
   autoScrollToBottom?: boolean;
+  allowUnchangedRenderReuse?: boolean;
   detailMode?: ChatSessionDetailMode;
   stateOverride?: ChatPanelState;
   branchGeneration?: number;
@@ -238,9 +256,20 @@ type ChatSessionDataTransitionReservation = {
   sequence: number;
   protectedState: ChatPanelState | undefined;
 };
+type PreparedLiveSessionActivity = {
+  candidate?: LiveSessionObservation;
+  fallbackActivityAtMs?: number;
+  clearPathObservation?: boolean;
+};
+type LiveRunningExpiry = {
+  timer: NodeJS.Timeout;
+  pathKey: string;
+  sessionId: string;
+  sessionInfoRevision: number;
+  effectiveActivityAtMs: number;
+};
 const DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE: ChatWebviewAutoRefreshMode = "off";
 const DEFAULT_CHAT_SESSION_DETAIL_MODE: ChatSessionDetailMode = "summary";
-const LIVE_RUNNING_STALE_MS = 30 * 60 * 1000;
 
 // Manages chat-like WebviewPanels opened in the editor area.
 export class ChatPanelManager implements vscode.Disposable {
@@ -278,6 +307,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly documentDataByPanel = new WeakMap<vscode.WebviewPanel, Map<string, SaveableChatDocument>>();
   private readonly patchEntryDetailRequestsByPanel = new WeakMap<vscode.WebviewPanel, Set<string>>();
   private readonly branchSnapshotByPanel = new WeakMap<vscode.WebviewPanel, BranchNavigationSnapshot>();
+  private readonly branchPresentationSessionKeyByPanel = new WeakMap<vscode.WebviewPanel, string>();
   private readonly branchGenerationByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private readonly branchHistoryGenerationByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private readonly branchSwitchSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
@@ -291,15 +321,28 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly codexAgentRunPinRevisionByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private readonly userMessageIndexesByPanel = new WeakMap<vscode.WebviewPanel, Set<number>>();
   private readonly titleRefreshSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly panelTitlePresentationByPanel = new WeakMap<vscode.WebviewPanel, string>();
+  private readonly panelIconPresentationByPanel = new WeakMap<vscode.WebviewPanel, string>();
+  private readonly sessionModelReuseCapablePanels = new WeakSet<vscode.WebviewPanel>();
+  private readonly deliveredSessionModelFingerprintByPanel = new WeakMap<vscode.WebviewPanel, string>();
+  private readonly stableViewLayoutCapablePanels = new WeakSet<vscode.WebviewPanel>();
+  private readonly stableViewLayoutReadyPanels = new WeakSet<vscode.WebviewPanel>();
+  private readonly viewStateRevisionByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private readonly sessionDataRequestSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private readonly sessionDataTransitionByPanel =
     new WeakMap<vscode.WebviewPanel, ChatSessionDataTransitionReservation>();
   private readonly sessionDataCommitSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly sessionDataInFlightSequencesByPanel =
+    new WeakMap<vscode.WebviewPanel, Set<number>>();
+  private readonly liveRunningExpiryByPanel = new WeakMap<vscode.WebviewPanel, LiveRunningExpiry>();
+  private readonly liveExpiryRefreshPendingByPanel = new WeakSet<vscode.WebviewPanel>();
+  private readonly liveSessionObservationByPath = new Map<string, LiveSessionObservation>();
   private readonly resumeRevisionByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private readonly resumePresentationCheckpointByPanel =
     new WeakMap<vscode.WebviewPanel, ResumePresentationCheckpoint>();
   private readonly resumePresentationDeliverySequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private reusableOpenGeneration = 0;
+  private liveObservationRequestSequence = 0;
   private codexAgentRunsLoading = false;
   public readonly onDidChangeAutoRefreshConsumerVisibility = this.autoRefreshConsumerVisibilityEmitter.event;
 
@@ -356,7 +399,11 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   public dispose(): void {
-    for (const panel of this.getOpenPanels()) this.cancelBranchNavigation(panel);
+    for (const panel of this.getOpenPanels()) {
+      this.cancelBranchNavigation(panel);
+      this.cancelLiveRunningExpiry(panel);
+    }
+    this.liveSessionObservationByPath.clear();
     this.bookmarkSubscription.dispose();
     this.annotationSubscription.dispose();
     this.pinSubscription.dispose();
@@ -385,6 +432,10 @@ export class ChatPanelManager implements vscode.Disposable {
     const turnTimelineMode = config.chatTurnTimelineMode;
     const imageSettings = this.buildImageSettings(config);
     const stickyUserPrompt = config.stickyUserPrompt;
+    if (turnTimelineMode !== "live") {
+      for (const panel of this.getOpenPanels()) this.cancelLiveRunningExpiry(panel);
+      this.liveSessionObservationByPath.clear();
+    }
     const send = (panel: vscode.WebviewPanel): void => {
       if (!this.readyByPanel.get(panel)) return;
       void panel.webview.postMessage({
@@ -573,7 +624,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
   private invalidateResumePresentation(
     panel: vscode.WebviewPanel,
-    options: { sessionDataPending?: boolean } = {},
+    options: { sessionDataPending?: boolean; preserveSnapshot?: boolean } = {},
   ): number {
     const revision = this.advanceResumeRevision(panel);
     if (this.readyByPanel.get(panel)) {
@@ -581,6 +632,7 @@ export class ChatPanelManager implements vscode.Disposable {
         type: "resumePresentationInvalidated",
         revision,
         sessionDataPending: options.sessionDataPending === true,
+        ...(options.preserveSnapshot === true ? { preserveSnapshot: true } : {}),
       });
     }
     return revision;
@@ -641,11 +693,17 @@ export class ChatPanelManager implements vscode.Disposable {
     }
     if (options?.isRequestCurrent && !options.isRequestCurrent()) return false;
 
-    const checkpoint = this.resumePresentationCheckpointByPanel.get(panel);
     const state = this.stateByPanel.get(panel);
+    return Boolean(state && this.matchesDeliveredResumePresentation(panel, state));
+  }
+
+  private matchesDeliveredResumePresentation(
+    panel: vscode.WebviewPanel,
+    state: ChatPanelState,
+  ): boolean {
+    const checkpoint = this.resumePresentationCheckpointByPanel.get(panel);
     if (
       !checkpoint ||
-      !state ||
       normalizeCacheKey(state.fsPath) !== checkpoint.sessionPathKey ||
       state.historySource !== checkpoint.source
     ) {
@@ -677,8 +735,7 @@ export class ChatPanelManager implements vscode.Disposable {
       if (!state) return;
       const session = this.historyService.findByFsPath(state.fsPath);
       if (!session) return;
-      panel.title = buildPanelTitle(session);
-      panel.iconPath = this.resolveSessionIconPath(session, state.kind);
+      this.applyPanelPresentation(panel, session, state.kind);
     };
 
     for (const panel of this.getOpenPanels()) update(panel);
@@ -713,6 +770,22 @@ export class ChatPanelManager implements vscode.Disposable {
 
       if (!this.readyByPanel.get(panel)) {
         this.stateByPanel.set(panel, { ...state, pendingAutoRefresh: true });
+        continue;
+      }
+      this.requestAutoRefresh(panel, state.autoRefreshMode);
+    }
+  }
+
+  public flushPendingAutoRefreshPanels(): void {
+    if (!vscode.window.state.focused) return;
+    for (const panel of this.getOpenPanels()) {
+      const state = this.stateByPanel.get(panel);
+      if (
+        !state?.pendingAutoRefresh ||
+        state.autoRefreshMode === "off" ||
+        !this.readyByPanel.get(panel) ||
+        !panel.visible
+      ) {
         continue;
       }
       this.requestAutoRefresh(panel, state.autoRefreshMode);
@@ -953,8 +1026,8 @@ export class ChatPanelManager implements vscode.Disposable {
       pendingAutoRefresh: false,
     };
     this.stateByPanel.set(panel, nextState);
-    panel.title = buildPanelTitle(session);
-    panel.iconPath = this.resolveSessionIconPath(session, nextState.kind);
+    this.pruneLiveSessionObservations();
+    this.applyPanelPresentation(panel, session, nextState.kind);
     panel.reveal(
       options.viewColumn ?? panel.viewColumn,
       options.preserveFocus ?? options.kind === "reusable",
@@ -986,12 +1059,17 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private clearSessionBoundPanelData(panel: vscode.WebviewPanel): void {
+    this.cancelLiveRunningExpiry(panel);
+    this.liveExpiryRefreshPendingByPanel.delete(panel);
     this.imageDataByPanel.delete(panel);
     this.documentDataByPanel.delete(panel);
     this.patchEntryDetailRequestsByPanel.delete(panel);
     this.bookmarkTargetsByPanel.delete(panel);
     this.userMessageIndexesByPanel.delete(panel);
+    this.branchSnapshotByPanel.delete(panel);
+    this.branchPresentationSessionKeyByPanel.delete(panel);
     this.branchHistoryGenerationByPanel.delete(panel);
+    this.deliveredSessionModelFingerprintByPanel.delete(panel);
     this.nextCodexAgentRunsGeneration(panel);
     this.codexAgentRunsSnapshotByPanel.delete(panel);
     this.codexAgentRunPinSequenceByPanel.delete(panel);
@@ -1054,9 +1132,29 @@ export class ChatPanelManager implements vscode.Disposable {
       });
     });
     panel.onDidChangeViewState(() => {
-      void panel.webview.postMessage({ type: "viewState", visible: panel.visible });
+      const viewStateRevision = (this.viewStateRevisionByPanel.get(panel) ?? 0) + 1;
+      this.viewStateRevisionByPanel.set(panel, viewStateRevision);
+      this.stableViewLayoutReadyPanels.delete(panel);
+      const viewStateDelivery = panel.webview.postMessage({
+        type: "viewState",
+        visible: panel.visible,
+        revision: viewStateRevision,
+      });
+      void Promise.resolve(viewStateDelivery).then(
+        (delivered) => {
+          if (!delivered) this.acceptStableViewLayoutReady(panel, viewStateRevision);
+        },
+        () => this.acceptStableViewLayoutReady(panel, viewStateRevision),
+      );
       const state = this.stateByPanel.get(panel);
-      if (state && state.pendingAutoRefresh && state.autoRefreshMode !== "off" && this.readyByPanel.get(panel)) {
+      if (
+        !this.stableViewLayoutCapablePanels.has(panel) &&
+        vscode.window.state.focused &&
+        panel.visible &&
+        state?.pendingAutoRefresh &&
+        state.autoRefreshMode !== "off" &&
+        this.readyByPanel.get(panel)
+      ) {
         this.requestAutoRefresh(panel, state.autoRefreshMode);
       }
       this.notifyAutoRefreshConsumerVisibilityChanged();
@@ -1066,6 +1164,7 @@ export class ChatPanelManager implements vscode.Disposable {
       this.stateByPanel.delete(panel);
       this.readyByPanel.delete(panel);
       this.branchSnapshotByPanel.delete(panel);
+      this.branchPresentationSessionKeyByPanel.delete(panel);
       this.branchGenerationByPanel.delete(panel);
       this.branchHistoryGenerationByPanel.delete(panel);
       this.codexAgentRunsSnapshotByPanel.delete(panel);
@@ -1074,8 +1173,15 @@ export class ChatPanelManager implements vscode.Disposable {
       this.sessionDataRequestSequenceByPanel.delete(panel);
       this.sessionDataTransitionByPanel.delete(panel);
       this.sessionDataCommitSequenceByPanel.delete(panel);
+      this.sessionDataInFlightSequencesByPanel.delete(panel);
+      this.stableViewLayoutCapablePanels.delete(panel);
+      this.stableViewLayoutReadyPanels.delete(panel);
+      this.viewStateRevisionByPanel.delete(panel);
+      this.cancelLiveRunningExpiry(panel);
+      this.liveExpiryRefreshPendingByPanel.delete(panel);
       this.resumePresentationCheckpointByPanel.delete(panel);
       this.resumePresentationDeliverySequenceByPanel.delete(panel);
+      this.pruneLiveSessionObservations();
       this.notifyAutoRefreshConsumerVisibilityChanged();
     });
   }
@@ -1146,9 +1252,9 @@ export class ChatPanelManager implements vscode.Disposable {
       pathMode: restored.pathMode,
       pendingAutoRefresh: false,
     });
+    this.pruneLiveSessionObservations();
     if (session) {
-      panel.title = buildPanelTitle(session);
-      panel.iconPath = this.resolveSessionIconPath(session, restored.kind);
+      this.applyPanelPresentation(panel, session, restored.kind);
     }
     this.notifyAutoRefreshConsumerVisibilityChanged();
   }
@@ -1251,7 +1357,6 @@ export class ChatPanelManager implements vscode.Disposable {
     <div id="timeline"></div>
   </div>
   <aside id="mermaidPaneRoot" hidden></aside>
-  <div id="restoreCover" aria-hidden="true" hidden></div>
   <div id="branchOverlayRoot" hidden></div>
   <div id="agentRunsOverlayRoot" hidden></div>
   <script nonce="${nonce}" src="${markdownItUri}"></script>
@@ -1307,6 +1412,8 @@ export class ChatPanelManager implements vscode.Disposable {
     }
     if (
       type !== "ready" &&
+      type !== "viewLayoutSuspended" &&
+      type !== "viewLayoutReady" &&
       type !== "copy" &&
       type !== "copySessionId" &&
       type !== "copySessionFilePath" &&
@@ -1325,6 +1432,17 @@ export class ChatPanelManager implements vscode.Disposable {
 
     switch (type) {
       case "ready": {
+        if (msg?.capabilities?.sessionModelReuse === 1) {
+          this.sessionModelReuseCapablePanels.add(panel);
+        } else {
+          this.sessionModelReuseCapablePanels.delete(panel);
+        }
+        if (msg?.capabilities?.stableViewLayout === 1) {
+          this.stableViewLayoutCapablePanels.add(panel);
+        } else {
+          this.stableViewLayoutCapablePanels.delete(panel);
+          this.stableViewLayoutReadyPanels.delete(panel);
+        }
         this.readyByPanel.set(panel, true);
         const detailMode = normalizeChatSessionDetailMode(msg?.detailMode);
         const restoreState = this.stateByPanel.get(panel);
@@ -1336,6 +1454,19 @@ export class ChatPanelManager implements vscode.Disposable {
           restoreSelectedMessageIndex: restoreState?.restoreTopMessageIndex,
           preserveUiState: shouldRestorePosition,
         });
+        return;
+      }
+      case "viewLayoutReady": {
+        const revision = Number(msg?.revision);
+        this.acceptStableViewLayoutReady(panel, revision);
+        return;
+      }
+      case "viewLayoutSuspended": {
+        if (!this.stableViewLayoutCapablePanels.has(panel)) return;
+        const revision = Number(msg?.revision);
+        const expectedRevision = this.viewStateRevisionByPanel.get(panel) ?? 0;
+        if (!Number.isSafeInteger(revision) || revision < 0 || revision !== expectedRevision) return;
+        this.stableViewLayoutReadyPanels.delete(panel);
         return;
       }
       case "openMarkdown": {
@@ -1560,6 +1691,7 @@ export class ChatPanelManager implements vscode.Disposable {
             pathMode: undefined,
             pathModeEnabled: undefined,
           });
+          this.pruneLiveSessionObservations();
           await this.sendSessionData(panel, {
             preserveUiState: false,
             supersedeTransition: true,
@@ -1635,6 +1767,8 @@ export class ChatPanelManager implements vscode.Disposable {
           restoreSelectedMessageIndex,
           preserveUiState,
           autoScrollToBottom,
+          allowUnchangedRenderReuse:
+            msg?.allowUnchangedRenderReuse === true && state.autoRefreshMode !== "off",
           detailMode,
         });
         if (!sent) return;
@@ -1649,6 +1783,11 @@ export class ChatPanelManager implements vscode.Disposable {
           pendingAutoRefresh: autoRefreshMode === "off" ? false : state.pendingAutoRefresh,
         };
         this.stateByPanel.set(panel, nextState);
+        if (autoRefreshMode === "off") {
+          this.cancelLiveRunningExpiry(panel);
+          this.liveExpiryRefreshPendingByPanel.delete(panel);
+        }
+        this.pruneLiveSessionObservations();
         this.notifyAutoRefreshConsumerVisibilityChanged();
         if (nextState.pendingAutoRefresh && nextState.autoRefreshMode !== "off" && this.readyByPanel.get(panel)) {
           this.requestAutoRefresh(panel, nextState.autoRefreshMode);
@@ -1818,6 +1957,7 @@ export class ChatPanelManager implements vscode.Disposable {
     this.codexForkNavigation.clearCache();
     for (const panel of this.getOpenPanels()) {
       this.branchSnapshotByPanel.delete(panel);
+      this.branchPresentationSessionKeyByPanel.delete(panel);
       this.branchHistoryGenerationByPanel.delete(panel);
     }
     this.refreshBranchNavigation();
@@ -1827,6 +1967,7 @@ export class ChatPanelManager implements vscode.Disposable {
     this.branchNavigation.clearSnapshots();
     for (const panel of this.getOpenPanels()) {
       this.branchSnapshotByPanel.delete(panel);
+      this.branchPresentationSessionKeyByPanel.delete(panel);
       this.branchHistoryGenerationByPanel.delete(panel);
     }
     this.refreshBranchNavigation();
@@ -1843,7 +1984,9 @@ export class ChatPanelManager implements vscode.Disposable {
     for (const panel of this.getOpenPanels()) {
       const state = this.stateByPanel.get(panel);
       const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
-      if (session && state) panel.iconPath = this.resolveSessionIconPath(session, state.kind);
+      if (session && state) {
+        this.applyPanelIconPath(panel, this.resolveSessionIconPath(session, state.kind));
+      }
       if (this.readyByPanel.get(panel)) this.publishCodexAgentRuns(panel);
     }
   }
@@ -1852,7 +1995,9 @@ export class ChatPanelManager implements vscode.Disposable {
     for (const panel of this.getOpenPanels()) {
       const state = this.stateByPanel.get(panel);
       const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
-      if (session && state) panel.iconPath = this.resolveSessionIconPath(session, state.kind);
+      if (session && state) {
+        this.applyPanelIconPath(panel, this.resolveSessionIconPath(session, state.kind));
+      }
       if (!this.readyByPanel.get(panel)) continue;
       const generation = this.nextCodexAgentRunsGeneration(panel);
       this.codexAgentRunsSnapshotByPanel.delete(panel);
@@ -2372,11 +2517,22 @@ export class ChatPanelManager implements vscode.Disposable {
   ): void {
     const state = this.stateByPanel.get(panel);
     const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+    const presentationSessionKey = state && session
+      ? buildBranchPresentationSessionKey(state, session)
+      : "";
+    const preservesCurrentPresentation = Boolean(
+      presentationSessionKey &&
+      this.branchSnapshotByPanel.has(panel) &&
+      this.branchPresentationSessionKeyByPanel.get(panel) === presentationSessionKey,
+    );
     this.cancelBranchNavigation(panel);
     const generation = (this.branchGenerationByPanel.get(panel) ?? 0) + 1;
     this.branchGenerationByPanel.set(panel, generation);
-    this.branchSnapshotByPanel.delete(panel);
-    this.branchHistoryGenerationByPanel.delete(panel);
+    if (!preservesCurrentPresentation) {
+      this.branchSnapshotByPanel.delete(panel);
+      this.branchPresentationSessionKeyByPanel.delete(panel);
+      this.branchHistoryGenerationByPanel.delete(panel);
+    }
     const historyGeneration = this.historyService.getIndexGeneration();
     const config = getConfig();
     const enabled =
@@ -2384,6 +2540,7 @@ export class ChatPanelManager implements vscode.Disposable {
       config.branchNavigationEnabled;
     if (!state || !session || !enabled) {
       this.branchSnapshotByPanel.delete(panel);
+      this.branchPresentationSessionKeyByPanel.delete(panel);
       this.branchHistoryGenerationByPanel.delete(panel);
       void panel.webview.postMessage({ type: "branchNavigationDisabled", generation });
       return;
@@ -2391,7 +2548,9 @@ export class ChatPanelManager implements vscode.Disposable {
 
     const cancellation = new vscode.CancellationTokenSource();
     this.branchCancellationByPanel.set(panel, cancellation);
-    void panel.webview.postMessage({ type: "branchNavigationPending", generation });
+    if (!preservesCurrentPresentation) {
+      void panel.webview.postMessage({ type: "branchNavigationPending", generation });
+    }
     if (session.source === "codex") {
       void this.codexForkNavigation.load(session, {
         shouldContinue: () =>
@@ -2445,6 +2604,9 @@ export class ChatPanelManager implements vscode.Disposable {
             error: sanitizeDebugError(error),
           }),
         );
+        this.branchSnapshotByPanel.delete(panel);
+        this.branchPresentationSessionKeyByPanel.delete(panel);
+        this.branchHistoryGenerationByPanel.delete(panel);
         void panel.webview.postMessage({
           type: "branchNavigationError",
           generation,
@@ -2462,6 +2624,7 @@ export class ChatPanelManager implements vscode.Disposable {
     void this.branchNavigation.load(session, {
       token: cancellation.token,
       onStoredSnapshot: (snapshot) => {
+        if (preservesCurrentPresentation) return;
         if (
           !this.isCurrentBranchRequest(
             panel,
@@ -2506,6 +2669,9 @@ export class ChatPanelManager implements vscode.Disposable {
           error: sanitizeDebugError(error),
         }),
       );
+      this.branchSnapshotByPanel.delete(panel);
+      this.branchPresentationSessionKeyByPanel.delete(panel);
+      this.branchHistoryGenerationByPanel.delete(panel);
       void panel.webview.postMessage({
         type: "branchNavigationError",
         generation,
@@ -2564,6 +2730,10 @@ export class ChatPanelManager implements vscode.Disposable {
       i18n.branchLoadFailed = t("codexForks.loadFailed");
     }
     this.branchSnapshotByPanel.set(panel, snapshot);
+    this.branchPresentationSessionKeyByPanel.set(
+      panel,
+      buildBranchPresentationSessionKey(state, activeSession),
+    );
     this.branchHistoryGenerationByPanel.set(panel, historyGeneration);
     void panel.webview.postMessage({
       type: "branchNavigation",
@@ -3101,8 +3271,7 @@ export class ChatPanelManager implements vscode.Disposable {
       }
       return false;
     }
-    panel.title = buildPanelTitle(session);
-    panel.iconPath = this.resolveSessionIconPath(session, "branch");
+    this.applyPanelPresentation(panel, session, "branch");
     this.notifyAutoRefreshConsumerVisibilityChanged();
     return true;
   }
@@ -3146,7 +3315,10 @@ export class ChatPanelManager implements vscode.Disposable {
       options?.supersedeTransition === true,
     );
     if (!request) return false;
-    const resumeRevision = this.invalidateResumePresentation(panel, { sessionDataPending: true });
+    const resumeRevision = this.invalidateResumePresentation(panel, {
+      sessionDataPending: true,
+      preserveSnapshot: this.matchesDeliveredResumePresentation(panel, state),
+    });
     let sent = false;
     try {
       sent = await this.sendSessionDataForRequest(
@@ -3205,13 +3377,28 @@ export class ChatPanelManager implements vscode.Disposable {
       }),
     );
     let model: Awaited<ReturnType<typeof buildChatSessionModel>>;
+    let activityEvidence: ChatSourceActivityEvidence | undefined;
+    const shouldCollectLiveActivity =
+      config.chatTurnTimelineMode === "live" && state.autoRefreshMode !== "off";
+    const liveObservationRequestSequence = shouldCollectLiveActivity
+      ? this.nextLiveObservationRequestSequence()
+      : undefined;
     try {
       const buildStartedAt = nowMs();
-      model = await buildChatSessionModel(state.fsPath, {
+      const buildOptions = {
         images: config.images,
         includeDetails: detailMode === "full",
         turnTimelineMode: config.chatTurnTimelineMode,
-      });
+        sessionInventory:
+          this.historyService.getIndex().historySources ?? this.historyService.getIndex().sessions,
+      } as const;
+      if (shouldCollectLiveActivity) {
+        const built = await buildChatSessionModelWithActivityEvidence(state.fsPath, buildOptions);
+        model = built.model;
+        activityEvidence = built.activityEvidence;
+      } else {
+        model = await buildChatSessionModel(state.fsPath, buildOptions);
+      }
       buildMs = elapsedMs(buildStartedAt);
     } catch (error) {
       if (!isCurrent()) return false;
@@ -3263,8 +3450,19 @@ export class ChatPanelManager implements vscode.Disposable {
       restoreTopMessageIndex: undefined,
     };
     const summary = this.historyService.findByFsPath(nextState.fsPath);
-    if (config.chatTurnTimelineMode === "live") {
-      model = await this.withLiveRunningTurnStatus(model, nextState, panel, summary, config);
+    let preparedLiveActivity: PreparedLiveSessionActivity | undefined;
+    if (
+      config.chatTurnTimelineMode === "live" &&
+      activityEvidence &&
+      liveObservationRequestSequence !== undefined
+    ) {
+      preparedLiveActivity = await this.prepareLiveSessionActivity(
+        nextState,
+        summary,
+        config,
+        activityEvidence,
+        liveObservationRequestSequence,
+      );
       if (!isCurrent()) return false;
     }
     const statsStartedAt = nowMs();
@@ -3284,6 +3482,25 @@ export class ChatPanelManager implements vscode.Disposable {
     this.stateByPanel.set(panel, committedState);
     this.markSessionDataTransitionCommitted(panel, request, committedState);
     this.sessionDataCommitSequenceByPanel.set(panel, request.sequence);
+    let effectiveLiveActivityAtMs: number | undefined;
+    if (config.chatTurnTimelineMode === "live") {
+      const observation = this.commitLiveSessionObservation(committedState, preparedLiveActivity);
+      effectiveLiveActivityAtMs = observation && observation.sessionId === committedState.sessionId
+        ? observation.effectiveActivityAtMs
+        : preparedLiveActivity?.fallbackActivityAtMs;
+      model = this.withLiveRunningTurnStatus(
+        model,
+        committedState,
+        panel,
+        summary,
+        config,
+        effectiveLiveActivityAtMs,
+      );
+    } else {
+      this.cancelLiveRunningExpiry(panel);
+      this.liveExpiryRefreshPendingByPanel.delete(panel);
+    }
+    this.pruneLiveSessionObservations();
     this.imageDataByPanel.set(panel, collectSaveableImages(model));
     this.documentDataByPanel.set(panel, collectSaveableDocuments(model));
     const annotation = this.annotationStore.get(nextState.fsPath);
@@ -3320,21 +3537,34 @@ export class ChatPanelManager implements vscode.Disposable {
       ),
     );
     const cliResume = this.buildCliResumeSnapshot(panel, resumeRevision);
+    const sessionDataModel: ChatSessionModel = {
+      ...webviewModel,
+      annotation: {
+        tags: annotation?.tags ? [...annotation.tags] : [],
+        note: annotation?.note ?? "",
+      },
+    };
+    const modelFingerprint = createChatRenderFingerprint(sessionDataModel);
+    if (!modelFingerprint) this.logger?.debug("chatSession model fingerprint unavailable");
+    const reusesDeliveredAutoRefreshModel = Boolean(
+      options?.allowUnchangedRenderReuse === true &&
+      this.sessionModelReuseCapablePanels.has(panel) &&
+      modelFingerprint &&
+      this.deliveredSessionModelFingerprintByPanel.get(panel) === modelFingerprint,
+    );
     const delivery = panel.webview.postMessage({
       type: "sessionData",
-      model: {
-        ...webviewModel,
-        annotation: {
-          tags: annotation?.tags ? [...annotation.tags] : [],
-          note: annotation?.note ?? "",
-        },
-      },
+      ...(reusesDeliveredAutoRefreshModel
+        ? { reuseCurrentModel: true }
+        : { model: sessionDataModel }),
+      ...(modelFingerprint ? { modelFingerprint } : {}),
       revealMessageIndex: nextState.revealMessageIndex,
       revealTarget: nextState.revealTarget,
       restoreScrollY: options?.restoreScrollY,
       restoreSelectedMessageIndex: options?.restoreSelectedMessageIndex,
       preserveUiState: options?.preserveUiState === true,
       autoScrollToBottom: options?.autoScrollToBottom === true,
+      allowUnchangedRenderReuse: options?.allowUnchangedRenderReuse === true,
       panelKind: nextState.kind,
       isPreview: nextState.kind === "reusable",
       isPinned: (() => {
@@ -3391,19 +3621,34 @@ export class ChatPanelManager implements vscode.Disposable {
         fileSizeBytes: performanceStats.fileSizeBytes,
       }),
     );
-    this.scheduleBranchNavigation(panel);
-    this.publishCodexAgentRuns(panel);
+    if (!reusesDeliveredAutoRefreshModel) {
+      this.scheduleBranchNavigation(panel);
+      this.publishCodexAgentRuns(panel);
+    }
     const delivered = await delivery;
     if (delivered) {
       this.rememberDeliveredResumePresentation(panel, committedState, webviewModel, summary, request.sequence);
     }
-    if (!delivered || this.sessionDataCommitSequenceByPanel.get(panel) !== request.sequence) return false;
+    const deliveryIsCurrent =
+      delivered && this.sessionDataCommitSequenceByPanel.get(panel) === request.sequence;
+    if (!deliveryIsCurrent) return false;
     const latestState = this.stateByPanel.get(panel);
-    return Boolean(
-      latestState &&
-      latestState.kind === committedState.kind &&
-      normalizeCacheKey(latestState.fsPath) === normalizeCacheKey(committedState.fsPath),
+    if (
+      !latestState ||
+      latestState.kind !== committedState.kind ||
+      normalizeCacheKey(latestState.fsPath) !== normalizeCacheKey(committedState.fsPath)
+    ) {
+      return false;
+    }
+    if (modelFingerprint) this.deliveredSessionModelFingerprintByPanel.set(panel, modelFingerprint);
+    else this.deliveredSessionModelFingerprintByPanel.delete(panel);
+    this.updateLiveRunningExpiry(
+      panel,
+      latestState,
+      webviewModel,
+      effectiveLiveActivityAtMs,
     );
+    return true;
   }
 
   private beginSessionDataRequest(
@@ -3423,6 +3668,9 @@ export class ChatPanelManager implements vscode.Disposable {
     }
     const sequence = (this.sessionDataRequestSequenceByPanel.get(panel) ?? 0) + 1;
     this.sessionDataRequestSequenceByPanel.set(panel, sequence);
+    const inFlightSequences = this.sessionDataInFlightSequencesByPanel.get(panel) ?? new Set<number>();
+    inFlightSequences.add(sequence);
+    this.sessionDataInFlightSequencesByPanel.set(panel, inFlightSequences);
     if (transition) {
       this.sessionDataTransitionByPanel.set(panel, { sequence, protectedState: startingState });
     } else if (activeTransition) {
@@ -3476,6 +3724,11 @@ export class ChatPanelManager implements vscode.Disposable {
       this.sessionDataTransitionByPanel.get(panel)?.sequence === request.sequence
     ) {
       this.sessionDataTransitionByPanel.delete(panel);
+    }
+    const inFlightSequences = this.sessionDataInFlightSequencesByPanel.get(panel);
+    if (inFlightSequences?.delete(request.sequence) && inFlightSequences.size === 0) {
+      this.sessionDataInFlightSequencesByPanel.delete(panel);
+      this.flushPendingLiveExpiryRefresh(panel);
     }
   }
 
@@ -3562,7 +3815,11 @@ export class ChatPanelManager implements vscode.Disposable {
     );
 
     try {
-      const entry = await buildChatPatchEntryDetails(state.fsPath, target);
+      const entry = await buildChatPatchEntryDetails(
+        state.fsPath,
+        target,
+        this.historyService.getIndex().historySources ?? this.historyService.getIndex().sessions,
+      );
       if (this.stateByPanel.get(panel) !== state) return;
       if (!entry) {
         await panel.webview.postMessage({
@@ -4264,10 +4521,13 @@ export class ChatPanelManager implements vscode.Disposable {
       branchFit: t("claudeBranches.fit"),
       branchZoomOut: t("claudeBranches.zoomOut"),
       branchZoomIn: t("claudeBranches.zoomIn"),
-      branchCollapsedPoints: t("claudeBranches.collapsedPoints"),
       branchCollapsedChoices: t("claudeBranches.collapsedChoices"),
+      branchPageControls: t("claudeBranches.pageControls"),
+      branchShowPreviousPoints: t("claudeBranches.showPreviousPoints"),
+      branchShowNextPoints: t("claudeBranches.showNextPoints"),
       branchBefore: t("claudeBranches.before"),
       branchEnd: t("claudeBranches.end"),
+      branchEndsHere: t("claudeBranches.endsHere"),
       branchRoleUser: t("claudeBranches.roleUser"),
       branchRoleAssistant: t("claudeBranches.roleAssistant"),
       branchSwitchFailed: t("claudeBranches.switchFailed"),
@@ -4306,13 +4566,81 @@ export class ChatPanelManager implements vscode.Disposable {
     return { timeZone };
   }
 
-  private async withLiveRunningTurnStatus(
+  private nextLiveObservationRequestSequence(): number {
+    const current = Number.isSafeInteger(this.liveObservationRequestSequence)
+      ? this.liveObservationRequestSequence
+      : 0;
+    if (current >= Number.MAX_SAFE_INTEGER) {
+      this.liveSessionObservationByPath.clear();
+      this.liveObservationRequestSequence = 1;
+      return 1;
+    }
+    this.liveObservationRequestSequence = current + 1;
+    return this.liveObservationRequestSequence;
+  }
+
+  private async prepareLiveSessionActivity(
+    state: ChatPanelState,
+    summary: SessionSummary | undefined,
+    config: ReturnType<typeof getConfig>,
+    activityEvidence: ChatSourceActivityEvidence,
+    requestSequence: number,
+  ): Promise<PreparedLiveSessionActivity> {
+    const isActiveCodexSession =
+      state.historySource === "codex" && isActiveCodexSessionPath(state.fsPath, summary, config);
+    if (!isActiveCodexSession || !state.sessionId) {
+      return { clearPathObservation: true };
+    }
+    const observedAtMs = Date.now();
+    const fingerprint = await readSessionFingerprint(state.fsPath);
+    if (!fingerprint) {
+      const bootstrap = resolveLiveActivityBootstrap(activityEvidence, undefined, observedAtMs);
+      return bootstrap ? { fallbackActivityAtMs: bootstrap.effectiveActivityAtMs } : {};
+    }
+
+    const pathKey = normalizeCacheKey(state.fsPath);
+    const previous = this.liveSessionObservationByPath.get(pathKey);
+    const candidate = buildLiveSessionObservation(previous, {
+      sessionId: state.sessionId,
+      fingerprint,
+      activityEvidence,
+      requestSequence,
+      observedAtMs,
+    });
+    const preview = mergeLiveSessionObservation(previous, candidate);
+    return {
+      ...(candidate ? { candidate } : {}),
+      ...(preview?.sessionId === state.sessionId && preview.effectiveActivityAtMs !== undefined
+        ? { fallbackActivityAtMs: preview.effectiveActivityAtMs }
+        : {}),
+    };
+  }
+
+  private commitLiveSessionObservation(
+    state: ChatPanelState,
+    prepared: PreparedLiveSessionActivity | undefined,
+  ): LiveSessionObservation | undefined {
+    const observations = this.liveSessionObservationByPath;
+    const pathKey = normalizeCacheKey(state.fsPath);
+    if (prepared?.clearPathObservation) {
+      observations.delete(pathKey);
+      return undefined;
+    }
+    const candidate = prepared?.candidate;
+    if (!candidate || candidate.sessionId !== state.sessionId) return undefined;
+    const merged = mergeLiveSessionObservation(observations.get(pathKey), candidate);
+    if (merged) observations.set(pathKey, merged);
+    return merged;
+  }
+
+  private withLiveRunningTurnStatus(
     model: ChatSessionModel,
     state: ChatPanelState,
     panel: vscode.WebviewPanel,
     summary: SessionSummary | undefined,
     config: ReturnType<typeof getConfig>,
-  ): Promise<ChatSessionModel> {
+    effectiveActivityAtMs: number | undefined,
+  ): ChatSessionModel {
     const turns = Array.isArray(model.turns) ? model.turns : [];
     if (turns.length === 0) return model;
 
@@ -4323,17 +4651,12 @@ export class ChatPanelManager implements vscode.Disposable {
     if (
       activeTurn &&
       activeTurn.status === "incomplete" &&
+      state.historySource === "codex" &&
       isActiveCodexSessionPath(state.fsPath, summary, config) &&
-      isPanelObservingLiveSession(panel, state, this.readyByPanel.get(panel) === true)
+      isPanelObservingLiveSession(state, this.readyByPanel.get(panel) === true) &&
+      isLiveActivityFresh(effectiveActivityAtMs, Date.now())
     ) {
-      const mtimeMs = await readSessionMtimeMs(state.fsPath);
-      const now = Date.now();
-      const ageMs = typeof mtimeMs === "number" ? now - mtimeMs : undefined;
-      const mtimeIsTrustworthy = typeof ageMs === "number" && Number.isFinite(ageMs) && ageMs >= 0;
-      const mtimeIsRecent = mtimeIsTrustworthy && ageMs <= LIVE_RUNNING_STALE_MS;
-      if (mtimeIsRecent) {
-        liveRunningTurnId = activeTurn.id;
-      }
+      liveRunningTurnId = activeTurn.id;
     }
 
     const activeTurnItemCount = getTurnItemCount(activeTurn);
@@ -4355,6 +4678,124 @@ export class ChatPanelManager implements vscode.Disposable {
       ...(liveRunningTurnId ? { liveRunningTurnId } : {}),
       ...(keepActiveTurnId && model.activeTurnId ? { activeTurnId: model.activeTurnId } : {}),
     };
+  }
+
+  private updateLiveRunningExpiry(
+    panel: vscode.WebviewPanel,
+    state: ChatPanelState,
+    model: ChatSessionModel,
+    effectiveActivityAtMs: number | undefined,
+  ): void {
+    this.cancelLiveRunningExpiry(panel);
+    if (
+      !model.liveRunningTurnId ||
+      !state.sessionId ||
+      !state.sessionInfoRevision ||
+      state.autoRefreshMode === "off" ||
+      !isLiveActivityFresh(effectiveActivityAtMs, Date.now())
+    ) {
+      return;
+    }
+    this.scheduleLiveRunningExpiry(panel, {
+      pathKey: normalizeCacheKey(state.fsPath),
+      sessionId: state.sessionId,
+      sessionInfoRevision: state.sessionInfoRevision,
+      effectiveActivityAtMs,
+    });
+  }
+
+  private scheduleLiveRunningExpiry(
+    panel: vscode.WebviewPanel,
+    context: Omit<LiveRunningExpiry, "timer">,
+  ): void {
+    this.cancelLiveRunningExpiry(panel);
+    const expiryAtMs = getLiveActivityExpiryAtMs(context.effectiveActivityAtMs);
+    if (expiryAtMs === undefined) return;
+    const delayMs = Math.max(1, Math.ceil(expiryAtMs - Date.now() + 1));
+    let expiry!: LiveRunningExpiry;
+    const timer = setTimeout(() => this.handleLiveRunningExpiry(panel, expiry), delayMs);
+    expiry = { ...context, timer };
+    this.liveRunningExpiryByPanel.set(panel, expiry);
+  }
+
+  private handleLiveRunningExpiry(panel: vscode.WebviewPanel, expiry: LiveRunningExpiry): void {
+    if (this.liveRunningExpiryByPanel.get(panel) !== expiry) return;
+    this.liveRunningExpiryByPanel.delete(panel);
+
+    const state = this.stateByPanel.get(panel);
+    if (
+      !state ||
+      normalizeCacheKey(state.fsPath) !== expiry.pathKey ||
+      state.sessionId !== expiry.sessionId ||
+      state.autoRefreshMode === "off"
+    ) {
+      return;
+    }
+
+    if (state.sessionInfoRevision !== expiry.sessionInfoRevision) {
+      // A newer state may have committed even when its Webview delivery failed.
+      this.queueLiveExpiryRefresh(panel, state);
+      return;
+    }
+
+    const now = Date.now();
+    if (isLiveActivityFresh(expiry.effectiveActivityAtMs, now)) {
+      this.scheduleLiveRunningExpiry(panel, {
+        pathKey: expiry.pathKey,
+        sessionId: expiry.sessionId,
+        sessionInfoRevision: expiry.sessionInfoRevision,
+        effectiveActivityAtMs: expiry.effectiveActivityAtMs,
+      });
+      return;
+    }
+
+    this.queueLiveExpiryRefresh(panel, state);
+  }
+
+  private queueLiveExpiryRefresh(panel: vscode.WebviewPanel, state: ChatPanelState): void {
+    if ((this.sessionDataInFlightSequencesByPanel.get(panel)?.size ?? 0) > 0) {
+      this.liveExpiryRefreshPendingByPanel.add(panel);
+      return;
+    }
+    this.requestOrDeferLiveExpiryRefresh(panel, state);
+  }
+
+  private requestOrDeferLiveExpiryRefresh(panel: vscode.WebviewPanel, state: ChatPanelState): void {
+    if (this.stateByPanel.get(panel) !== state || state.autoRefreshMode === "off") return;
+    if (vscode.window.state.focused && this.readyByPanel.get(panel)) {
+      this.requestAutoRefresh(panel, state.autoRefreshMode);
+      return;
+    }
+    this.stateByPanel.set(panel, { ...state, pendingAutoRefresh: true });
+  }
+
+  private flushPendingLiveExpiryRefresh(panel: vscode.WebviewPanel): void {
+    if (!this.liveExpiryRefreshPendingByPanel.has(panel)) return;
+    this.liveExpiryRefreshPendingByPanel.delete(panel);
+    const state = this.stateByPanel.get(panel);
+    if (state) this.requestOrDeferLiveExpiryRefresh(panel, state);
+  }
+
+  private cancelLiveRunningExpiry(panel: vscode.WebviewPanel): void {
+    const expiry = this.liveRunningExpiryByPanel.get(panel);
+    if (expiry) clearTimeout(expiry.timer);
+    this.liveRunningExpiryByPanel.delete(panel);
+    this.liveExpiryRefreshPendingByPanel.delete(panel);
+  }
+
+  private pruneLiveSessionObservations(): void {
+    const observations = this.liveSessionObservationByPath;
+    if (observations.size === 0) return;
+    const activePathKeys = new Set<string>();
+    for (const panel of this.getOpenPanels()) {
+      const state = this.stateByPanel.get(panel);
+      if (state && state.autoRefreshMode !== "off") {
+        activePathKeys.add(normalizeCacheKey(state.fsPath));
+      }
+    }
+    for (const pathKey of observations.keys()) {
+      if (!activePathKeys.has(pathKey)) observations.delete(pathKey);
+    }
   }
 
   private async refreshPanelTitleFromFile(panel: vscode.WebviewPanel): Promise<void> {
@@ -4384,8 +4825,7 @@ export class ChatPanelManager implements vscode.Disposable {
       config,
     );
     if (!this.isTitleRefreshCurrent(panel, state, titleRefreshSequence)) return;
-    panel.title = buildPanelTitle(displaySummary);
-    panel.iconPath = this.resolveSessionIconPath(displaySummary, state.kind);
+    this.applyPanelPresentation(panel, displaySummary, state.kind);
   }
 
   private nextTitleRefreshSequence(panel: vscode.WebviewPanel): number {
@@ -4510,13 +4950,70 @@ export class ChatPanelManager implements vscode.Disposable {
     );
   }
 
+  private applyPanelPresentation(
+    panel: vscode.WebviewPanel,
+    session: SessionSummary,
+    kind: ChatPanelKind,
+  ): void {
+    const title = buildPanelTitle(session);
+    if (this.panelTitlePresentationByPanel.get(panel) !== title) {
+      panel.title = title;
+      this.panelTitlePresentationByPanel.set(panel, title);
+    }
+    this.applyPanelIconPath(panel, this.resolveSessionIconPath(session, kind));
+  }
+
+  private applyPanelIconPath(
+    panel: vscode.WebviewPanel,
+    iconPath: { light: vscode.Uri; dark: vscode.Uri },
+  ): void {
+    const presentationKey = `${iconPath.light.toString()}\n${iconPath.dark.toString()}`;
+    if (this.panelIconPresentationByPanel.get(panel) === presentationKey) return;
+    panel.iconPath = iconPath;
+    this.panelIconPresentationByPanel.set(panel, presentationKey);
+  }
+
   private notifyAutoRefreshConsumerVisibilityChanged(): void {
     this.autoRefreshConsumerVisibilityEmitter.fire();
+  }
+
+  private acceptStableViewLayoutReady(panel: vscode.WebviewPanel, revision: number): void {
+    if (
+      !Number.isSafeInteger(revision) ||
+      revision < 0 ||
+      !panel.visible ||
+      !this.stateByPanel.has(panel) ||
+      !this.stableViewLayoutCapablePanels.has(panel) ||
+      revision !== (this.viewStateRevisionByPanel.get(panel) ?? 0)
+    ) {
+      return;
+    }
+    this.stableViewLayoutReadyPanels.add(panel);
+    const latestState = this.stateByPanel.get(panel);
+    if (
+      vscode.window.state.focused &&
+      latestState?.pendingAutoRefresh &&
+      latestState.autoRefreshMode !== "off" &&
+      this.readyByPanel.get(panel)
+    ) {
+      this.requestAutoRefresh(panel, latestState.autoRefreshMode);
+    }
   }
 
   private requestAutoRefresh(panel: vscode.WebviewPanel, mode: ChatWebviewAutoRefreshMode): void {
     const state = this.stateByPanel.get(panel);
     if (!state || state.autoRefreshMode === "off" || !this.readyByPanel.get(panel)) return;
+    if (
+      panel.visible &&
+      this.stableViewLayoutCapablePanels.has(panel) &&
+      !this.stableViewLayoutReadyPanels.has(panel)
+    ) {
+      if (!state.pendingAutoRefresh) {
+        this.stateByPanel.set(panel, { ...state, pendingAutoRefresh: true });
+      }
+      return;
+    }
+    this.liveExpiryRefreshPendingByPanel.delete(panel);
     this.stateByPanel.set(panel, { ...state, pendingAutoRefresh: false });
     void panel.webview.postMessage({ type: "requestReload", mode });
   }
@@ -4524,6 +5021,13 @@ export class ChatPanelManager implements vscode.Disposable {
 
 function hasAgentRunsRelation(component: { nodes: readonly { unavailableParent: boolean }[] }): boolean {
   return component.nodes.length > 1 || component.nodes.some((node) => node.unavailableParent);
+}
+
+function buildBranchPresentationSessionKey(
+  state: ChatPanelState,
+  session: SessionSummary,
+): string {
+  return [normalizeCacheKey(state.fsPath), session.source, session.identityKey].join("\n");
 }
 
 function buildCodexAgentRunsRelationKey(component: CodexAgentComponent, currentIdentityKey: string): string {
@@ -4668,12 +5172,13 @@ function normalizeChatWebviewPathModeOrUndefined(value: unknown): ChatWebviewPat
   return value === "recorded" || value === "relocated" ? value : undefined;
 }
 
-async function readSessionMtimeMs(fsPath: string): Promise<number | undefined> {
+async function readSessionFingerprint(fsPath: string): Promise<SessionFileFingerprint | undefined> {
   const trimmed = typeof fsPath === "string" ? fsPath.trim() : "";
   if (!trimmed) return undefined;
   try {
     const stat = await vscode.workspace.fs.stat(vscode.Uri.file(trimmed));
-    return typeof stat.mtime === "number" && Number.isFinite(stat.mtime) ? stat.mtime : undefined;
+    if ((stat.type & vscode.FileType.File) === 0) return undefined;
+    return createSessionFileFingerprint(stat.mtime, stat.size);
   } catch {
     return undefined;
   }
@@ -4695,11 +5200,10 @@ function isActiveCodexSessionPath(
 }
 
 function isPanelObservingLiveSession(
-  panel: vscode.WebviewPanel,
   state: ChatPanelState,
   isReady: boolean,
 ): boolean {
-  return isReady && panel.visible && state.autoRefreshMode !== "off";
+  return isReady && state.autoRefreshMode !== "off";
 }
 
 function isPathInsideRoot(fsPath: string, rootPath: string): boolean {

@@ -35,9 +35,12 @@
   const btnPageSearchPrev = document.getElementById("btnPageSearchPrev");
   const btnPageSearchNext = document.getElementById("btnPageSearchNext");
   const btnPageSearchClose = document.getElementById("btnPageSearchClose");
-  const restoreCoverEl = document.getElementById("restoreCover");
   const branchOverlayRootEl = document.getElementById("branchOverlayRoot");
   const agentRunsOverlayRootEl = document.getElementById("agentRunsOverlayRoot");
+  const toolbarContentKeyByElement = new WeakMap();
+  let pageSearchRoleFiltersPresentationKey = "";
+  let sessionMetadataPresentationKey = "";
+  let sessionAnnotationPresentationKey = "";
   const mermaidPaneRootEl = document.getElementById("mermaidPaneRoot");
 
   const md = createMarkdownRenderer();
@@ -332,6 +335,12 @@
   const MAX_MERMAID_DISPLAY_DIMENSION = 16384;
   const MAX_MERMAID_DISPLAY_PIXELS = 64 * 1024 * 1024;
   const MAX_MERMAID_PALETTE_NODES = 2048;
+  const MAX_MERMAID_SEQUENCE_REGIONS = 256;
+  const MERMAID_LIGHT_SEQUENCE_TEXT_RGB = Object.freeze([15, 23, 42]);
+  const MERMAID_LIGHT_SEQUENCE_LINE_RGB = Object.freeze([51, 65, 85]);
+  const MERMAID_LIGHT_SEQUENCE_ACCENT_RGB = Object.freeze([37, 99, 235]);
+  const MERMAID_MIN_TEXT_CONTRAST = 4.5;
+  const MERMAID_MIN_LINE_CONTRAST = 3.5;
   const MERMAID_INLINE_VISUAL_OVERFLOW_TOLERANCE_PX = 2;
   const PAGE_SEARCH_REFRESH_DEBOUNCE_MS = 180;
   const RESTORE_POSITION_SAVE_DEBOUNCE_MS = 500;
@@ -339,11 +348,9 @@
   const MAX_CACHED_IMAGE_DATA = 64;
   const TIME_GUIDE_REBUILD_IDLE_TIMEOUT_MS = 900;
   const TIME_GUIDE_REBUILD_FALLBACK_DELAY_MS = 80;
-  const RESTORE_COVER_HIDE_DELAY_MS = 140;
-  const RESTORE_COVER_MIN_VISIBLE_MS = 220;
-  const RESTORE_COVER_MAX_WAIT_MS = 900;
-  const RESTORE_COVER_STABLE_FRAMES = 3;
   const DEFERRED_RENDER_FRAME_BUDGET_MS = 8;
+  const VISIBLE_LAYOUT_STABLE_FRAME_COUNT = 2;
+  const VISIBLE_LAYOUT_MAX_FRAME_COUNT = 30;
   const DEFERRED_PATCH_ROOT_MARGIN = "1200px 0px";
   const DEFERRED_PATCH_PLACEHOLDER_MIN_HEIGHT = 120;
   const DEFERRED_SEARCH_REFRESH_DELAY_MS = 180;
@@ -352,6 +359,7 @@
   const SIMPLIFIED_DIFF_ENTRY_COUNT = 300;
   const SIMPLIFIED_DIFF_LINE_ESTIMATE = 8000;
   const SIMPLIFIED_IMAGE_COUNT = 80;
+  const CHAT_RENDER_FINGERPRINT_RE = /^v1:[0-9a-f]{64}$/u;
   const STICKY_USER_SUMMARY_LIMIT = 180;
   const STICKY_USER_PREVIEW_LIMIT = 6000;
   const STICKY_USER_BOUNDARY_TOLERANCE_PX = 1;
@@ -359,6 +367,8 @@
 
   /** @type {any} */
   let model = null;
+  let currentModelRenderFingerprint = "";
+  let lastRenderedSessionDataKey = "";
   /** @type {any} */
   let i18n = {};
   /** @type {any} */
@@ -526,6 +536,13 @@
   let openPositionSaveTimer = 0;
   let restorePositionSaveTimer = 0;
   let toolbarCompactFrame = 0;
+  let lastToolbarCompactLayoutKey = "";
+  let visibleLayoutResumeFrame = 0;
+  let visibleLayoutResumePending = true;
+  let visibleLayoutReturnPending = false;
+  let hostViewStateRevision = 0;
+  let lastStableVisibleLayoutWidth = Math.max(0, Math.round(Number(window.innerWidth) || 0));
+  let lastStableVisibleLayoutHeight = Math.max(0, Math.round(Number(window.innerHeight) || 0));
   let patchLayoutFrame = 0;
   let timeGuideEnabled = false;
   let timeGuide = null;
@@ -535,11 +552,7 @@
   let timeGuideUpdateIdle = 0;
   let timeGuideUpdateNeedsRebuild = false;
   let timeGuideUpdateGeneration = 0;
-  let restoreCoverActive = false;
-  let restoreCoverFrame = 0;
-  let restoreCoverTimer = 0;
-  let restoreCoverShownAt = 0;
-  let pendingTimeGuideAfterRestoreCover = null;
+  let hostViewVisible = true;
   let deferredRenderGeneration = 0;
   let deferredRenderQueue = [];
   let deferredRenderKeys = new Set();
@@ -622,37 +635,37 @@
     persistRestorePosition({ immediate: true });
   });
   window.addEventListener("pagehide", () => {
-    showRestoreCover();
+    visibleLayoutReturnPending = true;
+    activateVisibleLayoutAtomicMask();
+    debugVisibleLayout("pagehide");
+    pauseVisibleLayoutWork();
     persistCurrentChatOpenPosition({ immediate: true });
     persistRestorePosition({ immediate: true });
   });
   window.addEventListener("pageshow", () => {
-    scheduleRestoreCoverRelease();
-    if (!isRestoreCoverBlockingTimeGuide()) resumeDeferredRenderWork();
+    debugVisibleLayout("pageshow");
+    scheduleVisibleLayoutResume();
   });
-  window.addEventListener("resize", () => {
-    scheduleStickyUserOverlayUpdate();
-    scheduleRunningTurnFallbackUpdate();
-    scheduleBranchTreeRelayout();
-    applyAgentRunsOverlayWidth();
-    scheduleAgentRunsTreeRelayout();
-    applyMermaidPaneWidth();
-    scheduleMermaidInlineOverflowUpdate();
-  });
+  window.addEventListener("resize", handleVisibleLayoutViewportResize);
   if (document.fonts && typeof document.fonts.addEventListener === "function") {
     document.fonts.addEventListener("loadingdone", scheduleBranchTreeRelayout);
     document.fonts.addEventListener("loadingdone", scheduleAgentRunsTreeRelayout);
+    document.fonts.addEventListener("loadingdone", () => {
+      lastToolbarCompactLayoutKey = "";
+      scheduleToolbarCompactMode();
+    });
   }
   document.addEventListener("visibilitychange", () => {
+    debugVisibleLayout("visibilitychange", { state: document.visibilityState });
     if (document.visibilityState === "hidden") {
       stopRunningTurnElapsedTimer();
-      showRestoreCover();
+      visibleLayoutReturnPending = true;
+      activateVisibleLayoutAtomicMask();
+      pauseVisibleLayoutWork();
       persistCurrentChatOpenPosition({ immediate: true });
       persistRestorePosition({ immediate: true });
     } else if (document.visibilityState === "visible") {
-      scheduleRestoreCoverRelease();
-      if (!isRestoreCoverBlockingTimeGuide()) resumeDeferredRenderWork();
-      syncRunningTurnElapsedTimer();
+      scheduleVisibleLayoutResume();
     }
   });
 
@@ -878,13 +891,6 @@
     });
   }
 
-  window.addEventListener("resize", () => {
-    applyPageSearchPanelWidth();
-    scheduleToolbarCompactMode();
-    schedulePatchLayoutSync();
-    updateTimeGuide({ afterPaint: true });
-    scheduleStickyUserOverlayUpdate({ rebuildRows: true });
-  });
   applyPageSearchPanelWidth();
   applyMermaidPaneWidth();
   if (toolbarResizeObserver) toolbarResizeObserver.observe(toolbarEl);
@@ -970,11 +976,27 @@
   window.addEventListener("message", (event) => {
     const msg = event.data || {};
     if (msg.type === "viewState") {
-      if (msg.visible === false) showRestoreCover();
-      else if (msg.visible === true) {
-        scheduleRestoreCoverRelease();
-        if (!isRestoreCoverBlockingTimeGuide()) resumeDeferredRenderWork();
+      const revision = Number(msg.revision);
+      if (Number.isSafeInteger(revision) && revision >= 0) {
+        if (revision < hostViewStateRevision) {
+          debugVisibleLayout("viewStateStale", {
+            receivedRevision: revision,
+            visible: msg.visible === true,
+          });
+          return;
+        }
+        hostViewStateRevision = revision;
       }
+      if (msg.visible === false) {
+        hostViewVisible = false;
+        visibleLayoutReturnPending = true;
+        activateVisibleLayoutAtomicMask();
+        pauseVisibleLayoutWork();
+      } else if (msg.visible === true) {
+        hostViewVisible = true;
+        scheduleVisibleLayoutResume();
+      }
+      debugVisibleLayout("viewState", { receivedRevision: revision, visible: msg.visible === true });
       return;
     }
     if (msg.type === "mermaidPreferences") {
@@ -1172,6 +1194,17 @@
       return;
     }
     if (msg.type === "sessionData") {
+      const incomingModelFingerprint = normalizeChatRenderFingerprint(msg.modelFingerprint);
+      const reusesCurrentModel = msg.reuseCurrentModel === true;
+      const currentModelUnavailable =
+        reusesCurrentModel &&
+        (!model ||
+          !incomingModelFingerprint ||
+          incomingModelFingerprint !== currentModelRenderFingerprint);
+      if (currentModelUnavailable) {
+        requestReload();
+        return;
+      }
       cancelRenderAfterCurrent();
       const restoreScrollY = typeof msg.restoreScrollY === "number" ? msg.restoreScrollY : undefined;
       const restoreSelectedMessageIndex =
@@ -1205,11 +1238,17 @@
       const prevExpandedUsageCardKeys = new Set(expandedUsageCardKeys);
       const prevWideTimelineCardKeys = new Set(wideTimelineCardKeys);
       const prevWrappedPatchHunkKeys = new Set(wrappedPatchHunkKeys);
+      const previousSessionInfoSnapshot = sessionInfoSnapshot;
+      const previousResumeToolbarPresentationKey = buildResumeToolbarPresentationKey();
+      const previousIsPinned = isPinned;
+      const previousAutoRefreshAvailable = autoRefreshAvailable;
+      const previousAutoRefreshMode = autoRefreshMode;
+      const previousPathModeEnabled = pathModeEnabled;
       const previousModelPath = model && typeof model.fsPath === "string" ? model.fsPath : "";
       const previousModelIdentity = getChatModelSessionIdentity(model);
       persistCurrentChatOpenPosition({ immediate: true });
 
-      const incomingModel = msg.model || null;
+      const incomingModel = reusesCurrentModel ? model : msg.model || null;
       const nextModelPath = incomingModel && typeof incomingModel.fsPath === "string" ? incomingModel.fsPath : "";
       const nextModelIdentity = getChatModelSessionIdentity(incomingModel);
       const sessionChanged = Boolean(
@@ -1252,7 +1291,7 @@
       applyMermaidPreferences(msg.mermaidPreferences, { rerender: false });
       const previousPageSearchContentRevision = pageSearchContentRevision;
       model = incomingModel;
-      bumpPageSearchContentRevision();
+      currentModelRenderFingerprint = incomingModelFingerprint;
       i18n = msg.i18n || {};
       sessionInfoSnapshot = normalizeSessionInfoSnapshot(msg.sessionInfo);
       applyResumeSnapshotSafely(msg.cliResume, { fromSessionData: true, update: false });
@@ -1284,6 +1323,13 @@
       detailsLoaded = msg.detailsLoaded === true || msg.detailMode === "full";
       detailReloadPending = false;
       updateEffectivePerformanceMode({ showAutoToast: true });
+      showDetails = shouldPreserveUiState ? prevShowDetails : false;
+      const reusedSessionDataRender = canReuseCurrentSessionDataRender({
+        allowUnchangedRenderReuse: msg.allowUnchangedRenderReuse === true,
+        preserveUiState: shouldPreserveUiState,
+        sessionChanged,
+        transitionDirection,
+      });
       debugChatOpenPosition("sessionData", {
         session: getDebugSessionName(nextModelPath),
         mode: chatOpenPosition,
@@ -1293,6 +1339,7 @@
         restore: isRestore,
         preserveUiState: shouldPreserveUiState,
         autoScrollToBottom,
+        renderReused: reusedSessionDataRender,
         reveal: typeof msg.revealMessageIndex === "number" || !!revealTarget,
       });
       expandedNote = shouldPreserveUiState ? prevExpandedNote : false;
@@ -1308,9 +1355,12 @@
       expandedMessageIndexes = shouldPreserveUiState ? prevExpandedMessageIndexes : new Set();
       expandedStickyUserKeys = shouldPreserveUiState ? prevExpandedStickyUserKeys : new Set();
       collapsedTurnIds = shouldPreserveUiState && isTurnTimelineEnabled() ? prevCollapsedTurnIds : new Set();
-      clearAllPageSearchTemporaryExpansions();
-      pendingPageSearchRefreshOptions = null;
-      queuePageSearchContentMutationRefresh(previousPageSearchContentRevision);
+      if (!reusedSessionDataRender) {
+        bumpPageSearchContentRevision();
+        clearAllPageSearchTemporaryExpansions();
+        pendingPageSearchRefreshOptions = null;
+        queuePageSearchContentMutationRefresh(previousPageSearchContentRevision);
+      }
       expandedPatchEntries = shouldPreserveUiState ? prevExpandedPatchEntries : new Set();
       expandedPatchGroupFileLists = shouldPreserveUiState ? prevExpandedPatchGroupFileLists : new Set();
       allDiffPatchGroupKeys = shouldPreserveUiState ? prevAllDiffPatchGroupKeys : new Set();
@@ -1331,18 +1381,35 @@
           expandedPatchEntries.add(revealTarget.entryId);
         }
       }
-      if (!isTurnTimelineEnabled()) {
+      if (!reusedSessionDataRender && !isTurnTimelineEnabled()) {
         collapsedTurnIds = new Set();
         clearAllPageSearchTemporaryExpansions();
       }
 
       // Preserve details visibility only for reload-like updates; fresh opens start with details hidden.
-      showDetails = shouldPreserveUiState ? prevShowDetails : false;
-      syncPageSearchRoleFilters({ reset: !shouldPreserveUiState });
-      updateToolbar();
-      render();
-      runBranchTransition(transitionDirection);
-      if (branchOverlayOpen) renderBranchOverlay();
+      if (!reusedSessionDataRender) syncPageSearchRoleFilters({ reset: !shouldPreserveUiState });
+      const nextResumeToolbarPresentationKey = buildResumeToolbarPresentationKey();
+      const canReuseToolbarPresentation = Boolean(
+        reusedSessionDataRender &&
+        previousResumeToolbarPresentationKey &&
+        previousResumeToolbarPresentationKey === nextResumeToolbarPresentationKey &&
+        previousIsPinned === isPinned &&
+        previousAutoRefreshAvailable === autoRefreshAvailable &&
+        previousAutoRefreshMode === autoRefreshMode &&
+        previousPathModeEnabled === pathModeEnabled
+      );
+      if (!canReuseToolbarPresentation) updateToolbar();
+      if (reusedSessionDataRender) {
+        if (!hasSameSessionInfoPresentation(previousSessionInfoSnapshot, sessionInfoSnapshot)) {
+          renderCurrentSessionMetadata();
+        }
+        reconcileCommittedPageSearchHistory();
+        if (pageSearchShowingSuggestions) updatePageSearchSuggestionsAfterInput();
+      } else {
+        render();
+        runBranchTransition(transitionDirection);
+        if (branchOverlayOpen) renderBranchOverlay();
+      }
       let pendingRestoreCompletions = 0;
       let restoreStatePersisted = false;
       let pageSearchSeedApplied = false;
@@ -1472,7 +1539,10 @@
       return;
     }
     if (msg.type === "requestReload") {
-      requestReload({ followLatest: msg.mode === "follow" });
+      requestReload({
+        followLatest: msg.mode === "follow",
+        allowUnchangedRenderReuse: true,
+      });
       return;
     }
     if (msg.type === "patchEntryDetails") {
@@ -1545,9 +1615,11 @@
 
   vscode.postMessage({
     type: "ready",
+    capabilities: { sessionModelReuse: 1, stableViewLayout: 1 },
     detailMode:
       webviewState && webviewState.restore && webviewState.restore.detailMode === "full" ? "full" : "summary",
   });
+  scheduleVisibleLayoutResume();
 
   function looksLikeMojibake(text) {
     return (
@@ -1617,6 +1689,54 @@
     return fsPath ? "path:" + fsPath : "";
   }
 
+  function normalizeChatRenderFingerprint(value) {
+    return typeof value === "string" && CHAT_RENDER_FINGERPRINT_RE.test(value) ? value : "";
+  }
+
+  function buildCurrentSessionDataRenderKey() {
+    const modelFingerprint = normalizeChatRenderFingerprint(currentModelRenderFingerprint);
+    if (!modelFingerprint) return "";
+    try {
+      return JSON.stringify({
+        version: 1,
+        modelFingerprint,
+        i18n,
+        dateTime,
+        toolDisplayMode,
+        userLongMessageFolding,
+        assistantLongMessageFolding,
+        stickyUserPromptEnabled,
+        turnTimelineMode,
+        timeGuideEnabled,
+        imageSettings,
+        effectivePerformanceMode,
+        pathMode: getEffectivePathMode(),
+        mermaidThemePreference,
+        showDetails,
+      });
+    } catch (_error) {
+      // Invalid render inputs must fall back to a full render.
+      return "";
+    }
+  }
+
+  function canReuseCurrentSessionDataRender(options) {
+    if (
+      options?.allowUnchangedRenderReuse !== true ||
+      options?.preserveUiState !== true ||
+      options?.sessionChanged === true ||
+      options?.transitionDirection
+    ) {
+      return false;
+    }
+    const nextKey = buildCurrentSessionDataRenderKey();
+    return !!nextKey && nextKey === lastRenderedSessionDataKey;
+  }
+
+  function commitCurrentSessionDataRenderKey() {
+    lastRenderedSessionDataKey = buildCurrentSessionDataRenderKey();
+  }
+
   function isArchivedCodexSession() {
     return !!(
       model &&
@@ -1683,11 +1803,17 @@
     const revision = Number(message?.revision);
     if (!Number.isSafeInteger(revision) || revision <= resumeRevision) return;
     resumeRevision = revision;
-    resumePresentationPending = true;
+    const preserveSnapshot = message?.preserveSnapshot === true && resumeSnapshot !== null;
+    resumePresentationPending = !preserveSnapshot;
     resumeSessionDataPending = resumeSessionDataPending || message?.sessionDataPending === true;
-    if (resumeSessionDataPending) resumeSnapshot = null;
+    if (preserveSnapshot) {
+      resumeSnapshot = { ...resumeSnapshot, revision };
+    } else if (resumeSessionDataPending) {
+      resumeSnapshot = null;
+    }
     closeResumeMethodMenu();
-    updateResumeToolbarSafely();
+    // A preserved snapshot only advances the request revision and does not change presentation.
+    if (!preserveSnapshot) updateResumeToolbarSafely();
   }
 
   function applyResumePresentationInvalidationSafely(message) {
@@ -1775,6 +1901,27 @@
     return source === "codex" || source === "claude" ? source : null;
   }
 
+  function buildResumeToolbarPresentationKey() {
+    try {
+      return JSON.stringify({
+        version: 1,
+        source: getCurrentResumeSource(),
+        archived: isArchivedCodexSession(),
+        presentationPending: resumePresentationPending,
+        hiddenPendingSessionData: resumeSessionDataPending && !resumeSnapshot,
+        snapshot: resumeSnapshot
+          ? {
+              codex: resumeSnapshot.codex,
+              claude: resumeSnapshot.claude,
+            }
+          : null,
+      });
+    } catch (_error) {
+      // An invalid presentation key safely falls back to the regular toolbar update.
+      return "";
+    }
+  }
+
   function getResumeMethodPresentation(source, method) {
     const extension = method === "extension";
     if (source === "claude") {
@@ -1858,14 +2005,17 @@
   function updateResumeToolbar() {
     const source = getCurrentResumeSource();
     const archivedCodexSession = isArchivedCodexSession();
-    if (!source || resumeSessionDataPending) {
+    if (!source || (resumeSessionDataPending && !resumeSnapshot)) {
       setResumeActionHidden(true);
       return;
     }
 
     if (archivedCodexSession) {
       const label = getRequiredResumeUiText(i18n.restoreArchived);
-      const tooltip = getRequiredResumeUiText(i18n.restoreArchivedTooltip);
+      const restoreAvailable = !resumePresentationPending;
+      const tooltip = restoreAvailable
+        ? getRequiredResumeUiText(i18n.restoreArchivedTooltip)
+        : getRequiredResumeUiText(i18n.resumeUnavailableForSessionTooltip);
       setResumeActionHidden(false);
       if (resumeActionEl instanceof HTMLElement) {
         resumeActionEl.dataset.split = "false";
@@ -1873,8 +2023,8 @@
       }
       if (btnResumeInCodex instanceof HTMLButtonElement) {
         btnResumeInCodex.hidden = false;
-        btnResumeInCodex.disabled = false;
-        btnResumeInCodex.removeAttribute("aria-disabled");
+        btnResumeInCodex.disabled = !restoreAvailable;
+        btnResumeInCodex.setAttribute("aria-disabled", restoreAvailable ? "false" : "true");
         btnResumeInCodex.dataset.resumeMethod = "restore";
         setToolbarButtonWithIcon(btnResumeInCodex, label, CARD_RESTORE_ICON_SVG);
         btnResumeInCodex.title = tooltip;
@@ -1958,6 +2108,7 @@
   }
 
   function handleResumePrimaryClick() {
+    if (resumePresentationPending) return;
     if (isArchivedCodexSession()) {
       persistCurrentChatOpenPosition({ immediate: true });
       const revealMessageIndex = chatOpenPosition === "lastMessage" ? findTopVisibleMessageIndex() : null;
@@ -1969,7 +2120,7 @@
     }
     const source = getCurrentResumeSource();
     const target = source ? resumeSnapshot?.[source] : null;
-    if (!source || !target || resumePresentationPending || resumeSessionDataPending) return;
+    if (!source || !target || resumePresentationPending) return;
     const method = target.configuredMethod === "both" ? target.primaryMethod : target.configuredMethod;
     invokeResumeMethod(source, target, method);
   }
@@ -1980,7 +2131,6 @@
       !target ||
       (method !== "extension" && method !== "cli") ||
       resumePresentationPending ||
-      resumeSessionDataPending ||
       resumeSnapshot?.revision !== resumeRevision ||
       resumeSnapshot?.[source] !== target ||
       !target[method]?.available
@@ -2012,7 +2162,6 @@
       !target ||
       target.configuredMethod !== "both" ||
       resumePresentationPending ||
-      resumeSessionDataPending ||
       !(btnResumeMenu instanceof HTMLButtonElement)
     ) {
       return;
@@ -2191,7 +2340,7 @@
       pageSearchInputEl.setAttribute("aria-label", searchPlaceholder);
     }
     if (pageSearchTitleEl instanceof HTMLElement) {
-      pageSearchTitleEl.textContent = pageSearchLabel;
+      if (pageSearchTitleEl.textContent !== pageSearchLabel) pageSearchTitleEl.textContent = pageSearchLabel;
     }
     renderPageSearchRoleFilters();
     const prevTooltip = getSafeUiText(i18n.pageSearchPrevTooltip, "Previous match");
@@ -2206,6 +2355,8 @@
 
   function setToolbarButtonWithIcon(button, label, iconSvg) {
     if (!(button instanceof HTMLElement)) return;
+    const contentKey = `label:${String(label)}\u0000${String(iconSvg)}`;
+    if (toolbarContentKeyByElement.get(button) === contentKey) return;
 
     const icon = document.createElement("span");
     icon.className = "toolbarBtnIcon";
@@ -2216,27 +2367,43 @@
     text.textContent = label;
 
     button.replaceChildren(icon, text);
+    toolbarContentKeyByElement.set(button, contentKey);
   }
 
   function setToolbarIconButton(button, iconSvg, tooltip) {
     if (!(button instanceof HTMLElement)) return;
     const safeTooltip = typeof tooltip === "string" && tooltip.trim() ? tooltip.trim() : "";
-    button.innerHTML = iconSvg;
+    const contentKey = `icon:${String(iconSvg)}`;
+    if (toolbarContentKeyByElement.get(button) !== contentKey) {
+      button.innerHTML = iconSvg;
+      toolbarContentKeyByElement.set(button, contentKey);
+    }
     if (safeTooltip) {
-      button.title = safeTooltip;
-      button.setAttribute("aria-label", safeTooltip);
+      if (button.title !== safeTooltip) button.title = safeTooltip;
+      if (button.getAttribute("aria-label") !== safeTooltip) {
+        button.setAttribute("aria-label", safeTooltip);
+      }
     }
   }
 
   function setToolbarCountBadge(button, count, visible) {
-    if (!(button instanceof HTMLElement) || visible !== true) return;
+    if (!(button instanceof HTMLElement)) return;
+    const existingBadge = Array.from(button.children).find(
+      (child) => child instanceof HTMLElement && child.classList.contains("toolbarRelationCountBadge"),
+    );
     const safeCount = Number(count);
-    if (!Number.isSafeInteger(safeCount) || safeCount < 1) return;
-    const badge = document.createElement("span");
-    badge.className = "toolbarRelationCountBadge";
-    badge.textContent = safeCount > 99 ? "99+" : String(safeCount);
-    badge.setAttribute("aria-hidden", "true");
-    button.appendChild(badge);
+    if (visible !== true || !Number.isSafeInteger(safeCount) || safeCount < 1) {
+      if (existingBadge instanceof HTMLElement) existingBadge.remove();
+      return;
+    }
+    const badge = existingBadge instanceof HTMLElement ? existingBadge : document.createElement("span");
+    const label = safeCount > 99 ? "99+" : String(safeCount);
+    if (badge.textContent !== label) badge.textContent = label;
+    if (!existingBadge) {
+      badge.className = "toolbarRelationCountBadge";
+      badge.setAttribute("aria-hidden", "true");
+      button.appendChild(badge);
+    }
   }
 
   function createBranchControl(group) {
@@ -2978,7 +3145,7 @@
   function updateBranchControlDisabledState() {
     const pending = branchNavigationPending || branchSwitchPending || branchOverlayPagePending;
     for (const button of document.querySelectorAll(
-      ".branchActionRail button, .branchTreeNavigateButton, .branchTreeNode-collapsed .branchTreeNodePrimary",
+      ".branchActionRail button, .branchTreeNavigateButton, .branchTreeNode-collapsed .branchTreeNodePrimary, .branchOverlayPageButton",
     )) {
       if (!(button instanceof HTMLButtonElement)) continue;
       const requiresCursor = button.matches(".branchTreeNode-collapsed .branchTreeNodePrimary");
@@ -4188,6 +4355,8 @@
     const node = findBranchTreeFocusElement(stage);
     const primary = node?.querySelector(".branchTreeNodePrimary");
     if (isSessionOverlayFocusTarget(primary)) return primary;
+    const navigate = node?.querySelector(".branchTreeNavigateButton");
+    if (isSessionOverlayFocusTarget(navigate)) return navigate;
     return findSessionOverlayFocusTarget(branchOverlayRootEl, "branch:header:close");
   }
 
@@ -4241,6 +4410,41 @@
       warning.textContent = getSafeUiText(i18n.branchPartialWarning, "Some branch information could not be resolved.");
       warning.title = warning.textContent;
       heading.appendChild(warning);
+    }
+    if (overlay.previousCursor || overlay.nextCursor) {
+      const paging = el("div", {
+        className: "branchOverlayPaging",
+        role: "group",
+        ariaLabel: getSafeUiText(i18n.branchPageControls, "Load more branch points"),
+      });
+      const appendPageButton = (cursor, label, focusKey) => {
+        if (!cursor) return;
+        const button = el("button", { type: "button", className: "branchOverlayPageButton" });
+        button.textContent = label;
+        button.title = label;
+        button.setAttribute("aria-label", label);
+        button.disabled = branchNavigationPending || branchOverlayPagePending;
+        button.addEventListener("click", () => requestBranchTreePage(cursor));
+        setSessionOverlayFocusKey(button, focusKey);
+        paging.appendChild(button);
+      };
+      appendPageButton(
+        overlay.previousCursor,
+        formatTemplate(
+          getSafeUiText(i18n.branchShowPreviousPoints, "Show earlier branch points ({0} remaining)"),
+          overlay.previousGroupCount,
+        ),
+        "branch:header:previous-page",
+      );
+      appendPageButton(
+        overlay.nextCursor,
+        formatTemplate(
+          getSafeUiText(i18n.branchShowNextPoints, "Show later branch points ({0} remaining)"),
+          overlay.nextGroupCount,
+        ),
+        "branch:header:next-page",
+      );
+      if (paging.childElementCount > 0) heading.appendChild(paging);
     }
 
     const actions = el("div", { className: "branchOverlayActions" });
@@ -4358,18 +4562,15 @@
       return node.id;
     };
 
-    const addCollapsed = (id, parentId, count, cursor, pageKind, group) => addNode({
+    const addCollapsedChoices = (id, parentId, count, cursor, group) => addNode({
       id,
       parentId,
       kind: "collapsed",
-      label: pageKind === "group"
-        ? formatTemplate(getSafeUiText(i18n.branchCollapsedPoints, "{0} more branch points"), count)
-        : formatTemplate(getSafeUiText(i18n.branchCollapsedChoices, "{0} more histories"), count),
+      label: formatTemplate(getSafeUiText(i18n.branchCollapsedChoices, "{0} more histories"), count),
       preview: "",
       current: false,
       collapsedCount: count,
       cursor,
-      pageKind,
       group,
     });
 
@@ -4425,7 +4626,7 @@
         }) || parentId;
       }
 
-      if (group.previousChoiceCursor) addCollapsed("choice-prev:" + group.id, parentId, group.previousChoiceCount, group.previousChoiceCursor, "choice", group);
+      if (group.previousChoiceCursor) addCollapsedChoices("choice-prev:" + group.id, parentId, group.previousChoiceCount, group.previousChoiceCursor, group);
 
       for (const choice of group.choices) {
         if (nodes.length >= MAX_BRANCH_OVERLAY_CARDS - 2) break;
@@ -4434,6 +4635,7 @@
         const currentChoice = group.activeLineage && choice.choiceIndex === group.currentChoiceIndex;
         const nestedGroups = childrenByOwner.get(group.id + ":" + choice.id) || [];
         const combined = anchorsMatch(occurrence.branchStart, occurrence.historyEnd);
+        const endsAtBranchPoint = combined && anchorsMatch(occurrence.preBranch, occurrence.branchStart);
         const branchedFromStart = !occurrence.preBranch && anchorsMatch(occurrence.historyFirst, occurrence.branchStart);
         const routeBeforeAnchor = occurrence.preBranch && !anchorsMatchExactly(occurrence.preBranch, beforeAnchor)
           ? occurrence.preBranch
@@ -4443,19 +4645,24 @@
         const effectiveStartId = addNode({
           id: startId,
           parentId,
-          kind: combined ? "branchStartEnd" : "branchStart",
-          label: [
-            branchedFromStart ? getSafeUiText(i18n.branchFromStart, "Branched from history start") : "",
-            startLabel,
-            combined ? getSafeUiText(i18n.branchEnd, "History end") : "",
-          ].filter(Boolean).join(" · "),
-          anchor: occurrence.branchStart,
-          preview: choice.preview || occurrence.branchStart.preview || "",
-          beforeAnchor: routeBeforeAnchor,
+          kind: endsAtBranchPoint ? "branchTerminal" : combined ? "branchStartEnd" : "branchStart",
+          label: endsAtBranchPoint
+            ? startLabel
+            : [
+                branchedFromStart ? getSafeUiText(i18n.branchFromStart, "Branched from history start") : "",
+                startLabel,
+                combined ? getSafeUiText(i18n.branchEnd, "History end") : "",
+              ].filter(Boolean).join(" · "),
+          anchor: endsAtBranchPoint ? occurrence.historyEnd : occurrence.branchStart,
+          preview: endsAtBranchPoint ? "" : choice.preview || occurrence.branchStart.preview || "",
+          terminalText: endsAtBranchPoint
+            ? getSafeUiText(i18n.branchEndsHere, "This branch's history ends here.")
+            : "",
+          beforeAnchor: endsAtBranchPoint ? null : routeBeforeAnchor,
           current: currentChoice,
           group,
           choice,
-          targetKind: "branchStart",
+          targetKind: endsAtBranchPoint ? "historyEnd" : "branchStart",
         });
         if (!effectiveStartId) continue;
 
@@ -4477,17 +4684,14 @@
         }
       }
 
-      if (group.nextChoiceCursor) addCollapsed("choice-next:" + group.id, parentId, group.nextChoiceCount, group.nextChoiceCursor, "choice", group);
+      if (group.nextChoiceCursor) addCollapsedChoices("choice-next:" + group.id, parentId, group.nextChoiceCount, group.nextChoiceCursor, group);
     };
 
-    if (overlay.previousCursor) addCollapsed("group-prev", "", overlay.previousGroupCount, overlay.previousCursor, "group", null);
     const roots = overlay.groups.filter((group) => !group.parentGroupId || !loadedGroupById.has(group.parentGroupId));
     for (const group of roots) buildGroup(group, "");
     for (const group of overlay.groups) {
       if (!renderedGroups.has(group.id)) buildGroup(group, "");
     }
-    if (overlay.nextCursor && nodes.length < MAX_BRANCH_OVERLAY_CARDS) addCollapsed("group-next", "", overlay.nextGroupCount, overlay.nextCursor, "group", null);
-
     const currentPathNodeIds = new Set();
     for (const currentNode of nodes.filter((node) => node.current)) {
       let cursor = currentNode;
@@ -4505,6 +4709,7 @@
 
   function renderBranchTreeNode(node) {
     const expanded = expandedBranchPreviewKeys.has(node.id);
+    const terminal = node.kind === "branchTerminal";
     const card = el("article", {
       className: "branchTreeNode branchTreeNode-" + node.kind
         + (node.currentPath ? " currentPath" : "")
@@ -4515,8 +4720,10 @@
     if (node.parentId) card.dataset.branchTreeParentId = node.parentId;
     if (node.current) card.setAttribute("aria-current", "true");
 
-    const primary = el("button", { type: "button", className: "branchTreeNodePrimary" });
-    setSessionOverlayFocusKey(primary, "branch:node:" + node.id + ":primary");
+    const primary = terminal
+      ? el("div", { className: "branchTreeNodePrimary branchTreeNodePrimary-static" })
+      : el("button", { type: "button", className: "branchTreeNodePrimary" });
+    if (!terminal) setSessionOverlayFocusKey(primary, "branch:node:" + node.id + ":primary");
     const badges = el("span", { className: "branchTreeNodeBadges" });
     const marker = el("span", { className: "branchTreeNodeMarker" });
     marker.textContent = node.label;
@@ -4527,19 +4734,23 @@
       badges.appendChild(current);
     }
     primary.appendChild(badges);
-    if (node.anchor) {
+    if (node.anchor && !terminal) {
       const anchor = el("span", { className: "branchTreeNodeAnchor" });
       const anchorText = formatBranchAnchor(node.anchor);
       anchor.textContent = anchorText;
       anchor.title = anchorText;
       primary.appendChild(anchor);
     }
-    if (node.preview) {
+    if (terminal) {
+      const terminalText = el("span", { className: "branchTreeNodeTerminal" });
+      terminalText.textContent = node.terminalText || getSafeUiText(i18n.branchEndsHere, "This branch's history ends here.");
+      primary.appendChild(terminalText);
+    } else if (node.preview) {
       const preview = el("span", { className: "branchTreeNodePreview" });
       preview.textContent = node.preview;
       primary.appendChild(preview);
     }
-    if (node.beforeAnchor && !anchorsMatch(node.beforeAnchor, node.anchor)) {
+    if (!terminal && node.beforeAnchor && !anchorsMatch(node.beforeAnchor, node.anchor)) {
       const before = el("span", { className: "branchTreeNodeBefore" });
       const beforeText = getSafeUiText(i18n.branchBefore, "Before branch") + " · " + formatBranchAnchor(node.beforeAnchor);
       before.textContent = beforeText;
@@ -4549,12 +4760,12 @@
 
     if (node.kind === "collapsed") {
       primary.dataset.branchTreeCursorAvailable = String(Boolean(node.cursor));
+      primary.title = node.label;
       primary.disabled = branchOverlayPagePending || !node.cursor;
       primary.addEventListener("click", () => {
-        if (node.pageKind === "choice" && node.group) requestBranchTreeChoicePage(node.group, node.cursor);
-        else requestBranchTreePage(node.cursor);
+        if (node.group) requestBranchTreeChoicePage(node.group, node.cursor);
       });
-    } else {
+    } else if (!terminal) {
       primary.disabled = !node.preview;
       if (node.preview) primary.setAttribute("aria-expanded", String(expanded));
       primary.addEventListener("click", () => {
@@ -4562,7 +4773,7 @@
         toggleBranchTreeNodePreview(node);
       });
     }
-    primary.addEventListener("focus", () => { branchTreeFocusNodeId = node.id; });
+    if (!terminal) primary.addEventListener("focus", () => { branchTreeFocusNodeId = node.id; });
     card.appendChild(primary);
 
     const actions = el("div", { className: "branchTreeNodeActions" });
@@ -4605,18 +4816,22 @@
     }
     if (actions.childElementCount > 0) card.appendChild(actions);
 
-    const actionLabel = node.kind === "collapsed"
-      ? node.label
-      : expanded
-        ? getSafeUiText(i18n.branchCollapsePreview, "Collapse preview")
-        : getSafeUiText(i18n.branchExpandPreview, "Expand preview");
-    primary.setAttribute("aria-label", [
-      actionLabel,
-      node.label,
-      node.current ? getSafeUiText(i18n.branchCurrent, "Current history") : "",
-      node.anchor ? formatBranchAnchor(node.anchor) : "",
-      node.preview || "",
-      ].filter(Boolean).join(" ・ "));
+    if (!terminal) {
+      if (node.kind === "collapsed") {
+        primary.setAttribute("aria-label", node.label);
+      } else {
+        const actionLabel = expanded
+          ? getSafeUiText(i18n.branchCollapsePreview, "Collapse preview")
+          : getSafeUiText(i18n.branchExpandPreview, "Expand preview");
+        primary.setAttribute("aria-label", [
+          actionLabel,
+          node.label,
+          node.current ? getSafeUiText(i18n.branchCurrent, "Current history") : "",
+          node.anchor ? formatBranchAnchor(node.anchor) : "",
+          node.preview || "",
+        ].filter(Boolean).join(" ・ "));
+      }
+    }
     return card;
   }
 
@@ -5529,7 +5744,6 @@
     temporaryPerformanceMode = getNextTemporaryPerformanceMode();
     updateEffectivePerformanceMode();
     updateToolbar();
-    if (effectivePerformanceMode === "normal") restoreHibernatedPatchBodies({ force: true });
     showToast(getPerformanceSwitchToast(), { durationMs: 2400, key: "performanceMode" });
   }
 
@@ -5552,7 +5766,6 @@
       });
     }
 
-    if (previousMode === "simplified" && nextMode === "normal") restoreHibernatedPatchBodies({ force: true });
     debugPerformanceModeIfChanged(previousMode, nextMode);
   }
 
@@ -5722,6 +5935,7 @@
       type: "reload",
       preserveUiState: true,
       autoScrollToBottom: followLatest,
+      allowUnchangedRenderReuse: options.allowUnchangedRenderReuse === true,
       includeDetails,
     };
     detailReloadPending = includeDetails && !detailsLoaded;
@@ -5763,7 +5977,6 @@
     releaseStickyUserSuppressionForPointerScroll();
     schedulePersistChatOpenPosition();
     schedulePersistRestorePosition();
-    if (isSimplifiedPerformanceMode()) restoreHibernatedPatchBodies();
     if (timeGuideEnabled && timeGuide) timeGuide.handleScroll();
     scheduleStickyUserOverlayUpdate();
     scheduleRunningTurnFallbackUpdate();
@@ -6365,6 +6578,14 @@
 
   function scheduleToolbarCompactMode() {
     if (!(toolbarEl instanceof HTMLElement)) return;
+    if (
+      visibleLayoutResumePending ||
+      !hostViewVisible ||
+      document.visibilityState === "hidden" ||
+      toolbarEl.clientWidth <= 0
+    ) {
+      return;
+    }
     if (toolbarCompactFrame) cancelAnimationFrame(toolbarCompactFrame);
     toolbarCompactFrame = requestAnimationFrame(() => {
       toolbarCompactFrame = 0;
@@ -6374,12 +6595,234 @@
 
   function updateToolbarCompactMode() {
     if (!(toolbarEl instanceof HTMLElement)) return;
+    if (
+      visibleLayoutResumePending ||
+      !hostViewVisible ||
+      document.visibilityState === "hidden" ||
+      toolbarEl.clientWidth <= 0
+    ) {
+      return;
+    }
+    const layoutKey = buildToolbarCompactLayoutKey();
+    if (layoutKey && layoutKey === lastToolbarCompactLayoutKey) return;
     toolbarEl.classList.remove("toolbarCompact");
     const needsCompact = toolbarEl.scrollWidth > toolbarEl.clientWidth + 1;
     toolbarEl.classList.toggle("toolbarCompact", needsCompact);
-    document.documentElement.style.setProperty("--chv-toolbar-height", `${toolbarEl.offsetHeight}px`);
+    lastToolbarCompactLayoutKey = layoutKey;
+    const toolbarHeight = toolbarEl.offsetHeight;
+    if (toolbarHeight > 0) {
+      document.documentElement.style.setProperty("--chv-toolbar-height", `${toolbarHeight}px`);
+    }
     updateTimeGuide({ afterPaint: true });
     scheduleStickyUserOverlayUpdate();
+  }
+
+  function buildToolbarCompactLayoutKey() {
+    if (!(toolbarEl instanceof HTMLElement)) return "";
+    try {
+      const style = window.getComputedStyle(toolbarEl);
+      return JSON.stringify({
+        version: 1,
+        width: toolbarEl.clientWidth,
+        devicePixelRatio: Number(window.devicePixelRatio) || 1,
+        font: style.font,
+        letterSpacing: style.letterSpacing,
+        content: toolbarEl.innerHTML,
+      });
+    } catch (_error) {
+      // Layout-key failures safely fall back to measuring the toolbar.
+      return "";
+    }
+  }
+
+  function pauseVisibleLayoutWork() {
+    visibleLayoutResumePending = true;
+    if (visibleLayoutReturnPending) retainStableVisibleLayoutWidth();
+    if (visibleLayoutResumeFrame) {
+      cancelAnimationFrame(visibleLayoutResumeFrame);
+      visibleLayoutResumeFrame = 0;
+    }
+    if (toolbarCompactFrame) {
+      cancelAnimationFrame(toolbarCompactFrame);
+      toolbarCompactFrame = 0;
+    }
+    cancelDeferredRenderSchedule();
+    debugVisibleLayout("pause");
+    vscode.postMessage({ type: "viewLayoutSuspended", revision: hostViewStateRevision });
+  }
+
+  function scheduleVisibleLayoutResume() {
+    if (!hostViewVisible || document.visibilityState === "hidden") return;
+    if (completeVisibleLayoutResumeIfExact()) return;
+    if (visibleLayoutResumeFrame) return;
+    visibleLayoutResumePending = true;
+    activateVisibleLayoutAtomicMaskIfNeeded();
+    debugVisibleLayout("resumeScheduled");
+    let previousSignature = "";
+    let stableFrameCount = 0;
+    let observedFrameCount = 0;
+    const waitForStableLayout = () => {
+      visibleLayoutResumeFrame = 0;
+      if (!hostViewVisible || document.visibilityState === "hidden") return;
+      const signature = getVisibleLayoutSignature();
+      const returnWidthIsPlausible = isVisibleLayoutReturnWidthPlausible();
+      if (!returnWidthIsPlausible) activateVisibleLayoutAtomicMask();
+      observedFrameCount += 1;
+      const signatureChanged = signature !== previousSignature;
+      if (signature && !signatureChanged) stableFrameCount += 1;
+      else {
+        previousSignature = signature;
+        stableFrameCount = 0;
+      }
+      const shouldComplete =
+        (signature && returnWidthIsPlausible && stableFrameCount >= VISIBLE_LAYOUT_STABLE_FRAME_COUNT) ||
+        observedFrameCount >= VISIBLE_LAYOUT_MAX_FRAME_COUNT;
+      if (observedFrameCount === 1 || signatureChanged || shouldComplete) {
+        debugVisibleLayout("resumeFrame", {
+          observedFrameCount,
+          stableFrameCount,
+          returnWidthIsPlausible,
+          fallback: observedFrameCount >= VISIBLE_LAYOUT_MAX_FRAME_COUNT,
+        });
+      }
+      if (shouldComplete) {
+        completeVisibleLayoutResume();
+        return;
+      }
+      visibleLayoutResumeFrame = requestAnimationFrame(waitForStableLayout);
+    };
+    visibleLayoutResumeFrame = requestAnimationFrame(waitForStableLayout);
+  }
+
+  function getVisibleLayoutSignature() {
+    const viewportWidth = Math.max(0, Math.round(Number(window.innerWidth) || 0));
+    const viewportHeight = Math.max(0, Math.round(Number(window.innerHeight) || 0));
+    const toolbarWidth = toolbarEl instanceof HTMLElement ? toolbarEl.clientWidth : 0;
+    const scrollRootWidth = scrollRootEl instanceof HTMLElement ? scrollRootEl.clientWidth : 0;
+    if (viewportWidth <= 0 || viewportHeight <= 0 || toolbarWidth <= 0 || scrollRootWidth <= 0) return "";
+    return [viewportWidth, viewportHeight, toolbarWidth, scrollRootWidth].join("x");
+  }
+
+  function completeVisibleLayoutResume() {
+    visibleLayoutResumeFrame = 0;
+    if (!hostViewVisible || document.visibilityState === "hidden") return;
+    const viewportChanged = hasStableVisibleViewportChanged();
+    debugVisibleLayout("resumeCompleting", { viewportChanged });
+    releaseStableVisibleLayoutWidth();
+    visibleLayoutReturnPending = false;
+    visibleLayoutResumePending = false;
+    if (viewportChanged) handleVisibleLayoutResize();
+    else scheduleToolbarCompactMode();
+    releaseVisibleLayoutAtomicMask();
+    resumeDeferredRenderWork();
+    syncRunningTurnElapsedTimer();
+    debugVisibleLayout("resumeComplete");
+    vscode.postMessage({ type: "viewLayoutReady", revision: hostViewStateRevision });
+  }
+
+  function isVisibleLayoutReturnWidthPlausible() {
+    if (!visibleLayoutReturnPending || lastStableVisibleLayoutWidth <= 0) return true;
+    const viewportWidth = Math.max(0, Math.round(Number(window.innerWidth) || 0));
+    const toleratedDrop = Math.max(96, Math.round(lastStableVisibleLayoutWidth * 0.2));
+    return viewportWidth >= Math.max(1, lastStableVisibleLayoutWidth - toleratedDrop);
+  }
+
+  function handleVisibleLayoutViewportResize() {
+    debugVisibleLayout("resize");
+    if (!hostViewVisible || document.visibilityState === "hidden") {
+      pauseVisibleLayoutWork();
+      return;
+    }
+    if (completeVisibleLayoutResumeIfExact()) return;
+    activateVisibleLayoutAtomicMaskIfNeeded();
+    if (!visibleLayoutResumePending) pauseVisibleLayoutWork();
+    scheduleVisibleLayoutResume();
+  }
+
+  function handleVisibleLayoutResize() {
+    if (visibleLayoutResumePending || !hostViewVisible || document.visibilityState === "hidden") return;
+    const viewportWidth = Math.max(0, Math.round(Number(window.innerWidth) || 0));
+    const viewportHeight = Math.max(0, Math.round(Number(window.innerHeight) || 0));
+    if (viewportWidth > 0) lastStableVisibleLayoutWidth = viewportWidth;
+    if (viewportHeight > 0) lastStableVisibleLayoutHeight = viewportHeight;
+    applyPageSearchPanelWidth();
+    scheduleToolbarCompactMode();
+    schedulePatchLayoutSync();
+    updateTimeGuide({ afterPaint: true });
+    scheduleStickyUserOverlayUpdate({ rebuildRows: true });
+    scheduleRunningTurnFallbackUpdate();
+    scheduleBranchTreeRelayout();
+    applyAgentRunsOverlayWidth();
+    scheduleAgentRunsTreeRelayout();
+    applyMermaidPaneWidth();
+    scheduleMermaidInlineOverflowUpdate();
+  }
+
+  function hasStableVisibleViewportChanged() {
+    return !matchesLastStableVisibleViewport();
+  }
+
+  function matchesLastStableVisibleViewport() {
+    const viewportWidth = Math.max(0, Math.round(Number(window.innerWidth) || 0));
+    const viewportHeight = Math.max(0, Math.round(Number(window.innerHeight) || 0));
+    return (
+      lastStableVisibleLayoutWidth > 0 &&
+      lastStableVisibleLayoutHeight > 0 &&
+      viewportWidth === lastStableVisibleLayoutWidth &&
+      viewportHeight === lastStableVisibleLayoutHeight
+    );
+  }
+
+  function completeVisibleLayoutResumeIfExact() {
+    if (!visibleLayoutReturnPending || !matchesLastStableVisibleViewport()) return false;
+    if (visibleLayoutResumeFrame) {
+      cancelAnimationFrame(visibleLayoutResumeFrame);
+      visibleLayoutResumeFrame = 0;
+    }
+    debugVisibleLayout("resumeExactViewport");
+    completeVisibleLayoutResume();
+    return true;
+  }
+
+  function retainStableVisibleLayoutWidth() {
+    if (!(document.body instanceof HTMLElement) || lastStableVisibleLayoutWidth <= 0) return;
+    const retainedWidth = Math.min(100000, Math.max(1, Math.round(lastStableVisibleLayoutWidth)));
+    document.documentElement.style.setProperty("--chv-retained-layout-width", `${retainedWidth}px`);
+    document.body.classList.add("viewLayoutWidthRetained");
+  }
+
+  function releaseStableVisibleLayoutWidth() {
+    document.body.classList.remove("viewLayoutWidthRetained");
+    document.documentElement.style.removeProperty("--chv-retained-layout-width");
+  }
+
+  function activateVisibleLayoutAtomicMask() {
+    if (
+      !(document.body instanceof HTMLElement) ||
+      document.body.classList.contains("viewLayoutAtomicMask")
+    ) {
+      return;
+    }
+    document.body.classList.add("viewLayoutAtomicMask");
+    const compositorOpacity = window.getComputedStyle(document.body, "::after").opacity;
+    debugVisibleLayout("maskActivated", { compositorOpacity });
+  }
+
+  function activateVisibleLayoutAtomicMaskIfNeeded() {
+    if (visibleLayoutReturnPending && !isVisibleLayoutReturnWidthPlausible()) {
+      activateVisibleLayoutAtomicMask();
+    }
+  }
+
+  function releaseVisibleLayoutAtomicMask() {
+    if (
+      !(document.body instanceof HTMLElement) ||
+      !document.body.classList.contains("viewLayoutAtomicMask")
+    ) {
+      return;
+    }
+    document.body.classList.remove("viewLayoutAtomicMask");
+    debugVisibleLayout("maskReleased");
   }
 
   function normalizePageSearchPanelWidth(value) {
@@ -7019,25 +7462,34 @@
   function renderPageSearchRoleFilters(availableRoles = getAvailablePageSearchRoles()) {
     if (!(pageSearchRoleFiltersEl instanceof HTMLElement)) return;
     prunePageSearchSelectedRoles(availableRoles);
+    const ariaLabel = getSafeUiText(i18n.pageSearchRoleFilters, "Filter target roles");
+    const selectedCount = availableRoles.filter((role) => pageSearchSelectedRoles.has(role)).length;
+    const presentations = availableRoles.map((role) => {
+      const label = getPageSearchRoleLabel(role);
+      const selected = pageSearchSelectedRoles.has(role);
+      return {
+        role,
+        label,
+        shortLabel: PAGE_SEARCH_ROLE_SHORT_LABELS[role] || label.slice(0, 1).toUpperCase(),
+        selected,
+        tooltip: getPageSearchRoleFilterTooltip(role, label, selected, selectedCount),
+      };
+    });
+    const presentationKey = JSON.stringify({ ariaLabel, presentations });
+    if (presentationKey === pageSearchRoleFiltersPresentationKey) return;
     pageSearchRoleFiltersEl.textContent = "";
     if (availableRoles.length === 0) {
       pageSearchRoleFiltersEl.hidden = true;
+      pageSearchRoleFiltersPresentationKey = presentationKey;
       return;
     }
 
     pageSearchRoleFiltersEl.hidden = false;
-    pageSearchRoleFiltersEl.setAttribute(
-      "aria-label",
-      getSafeUiText(i18n.pageSearchRoleFilters, "Filter target roles"),
-    );
-    const selectedCount = availableRoles.filter((role) => pageSearchSelectedRoles.has(role)).length;
-    for (const role of availableRoles) {
-      const label = getPageSearchRoleLabel(role);
-      const shortLabel = PAGE_SEARCH_ROLE_SHORT_LABELS[role] || label.slice(0, 1).toUpperCase();
-      const selected = pageSearchSelectedRoles.has(role);
+    pageSearchRoleFiltersEl.setAttribute("aria-label", ariaLabel);
+    for (const presentation of presentations) {
+      const { role, label, shortLabel, selected, tooltip } = presentation;
       const button = el("button", { type: "button", className: "pageSearchRoleFilter" });
       button.dataset.role = role;
-      const tooltip = getPageSearchRoleFilterTooltip(role, label, selected, selectedCount);
       button.title = tooltip;
       button.setAttribute("aria-label", tooltip);
       button.setAttribute("aria-pressed", selected ? "true" : "false");
@@ -7052,6 +7504,7 @@
       });
       pageSearchRoleFiltersEl.appendChild(button);
     }
+    pageSearchRoleFiltersPresentationKey = presentationKey;
   }
 
   function getPageSearchRoleLabel(role) {
@@ -8282,6 +8735,64 @@
     });
   }
 
+  function renderCurrentSessionMetadata() {
+    if (!(metaEl instanceof HTMLElement)) return;
+    if (!model) {
+      if (metaEl.childNodes.length > 0) metaEl.textContent = "";
+      sessionMetadataPresentationKey = "";
+      return;
+    }
+    const metaLines = [];
+    if (model.meta && model.meta.timestampIso) metaLines.push(`Start: ${formatIsoYmdHm(model.meta.timestampIso)}`);
+    appendCwdMetaLines(metaLines, model.meta);
+    if (model.meta && model.meta.originator) metaLines.push(`Originator: ${model.meta.originator}`);
+    if (model.meta && model.meta.cliVersion) metaLines.push(`CLI: ${model.meta.cliVersion}`);
+    if (model.meta && model.meta.modelProvider) metaLines.push(`Model Provider: ${model.meta.modelProvider}`);
+    if (model.meta && model.meta.source) metaLines.push(`Source: ${model.meta.source}`);
+    if (model.sessionLocation && model.sessionLocation.archiveState === "archived") {
+      metaLines.push(i18n.sessionLocationArchived || "Archived");
+    }
+    const snapshot = sessionInfoSnapshot;
+    let nextPresentationKey = "";
+    try {
+      nextPresentationKey = JSON.stringify({
+        version: 1,
+        metaLines,
+        sessionInfo: snapshot
+          ? {
+              sessionId: snapshot.sessionId,
+              fileName: snapshot.fileName,
+              filePath: snapshot.filePath,
+            }
+          : null,
+        labels: {
+          sessionId: i18n.sessionId,
+          sessionFile: i18n.sessionFile,
+          copySessionIdTooltip: i18n.copySessionIdTooltip,
+          copySessionFilePathTooltip: i18n.copySessionFilePathTooltip,
+          revealSessionFileTooltip: i18n.revealSessionFileTooltip,
+        },
+      });
+    } catch (_error) {
+      // Invalid metadata inputs must fall back to rebuilding the small metadata region.
+    }
+    if (nextPresentationKey && nextPresentationKey === sessionMetadataPresentationKey) return;
+    metaEl.textContent = "";
+    sessionMetadataPresentationKey = "";
+    renderSessionMetadata(metaLines);
+    sessionMetadataPresentationKey = nextPresentationKey;
+  }
+
+  function hasSameSessionInfoPresentation(left, right) {
+    if (left === right) return true;
+    if (!left || !right) return false;
+    return (
+      left.sessionId === right.sessionId &&
+      left.fileName === right.fileName &&
+      left.filePath === right.filePath
+    );
+  }
+
   function appendSessionInfoRow(options) {
     const label = typeof options?.label === "string" ? options.label.trim() : "";
     const value = typeof options?.value === "string" ? options.value : "";
@@ -8311,9 +8822,11 @@
       button.setAttribute("aria-label", actionLabel);
       button.innerHTML = action.icon;
       button.addEventListener("click", () => {
+        const revision = sessionInfoSnapshot?.revision;
+        if (!Number.isSafeInteger(revision) || revision <= 0) return;
         vscode.postMessage({
           type: action.type,
-          revision: snapshot.revision,
+          revision,
         });
       });
       actionsEl.appendChild(button);
@@ -8377,8 +8890,6 @@
     mermaidSearchRecordsByKey = new Map();
     resetDeferredRenderWork({ nextGeneration: true });
     prepareTimeGuideForTimelineRender();
-    if (annotationEl) annotationEl.textContent = "";
-    metaEl.textContent = "";
     timelineEl.textContent = "";
     stickyUserRows = [];
     activeStickyUserKey = null;
@@ -8390,6 +8901,8 @@
     document.body.classList.toggle("chatTimeGuideEnabled", timeGuideEnabled === true);
     if (!model) {
       if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
+      clearSessionAnnotationHeader();
+      renderCurrentSessionMetadata();
       currentTurnSummaryById = new Map();
       resetRunningTurnIndicators();
       scheduleStickyUserOverlayUpdate();
@@ -8398,18 +8911,7 @@
 
     renderAnnotationHeader(model.annotation);
 
-    // Render session metadata at the top.
-    const metaLines = [];
-    if (model.meta && model.meta.timestampIso) metaLines.push(`Start: ${formatIsoYmdHm(model.meta.timestampIso)}`);
-    appendCwdMetaLines(metaLines, model.meta);
-    if (model.meta && model.meta.originator) metaLines.push(`Originator: ${model.meta.originator}`);
-    if (model.meta && model.meta.cliVersion) metaLines.push(`CLI: ${model.meta.cliVersion}`);
-    if (model.meta && model.meta.modelProvider) metaLines.push(`Model Provider: ${model.meta.modelProvider}`);
-    if (model.meta && model.meta.source) metaLines.push(`Source: ${model.meta.source}`);
-    if (model.sessionLocation && model.sessionLocation.archiveState === "archived") {
-      metaLines.push(i18n.sessionLocationArchived || "Archived");
-    }
-    renderSessionMetadata(metaLines);
+    renderCurrentSessionMetadata();
 
     const items = Array.isArray(model.items) ? model.items : [];
     // Build navigation metadata between messages before rendering.
@@ -8573,6 +9075,7 @@
       updatePageSearchStatus();
     }
     syncMermaidPaneAfterTimelineRender();
+    commitCurrentSessionDataRenderKey();
     } finally {
       renderDepth = Math.max(0, renderDepth - 1);
     }
@@ -9633,6 +10136,10 @@
       ? annotation.tags.map((x) => String(x || "").trim()).filter((x) => x.length > 0)
       : [];
     const note = typeof (annotation && annotation.note) === "string" ? annotation.note.trim() : "";
+    const nextPresentationKey = buildSessionAnnotationPresentationKey(tags, note);
+    if (nextPresentationKey && nextPresentationKey === sessionAnnotationPresentationKey) return;
+    annotationEl.textContent = "";
+    sessionAnnotationPresentationKey = "";
 
     const wrap = el("div", { className: "sessionHeader" });
 
@@ -9714,6 +10221,7 @@
         expandedNote = !expandedNote;
         noteText.classList.toggle("clamped", !expandedNote);
         applyToggleLabel();
+        sessionAnnotationPresentationKey = buildSessionAnnotationPresentationKey(tags, note);
       });
       noteBody.appendChild(toggleBtn);
     }
@@ -9721,6 +10229,38 @@
     noteRow.appendChild(noteBody);
     wrap.appendChild(noteRow);
     annotationEl.appendChild(wrap);
+    sessionAnnotationPresentationKey = nextPresentationKey;
+  }
+
+  function buildSessionAnnotationPresentationKey(tags, note) {
+    try {
+      return JSON.stringify({
+        version: 1,
+        tags,
+        note,
+        expandedNote,
+        labels: {
+          tags: i18n.annotationTags,
+          note: i18n.annotationNote,
+          none: i18n.annotationNone,
+          filterTag: i18n.annotationFilterTag,
+          removeTag: i18n.annotationRemoveTag,
+          edit: i18n.annotationEdit,
+          showLess: i18n.annotationShowLess,
+          showMore: i18n.annotationShowMore,
+        },
+      });
+    } catch (_error) {
+      // Invalid annotation inputs safely fall back to rebuilding the header.
+      return "";
+    }
+  }
+
+  function clearSessionAnnotationHeader() {
+    if (annotationEl instanceof HTMLElement && annotationEl.childNodes.length > 0) {
+      annotationEl.textContent = "";
+    }
+    sessionAnnotationPresentationKey = "";
   }
 
   function createChatTurnSection(kind) {
@@ -10087,101 +10627,6 @@
     return timeGuide;
   }
 
-  function isRestoreCoverBlockingTimeGuide() {
-    return restoreCoverActive || !!(restoreCoverEl instanceof HTMLElement && !restoreCoverEl.hidden);
-  }
-
-  function mergePendingTimeGuideOptions(current, next) {
-    return {
-      afterPaint: true,
-      rebuildItems: !!(current && current.rebuildItems) || next.rebuildItems === true,
-    };
-  }
-
-  function showRestoreCover() {
-    if (!(restoreCoverEl instanceof HTMLElement)) return;
-    cancelRestoreCoverRelease();
-    cancelDeferredRenderSchedule();
-    if (isSimplifiedPerformanceMode()) hibernateOpenPatchBodies();
-    restoreCoverActive = true;
-    restoreCoverShownAt = performance.now();
-    restoreCoverEl.hidden = false;
-    document.body.classList.add("restoreCoverActive");
-  }
-
-  function cancelRestoreCoverRelease() {
-    if (restoreCoverFrame) {
-      cancelAnimationFrame(restoreCoverFrame);
-      restoreCoverFrame = 0;
-    }
-    if (restoreCoverTimer) {
-      window.clearTimeout(restoreCoverTimer);
-      restoreCoverTimer = 0;
-    }
-  }
-
-  function scheduleRestoreCoverRelease() {
-    if (!(restoreCoverEl instanceof HTMLElement) || restoreCoverEl.hidden) return;
-    cancelRestoreCoverRelease();
-    let lastSignature = "";
-    let stableFrames = 0;
-    const startedAt = performance.now();
-    const waitForStableLayout = () => {
-      restoreCoverFrame = 0;
-      if (!(restoreCoverEl instanceof HTMLElement) || restoreCoverEl.hidden) return;
-
-      const signature = getRestoreCoverLayoutSignature();
-      if (signature && signature === lastSignature) stableFrames += 1;
-      else {
-        lastSignature = signature;
-        stableFrames = 0;
-      }
-
-      const now = performance.now();
-      const minElapsed = now - restoreCoverShownAt >= RESTORE_COVER_MIN_VISIBLE_MS;
-      const timedOut = now - startedAt >= RESTORE_COVER_MAX_WAIT_MS;
-      if ((minElapsed && stableFrames >= RESTORE_COVER_STABLE_FRAMES) || timedOut) {
-        releaseRestoreCover({ waitMs: now - restoreCoverShownAt, timedOut });
-        return;
-      }
-
-      restoreCoverFrame = requestAnimationFrame(waitForStableLayout);
-    };
-    restoreCoverFrame = requestAnimationFrame(waitForStableLayout);
-  }
-
-  function getRestoreCoverLayoutSignature() {
-    const root = getScrollRoot();
-    const toolbarHeight = toolbarEl instanceof HTMLElement ? toolbarEl.offsetHeight : 0;
-    const rootWidth = root instanceof HTMLElement ? root.clientWidth : 0;
-    const rootHeight = root instanceof HTMLElement ? root.clientHeight : 0;
-    return [window.innerWidth, window.innerHeight, rootWidth, rootHeight, toolbarHeight].join("x");
-  }
-
-  function releaseRestoreCover(details = {}) {
-    restoreCoverFrame = 0;
-    restoreCoverActive = false;
-    document.body.classList.remove("restoreCoverActive");
-    debugWebview("restoreCover", "release", {
-      scope: "chat",
-      waitMs: Math.round(Number(details.waitMs || 0)),
-      timedOut: details.timedOut === true,
-    });
-    restoreCoverTimer = window.setTimeout(() => {
-      restoreCoverTimer = 0;
-      if (!restoreCoverActive && restoreCoverEl instanceof HTMLElement) restoreCoverEl.hidden = true;
-      flushTimeGuideAfterRestoreCover();
-    }, RESTORE_COVER_HIDE_DELAY_MS);
-  }
-
-  function flushTimeGuideAfterRestoreCover() {
-    const pending = pendingTimeGuideAfterRestoreCover;
-    pendingTimeGuideAfterRestoreCover = null;
-    if (pending) updateTimeGuide(pending);
-    resumeDeferredRenderWork();
-    if (isSimplifiedPerformanceMode()) restoreHibernatedPatchBodies();
-  }
-
   function prepareTimeGuideForTimelineRender() {
     cancelPendingTimeGuideUpdate();
     timeGuideUpdateNeedsRebuild = false;
@@ -10212,18 +10657,11 @@
     if (!timeGuideEnabled) {
       cancelPendingTimeGuideUpdate();
       timeGuideUpdateNeedsRebuild = false;
-      pendingTimeGuideAfterRestoreCover = null;
       timeGuideItems = [];
       if (timeGuide) {
         timeGuide.dispose();
         timeGuide = null;
       }
-      return;
-    }
-
-    if (isRestoreCoverBlockingTimeGuide()) {
-      cancelPendingTimeGuideUpdate();
-      pendingTimeGuideAfterRestoreCover = mergePendingTimeGuideOptions(pendingTimeGuideAfterRestoreCover, options);
       return;
     }
 
@@ -12586,7 +13024,6 @@
         "patchEntryBody-deferred",
         "patchEntryBody-rendering",
         "patchEntryBody-status",
-        "patchEntryBody-hibernated",
       );
       body.removeAttribute("aria-busy");
       body.removeAttribute("data-deferred-state");
@@ -12717,7 +13154,7 @@
     deferredPatchBodyRequests.delete(body);
     removeDeferredRenderItemsForPrefix(buildDeferredPatchBodyKey(entry));
     body.textContent = "";
-    body.classList.remove("patchEntryBody-deferred", "patchEntryBody-rendering", "patchEntryBody-hibernated");
+    body.classList.remove("patchEntryBody-deferred", "patchEntryBody-rendering");
     body.classList.add("patchEntryBody-status");
     body.removeAttribute("aria-busy");
     body.removeAttribute("data-deferred-state");
@@ -12748,53 +13185,6 @@
     return id.length > 0 && id.length <= 512 ? id : "";
   }
 
-  function hibernateOpenPatchBodies() {
-    for (const body of document.querySelectorAll(".patchEntryBody[data-patch-entry-id]")) {
-      if (!(body instanceof HTMLElement)) continue;
-      if (body.dataset.deferredState === "hibernated") continue;
-      const details = body.closest("details.patchEntry");
-      if (!(details instanceof HTMLDetailsElement) || !details.open) continue;
-      if (body.classList.contains("patchEntryBody-status")) continue;
-      const entry = getPatchEntryForBody(body);
-      if (!entry || (entry.detailsOmitted && !hasLoadedPatchEntryDetails(entry))) continue;
-
-      const height = Math.ceil(body.getBoundingClientRect().height) || getEstimatedPatchBodyHeight(entry);
-      if (height > 0) {
-        patchBodyHeightByEntryId.set(getPatchEntryId(entry), height);
-        body.style.setProperty("min-height", `${height}px`);
-      }
-      if (deferredPatchObserver) deferredPatchObserver.unobserve(body);
-      deferredPatchBodyRequests.delete(body);
-      removeDeferredRenderItemsForPrefix(buildDeferredPatchBodyKey(entry));
-      body.textContent = "";
-      body.classList.remove("patchEntryBody-deferred", "patchEntryBody-rendering");
-      body.classList.add("patchEntryBody-hibernated");
-      body.removeAttribute("aria-busy");
-      body.dataset.deferredState = "hibernated";
-    }
-  }
-
-  function restoreHibernatedPatchBodies(options = {}) {
-    const force = options.force === true;
-    for (const body of document.querySelectorAll('.patchEntryBody[data-deferred-state="hibernated"]')) {
-      if (!(body instanceof HTMLElement)) continue;
-      if (!force && !isSimplifiedPerformanceMode()) continue;
-      const details = body.closest("details.patchEntry");
-      if (!(details instanceof HTMLDetailsElement) || !details.open) continue;
-      const entry = getPatchEntryForBody(body);
-      if (!entry) continue;
-      scheduleDeferredPatchEntryBody(body, details, entry, inferPatchLanguage(entry));
-    }
-  }
-
-  function getPatchEntryForBody(body) {
-    if (!(body instanceof HTMLElement)) return null;
-    const entryId = typeof body.dataset.patchEntryId === "string" ? body.dataset.patchEntryId : "";
-    if (!entryId) return null;
-    const summaryEntry = patchEntrySummaryById.get(entryId);
-    return summaryEntry ? resolvePatchEntryForDisplay(summaryEntry) : patchEntryDetailsById.get(entryId) || null;
-  }
-
   function scheduleDeferredPatchEntryBody(body, details, entry, entryLanguage) {
     if (!(body instanceof HTMLElement) || !(details instanceof HTMLElement) || !entry) return;
     const key = buildDeferredPatchBodyKey(entry);
@@ -12802,7 +13192,7 @@
 
     body.dataset.deferredState = "queued";
     body.dataset.deferredKey = key;
-    body.classList.remove("patchEntryBody-hibernated", "patchEntryBody-status");
+    body.classList.remove("patchEntryBody-status");
     body.classList.add("patchEntryBody-deferred");
     body.setAttribute("aria-busy", "true");
     const estimatedHeight = getEstimatedPatchBodyHeight(entry);
@@ -12832,7 +13222,7 @@
   function beginDeferredPatchEntryBody(body, details, entry, entryLanguage) {
     if (!isPatchBodyRenderable(body, details)) return;
     body.textContent = "";
-    body.classList.remove("patchEntryBody-deferred", "patchEntryBody-hibernated");
+    body.classList.remove("patchEntryBody-deferred");
     body.classList.add("patchEntryBody-rendering");
     body.dataset.deferredState = "rendering";
 
@@ -12884,7 +13274,7 @@
     if (deferredPatchObserver) deferredPatchObserver.unobserve(body);
     deferredPatchBodyRequests.delete(body);
     body.classList.remove("patchEntryBody-deferred", "patchEntryBody-rendering");
-    body.classList.remove("patchEntryBody-hibernated", "patchEntryBody-status");
+    body.classList.remove("patchEntryBody-status");
     body.dataset.deferredState = "rendered";
     body.removeAttribute("aria-busy");
     body.style.removeProperty("min-height");
@@ -13000,7 +13390,7 @@
   }
 
   function isDeferredRenderPaused() {
-    return document.visibilityState === "hidden" || isRestoreCoverBlockingTimeGuide();
+    return visibleLayoutResumePending || !hostViewVisible || document.visibilityState === "hidden";
   }
 
   function processDeferredRenderQueue() {
@@ -13621,6 +14011,27 @@
 
   function debugChatOpenPosition(eventName, details) {
     debugWebview("chatOpenPosition", eventName, details);
+  }
+
+  function debugVisibleLayout(eventName, details = {}) {
+    debugWebview("viewLayout", eventName, {
+      revision: hostViewStateRevision,
+      hostVisible: hostViewVisible,
+      documentState: document.visibilityState,
+      viewportWidth: Math.max(0, Math.round(Number(window.innerWidth) || 0)),
+      viewportHeight: Math.max(0, Math.round(Number(window.innerHeight) || 0)),
+      toolbarWidth: toolbarEl instanceof HTMLElement ? toolbarEl.clientWidth : 0,
+      scrollRootWidth: scrollRootEl instanceof HTMLElement ? scrollRootEl.clientWidth : 0,
+      lastStableWidth: lastStableVisibleLayoutWidth,
+      lastStableHeight: lastStableVisibleLayoutHeight,
+      resumePending: visibleLayoutResumePending,
+      returnPending: visibleLayoutReturnPending,
+      widthRetained:
+        document.body instanceof HTMLElement && document.body.classList.contains("viewLayoutWidthRetained"),
+      maskActive:
+        document.body instanceof HTMLElement && document.body.classList.contains("viewLayoutAtomicMask"),
+      ...details,
+    });
   }
 
   function debugWebview(scope, eventName, details) {
@@ -14927,7 +15338,6 @@
     withPageSearchContentMutation(
       () => {
         model = { ...model, annotation };
-        if (annotationEl) annotationEl.textContent = "";
         renderAnnotationHeader(annotation);
         restoreAnnotationScrollCompensation(scrollCompensation);
         scheduleStickyUserOverlayUpdate();
@@ -16017,6 +16427,12 @@
         result && result.nodeRoles,
         renderId,
       );
+      applyMermaidSequenceRegionContrast(
+        svg,
+        renderThemeMode,
+        result && result.diagramType,
+        diagramModel.source,
+      );
       svg.classList.add("mermaidSvg");
       svg.setAttribute("focusable", "false");
       svg.setAttribute("aria-hidden", "true");
@@ -16289,6 +16705,112 @@
       urlPattern.lastIndex = closingIndex + 1;
     }
     return true;
+  }
+
+  // Preserve author colors unless an opaque sequence region fails light-theme contrast.
+  function applyMermaidSequenceRegionContrast(svg, themeMode, rawDiagramType, rawSource) {
+    if (
+      !(svg instanceof SVGElement) ||
+      (themeMode !== "light" && themeMode !== "highContrastLight") ||
+      rawDiagramType !== "sequence"
+    ) {
+      return;
+    }
+
+    const authorColors = getMermaidSequenceAuthorRegionColors(rawSource);
+    if (!(authorColors instanceof Set) || authorColors.size < 1) return;
+    const regions = Array.from(svg.querySelectorAll("rect.rect[fill]"));
+    if (regions.length < 1 || regions.length > MAX_MERMAID_SEQUENCE_REGIONS) return;
+
+    const updates = [];
+    for (const region of regions) {
+      if (!(region instanceof Element)) return;
+      const color = parseMermaidOpaqueRgbColor(region.getAttribute("fill"));
+      if (!color || !authorColors.has(getMermaidRgbKey(color))) continue;
+      const adjustedFill = getMermaidSequenceAdjustedRegionFill(color);
+      if (adjustedFill) updates.push({ region, adjustedFill });
+    }
+    for (const update of updates) {
+      update.region.setAttribute("fill", update.adjustedFill);
+    }
+  }
+
+  function getMermaidSequenceAuthorRegionColors(rawSource) {
+    if (typeof rawSource !== "string" || rawSource.length > MAX_MERMAID_SOURCE_LENGTH) return null;
+    const colors = new Set();
+    let regionCount = 0;
+    for (const line of rawSource.replace(/\r\n?/gu, "\n").split("\n")) {
+      const match = /^\s*(?:box|rect)\s+((?:#[0-9a-f]{3}(?:[0-9a-f]{3})?)|(?:rgb\(\s*[0-9]{1,3}\s*,\s*[0-9]{1,3}\s*,\s*[0-9]{1,3}\s*\)))(?=\s|$)/iu.exec(
+        line,
+      );
+      if (!match) continue;
+      regionCount += 1;
+      if (regionCount > MAX_MERMAID_SEQUENCE_REGIONS) return null;
+      const color = parseMermaidOpaqueRgbColor(match[1]);
+      if (color) colors.add(getMermaidRgbKey(color));
+    }
+    return colors;
+  }
+
+  function parseMermaidOpaqueRgbColor(value) {
+    const color = typeof value === "string" ? value.trim() : "";
+    const hexMatch = /^#([0-9a-f]{3}|[0-9a-f]{6})$/iu.exec(color);
+    if (hexMatch) {
+      const hex = hexMatch[1];
+      const normalized = hex.length === 3 ? hex.replace(/./gu, (digit) => `${digit}${digit}`) : hex;
+      return [0, 2, 4].map((offset) => Number.parseInt(normalized.slice(offset, offset + 2), 16));
+    }
+
+    const rgbMatch = /^rgb\(\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*,\s*([0-9]{1,3})\s*\)$/iu.exec(color);
+    if (!rgbMatch) return null;
+    const channels = rgbMatch.slice(1).map((channel) => Number.parseInt(channel, 10));
+    return channels.every((channel) => Number.isInteger(channel) && channel >= 0 && channel <= 255)
+      ? channels
+      : null;
+  }
+
+  function getMermaidRgbKey(color) {
+    return color.join(",");
+  }
+
+  function getMermaidSequenceAdjustedRegionFill(color) {
+    if (hasMermaidLightSequenceContrast(color)) return "";
+    for (let authorColorPercent = 99; authorColorPercent >= 0; authorColorPercent -= 1) {
+      const adjusted = color.map((channel) =>
+        Math.round((channel * authorColorPercent + 255 * (100 - authorColorPercent)) / 100),
+      );
+      if (hasMermaidLightSequenceContrast(adjusted)) return formatMermaidRgbHex(adjusted);
+    }
+    return "#ffffff";
+  }
+
+  function hasMermaidLightSequenceContrast(color) {
+    return (
+      getMermaidContrastRatio(color, MERMAID_LIGHT_SEQUENCE_TEXT_RGB) >= MERMAID_MIN_TEXT_CONTRAST &&
+      getMermaidContrastRatio(color, MERMAID_LIGHT_SEQUENCE_LINE_RGB) >= MERMAID_MIN_LINE_CONTRAST &&
+      getMermaidContrastRatio(color, MERMAID_LIGHT_SEQUENCE_ACCENT_RGB) >= MERMAID_MIN_LINE_CONTRAST
+    );
+  }
+
+  function getMermaidContrastRatio(left, right) {
+    const leftLuminance = getMermaidRelativeLuminance(left);
+    const rightLuminance = getMermaidRelativeLuminance(right);
+    return (
+      (Math.max(leftLuminance, rightLuminance) + 0.05) /
+      (Math.min(leftLuminance, rightLuminance) + 0.05)
+    );
+  }
+
+  function getMermaidRelativeLuminance(color) {
+    const channels = color.map((value) => {
+      const channel = value / 255;
+      return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+  }
+
+  function formatMermaidRgbHex(color) {
+    return `#${color.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
   }
 
   function applyMermaidFlowchartPalette(svg, themeMode, rawSource, rawNodeRoles, rawRenderId) {

@@ -74,6 +74,7 @@ type HistoryInsightsLoadReason = "initial" | "refresh" | "current";
 export interface HistoryInsightsHistoryIndexSnapshot {
   readonly config: CodexHistoryViewerConfig;
   readonly sessions: readonly SessionSummary[];
+  readonly historySources?: readonly SessionSummary[];
 }
 
 export interface HistoryInsightsPanelActions {
@@ -637,12 +638,17 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
         });
         if (!this.requireActiveLoad(panel, state, generation, cancellation)) return;
       }
-      const analysisActiveSessions = this.historyService.isCurrentIndexForConfig(historyIndex.config)
+      const useCurrentHistoryInventory = this.historyService.isCurrentIndexForConfig(historyIndex.config);
+      const analysisActiveSessions = useCurrentHistoryInventory
         ? this.historyService.getIndex().sessions
         : activeSessions;
+      const analysisHistoryInventory = useCurrentHistoryInventory
+        ? this.historyService.getIndex().historySources ?? analysisActiveSessions
+        : historyIndex.historySources ?? analysisActiveSessions;
       const result = await this.analysisService.ensureEntries({
         sessions,
         activeSessions: analysisActiveSessions,
+        historyInventory: analysisHistoryInventory,
         config: historyIndex.config,
         token: cancellation.token,
         onProgress: (progress) => {

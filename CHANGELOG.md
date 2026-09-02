@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.13.0] - 2026-09-02
+
+### Added
+
+- Added support for Codex paginated sessions that use `history_base`.
+
+### Changed
+
+- Improved Branch Navigation terminal routes so a history that ends at a Fork point no longer repeats the shared message as a duplicate card.
+- Updated the bundled Mermaid renderer from 11.16.1 to 11.17.2 and the Shiki syntax highlighter from 4.3.1 to 4.4.3.
+
+### Fixed
+
+- Fixed an issue where the Codex running state and session auto-refresh could become stale when an active Codex session file changed without updating its modification time (`mtime`).
+- Fixed Session Viewer resume controls briefly disappearing and reappearing during auto-refresh of the same session.
+- Fixed large Session Viewer tabs recalculating their layout against VS Code's temporary narrow viewport when returning to them.
+- Fixed unreadable text and lines in Light Mermaid sequence diagrams that use explicitly dark opaque `box` or `rect` backgrounds, without changing Dark diagrams, other diagram types, or Mermaid source.
+
+### Security
+
+- Updated the distributed Markdown renderer from `markdown-it@14.3.0` to `markdown-it@14.3.1`, incorporating upstream fixes for quadratic-complexity linkification cases.
+- Updated the bundled KaTeX renderer from 0.16.8 to 0.18.5, incorporating upstream security fixes and hardening.
+
 ## [2.12.0] - 2026-08-28
 
 ### Added

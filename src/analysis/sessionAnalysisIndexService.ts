@@ -13,6 +13,10 @@ import {
 import type { DebugLogger } from "../services/logger";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import {
+  resolveCodexLogicalHistoryPlan,
+  type CodexLogicalHistoryPlan,
+} from "../sessions/codexHistoryBase";
+import {
   buildUnsupportedSessionAnalysisEntry,
   ClaudeSessionAnalysisAdapter,
   CodexSessionAnalysisAdapter,
@@ -55,6 +59,7 @@ export interface AnalysisCancellationToken {
 export interface EnsureSessionAnalysisOptions {
   sessions: readonly SessionSummary[];
   activeSessions: readonly SessionSummary[];
+  historyInventory?: readonly SessionSummary[];
   config: CodexHistoryViewerConfig;
   token?: AnalysisCancellationToken;
   onProgress?: (progress: SessionAnalysisProgress) => void;
@@ -99,6 +104,8 @@ interface SharedBuildJob {
   config: CodexHistoryViewerConfig;
   consumers: Map<number, SharedBuildConsumer>;
   sessionsByCacheKey: Map<string, SessionSummary>;
+  historyInventoryByCacheKey: Map<string, SessionSummary>;
+  historyInventoryRevision: number;
   activeKeys: Set<string>;
   pendingKeys: string[];
   pendingIndex: number;
@@ -145,7 +152,11 @@ export class SessionAnalysisIndexService {
           (
             !current.accepting ||
             !sameCacheContext(current.context, context) ||
-            hasConflictingRequestedSession(current, options.sessions)
+            hasConflictingRequestedSession(current, options.sessions) ||
+            hasConflictingHistoryInventory(
+              current,
+              options.historyInventory ?? options.activeSessions,
+            )
           )
         ) {
           return { waitFor: current.completion };
@@ -202,6 +213,8 @@ export class SessionAnalysisIndexService {
       config,
       consumers: new Map(),
       sessionsByCacheKey: new Map(),
+      historyInventoryByCacheKey: new Map(),
+      historyInventoryRevision: 0,
       activeKeys: new Set(),
       pendingKeys: [],
       pendingIndex: 0,
@@ -263,7 +276,15 @@ export class SessionAnalysisIndexService {
     }
     if (options.token?.isCancellationRequested) this.cancelSharedBuildConsumer(consumer);
     if (consumer.settled) return result;
-    for (const session of options.activeSessions) job.activeKeys.add(session.cacheKey);
+    for (const session of options.historyInventory ?? options.activeSessions) {
+      if (job.historyInventoryByCacheKey.get(session.cacheKey) !== session) {
+        job.historyInventoryByCacheKey.set(session.cacheKey, session);
+        job.historyInventoryRevision += 1;
+      }
+    }
+    for (const session of options.activeSessions) {
+      job.activeKeys.add(session.cacheKey);
+    }
     for (const session of sessions) {
       job.activeKeys.add(session.cacheKey);
       if (!job.sessionsByCacheKey.has(session.cacheKey)) job.sessionsByCacheKey.set(session.cacheKey, session);
@@ -330,6 +351,8 @@ export class SessionAnalysisIndexService {
     const { cache, contextChanged } = this.createWorkingCache(job.context);
     let cacheChanged = contextChanged;
     let processed = 0;
+    let historyInventory: readonly SessionSummary[] = [];
+    let historyInventoryRevision = -1;
     while (true) {
       this.pruneCancelledSharedBuildConsumers(job);
       if (!hasActiveSharedBuildConsumer(job)) throw new SessionAnalysisCancelledError();
@@ -348,15 +371,34 @@ export class SessionAnalysisIndexService {
       const session = job.sessionsByCacheKey.get(cacheKey);
       if (!session) continue;
       const stat = await statSessionFile(session.fsPath);
+      if (historyInventoryRevision !== job.historyInventoryRevision) {
+        historyInventory = Array.from(job.historyInventoryByCacheKey.values());
+        historyInventoryRevision = job.historyInventoryRevision;
+      }
+      const historyPlan = await resolveHistoryPlan(session, historyInventory);
+      const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
       this.pruneCancelledSharedBuildConsumers(job);
       if (!hasActiveSharedBuildConsumer(job)) throw new SessionAnalysisCancelledError();
       if (!isSharedBuildCacheKeyRequested(job, cacheKey)) continue;
       const cached = cache.entries[cacheKey];
       let outcome: SharedBuildOutcome;
-      if (cached && stat && isEntryFresh(cached, session, stat.mtimeMs, stat.size)) {
+      if (cached && stat && isEntryFresh(
+        cached,
+        session,
+        stat.mtimeMs,
+        stat.size,
+        historySignature,
+      )) {
         outcome = { entry: cached, cacheHit: true };
       } else {
-        const entry = await this.getOrBuildEntry(session, stat, job.config);
+        const entry = await this.getOrBuildEntry(
+          session,
+          stat,
+          job.config,
+          historyInventory,
+          historyPlan,
+          historySignature,
+        );
         cache.entries[cacheKey] = entry;
         cacheChanged = true;
         outcome = { entry, cacheHit: false };
@@ -515,6 +557,7 @@ export class SessionAnalysisIndexService {
     options.onProgress?.(progressOf("collectSessions", options.sessions.length, options.sessions.length, 0, 0));
 
     const entries: SessionAnalysisEntry[] = [];
+    const historyInventory = options.historyInventory ?? options.activeSessions;
     let cacheHitCount = 0;
     let rebuiltCount = 0;
     let failedCount = 0;
@@ -522,12 +565,27 @@ export class SessionAnalysisIndexService {
       this.throwIfCancelled(options.token);
       const session = options.sessions[index]!;
       const stat = await statSessionFile(session.fsPath);
+      const historyPlan = await resolveHistoryPlan(session, historyInventory);
+      const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
       const cached = cache.entries[session.cacheKey];
-      if (cached && stat && isEntryFresh(cached, session, stat.mtimeMs, stat.size)) {
+      if (cached && stat && isEntryFresh(
+        cached,
+        session,
+        stat.mtimeMs,
+        stat.size,
+        historySignature,
+      )) {
         entries.push(cached);
         cacheHitCount += 1;
       } else {
-        const entry = await this.getOrBuildEntry(session, stat, options.config);
+        const entry = await this.getOrBuildEntry(
+          session,
+          stat,
+          options.config,
+          historyInventory,
+          historyPlan,
+          historySignature,
+        );
         cache.entries[session.cacheKey] = entry;
         entries.push(entry);
         cacheChanged = true;
@@ -631,23 +689,37 @@ export class SessionAnalysisIndexService {
     session: SessionSummary,
     stat: { mtimeMs: number; size: number } | null,
     config: CodexHistoryViewerConfig,
+    sessionInventory: readonly SessionSummary[],
+    historyPlan: CodexLogicalHistoryPlan | undefined,
+    historySignature: string | undefined,
   ): Promise<SessionAnalysisEntry> {
-    const existing = this.inFlightByCacheKey.get(session.cacheKey);
+    const inFlightKey = historySignature
+      ? `${session.cacheKey}\u0000${historySignature}`
+      : session.cacheKey;
+    const existing = this.inFlightByCacheKey.get(inFlightKey);
     if (existing) return existing;
     const input = {
       session,
       mtimeMs: stat?.mtimeMs ?? 0,
       size: stat?.size ?? 0,
       claudeSessionsRoot: config.claudeSessionsRoot,
+      sessionInventory,
+      historyPlan,
+      historySignature,
     };
-    const build = stat && !isSessionAnalysisFileSizeSupported(stat.size)
+    const analysisInputSize = historyPlan
+      ? getLogicalHistorySize(historyPlan)
+      : stat?.size;
+    const exceedsFileSizeLimit =
+      analysisInputSize !== undefined && !isSessionAnalysisFileSizeSupported(analysisInputSize);
+    const build = exceedsFileSizeLimit
       ? Promise.resolve(buildUnsupportedSessionAnalysisEntry(input, "fileSizeLimit"))
       : (session.source === "codex" ? this.codexAdapter : this.claudeAdapter).analyze(input);
-    this.inFlightByCacheKey.set(session.cacheKey, build);
+    this.inFlightByCacheKey.set(inFlightKey, build);
     try {
       return await build;
     } finally {
-      if (this.inFlightByCacheKey.get(session.cacheKey) === build) this.inFlightByCacheKey.delete(session.cacheKey);
+      if (this.inFlightByCacheKey.get(inFlightKey) === build) this.inFlightByCacheKey.delete(inFlightKey);
     }
   }
 
@@ -770,6 +842,30 @@ function hasConflictingRequestedSession(
   return false;
 }
 
+function hasConflictingHistoryInventory(
+  job: SharedBuildJob,
+  sessionInventory: readonly SessionSummary[],
+): boolean {
+  const hasPaginatedCodexHistory =
+    Array.from(job.historyInventoryByCacheKey.values()).some(
+      (session) => session.source === "codex" && session.meta.codexHistoryBase !== undefined,
+    ) || sessionInventory.some(
+      (session) => session.source === "codex" && session.meta.codexHistoryBase !== undefined,
+    );
+  if (!hasPaginatedCodexHistory) return false;
+  if (
+    job.historyInventoryByCacheKey.size > 0 &&
+    job.historyInventoryByCacheKey.size !== sessionInventory.length
+  ) {
+    return true;
+  }
+  for (const session of sessionInventory) {
+    const existing = job.historyInventoryByCacheKey.get(session.cacheKey);
+    if (job.historyInventoryByCacheKey.size > 0 && existing !== session) return true;
+  }
+  return false;
+}
+
 function hasActiveSharedBuildConsumer(job: SharedBuildJob): boolean {
   for (const consumer of job.consumers.values()) {
     if (!consumer.settled) return true;
@@ -884,6 +980,7 @@ function isSessionAnalysisEntry(value: unknown, key: string): value is SessionAn
   if (typeof entry.fsPath !== "string" || entry.fsPath.length > SESSION_ANALYSIS_MAX_PATH_LENGTH || !pathIsAbsolute(entry.fsPath)) return false;
   if (!isBoundedSessionIdentityKey(entry.identityKey)) return false;
   if (!isSafeNonNegativeNumber(entry.mtimeMs) || !isSafeNonNegativeInteger(entry.size) || !isSafeNonNegativeInteger(entry.parserVersion)) return false;
+  if (entry.historySignature !== undefined && !isOptionalBoundedString(entry.historySignature, 256)) return false;
   if (!isStorageLocation(entry.storage) || !isMessageStats(entry.messageStats)) return false;
   const usageStats = entry.usageStats;
   if (!isUsageStats(usageStats) || !isFileChangeStats(entry.fileChangeStats)) return false;
@@ -1129,6 +1226,7 @@ function isEntryFresh(
   session: SessionSummary,
   mtimeMs: number,
   size: number,
+  historySignature: string | undefined,
 ): boolean {
   const parserVersion =
     session.source === "codex" ? SESSION_ANALYSIS_CODEX_PARSER_VERSION : SESSION_ANALYSIS_CLAUDE_PARSER_VERSION;
@@ -1136,8 +1234,42 @@ function isEntryFresh(
     isEntryForSession(entry, session) &&
     entry.mtimeMs === mtimeMs &&
     entry.size === size &&
+    entry.historySignature === historySignature &&
     entry.parserVersion === parserVersion
   );
+}
+
+async function resolveHistoryPlan(
+  session: SessionSummary,
+  sessionInventory: readonly SessionSummary[],
+): Promise<CodexLogicalHistoryPlan | undefined> {
+  if (session.source !== "codex" || !session.meta.codexHistoryBase) return undefined;
+  try {
+    return await resolveCodexLogicalHistoryPlan(session.fsPath, sessionInventory);
+  } catch {
+    return undefined;
+  }
+}
+
+function buildHistoryPlanSignature(plan: CodexLogicalHistoryPlan): string {
+  return plan.signature;
+}
+
+function getLogicalHistorySize(plan: CodexLogicalHistoryPlan): number {
+  let total = 0;
+  for (const segment of plan.segments) {
+    const size = segment.endByteOffset ?? segment.size;
+    if (
+      !Number.isSafeInteger(size) ||
+      size < 0 ||
+      size > segment.size ||
+      total > Number.MAX_SAFE_INTEGER - size
+    ) {
+      return Number.POSITIVE_INFINITY;
+    }
+    total += size;
+  }
+  return total;
 }
 
 function isEntryForSession(entry: SessionAnalysisEntry, session: SessionSummary): boolean {

@@ -25,11 +25,11 @@ Packages:
   dagre-d3-es
   dayjs
   es-toolkit
+  fastdom
   hachure-fill
   iconv-lite
   import-meta-resolve
   js-yaml (embedded in the Mermaid distribution)
-  katex
   khroma
   langium (embedded in @mermaid-js/parser)
   layout-base
@@ -41,6 +41,7 @@ Packages:
   points-on-path
   roughjs
   safer-buffer
+  strictdom
   stylis
   tinyexec
   ts-dedent
@@ -75,13 +76,13 @@ Copyright notices:
     Sidharth Vinod and dagre-es contributors
   Copyright (c) 2018-present, iamkun
   Copyright (c) 2024 Viva Republica, Inc.
+  Copyright (c) 2016 Wilson Page <wilsonpage@me.com>
   Copyright (c) 2023 Preet Shihn
   Copyright (c) 2011 Alexander Shtuchkin
   Copyright (c) Titus Wormer
   Copyright Node.js contributors.
   Copyright Joyent, Inc. and other Node contributors.
   Copyright (c) 2011-2015 Vitaly Puzrin
-  Copyright (c) 2013-2020 Khan Academy and other contributors
   Copyright (c) 2019-present Fabio Spampinato, Andrew Maney
   Copyright 2021-2022 TypeFox GmbH
   Copyright 2022 TypeFox GmbH
@@ -99,6 +100,7 @@ Copyright notices:
   Copyright (c) 2019 Preet Shihn
   Copyright (c) 2018 Nikita Skovoroda
   Copyright (c) 2016-present Sultan Tarimo
+  Copyright (c) 2013 Wilson Page <wilsonpage@me.com>
   Copyright (c) 2024 Tinylibs
   Copyright (c) 2018 Tamino Martinius
   Copyright (c) 2010-2020 Robert Kieffer and other contributors
@@ -122,6 +124,18 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+===============================================================================
+KaTeX
+===============================================================================
+
+Package:
+  katex
+Source:
+  https://github.com/KaTeX/KaTeX
+License: MIT (full text in the first MIT section above)
+
+Copyright (c) 2013-2020 Khan Academy and other contributors
 
 ===============================================================================
 D3 and ISC-licensed runtime components

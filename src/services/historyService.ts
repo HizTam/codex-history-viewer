@@ -2,9 +2,14 @@ import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig, HistoryDateBasis } from "../settings";
 import { findSessionFiles, type DiscoveredSessionFile } from "../sessions/sessionDiscovery";
 import type { HistoryIndex, HistoryRoots, SessionSummary } from "../sessions/sessionTypes";
-import { buildSessionSummary, tryReadSessionMeta } from "../sessions/sessionSummary";
+import {
+  buildSessionSummary,
+  rebuildCodexHistoryBasePreview,
+  tryReadSessionMeta,
+} from "../sessions/sessionSummary";
 import { sanitizeCachedCodexAgentMetadata } from "../agents/codexAgentMetadata";
 import { sanitizeCachedCodexForkMetadata } from "../branchMap/codexForkMetadata";
+import { sanitizeCachedCodexHistoryBaseMetadata } from "../sessions/codexHistoryBase";
 import { resolveSessionDisplayTitle, resolveSessionDisplayTitles } from "../sessions/sessionTitleResolver";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { HISTORY_CACHE_FILE_NAME, HISTORY_CACHE_FILE_PATTERN } from "../storage/cacheFiles";
@@ -28,7 +33,7 @@ interface CacheEntryV1 {
   codexAgentMetadataVersion?: 1;
 }
 
-const SUMMARY_CACHE_ALGO_VERSION = 18;
+const SUMMARY_CACHE_ALGO_VERSION = 19;
 const HISTORY_REFRESH_CONCURRENCY = 4;
 
 interface CacheFileV9 {
@@ -191,6 +196,7 @@ function emptyIndex(roots: HistoryRoots): HistoryIndex {
     sessionsRoot: roots.codexSessionsRoot,
     roots,
     sessions: [],
+    historySources: [],
     byCacheKey: new Map(),
     byIdentityKey: new Map(),
     byYmd: new Map(),
@@ -361,14 +367,24 @@ export class HistoryService {
     const roots = buildHistoryRoots(config);
     const summaries = Object.values(normalized.entries)
       .map((entry) => applyHistoryDateBasis(entry.summary, config.historyDateBasis));
+    const historySources = Array.from(summaries);
     const selectedSummaries = selectPreferredSummariesByIdentity(summaries);
-    const resolvedSummaries = await this.resolveDisplayTitles(selectedSummaries, config);
+    const previewResolvedSummaries = await mapWithConcurrency(
+      selectedSummaries,
+      HISTORY_REFRESH_CONCURRENCY,
+      (summary) => rebuildCodexHistoryBasePreview(
+        summary,
+        historySources,
+        config.previewMaxMessages,
+      ),
+    );
+    const resolvedSummaries = await this.resolveDisplayTitles(previewResolvedSummaries, config);
     sortSummariesByDisplayDate(resolvedSummaries);
     if (!this.isOperationContextCurrent(operation)) {
       this.logger?.debug(`history.cacheImmediate superseded totalMs=${elapsedMs(startedAt)}`);
       return false;
     }
-    const nextIndex = buildIndex(roots, resolvedSummaries);
+    const nextIndex = buildIndex(roots, resolvedSummaries, historySources);
     const verifiedCacheKeys = collectVerifiedCodexMetadataCacheKeys(normalized.entries);
     const metadataComplete = isCompleteCodexAgentMetadataCache(
       normalizedCache,
@@ -500,7 +516,15 @@ export class HistoryService {
       return { ...summary, meta: nextMeta };
     });
 
-    const nextIndex = buildIndex(this.index.roots, nextSummaries);
+    const nextHistorySources = (this.index.historySources ?? this.index.sessions).map((summary) => {
+      if (summary.source !== "codex" || !updatedByCacheKey.has(summary.cacheKey)) return summary;
+      const nextMeta = { ...summary.meta };
+      const codexAgent = updatedByCacheKey.get(summary.cacheKey);
+      if (codexAgent) nextMeta.codexAgent = codexAgent;
+      else delete nextMeta.codexAgent;
+      return { ...summary, meta: nextMeta };
+    });
+    const nextIndex = buildIndex(this.index.roots, nextSummaries, nextHistorySources);
     const complete = areAllCodexEntriesVerifiedForIndex(entries, nextIndex);
     const nextCache: CacheFileV9 = {
       ...cache,
@@ -803,8 +827,19 @@ export class HistoryService {
 
     throwIfHistoryRebuildCancelled(token);
     const titleStartedAt = nowMs();
+    const historySources = Array.from(summaries);
     const selectedSummaries = selectPreferredSummariesByIdentity(summaries);
-    const resolvedSummaries = await this.resolveDisplayTitles(selectedSummaries, config);
+    const previewResolvedSummaries = await mapWithConcurrency(
+      selectedSummaries,
+      HISTORY_REFRESH_CONCURRENCY,
+      (summary) => rebuildCodexHistoryBasePreview(
+        summary,
+        historySources,
+        config.previewMaxMessages,
+        token,
+      ),
+    );
+    const resolvedSummaries = await this.resolveDisplayTitles(previewResolvedSummaries, config);
     const titleMs = elapsedMs(titleStartedAt);
     throwIfHistoryRebuildCancelled(token);
     const summariesByKey = new Map(resolvedSummaries.map((summary) => [summary.cacheKey, summary] as const));
@@ -818,7 +853,7 @@ export class HistoryService {
     summaries.push(...resolvedSummaries);
     sortSummariesByDisplayDate(summaries);
 
-    const index = buildIndex(roots, summaries);
+    const index = buildIndex(roots, summaries, historySources);
     const metadataComplete = areAllCodexEntriesVerifiedForIndex(nextEntries, index);
     return {
       index,
@@ -1100,6 +1135,7 @@ function normalizeCachedEntry(value: unknown, storageKey: string): CacheEntryV1 
     const meta = { ...summary.meta };
     delete meta.codexAgent;
     delete meta.codexFork;
+    delete meta.codexHistoryBase;
     return {
       mtimeMs,
       size,
@@ -1111,11 +1147,15 @@ function normalizeCachedEntry(value: unknown, storageKey: string): CacheEntryV1 
   const sanitized = sanitizeCachedCodexAgentMetadata(summary.meta.codexAgent);
   const sanitizedFork = sanitizeCachedCodexForkMetadata(summary.meta.codexFork);
   if (!sanitizedFork.valid) return null;
+  const sanitizedHistoryBase = sanitizeCachedCodexHistoryBaseMetadata(summary.meta.codexHistoryBase);
+  if (!sanitizedHistoryBase.valid) return null;
   const meta = { ...summary.meta };
   if (sanitized.value) meta.codexAgent = sanitized.value;
   else delete meta.codexAgent;
   if (sanitizedFork.value) meta.codexFork = sanitizedFork.value;
   else delete meta.codexFork;
+  if (sanitizedHistoryBase.value) meta.codexHistoryBase = sanitizedHistoryBase.value;
+  else delete meta.codexHistoryBase;
   return {
     mtimeMs,
     size,
@@ -1281,9 +1321,14 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function buildIndex(roots: HistoryRoots, summaries: SessionSummary[]): HistoryIndex {
+function buildIndex(
+  roots: HistoryRoots,
+  summaries: SessionSummary[],
+  historySources: SessionSummary[] = summaries,
+): HistoryIndex {
   const idx: HistoryIndex = emptyIndex(roots);
   idx.sessions = summaries;
+  idx.historySources = historySources;
 
   for (const s of summaries) {
     idx.byCacheKey.set(s.cacheKey, s);

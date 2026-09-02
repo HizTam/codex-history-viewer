@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.12.0",
+  "version": "2.13.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -6081,29 +6081,32 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run check:katex && npm run compile",
     "clean:dist": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build:webview": "node scripts/build-webview-shiki.mjs",
     "compile": "npm run clean:dist && npm run build:webview && tsc -p .",
     "watch:webview": "node scripts/build-webview-shiki.mjs --watch",
     "watch": "tsc -watch -p .",
     "package": "vsce package --allow-missing-repository",
-    "lint": "npm run -s check:l10n && node --check media/codeLanguageSupport.js && node --check media/pageSearchCore.js && node --check media/chatView.js && node --check media/fileChangeHistory.js && node --check media/historyInsights.js && node --check media/settingsPanel.js",
+    "lint": "npm run -s check:l10n && npm run -s check:katex && node --check media/codeLanguageSupport.js && node --check media/pageSearchCore.js && node --check media/chatView.js && node --check media/fileChangeHistory.js && node --check media/historyInsights.js && node --check media/settingsPanel.js",
     "check:l10n": "node scripts/check-l10n-garbled.js",
+    "check:katex": "node scripts/sync-katex-vendor.mjs --check",
+    "sync:katex": "node scripts/sync-katex-vendor.mjs --write",
     "typecheck": "tsc -p . --noEmit"
   },
   "dependencies": {
-    "markdown-it": "^14.3.0",
-    "mermaid": "11.16.1"
+    "markdown-it": "^14.3.1",
+    "mermaid": "11.17.2"
   },
   "devDependencies": {
-    "@shikijs/langs": "^4.3.1",
-    "@shikijs/themes": "^4.3.1",
+    "@shikijs/langs": "^4.4.3",
+    "@shikijs/themes": "^4.4.3",
     "@types/node": "^20.11.30",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.9.2",
-    "esbuild": "^0.28.0",
-    "shiki": "^4.3.1",
+    "esbuild": "^0.28.2",
+    "katex": "0.18.5",
+    "shiki": "^4.4.3",
     "typescript": "^5.5.4"
   }
 }

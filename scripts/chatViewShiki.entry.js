@@ -650,6 +650,7 @@ import mermaid from "mermaid";
           "maxEdges",
           "htmlLabels",
           "flowchart",
+          "class",
           "sequence",
           "gantt",
           "look",

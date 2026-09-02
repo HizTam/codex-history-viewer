@@ -106,7 +106,19 @@ export interface SettingsAboutModel {
   versionTab: string;
   licenseTab: string;
   thirdPartyTab: string;
+  starLabel: string;
+  starTooltip: string;
   sponsorLabel: string;
+  sponsorTooltip: string;
+  resourcesLabel: string;
+  securityPolicyLabel: string;
+  securityPolicyTooltip: string;
+  reportVulnerabilityLabel: string;
+  reportVulnerabilityTooltip: string;
+  changelogLabel: string;
+  changelogTooltip: string;
+  commandReferenceLabel: string;
+  commandReferenceTooltip: string;
   licenseText: string;
   thirdPartyText: string;
 }
