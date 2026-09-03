@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-09-02
-- 対象バージョン: 2.13.0
+- 最終更新: 2026-09-03
+- 対象バージョン: 2.13.1
 
 ## 1. 概要
 
@@ -320,7 +320,7 @@
   - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
-  - 内部 file version: 16
+  - 内部 file version: 20
   - 用途: 繰り返し検索を高速化する増分インデックス
   - `search-index.v2.json` が破損して JSON parse error になった場合は、破損内容を退避せず削除し、次回検索時に再構築する
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
@@ -348,7 +348,7 @@
   - 用途: History Insights の統計と Claude Code Branch Navigation の構造化 occurrence を共用する差分解析キャッシュ。履歴キャッシュや検索インデックスの代替にはしない
   - History Insights、Claude Code Branch Navigation、または `Rebuild Cache` を要求したときだけ lazy load / lazy build し、拡張機能の起動や通常の History / Search 表示を待たせない
   - セッションごとの `cacheKey`、source、`mtime`、`size`、parser version と、sessions root / 有効ソースを含む cache context を検証し、変更された entry だけを再解析する
-  - 現行source parser versionはCodex `10` / Claude Code `10`とする。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析する
+  - 現行source parser versionはCodex `11` / Claude Code `10`とする。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析する
   - 既存 Chat model builder と同じ抽出結果を使って message index、turn、usage、file change、ツール名別呼び出し回数を集計し、解析側で独自の message index を採番しない
   - 同一セッションの重複解析を共有し、全体の更新、保存、clear は直列化する。進捗通知とキャンセルに対応する
   - 破損 JSON は削除して次回要求時に再生成し、権限エラーなどの read error では既存ファイルを削除しない
@@ -897,7 +897,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 - `src/services/searchIndexService.ts`
   - `search-index.v2.json` を管理する。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
-  - `SEARCH_INDEX_FILE_VERSION = 19` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item / Codex `history_base`論理履歴対応前に生成した既存インデックスは再構築対象にする
+  - `SEARCH_INDEX_FILE_VERSION = 20` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item / Codex `history_base`論理履歴 / Codex `item_completed` / `FileChange`のfile change hint対応前に生成した既存インデックスは再構築対象にする
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
   - 検索インデックス読み込み時の parse error はインデックスを削除して `null` 扱いにし、次回検索時に再構築する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
@@ -923,7 +923,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - ファイル単位 AI 更新履歴の候補抽出、精密 diff 解析、ページングを担当する
   - 検索インデックスの `fileChangeHints` は候補順位付けの補助として使う
   - 最終的な diff card は必ず元のローカルセッション JSONL を読み直して生成する
-  - Codex は `patch_apply_end` を第一候補にし、`apply_patch` 入力と照合して重複 diff を避ける
+  - Codex は旧形式の `patch_apply_end` と新形式の `item_completed` / `FileChange` を共通正規化し、`apply_patch` 入力との重複に加えて移行期に両形式が同じ変更を表す場合の重複 diff も避ける
+  - 新形式の `FileChange` は `status === "completed"` の場合だけ成功として扱い、旧形式は明示的な失敗情報がない履歴との後方互換性を維持する
   - `apply_patch verification failed` など失敗出力がある場合は成功 diff として扱わない
   - Claude Code は `Edit` / `MultiEdit` / `Write` から復元可能な diff だけを `ChatPatchEntry` 相当へ変換する
   - 絶対パス、workspace 相対パス、session cwd 相対パス、move / rename の before / after path を正規化して照合する
@@ -1186,7 +1187,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - `src/services/handoffService.ts`
   - 元セッション JSONL を UTF-8 stream として読み取り、Handoff 用の transcript 抜粋とファイル変更を生成する
   - LLM による要約生成は行わず、末尾優先で transcript 本文をサイズ上限内に切り出す
-  - Codex は `patch_apply_end` の `unified_diff` を復元可能なファイル変更として取り込む
+  - Codex は旧形式の `patch_apply_end` と新形式の `item_completed` / `FileChange` の `unified_diff` を復元可能なファイル変更として取り込む
   - Claude Code は `Edit` / `MultiEdit` / `Write` から復元可能な synthetic diff を作る
   - tool call / tool output 本文は Handoff ファイルへ含めない
   - Codex の `Files mentioned by the user` / `Files pasted by the user` block と Claude Code の IDE tag は raw のまま再出力せず、clean text と attachment summary を使う
@@ -1277,6 +1278,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `chatModelBuilder.ts` は Claude Code の `message.model` / `message.usage` から usage 行を生成し、連続する同一 usage の重複表示を抑制する
   - `chatModelBuilder.ts` は `session_meta` などから CWD / Git ブランチ / Git コミット / dirty 状態を environment 行に変換し、同一 snapshot の重複表示を抑制する
   - `chatModelBuilder.ts` は Codex の `custom_tool_call` / `custom_tool_call_output`、`local_shell_call`、`web_search_call`、`image_generation_call` を tool カードとして扱う
+  - `src/sessions/codexFileChangeEvents.ts` は旧 `patch_apply_end` と新 `item_completed` / `FileChange` を共通イベントへ正規化し、成功判定と旧新形式間のboundedな一対一重複排除をSession Viewer、File AI Change History、検索、History Insights、Handoffで共有する
   - `codexResponseItems.ts` は string / 配列 tool output と standalone response itemをboundedに検証し、`input_image`と`image_generation_call.result`を既存画像添付へ正規化する。shellの`env` / `user`、暗号化content、unknown fieldは投影しない
   - `chatModelBuilder.ts` は Codex の `exec_command_end`、tool output の JSON / plain text、Claude Code の tool result から tool 実行メタ情報を抽出する
   - `chatModelBuilder.ts` は `extractCodexMessageContent()` / `extractClaudeMessageContent()` の結果から clean text と `attachments` を message item へ設定し、Codex tool output由来の画像はtool itemへ設定する
@@ -1491,17 +1493,17 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - セッション削除では `removeMany()` で該当セッションのしおりを退避付きで削除し、Undo では `restore()` で戻す
 - `src/services/bookmarkIdentity.ts`
   - 通常履歴 Webview とファイル履歴 Webview で同じ `bookmarkGroupId` を生成するための共通 helper を持つ
-  - Codex `patch_apply_end` は `turn_id`、`call_id`、`payload.timestamp`、record `timestamp`、JSONL 行番号の順で group id を解決する
+  - Codex の旧 `patch_apply_end` と新 `item_completed` / `FileChange` は、正規化した `turn_id`、operation id（旧 `call_id` / 新 `item.id`）、payload `timestamp`、record `timestamp`、JSONL 行番号の順で group id を解決する
   - Claude Code tool use は `tool_use.id` を優先し、欠如時は JSONL 行番号と同一行内 tool call index から fallback call id を作る
 - `src/chat/chatModelBuilder.ts`
-  - Codex `patch_apply_end` の grouped diff に `bookmarkGroupId` を付与する
+  - Codex の旧 `patch_apply_end` と新 `item_completed` / `FileChange` の grouped diff に `bookmarkGroupId` を付与する
   - `turn_id` がある場合は `turn:<turn_id>` を `bookmarkGroupId` とする
   - `turn_id` がない場合は `bookmarkIdentity.ts` の共通規則で callId / timestamp / line fallback へフォールバックする
   - `apply_patch` 入力由来の pending patch group は `apply:<callId>` を `bookmarkGroupId` として扱い、callId 欠如時は JSONL 行番号由来の fallback callId を使う
   - Claude Code tool use 由来の patch group には tool call と message index から `bookmarkGroupId` を作る
 - `src/fileHistory/fileChangeHistoryService.ts`
   - ファイル履歴 card に `bookmarkGroupId` を付与する
-  - Codex `patch_apply_end` では通常履歴 Webview と同じ `bookmarkIdentity.ts` の group id を使い、1 ファイル diff card と通常履歴 grouped diff の同期キーを揃える
+  - Codex の旧 `patch_apply_end` と新 `item_completed` / `FileChange` では通常履歴 Webview と同じ `bookmarkIdentity.ts` の group id を使い、1 ファイル diff card と通常履歴 grouped diff の同期キーを揃える
   - Claude Code tool use の callId 欠如時も、通常履歴 Webview と同じ JSONL 行番号 / tool call index fallback を使う
 - `src/chat/chatPanelManager.ts` / `src/fileHistory/fileChangeHistoryPanelManager.ts`
   - Webview model へ `bookmarkKey` / `isBookmarked` を付与する
@@ -2079,7 +2081,7 @@ npm run package
 - History Insights の解析をキャンセルしても既存表示を stale として安全に保持し、panel を閉じて開き直した場合に旧 panel の進捗、エラー、model、VS Code通知が新しい panel へ混入しない。2秒未満のloadでは通知が出ず、2秒を超える初回load／model保持refreshでは通知からキャンセルできる。完了済みcancel後の新しいopen／条件適用はloadを開始し、snapshot保存中の最後の意図がcancelなら自動loadを抑止、cancel後にretryした場合は再開する
 - 新規 storage では `session-analysis-index.v1.json` は History Insights / Claude Code Branch Navigation / `Rebuild Cache` の初回解析要求まで作成されず、通常の History / Search / Pinned / セッションタイムライン表示を待たせない
 - Session Analysis Index は cache context が一致する限り未変更セッションを再利用し、mtime / size または parser version が変わった entry だけを再解析する。root / source context が変わった場合は新しい context で対象 entry を構築する
-- Session Analysis のsource parser versionはCodex `10` / Claude Code `10`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、`history_base`論理履歴を解析しないCodex version 9 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析される
+- Session Analysis のsource parser versionはCodex `11` / Claude Code `10`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、`history_base`論理履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`を集計しないversion 10 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析される
 - 破損した `session-analysis-index.v1.json` は次の解析要求で安全に再生成され、read error では既存ファイルを削除しない
 - `Rebuild Cache` は確認後に履歴キャッシュ、検索インデックス、Session Analysis Index を同じ履歴集合から順番に再作成し、進捗とキャンセルが機能する。独立した Session Analysis 再構築コマンドは公開しない
 - `Rebuild Cache` をSession Analysis Index削除前にキャンセルした場合は既存indexが残り、削除後のキャンセルでは不完全なindexが保存されない。削除 / 保存失敗時は成功通知が出ない
@@ -2171,8 +2173,8 @@ npm run package
 - Codex のみ有効 / Claude Code のみ有効 / 両方有効で、ファイル履歴の候補抽出、件数表示、source toggle が期待どおり動く
 - `search.indexToolContent = conversationOnly` でもファイル履歴 Webview が利用できる
 - `search.indexToolContent` に tool 情報を含めた場合、ファイル履歴の関連セッション優先付けヒントとして使われる
-- 対象ファイルに対する Codex `patch_apply_end` がファイル履歴に表示される
-- `apply_patch` 入力と `patch_apply_end` が同じ変更を表す場合、ファイル履歴 card が重複しない
+- 対象ファイルに対する Codex の旧 `patch_apply_end` と新 `item_completed` / `FileChange` がファイル履歴に表示される
+- `apply_patch` 入力または旧新両形式が同じ変更を表す場合、ファイル履歴 card が重複しない
 - 失敗した `apply_patch` / verification failed はファイル履歴 card として表示されない
 - Claude Code の `Edit` / `MultiEdit` / `Write` で復元可能な diff だけがファイル履歴に表示される
 - move / rename で before path と after path のどちらに一致してもファイル履歴に表示される
@@ -2473,7 +2475,7 @@ npm run package
 - Markdown transcript に attachment summary が出て、raw IDE tagや`Files mentioned`／`Files pasted` blockが出ない
 - Resume / Handoff のcontextにraw tagや`Files mentioned`／`Files pasted` blockが重複せず、バイナリ添付が再添付されない
 - プレビューモーダルを開いたまま別セッションを開くと、モーダルが閉じる
-- `patch_apply_end` を含むセッションで差分カードが表示される（`Show details` OFF でも出る）
+- 旧 `patch_apply_end` または新 `item_completed` / `FileChange` を含むセッションで差分カードが表示される（`Show details` OFF でも出る）
 - patch group collapsed 表示では先頭 3 file rows と `あと N 個のファイルを表示` が表示され、show more 後も件数と file row が正しい
 - patch group に `レビューする` 文言が表示されず、まとめて開く操作は `全差分を開く` として表示される
 - `全差分を開く` を押すと、対象 patch group card だけが全幅になり、全 file row と全 patch detail が同じ card 内で開く。オーバーレイ、別タブ、別パネルは開かない

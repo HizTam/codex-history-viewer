@@ -1488,7 +1488,7 @@ export class SettingsPanelManager implements vscode.Disposable {
 
   private buildAboutModel(): SettingsAboutModel {
     const packageJson: unknown = this.context.extension.packageJSON;
-    const version = readPackageString(packageJson, "version") ?? "2.13.0";
+    const version = readPackageString(packageJson, "version") ?? "2.13.1";
     const licenseName = readPackageString(packageJson, "license") ?? "MIT";
     const currentYear = new Date().getFullYear();
     const copyrightEndYear = Number.isSafeInteger(currentYear) && currentYear >= COPYRIGHT_START_YEAR

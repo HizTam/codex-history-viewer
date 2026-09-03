@@ -72,6 +72,12 @@ import {
   readSessionJsonlRecords,
   type CodexLogicalHistoryPlan,
 } from "../sessions/codexHistoryBase";
+import {
+  CodexFileChangeEventDeduper,
+  isSuccessfulCodexFileChangeEvent,
+  readCodexFileChangeEvent,
+  type CodexFileChangeEvent,
+} from "../sessions/codexFileChangeEvents";
 
 export interface ChatSessionModelBuildOptions {
   images?: ImagesConfig;
@@ -192,6 +198,7 @@ async function readTimelineItems(
   const items: ChatTimelineItem[] = [];
   const toolByCallId = new Map<string, ChatToolItem>();
   const pendingPatchGroups = new Map<string, PendingPatchGroup>();
+  const fileChangeDeduper = new CodexFileChangeEventDeduper();
   const codexTurnMeta: ChatMessageModelMeta = {};
   const usageState: UsageBuildState = {};
   const environmentState: EnvironmentBuildState = {};
@@ -241,6 +248,7 @@ async function readTimelineItems(
         items,
         toolByCallId,
         pendingPatchGroups,
+        fileChangeDeduper,
         () => messageIndex,
         codexTurnMeta,
         memoryCitationState,
@@ -296,6 +304,7 @@ async function readPatchEntryDetails(
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
   const pendingApplyPatchEntries = new Map<string, ChatPatchEntry[]>();
   const entriesByGroup = new Map<string, ChatPatchEntry[]>();
+  const fileChangeDeduper = new CodexFileChangeEventDeduper();
   let messageIndex = 0;
 
   const appendGroupEntries = (groupKey: string, entries: ChatPatchEntry[]): void => {
@@ -331,20 +340,22 @@ async function readPatchEntryDetails(
       continue;
     }
 
+    const fileChangeEvent = readCodexFileChangeEvent(obj);
+    if (fileChangeEvent) {
+      const rawOperationId = fileChangeEvent.operationId;
+      const callId = rawOperationId ?? `patch:${lineIndex}`;
+      const groupKey = buildPatchGroupKey(fileChangeEvent, lineIndex);
+      if (rawOperationId) pendingApplyPatchEntries.delete(rawOperationId);
+      if (!isSuccessfulCodexFileChangeEvent(fileChangeEvent)) continue;
+      if (fileChangeDeduper.shouldSuppress(fileChangeEvent)) continue;
+      appendGroupEntries(
+        groupKey,
+        buildCodexPatchEntriesForDetailTarget(fileChangeEvent.changes, sessionCwd, callId, target),
+      );
+      continue;
+    }
+
     if (obj?.type === "event_msg") {
-      const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
-      if (payloadType === "patch_apply_end") {
-        const rawCallId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-        const callId = rawCallId ?? `patch:${lineIndex}`;
-        const groupKey = buildPatchGroupKey(obj, lineIndex);
-        if (rawCallId) pendingApplyPatchEntries.delete(rawCallId);
-        if (isPatchApplyEndFailure(obj)) continue;
-        appendGroupEntries(
-          groupKey,
-          buildCodexPatchEntriesForDetailTarget(obj?.payload?.changes, sessionCwd, callId, target),
-        );
-        continue;
-      }
       continue;
     }
 
@@ -606,6 +617,7 @@ function indexCodexEventRecord(
   items: ChatTimelineItem[],
   toolByCallId: Map<string, ChatToolItem>,
   pendingPatchGroups: Map<string, PendingPatchGroup>,
+  fileChangeDeduper: CodexFileChangeEventDeduper,
   currentMessageIndex: () => number,
   codexTurnMeta: ChatMessageModelMeta,
   memoryCitationState: MemoryCitationBuildState,
@@ -671,20 +683,16 @@ function indexCodexEventRecord(
     return true;
   }
 
-  if (payloadType === "patch_apply_end") {
-    const key = buildPatchGroupKey(obj, lineIndex);
+  const fileChangeEvent = readCodexFileChangeEvent(obj);
+  if (fileChangeEvent) {
+    const key = buildPatchGroupKey(fileChangeEvent, lineIndex);
     const bookmarkGroupId = buildCodexPatchBookmarkGroupId(obj, lineIndex);
-    const turnId = resolveCodexTurnIdForItem(obj, turnState);
-    const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
+    const turnId = fileChangeEvent.turnId ?? resolveCodexTurnIdForItem(obj, turnState);
+    const callId = fileChangeEvent.operationId;
     const patchCallId = callId ?? `patch:${lineIndex}`;
-    const timestampIso =
-      typeof obj?.payload?.timestamp === "string"
-        ? obj.payload.timestamp
-        : typeof obj?.timestamp === "string"
-          ? obj.timestamp
-          : undefined;
+    const timestampIso = fileChangeEvent.timestampIso;
     const matchEntries = buildPatchEntries(
-      obj?.payload?.changes,
+      fileChangeEvent.changes,
       sessionCwd,
       patchCallId,
       shouldIncludeDetails(options),
@@ -694,8 +702,9 @@ function indexCodexEventRecord(
     if (!removedByCallId && matchEntries.length > 0) {
       removeMatchingPendingApplyPatchGroup(items, pendingPatchGroups, matchEntries, currentMessageIndex());
     }
-    if (isPatchApplyEndFailure(obj)) return true;
+    if (!isSuccessfulCodexFileChangeEvent(fileChangeEvent)) return true;
     if (entries.length === 0) return true;
+    if (fileChangeDeduper.shouldSuppress(fileChangeEvent)) return true;
 
     const existing = pendingPatchGroups.get(key);
     if (existing) {
@@ -2284,17 +2293,12 @@ function toPatchGroupItem(group: PendingPatchGroup): ChatPatchGroupItem {
   };
 }
 
-function buildPatchGroupKey(obj: any, fallbackIndex?: number): string {
-  const turnId = readCodexRecordTurnId(obj) ?? "";
+function buildPatchGroupKey(event: CodexFileChangeEvent, fallbackIndex?: number): string {
+  const turnId = event.turnId ?? "";
   if (turnId) return turnId;
-  const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id.trim() : "";
+  const callId = event.operationId ?? "";
   if (callId) return `call:${callId}`;
-  const timestampIso =
-    typeof obj?.payload?.timestamp === "string"
-      ? obj.payload.timestamp.trim()
-      : typeof obj?.timestamp === "string"
-        ? obj.timestamp.trim()
-        : "";
+  const timestampIso = event.timestampIso ?? "";
   if (timestampIso) return `ts:${timestampIso}`;
   return typeof fallbackIndex === "number" && Number.isFinite(fallbackIndex) && fallbackIndex > 0
     ? `line:${Math.floor(fallbackIndex)}`
@@ -2699,19 +2703,6 @@ function buildCodexApplyPatchEntriesForDetailTarget(
   }
   flush();
   return entries;
-}
-
-function isPatchApplyEndFailure(obj: any): boolean {
-  const payload = obj?.payload && typeof obj.payload === "object" ? obj.payload : {};
-  if (typeof payload.success === "boolean") return !payload.success;
-  const status = typeof payload.status === "string" ? payload.status.trim().toLowerCase() : "";
-  return (
-    status === "failed" ||
-    status === "failure" ||
-    status === "error" ||
-    status === "cancelled" ||
-    status === "canceled"
-  );
 }
 
 function isCodexToolCallOutput(payloadType: unknown): boolean {

@@ -34,8 +34,13 @@ import {
   resolveCodexLogicalHistoryPlan,
   type CodexLogicalHistoryPlan,
 } from "../sessions/codexHistoryBase";
+import {
+  CodexFileChangeEventDeduper,
+  isSuccessfulCodexFileChangeEvent,
+  readCodexFileChangeEvent,
+} from "../sessions/codexFileChangeEvents";
 
-const SEARCH_INDEX_FILE_VERSION = 19;
+const SEARCH_INDEX_FILE_VERSION = 20;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
 
@@ -435,6 +440,7 @@ async function buildIndexedSession(
     fileChangeHints: [],
     messageIndex: 0,
     toolAnchorByCallId: new Map(),
+    fileChangeDeduper: new CodexFileChangeEventDeduper(),
     indexToolContent: options.indexToolContent,
     pastedPromptResolver,
   };
@@ -463,24 +469,24 @@ interface BuildState {
   fileChangeHints: IndexedFileChangeHint[];
   messageIndex: number;
   toolAnchorByCallId: Map<string, number>;
+  fileChangeDeduper: CodexFileChangeEventDeduper;
   indexToolContent: SearchIndexToolContent;
   pastedPromptResolver?: ClaudePastedPromptResolver;
 }
 
 async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
   if (obj?.type === "event_msg") {
-    const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
-    if (payloadType === "patch_apply_end") {
+    const fileChangeEvent = readCodexFileChangeEvent(obj);
+    if (
+      fileChangeEvent &&
+      isSuccessfulCodexFileChangeEvent(fileChangeEvent) &&
+      !state.fileChangeDeduper.shouldSuppress(fileChangeEvent)
+    ) {
       const anchor = Math.max(1, state.messageIndex);
       addFileChangeHint(state, {
         messageIndex: anchor,
-        paths: extractCodexPatchChangePaths(obj?.payload?.changes),
-        timestampIso:
-          typeof obj?.payload?.timestamp === "string"
-            ? obj.payload.timestamp
-            : typeof obj?.timestamp === "string"
-              ? obj.timestamp
-              : undefined,
+        paths: extractCodexPatchChangePaths(fileChangeEvent.changes),
+        timestampIso: fileChangeEvent.timestampIso,
         origin: "codexPatch",
         hasDiffLikeContent: true,
       });

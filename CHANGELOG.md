@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.13.1] - 2026-09-03
+
+### Fixed
+
+- Fixed missing file changes in sessions using Codex's newer `item_completed` / `FileChange` format.
+
 ## [2.13.0] - 2026-09-02
 
 ### Added

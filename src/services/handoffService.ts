@@ -18,6 +18,11 @@ import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMes
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "./projectPathMapper";
 import { normalizeProjectKey } from "../utils/fsUtils";
 import { readSessionJsonlLines } from "../sessions/codexHistoryBase";
+import {
+  CodexFileChangeEventDeduper,
+  isSuccessfulCodexFileChangeEvent,
+  readCodexFileChangeEvent,
+} from "../sessions/codexFileChangeEvents";
 
 export type HandoffTarget = "codex" | "claude";
 
@@ -312,6 +317,7 @@ async function parseSessionForHandoff(
   const pastedPromptResolver = await createClaudePastedPromptResolver(session.fsPath);
   const messages: HandoffMessage[] = [];
   const diffBlocks: HandoffDiffBlock[] = [];
+  const fileChangeDeduper = new CodexFileChangeEventDeduper();
   let invalidJsonLines = 0;
   let totalLines = 0;
 
@@ -331,12 +337,12 @@ async function parseSessionForHandoff(
     }
 
     if (await collectCodexMessage(obj, messages)) {
-      collectCodexDiffBlocks(obj, diffBlocks);
+      collectCodexDiffBlocks(obj, diffBlocks, fileChangeDeduper);
       continue;
     }
     await collectClaudeMessage(obj, messages, pastedPromptResolver);
     collectClaudeDiffBlocks(obj, diffBlocks);
-    collectCodexDiffBlocks(obj, diffBlocks);
+    collectCodexDiffBlocks(obj, diffBlocks, fileChangeDeduper);
   }
 
   return { messages, diffBlocks, invalidJsonLines, totalLines };
@@ -389,12 +395,17 @@ async function collectClaudeMessage(
   return true;
 }
 
-function collectCodexDiffBlocks(obj: any, diffBlocks: HandoffDiffBlock[]): void {
+function collectCodexDiffBlocks(
+  obj: any,
+  diffBlocks: HandoffDiffBlock[],
+  fileChangeDeduper: CodexFileChangeEventDeduper,
+): void {
   if (diffBlocks.length >= MAX_DIFF_BLOCKS) return;
-  if (obj?.type !== "event_msg" || obj?.payload?.type !== "patch_apply_end") return;
-  if (isPatchApplyEndFailure(obj)) return;
+  const fileChangeEvent = readCodexFileChangeEvent(obj);
+  if (!fileChangeEvent || !isSuccessfulCodexFileChangeEvent(fileChangeEvent)) return;
+  if (fileChangeDeduper.shouldSuppress(fileChangeEvent)) return;
 
-  const changes = obj?.payload?.changes;
+  const changes = fileChangeEvent.changes;
   if (!changes || typeof changes !== "object" || Array.isArray(changes)) return;
 
   for (const [rawPath, rawChange] of Object.entries(changes as Record<string, unknown>)) {
@@ -408,13 +419,6 @@ function collectCodexDiffBlocks(obj: any, diffBlocks: HandoffDiffBlock[]): void 
       diff: clampText(unifiedDiff, MAX_SINGLE_DIFF_CHARS),
     });
   }
-}
-
-function isPatchApplyEndFailure(obj: any): boolean {
-  const payload = obj?.payload && typeof obj.payload === "object" ? obj.payload : {};
-  if (typeof payload.success === "boolean") return !payload.success;
-  const status = typeof payload.status === "string" ? payload.status.trim().toLowerCase() : "";
-  return status === "failed" || status === "failure" || status === "error" || status === "cancelled" || status === "canceled";
 }
 
 function collectClaudeDiffBlocks(obj: any, diffBlocks: HandoffDiffBlock[]): void {

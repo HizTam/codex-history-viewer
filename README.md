@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.13.0** (2026-09-02).
+Latest release: **2.13.1** (2026-09-03).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -272,17 +272,9 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.13.0
+## What's New in 2.13.1
 
-- Added support for Codex paginated sessions that use `history_base`.
-- Fixed an issue where the Codex running state and session auto-refresh could become stale when an active Codex session file changed without updating its modification time (`mtime`).
-- Fixed Session Viewer resume controls briefly disappearing and reappearing during auto-refresh of the same session.
-- Fixed large Session Viewer tabs recalculating their layout against VS Code's temporary narrow viewport when returning to them.
-- Improved Branch Navigation terminal routes so a history that ends at a Fork point no longer repeats the shared message as a duplicate card.
-- Fixed unreadable text and lines in Light Mermaid sequence diagrams that use explicitly dark opaque `box` or `rect` backgrounds.
-- Updated the bundled Mermaid renderer from 11.16.1 to 11.17.2 and the Shiki syntax highlighter from 4.3.1 to 4.4.3.
-- Updated the distributed Markdown renderer from `markdown-it@14.3.0` to `markdown-it@14.3.1`, incorporating upstream linkification security fixes.
-- Updated the bundled KaTeX renderer from 0.16.8 to 0.18.5, incorporating upstream security fixes and hardening.
+- Fixed missing file changes in sessions using Codex's newer `item_completed` / `FileChange` format.
 
 ## Changelog
 

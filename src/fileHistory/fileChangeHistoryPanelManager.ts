@@ -462,6 +462,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
           this.logger?.debug(
             formatDebugFields("fileChangeHistory diffStats", {
               codexPatchApplyEnd: loaded.stats.diffStats.codexPatchApplyEnd,
+              codexFileChangeCompleted: loaded.stats.diffStats.codexFileChangeCompleted,
               codexApplyPatchParsed: loaded.stats.diffStats.codexApplyPatchParsed,
               codexApplyPatchFailedSkipped: loaded.stats.diffStats.codexApplyPatchFailedSkipped,
               codexDuplicatesSuppressed: loaded.stats.diffStats.codexDuplicatesSuppressed,
@@ -558,6 +559,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       this.logger?.debug(
         formatDebugFields("fileChangeHistory diffStats", {
           codexPatchApplyEnd: loaded.stats.diffStats.codexPatchApplyEnd,
+          codexFileChangeCompleted: loaded.stats.diffStats.codexFileChangeCompleted,
           codexApplyPatchParsed: loaded.stats.diffStats.codexApplyPatchParsed,
           codexApplyPatchFailedSkipped: loaded.stats.diffStats.codexApplyPatchFailedSkipped,
           codexDuplicatesSuppressed: loaded.stats.diffStats.codexDuplicatesSuppressed,

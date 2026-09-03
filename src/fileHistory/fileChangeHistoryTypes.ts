@@ -53,6 +53,7 @@ export interface FileChangeHistoryLoadResult {
 
 export interface FileChangeHistoryDiffStats {
   codexPatchApplyEnd: number;
+  codexFileChangeCompleted: number;
   codexApplyPatchParsed: number;
   codexApplyPatchFailedSkipped: number;
   codexDuplicatesSuppressed: number;

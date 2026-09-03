@@ -1,16 +1,15 @@
-type JsonRecord = Record<string, unknown>;
+import { readCodexFileChangeEvent } from "../sessions/codexFileChangeEvents";
 
 // Builds stable cross-view IDs for bookmark targets that originate from JSONL records.
 export function buildCodexPatchBookmarkGroupId(obj: unknown, fallbackIndex?: number): string {
-  const root = asRecord(obj);
-  const payload = asRecord(root?.payload);
-  const turnId = readTrimmedString(payload?.turn_id);
+  const event = readCodexFileChangeEvent(obj);
+  const turnId = event?.turnId;
   if (turnId) return `turn:${turnId}`;
 
-  const callId = readTrimmedString(payload?.call_id);
+  const callId = event?.operationId;
   if (callId) return `call:${callId}`;
 
-  const timestampIso = readTrimmedString(payload?.timestamp) || readTrimmedString(root?.timestamp);
+  const timestampIso = event?.timestampIso;
   if (timestampIso) return `ts:${timestampIso}`;
 
   const index = normalizePositiveIndex(fallbackIndex);
@@ -30,10 +29,6 @@ export function buildClaudePatchBookmarkGroupId(
   messageIndex: number,
 ): string {
   return `claude:${resolveClaudeToolCallId(callId, lineIndex, toolCallIndex)}:${normalizeNonNegativeIndex(messageIndex)}`;
-}
-
-function asRecord(value: unknown): JsonRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as JsonRecord) : null;
 }
 
 function readTrimmedString(value: unknown): string {

@@ -30,6 +30,11 @@ import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/p
 import type { SearchIndexReadSnapshot } from "../services/searchIndexService";
 import type { HistoryIndex, SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { readSessionJsonlRecords } from "../sessions/codexHistoryBase";
+import {
+  CodexFileChangeEventDeduper,
+  isSuccessfulCodexFileChangeEvent,
+  readCodexFileChangeEvent,
+} from "../sessions/codexFileChangeEvents";
 import { formatYmdHmsInTimeZone, toYmdInTimeZone, ymdToString } from "../utils/dateUtils";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { normalizeCacheKey } from "../utils/fsUtils";
@@ -95,6 +100,7 @@ const MAX_SYNTHETIC_WRITE_LINES = 4000;
 function createDiffStats(): FileChangeHistoryDiffStats {
   return {
     codexPatchApplyEnd: 0,
+    codexFileChangeCompleted: 0,
     codexApplyPatchParsed: 0,
     codexApplyPatchFailedSkipped: 0,
     codexDuplicatesSuppressed: 0,
@@ -122,6 +128,7 @@ function cloneDiffStats(stats: FileChangeHistoryDiffStats): FileChangeHistoryDif
 
 function addDiffStats(target: FileChangeHistoryDiffStats, source: FileChangeHistoryDiffStats): void {
   target.codexPatchApplyEnd += source.codexPatchApplyEnd;
+  target.codexFileChangeCompleted += source.codexFileChangeCompleted;
   target.codexApplyPatchParsed += source.codexApplyPatchParsed;
   target.codexApplyPatchFailedSkipped += source.codexApplyPatchFailedSkipped;
   target.codexDuplicatesSuppressed += source.codexDuplicatesSuppressed;
@@ -287,6 +294,7 @@ async function parseCodexSession(
   let messageIndex = 0;
   const pendingApplyPatchEntries = new Map<string, ParsedPatchEntry[]>();
   const mergeStateByGroup = new Map<string, Map<string, number>>();
+  const fileChangeDeduper = new CodexFileChangeEventDeduper();
 
   for await (const record of readSessionJsonlRecords(session.fsPath, "codex", {
     sessionInventory,
@@ -335,19 +343,15 @@ async function parseCodexSession(
       continue;
     }
 
-    if (obj?.type !== "event_msg" || obj?.payload?.type !== "patch_apply_end") continue;
-    const rawCallId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
-    const callId = rawCallId ?? `patch:${lineIndex}`;
+    const fileChangeEvent = readCodexFileChangeEvent(obj);
+    if (!fileChangeEvent) continue;
+    const rawOperationId = fileChangeEvent.operationId;
+    const callId = rawOperationId ?? `patch:${lineIndex}`;
     const groupKey = buildCodexPatchBookmarkGroupId(obj, lineIndex);
-    const timestampIso =
-      typeof obj?.payload?.timestamp === "string"
-        ? obj.payload.timestamp
-        : typeof obj?.timestamp === "string"
-          ? obj.timestamp
-          : undefined;
-    const entries = buildCodexPatchEntries(obj?.payload?.changes, session.meta.cwd, target, projectPathMappings, callId);
-    const removedByCallIdCount = rawCallId ? pendingApplyPatchEntries.get(rawCallId)?.length ?? 0 : 0;
-    const removedByCallId = rawCallId ? pendingApplyPatchEntries.delete(rawCallId) : false;
+    const timestampIso = fileChangeEvent.timestampIso;
+    const entries = buildCodexPatchEntries(fileChangeEvent.changes, session.meta.cwd, target, projectPathMappings, callId);
+    const removedByCallIdCount = rawOperationId ? pendingApplyPatchEntries.get(rawOperationId)?.length ?? 0 : 0;
+    const removedByCallId = rawOperationId ? pendingApplyPatchEntries.delete(rawOperationId) : false;
     if (removedByCallId) diffStats.codexDuplicatesSuppressed += removedByCallIdCount;
     if (!removedByCallId && entries.length > 0) {
       diffStats.codexDuplicatesSuppressed += removeMatchingPendingApplyPatchEntries(
@@ -356,8 +360,13 @@ async function parseCodexSession(
         messageIndex > 0 ? messageIndex : undefined,
       );
     }
-    if (isPatchApplyEndFailure(obj)) continue;
-    diffStats.codexPatchApplyEnd += entries.length;
+    if (!isSuccessfulCodexFileChangeEvent(fileChangeEvent)) continue;
+    if (fileChangeDeduper.shouldSuppress(fileChangeEvent)) {
+      diffStats.codexDuplicatesSuppressed += entries.length;
+      continue;
+    }
+    if (fileChangeEvent.source === "patchApplyEnd") diffStats.codexPatchApplyEnd += entries.length;
+    else diffStats.codexFileChangeCompleted += entries.length;
     for (const entry of entries) {
       const merged = appendMergedParsedPatchEntry(
         out,
@@ -663,19 +672,6 @@ function clonePatchEntry(entry: ChatPatchEntry): ChatPatchEntry {
 function getCodexPatchMergePath(entry: ChatPatchEntry): string {
   const raw = entry.movePath || entry.moveDisplayPath || entry.path || entry.displayPath;
   return normalizePatchSignaturePath(raw).toLowerCase();
-}
-
-function isPatchApplyEndFailure(obj: any): boolean {
-  const payload = obj?.payload && typeof obj.payload === "object" ? obj.payload : {};
-  if (typeof payload.success === "boolean") return !payload.success;
-  const status = typeof payload.status === "string" ? payload.status.trim().toLowerCase() : "";
-  return (
-    status === "failed" ||
-    status === "failure" ||
-    status === "error" ||
-    status === "cancelled" ||
-    status === "canceled"
-  );
 }
 
 function isCodexToolCallOutput(payloadType: unknown): boolean {
