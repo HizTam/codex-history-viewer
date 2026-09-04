@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import type { PerformanceProbe } from "../performance/performanceCounters";
 
 // Safe JSON read/write helpers for global storage (UTF-8).
 
@@ -22,15 +23,26 @@ export interface JsonReadOrDropCorruptResult<T> {
   deletion?: JsonDeleteResult;
 }
 
-export async function readJson<T>(uri: vscode.Uri): Promise<T | null> {
-  const result = await readJsonDetailed<T>(uri);
+export interface JsonStorageReadOptions {
+  readonly performanceProbe?: PerformanceProbe;
+}
+
+export async function readJson<T>(
+  uri: vscode.Uri,
+  options: JsonStorageReadOptions = {},
+): Promise<T | null> {
+  const result = await readJsonDetailed<T>(uri, options);
   return result.ok ? result.value : null;
 }
 
-export async function readJsonDetailed<T>(uri: vscode.Uri): Promise<JsonReadResult<T>> {
+export async function readJsonDetailed<T>(
+  uri: vscode.Uri,
+  options: JsonStorageReadOptions = {},
+): Promise<JsonReadResult<T>> {
   let buf: Uint8Array;
   try {
     buf = await vscode.workspace.fs.readFile(uri);
+    options.performanceProbe?.add("cacheReadByteCount", buf.byteLength);
   } catch (error) {
     return {
       ok: false,
@@ -64,8 +76,11 @@ export async function deleteJsonFileAfterParseError<T>(
   }
 }
 
-export async function readJsonOrDropCorrupt<T>(uri: vscode.Uri): Promise<JsonReadOrDropCorruptResult<T>> {
-  const result = await readJsonDetailed<T>(uri);
+export async function readJsonOrDropCorrupt<T>(
+  uri: vscode.Uri,
+  options: JsonStorageReadOptions = {},
+): Promise<JsonReadOrDropCorruptResult<T>> {
+  const result = await readJsonDetailed<T>(uri, options);
   if (result.ok || result.reason !== "parseError") return { result };
   const deletion = await deleteJsonFileAfterParseError(uri, result);
   return { result, deletion };
@@ -88,11 +103,17 @@ export function formatJsonReadOrDropCorruptDebug<T>(
 export async function writeJson<T>(
   uri: vscode.Uri,
   data: T,
-  options?: { pretty?: boolean; beforeCommit?: () => void },
+  options?: {
+    pretty?: boolean;
+    beforeCommit?: () => void;
+    performanceProbe?: PerformanceProbe;
+  },
 ): Promise<void> {
   const pretty = options?.pretty ?? true;
   const text = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
   const buf = new TextEncoder().encode(text);
+  options?.performanceProbe?.add("cacheWriteCount");
+  options?.performanceProbe?.add("cacheWriteByteCount", buf.byteLength);
   const tmpUri = buildTempJsonUri(uri);
   try {
     await vscode.workspace.fs.writeFile(tmpUri, buf);

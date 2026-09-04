@@ -19,6 +19,17 @@ import {
   extractCodexToolOutput,
   projectCodexStandaloneResponseItem,
 } from "../chat/codexResponseItems";
+import {
+  normalizeCodexCorrelationId,
+  readCodexAsyncQuestionMessage,
+  readCodexControlToolKind,
+  readCodexRolloutRecordKind,
+} from "../sessions/codexRolloutCompatibility";
+
+interface CodexTranscriptState {
+  readonly seenAsyncQuestionIds: Set<string>;
+  readonly suppressedControlCallIds: Set<string>;
+}
 
 // Reads session JSONL and renders the session transcript as Markdown.
 export async function renderTranscript(
@@ -65,6 +76,10 @@ export async function renderTranscript(
 
   let msgIndex = 0;
   let lastToolCallId: string | undefined;
+  const codexState: CodexTranscriptState = {
+    seenAsyncQuestionIds: new Set(),
+    suppressedControlCallIds: new Set(),
+  };
 
   for await (const record of readSessionJsonlRecords(fsPath, historySource, {
     sessionInventory: options.sessionInventory,
@@ -76,6 +91,7 @@ export async function renderTranscript(
       timeZone,
       msgIndex,
       lastToolCallId,
+      state: codexState,
     });
     if (codexResult.handled) {
       msgIndex = codexResult.msgIndex;
@@ -107,11 +123,39 @@ export async function renderTranscript(
 async function renderCodexRecord(
   lines: string[],
   messageLineMap: Map<number, number>,
-  params: { obj: any; timeZone: string; msgIndex: number; lastToolCallId?: string },
+  params: {
+    obj: any;
+    timeZone: string;
+    msgIndex: number;
+    lastToolCallId?: string;
+    state: CodexTranscriptState;
+  },
 ): Promise<{ handled: boolean; msgIndex: number; lastToolCallId?: string }> {
-  const { obj, timeZone } = params;
+  const { obj, timeZone, state } = params;
   let { msgIndex, lastToolCallId } = params;
 
+  const asyncQuestion = readCodexAsyncQuestionMessage(obj);
+  if (asyncQuestion) {
+    if (state.seenAsyncQuestionIds.has(asyncQuestion.itemId)) {
+      return { handled: true, msgIndex, lastToolCallId };
+    }
+    state.seenAsyncQuestionIds.add(asyncQuestion.itemId);
+    const text = normalizeWhitespace(asyncQuestion.text);
+    if (!text) return { handled: true, msgIndex, lastToolCallId };
+    msgIndex += 1;
+    messageLineMap.set(msgIndex, lines.length + 1);
+    lines.push(`## [#${msgIndex}] Assistant`);
+    const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``);
+    lines.push("");
+    appendMessageBodyLines(lines, [], text);
+    return { handled: true, msgIndex, lastToolCallId: undefined };
+  }
+
+  const recordKind = readCodexRolloutRecordKind(obj);
+  if (recordKind && recordKind !== "response_item") {
+    return { handled: true, msgIndex, lastToolCallId };
+  }
   if (obj?.type !== "response_item") return { handled: false, msgIndex, lastToolCallId };
 
   if (obj?.payload?.type === "message") {
@@ -143,6 +187,11 @@ async function renderCodexRecord(
   }
 
   if (obj?.payload?.type === "function_call" || obj?.payload?.type === "custom_tool_call") {
+    if (readCodexControlToolKind(obj)) {
+      const callId = normalizeCodexCorrelationId(obj?.payload?.call_id);
+      if (callId) state.suppressedControlCallIds.add(callId);
+      return { handled: true, msgIndex, lastToolCallId: undefined };
+    }
     const payloadType = obj.payload.type;
     const name =
       typeof obj?.payload?.name === "string"
@@ -178,6 +227,10 @@ async function renderCodexRecord(
   }
 
   if (obj?.payload?.type === "function_call_output" || obj?.payload?.type === "custom_tool_call_output") {
+    const normalizedCallId = normalizeCodexCorrelationId(obj?.payload?.call_id);
+    if (normalizedCallId && state.suppressedControlCallIds.has(normalizedCallId)) {
+      return { handled: true, msgIndex, lastToolCallId };
+    }
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
     const extracted = await extractCodexToolOutput(obj?.payload?.output, undefined, { enabled: false });
     const outRaw = extracted.text;

@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import {
-  buildChatSessionModel,
+  createChatTimelineRecordAccumulator,
 } from "../chat/chatModelBuilder";
 import {
   detectClaudeMaterializedMessageRole,
@@ -14,17 +14,23 @@ import type {
   ChatPatchGroupItem,
   ChatRateLimit,
   ChatRateLimits,
+  ChatSessionModel,
   ChatTimelineItem,
   ChatTokenUsage,
   ChatTokenUsageField,
   ChatTurnSummary,
   ChatUsageItem,
 } from "../chat/chatTypes";
+import { extractChatTokenUsage } from "../chat/tokenUsage";
 import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
 import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import {
-  readSessionJsonlLines,
+  readCodexCompactedTokenUsageRecord,
+  readCodexTokenUsageRecord,
+} from "../sessions/codexRolloutCompatibility";
+import {
+  SessionJsonlReadCancelledError,
   type CodexLogicalHistoryPlan,
 } from "../sessions/codexHistoryBase";
 import { normalizeCacheKey } from "../utils/fsUtils";
@@ -53,6 +59,11 @@ import {
   type SessionMessageStats,
   type SessionUsageStats,
 } from "./sessionAnalysisTypes";
+import type { PerformanceProbe } from "../performance/performanceCounters";
+import {
+  readAnalysisRecordEnvelopes,
+  type AnalysisRecordEnvelope,
+} from "./analysisRecordPipeline";
 
 const MAX_WARNINGS = 20;
 const MAX_GRAPH_PREVIEW_LENGTH = 180;
@@ -72,11 +83,15 @@ export interface SessionAnalysisAdapterInput {
   sessionInventory?: readonly SessionSummary[];
   historyPlan?: CodexLogicalHistoryPlan;
   historySignature?: string;
+  performanceProbe?: PerformanceProbe;
+  token?: { readonly isCancellationRequested: boolean };
+  cancellationErrorFactory?: () => Error;
 }
 
 interface JsonlScanResult {
   malformedLineCount: number;
   invalidTimestamp: boolean;
+  codexDurableUsageRecordCount: number;
   latestCodexCumulativeUsage?: ChatTokenUsage;
   claudeRecords: RawClaudeRecord[];
   claudeGraphRecordsTruncated: boolean;
@@ -184,21 +199,7 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
   const { session } = input;
   const warnings: string[] = [];
   try {
-    const model = await buildChatSessionModel(session.fsPath, {
-      includeDetails: false,
-      turnTimelineMode: "basic",
-      images: { enabled: false, maxSizeMB: 1, thumbnailSize: "small" },
-      sessionInventory: input.sessionInventory,
-      historyPlan: input.historyPlan,
-    });
-    const scan = await scanJsonl(
-      session.fsPath,
-      session.source,
-      session.source === "claude",
-      session.meta.cwd,
-      input.sessionInventory,
-      input.historyPlan,
-    );
+    const { model, scan } = await runAnalysisRecordPipeline(input);
     if (scan.malformedLineCount > 0) warnings.push(`malformedLines:${scan.malformedLineCount}`);
     if (input.historyPlan && !input.historyPlan.complete) {
       warnings.push(`historyBase:${input.historyPlan.issue ?? "unresolved"}`);
@@ -210,7 +211,13 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
       scan.malformedLineCount > 0 || (input.historyPlan !== undefined && !input.historyPlan.complete)
         ? "partial"
         : "available";
-    const usageResult = buildUsageStats(model.items, session.source, scan.latestCodexCumulativeUsage, availability);
+    const usageResult = buildUsageStats(
+      model.items,
+      session.source,
+      scan.latestCodexCumulativeUsage,
+      scan.codexDurableUsageRecordCount > 0,
+      availability,
+    );
     if (usageResult.modelUsageTruncated) warnings.push(`modelUsageLimit:${MAX_MODEL_USAGE}`);
     if (usageResult.modelEffortUsageTruncated) warnings.push(`modelEffortUsageLimit:${MAX_MODEL_EFFORT_USAGE}`);
     if (usageResult.tokenOverflow) warnings.push("tokenUsageOverflow");
@@ -253,6 +260,24 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
     ) {
       warnings.push(`toolUsageLimit:${MAX_TOOL_USAGE}`);
     }
+    const completeness =
+      scan.malformedLineCount > 0 ||
+      scan.claudeGraphRecordsTruncated ||
+      scan.claudeGraphIdentifierInvalid ||
+      usageResult.modelUsageTruncated ||
+      usageResult.modelEffortUsageTruncated ||
+      usageResult.tokenOverflow ||
+      fileChangeResult.entryPartial ||
+      rateLimitResult.invalidValue ||
+      timestampInvalid ||
+      projectCwdInvalid ||
+      warnings.includes("graphSessionIdInvalid") ||
+      warnings.some((warning) => warning.startsWith("historyBase:")) ||
+      warnings.includes("toolNameTruncated") ||
+      warnings.some((warning) => warning.startsWith("toolUsageLimit:"))
+        ? "partial"
+        : "complete";
+    if (completeness === "partial") input.performanceProbe?.setOutcome("partial");
     return {
       cacheKey: session.cacheKey,
       identityKey: session.identityKey,
@@ -267,23 +292,7 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
       ...(input.historySignature ? { historySignature: input.historySignature } : {}),
       parserVersion:
         session.source === "codex" ? SESSION_ANALYSIS_CODEX_PARSER_VERSION : SESSION_ANALYSIS_CLAUDE_PARSER_VERSION,
-      completeness:
-        scan.malformedLineCount > 0 ||
-        scan.claudeGraphRecordsTruncated ||
-        scan.claudeGraphIdentifierInvalid ||
-        usageResult.modelUsageTruncated ||
-        usageResult.modelEffortUsageTruncated ||
-        usageResult.tokenOverflow ||
-        fileChangeResult.entryPartial ||
-        rateLimitResult.invalidValue ||
-        timestampInvalid ||
-        projectCwdInvalid ||
-        warnings.includes("graphSessionIdInvalid") ||
-        warnings.some((warning) => warning.startsWith("historyBase:")) ||
-        warnings.includes("toolNameTruncated") ||
-        warnings.some((warning) => warning.startsWith("toolUsageLimit:"))
-          ? "partial"
-          : "complete",
+      completeness,
       messageStats,
       usageStats: usageResult.stats,
       fileChangeStats: fileChangeResult.stats,
@@ -305,6 +314,11 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
       warnings: warnings.slice(0, MAX_WARNINGS),
     };
   } catch (error) {
+    if (error instanceof SessionJsonlReadCancelledError) {
+      input.performanceProbe?.setOutcome("cancelled");
+      throw input.cancellationErrorFactory?.() ?? error;
+    }
+    input.performanceProbe?.setOutcome("failed");
     return buildFailedEntry(input, error);
   }
 }
@@ -354,6 +368,7 @@ function buildUsageStats(
   items: readonly ChatTimelineItem[],
   source: SessionSummary["source"],
   cumulativeFallback: ChatTokenUsage | undefined,
+  hasCodexDurableUsageRecords: boolean,
   completeAvailability: AnalysisAvailability,
 ): UsageStatsBuildResult {
   const usageItems = items.filter(
@@ -496,7 +511,9 @@ function buildUsageStats(
       aggregationMethod: tokenOverflow
         ? "mixedPartial"
         : source === "codex"
-          ? "codexLastUsageSum"
+          ? hasCodexDurableUsageRecords
+            ? "codexResponseUsageSum"
+            : "codexLastUsageSum"
           : "claudeMessageSum",
     },
     modelUsageTruncated,
@@ -773,59 +790,184 @@ function normalizeRateLimitValue(
     : { invalidValue };
 }
 
-async function scanJsonl(
-  fsPath: string,
-  source: "codex" | "claude",
-  collectClaudeRecords: boolean,
-  sessionCwd?: string,
-  sessionInventory?: readonly SessionSummary[],
-  historyPlan?: CodexLogicalHistoryPlan,
-): Promise<JsonlScanResult> {
-  const pastedPromptResolver = collectClaudeRecords ? await createClaudePastedPromptResolver(fsPath) : undefined;
-  let malformedLineCount = 0;
-  let invalidTimestamp = false;
-  let latestCodexCumulativeUsage: ChatTokenUsage | undefined;
-  let observedSidechainTrue = false;
-  let observedSidechainFalse = false;
-  let claudeGraphRecordsTruncated = false;
-  let claudeGraphIdentifierInvalid = false;
-  const claudeRecords: RawClaudeRecord[] = [];
-  for await (const record of readSessionJsonlLines(fsPath, source, {
-    sessionInventory,
-    plan: historyPlan,
+async function runAnalysisRecordPipeline(
+  input: SessionAnalysisAdapterInput,
+): Promise<{ model: ChatSessionModel; scan: JsonlScanResult }> {
+  const { session } = input;
+  throwIfAnalysisCancelled(input);
+  const chat = await createChatTimelineRecordAccumulator(
+    session.fsPath,
+    session.source,
+    session.meta.cwd,
+    {
+      includeDetails: false,
+      turnTimelineMode: session.source === "codex" ? "basic" : "off",
+      images: { enabled: false, maxSizeMB: 1, thumbnailSize: "small" },
+      sessionInventory: input.sessionInventory,
+      historyPlan: input.historyPlan,
+      performanceProbe: input.performanceProbe,
+    },
+  );
+  throwIfAnalysisCancelled(input);
+  const integrity = new AnalysisIntegrityReducer();
+  const claudeGraph = session.source === "claude"
+    ? new ClaudeGraphRecordReducer(
+        session.meta.cwd,
+        await createClaudePastedPromptResolver(session.fsPath),
+      )
+    : undefined;
+  throwIfAnalysisCancelled(input);
+
+  for await (const envelope of readAnalysisRecordEnvelopes(session.fsPath, session.source, {
+    sessionInventory: input.sessionInventory,
+    plan: input.historyPlan,
+    token: input.token,
+    performanceProbe: input.performanceProbe,
   })) {
-    const recordOrdinal = record.lineIndex;
-    const { line } = record;
-    if (!line.trim()) continue;
-    let obj: any;
-    try {
-      obj = JSON.parse(line);
-    } catch {
-      malformedLineCount += 1;
-      continue;
-    }
-    if (hasInvalidRawTimestamp(obj)) invalidTimestamp = true;
-    const cumulative = extractTokenUsage(obj?.payload?.info?.total_token_usage);
-    if (cumulative) latestCodexCumulativeUsage = cumulative;
-    if (!collectClaudeRecords) continue;
-    if (obj?.isSidechain === true) observedSidechainTrue = true;
-    else if (obj?.isSidechain === false) observedSidechainFalse = true;
-    if (claudeRecords.length >= MAX_GRAPH_RECORDS) {
-      claudeGraphRecordsTruncated = true;
-      continue;
-    }
-    const builtRecord = await buildRawClaudeRecord(obj, recordOrdinal, sessionCwd, pastedPromptResolver);
-    if (builtRecord.invalidGraphIdentifier) claudeGraphIdentifierInvalid = true;
-    claudeRecords.push(builtRecord.record);
+    integrity.accept(envelope);
+    if (envelope.kind !== "parsed") continue;
+    const pendingChatRecord = chat.accept(envelope);
+    if (pendingChatRecord) await pendingChatRecord;
+    throwIfAnalysisCancelled(input);
+    if (claudeGraph) await claudeGraph.accept(envelope);
+    throwIfAnalysisCancelled(input);
   }
+
+  throwIfAnalysisCancelled(input);
+  const timeline = chat.finalize();
+  const model: ChatSessionModel = {
+    fsPath: session.fsPath,
+    meta: {
+      id: session.meta.id,
+      timestampIso: session.meta.timestampIso,
+      cwd: session.meta.cwd,
+      originator: session.meta.originator,
+      cliVersion: session.meta.cliVersion,
+      modelProvider: session.meta.modelProvider,
+      source: session.meta.source,
+      historySource: session.source,
+    },
+    items: timeline.items,
+    ...(timeline.turns && timeline.turns.length > 0 ? { turns: timeline.turns } : {}),
+    ...(timeline.activeTurnId ? { activeTurnId: timeline.activeTurnId } : {}),
+    ...(timeline.latestTurnId ? { latestTurnId: timeline.latestTurnId } : {}),
+  };
   return {
-    malformedLineCount,
-    invalidTimestamp,
-    ...(latestCodexCumulativeUsage ? { latestCodexCumulativeUsage } : {}),
-    claudeRecords,
-    claudeGraphRecordsTruncated,
-    claudeGraphIdentifierInvalid,
-    claudeSidechainState: observedSidechainTrue ? true : observedSidechainFalse ? false : "unknown",
+    model,
+    scan: {
+      ...integrity.finalize(),
+      ...(claudeGraph?.finalize() ?? emptyClaudeGraphScanResult()),
+    },
+  };
+}
+
+function throwIfAnalysisCancelled(input: SessionAnalysisAdapterInput): void {
+  if (input.token?.isCancellationRequested) throw new SessionJsonlReadCancelledError();
+}
+
+class AnalysisIntegrityReducer {
+  private malformedLineCount = 0;
+  private invalidTimestamp = false;
+  private codexDurableUsageRecordCount = 0;
+  private latestCodexCumulativeUsage: ChatTokenUsage | undefined;
+
+  public accept(envelope: AnalysisRecordEnvelope): void {
+    if (envelope.kind === "malformed") {
+      this.malformedLineCount += 1;
+      return;
+    }
+    if (envelope.kind !== "parsed") return;
+    const obj: any = envelope.value;
+    if (hasInvalidRawTimestamp(obj)) this.invalidTimestamp = true;
+    if (envelope.codexRecordKind === "token_usage_record") {
+      const record = readCodexTokenUsageRecord(obj);
+      if (!record) return;
+      if (extractChatTokenUsage(record.usage)) this.codexDurableUsageRecordCount += 1;
+      const cumulative = extractChatTokenUsage(record.threadTokenUsage);
+      if (cumulative) this.latestCodexCumulativeUsage = cumulative;
+      return;
+    }
+    if (envelope.codexRecordKind === "compacted") {
+      const record = readCodexCompactedTokenUsageRecord(obj);
+      const cumulative = record ? extractChatTokenUsage(record.threadTokenUsage) : undefined;
+      if (cumulative) this.latestCodexCumulativeUsage = cumulative;
+      return;
+    }
+    const cumulative = extractChatTokenUsage(obj?.payload?.info?.total_token_usage);
+    if (cumulative) this.latestCodexCumulativeUsage = cumulative;
+  }
+
+  public finalize(): Pick<
+    JsonlScanResult,
+    "malformedLineCount" | "invalidTimestamp" | "codexDurableUsageRecordCount" | "latestCodexCumulativeUsage"
+  > {
+    return {
+      malformedLineCount: this.malformedLineCount,
+      invalidTimestamp: this.invalidTimestamp,
+      codexDurableUsageRecordCount: this.codexDurableUsageRecordCount,
+      ...(this.latestCodexCumulativeUsage
+        ? { latestCodexCumulativeUsage: this.latestCodexCumulativeUsage }
+        : {}),
+    };
+  }
+}
+
+class ClaudeGraphRecordReducer {
+  private observedSidechainTrue = false;
+  private observedSidechainFalse = false;
+  private claudeGraphRecordsTruncated = false;
+  private claudeGraphIdentifierInvalid = false;
+  private readonly claudeRecords: RawClaudeRecord[] = [];
+
+  public constructor(
+    private readonly sessionCwd: string | undefined,
+    private readonly pastedPromptResolver: ClaudePastedPromptResolver | undefined,
+  ) {}
+
+  public async accept(envelope: Extract<AnalysisRecordEnvelope, { kind: "parsed" }>): Promise<void> {
+    const obj: any = envelope.value;
+    if (obj?.isSidechain === true) this.observedSidechainTrue = true;
+    else if (obj?.isSidechain === false) this.observedSidechainFalse = true;
+    if (this.claudeRecords.length >= MAX_GRAPH_RECORDS) {
+      this.claudeGraphRecordsTruncated = true;
+      return;
+    }
+    const builtRecord = await buildRawClaudeRecord(
+      obj,
+      envelope.lineIndex,
+      this.sessionCwd,
+      this.pastedPromptResolver,
+    );
+    if (builtRecord.invalidGraphIdentifier) this.claudeGraphIdentifierInvalid = true;
+    this.claudeRecords.push(builtRecord.record);
+  }
+
+  public finalize(): Pick<
+    JsonlScanResult,
+    "claudeRecords" | "claudeGraphRecordsTruncated" | "claudeGraphIdentifierInvalid" | "claudeSidechainState"
+  > {
+    return {
+      claudeRecords: this.claudeRecords,
+      claudeGraphRecordsTruncated: this.claudeGraphRecordsTruncated,
+      claudeGraphIdentifierInvalid: this.claudeGraphIdentifierInvalid,
+      claudeSidechainState: this.observedSidechainTrue
+        ? true
+        : this.observedSidechainFalse
+          ? false
+          : "unknown",
+    };
+  }
+}
+
+function emptyClaudeGraphScanResult(): Pick<
+  JsonlScanResult,
+  "claudeRecords" | "claudeGraphRecordsTruncated" | "claudeGraphIdentifierInvalid" | "claudeSidechainState"
+> {
+  return {
+    claudeRecords: [],
+    claudeGraphRecordsTruncated: false,
+    claudeGraphIdentifierInvalid: false,
+    claudeSidechainState: "unknown",
   };
 }
 
@@ -1139,6 +1281,13 @@ export function buildUnsupportedSessionAnalysisEntry(
   return buildUnavailableEntry(input, "unsupported", `unsupported:${reason}`);
 }
 
+export function buildSourceChangedSessionAnalysisEntry(
+  input: SessionAnalysisAdapterInput,
+): SessionAnalysisEntry {
+  input.performanceProbe?.setOutcome("partial");
+  return buildUnavailableEntry(input, "failed", "sourceChangedDuringAnalysis");
+}
+
 function buildUnavailableEntry(
   input: SessionAnalysisAdapterInput,
   completeness: "failed" | "unsupported",
@@ -1261,32 +1410,6 @@ function addTokenUsage(
     }
   }
   return overflowed;
-}
-
-function extractTokenUsage(value: unknown): ChatTokenUsage | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const raw = value as Record<string, unknown>;
-  const usage: ChatTokenUsage = {};
-  const invalidFields: ChatTokenUsageField[] = [];
-  for (const [key, rawKey] of [
-    ["inputTokens", "input_tokens"],
-    ["outputTokens", "output_tokens"],
-    ["cachedInputTokens", "cached_input_tokens"],
-    ["cacheReadInputTokens", "cache_read_input_tokens"],
-    ["cacheCreationInputTokens", "cache_creation_input_tokens"],
-    ["reasoningOutputTokens", "reasoning_output_tokens"],
-    ["totalTokens", "total_tokens"],
-  ] as const) {
-    if (!(rawKey in raw)) continue;
-    const normalized = normalizeToken(raw[rawKey]);
-    if (normalized === undefined) {
-      invalidFields.push(key);
-    } else {
-      usage[key] = normalized;
-    }
-  }
-  if (invalidFields.length > 0) usage.invalidFields = invalidFields;
-  return Object.keys(usage).length > 0 ? usage : undefined;
 }
 
 function resolveUsageTotal(usage: ChatTokenUsage): { value?: number; overflowed: boolean } {

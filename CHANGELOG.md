@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.14.0] - 2026-09-04
+
+### Added
+
+- Added a completion-notification action that copies the generated handoff file's absolute path to the clipboard.
+- Added turn timeline support for Claude Code sessions.
+
+### Changed
+
+- Reworked caching and history-reading paths to improve overall performance.
+- Added support for newer Codex history records.
+
+### Fixed
+
+- Fixed an issue where the same file could be counted and displayed more than once in a Session Viewer diff summary when it was modified multiple times within the same Codex turn.
+- Fixed Codex token totals excluding cache-write input tokens or double-counting usage when durable and legacy usage records coexist.
+
 ## [2.13.1] - 2026-09-03
 
 ### Fixed

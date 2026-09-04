@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig, HistoryDateBasis } from "../settings";
-import { findSessionFiles, type DiscoveredSessionFile } from "../sessions/sessionDiscovery";
+import { discoverSessionFiles, type DiscoveredSessionFile } from "../sessions/sessionDiscovery";
 import type { HistoryIndex, HistoryRoots, SessionSummary } from "../sessions/sessionTypes";
 import {
   buildSessionSummary,
@@ -9,7 +9,11 @@ import {
 } from "../sessions/sessionSummary";
 import { sanitizeCachedCodexAgentMetadata } from "../agents/codexAgentMetadata";
 import { sanitizeCachedCodexForkMetadata } from "../branchMap/codexForkMetadata";
-import { sanitizeCachedCodexHistoryBaseMetadata } from "../sessions/codexHistoryBase";
+import {
+  resolveCodexLogicalHistoryPlan,
+  sanitizeCachedCodexHistoryBaseMetadata,
+  type CodexLogicalHistoryPlan,
+} from "../sessions/codexHistoryBase";
 import { resolveSessionDisplayTitle, resolveSessionDisplayTitles } from "../sessions/sessionTitleResolver";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { HISTORY_CACHE_FILE_NAME, HISTORY_CACHE_FILE_PATTERN } from "../storage/cacheFiles";
@@ -25,12 +29,19 @@ import type { DebugLogger } from "./logger";
 import { sanitizeDebugError } from "./debugLogUtils";
 import { isBoundedSessionIdentityKey } from "../sessions/sessionIdentity";
 import { isValidByteCount } from "../utils/formatBytes";
+import type { PerformanceProbe } from "../performance/performanceCounters";
+import { buildCanonicalFingerprint } from "../utils/canonicalFingerprint";
 
 interface CacheEntryV1 {
   mtimeMs: number;
   size: number;
   summary: SessionSummary;
   codexAgentMetadataVersion?: 1;
+}
+
+interface HistoryInputStamp {
+  readonly mtimeMs: number;
+  readonly size: number;
 }
 
 const SUMMARY_CACHE_ALGO_VERSION = 19;
@@ -78,6 +89,8 @@ interface RefreshFileResult {
   summaryOk: number;
   summaryFailed: number;
   summaryMs: number;
+  unstableFileCount: number;
+  incomplete: boolean;
 }
 
 interface HistoryBuildMetrics {
@@ -94,11 +107,39 @@ interface HistoryBuildMetrics {
 }
 
 interface HistoryBuildResult {
-  index: HistoryIndex;
+  roots: HistoryRoots;
+  sessions: SessionSummary[];
+  historySources: SessionSummary[];
+  logicalPlanSignatures: ReadonlyMap<string, string>;
   cache: CacheFileV9;
   verifiedCacheKeys: Set<string>;
   metadataComplete: boolean;
+  unstableFileCount: number;
+  inventoryComplete: boolean;
+  discoveryFailureCount: number;
   metrics: HistoryBuildMetrics;
+}
+
+interface HistoryStateFingerprints {
+  readonly presentation: string;
+  readonly inventory: string;
+  readonly cache: string;
+}
+
+export type HistoryCacheWriteDisposition =
+  | "skippedUnchanged"
+  | "skippedIncomplete"
+  | "succeeded"
+  | "failed";
+
+export interface HistoryRefreshResult {
+  readonly presentationChanged: boolean;
+  readonly inventoryChanged: boolean;
+  readonly cacheChanged: boolean;
+  readonly cacheWrite: HistoryCacheWriteDisposition;
+  readonly unstableFileCount: number;
+  readonly inventoryComplete: boolean;
+  readonly discoveryFailureCount: number;
 }
 
 export interface HistoryRebuildSnapshot {
@@ -116,6 +157,13 @@ class HistoryOperationSupersededError extends Error {
   }
 }
 
+class HistoryInventoryIncompleteError extends Error {
+  constructor() {
+    super("History inventory could not be observed completely.");
+    this.name = "HistoryInventoryIncompleteError";
+  }
+}
+
 export function isHistoryOperationSupersededError(error: unknown): boolean {
   return error instanceof HistoryOperationSupersededError;
 }
@@ -125,6 +173,7 @@ function applyHistoryDateBasis(summary: SessionSummary, historyDateBasis: Histor
     historyDateBasis === "lastActivity" ? summary.lastActivityLocalDate : summary.startedLocalDate;
   const timeLabel =
     historyDateBasis === "lastActivity" ? summary.lastActivityTimeLabel : summary.startedTimeLabel;
+  if (summary.localDate === localDate && summary.timeLabel === timeLabel) return summary;
   return { ...summary, localDate, timeLabel };
 }
 
@@ -161,12 +210,12 @@ function compareIdentityCandidate(left: SessionSummary, right: SessionSummary): 
 async function cleanupObsoleteHistoryCacheFiles(
   globalStorageUri: vscode.Uri,
   currentCacheFileName: string,
-): Promise<void> {
+): Promise<boolean> {
   let entries: [string, vscode.FileType][];
   try {
     entries = await vscode.workspace.fs.readDirectory(globalStorageUri);
   } catch {
-    return;
+    return false;
   }
 
   const deletions = entries
@@ -174,13 +223,15 @@ async function cleanupObsoleteHistoryCacheFiles(
     .filter(([name]) => name.toLowerCase() !== currentCacheFileName.toLowerCase())
     .map(([name]) => vscode.Uri.joinPath(globalStorageUri, name));
 
+  let complete = true;
   for (const fileUri of deletions) {
     try {
       await vscode.workspace.fs.delete(fileUri, { recursive: false, useTrash: false });
     } catch {
-      // Ignore cleanup failures and keep the current cache usable.
+      complete = false;
     }
   }
+  return complete;
 }
 
 function buildHistoryRoots(config: CodexHistoryViewerConfig): HistoryRoots {
@@ -191,7 +242,8 @@ function buildHistoryRoots(config: CodexHistoryViewerConfig): HistoryRoots {
   };
 }
 
-function emptyIndex(roots: HistoryRoots): HistoryIndex {
+function emptyIndex(roots: HistoryRoots, performanceProbe?: PerformanceProbe): HistoryIndex {
+  performanceProbe?.add("mapMaterializationCount", 5);
   return {
     sessionsRoot: roots.codexSessionsRoot,
     roots,
@@ -219,6 +271,11 @@ export class HistoryService {
   private indexConfigKey = "";
   private cacheForCurrentIndex: CacheFileV9 | null = null;
   private cacheIndexGeneration = -1;
+  private stateFingerprints: HistoryStateFingerprints | null = null;
+  private persistedCacheFingerprint: string | null = null;
+  private logicalPlanSignaturesByCacheKey: ReadonlyMap<string, string> = new Map();
+  private readonly summaryFingerprintCache = new WeakMap<SessionSummary, string>();
+  private obsoleteHistoryCacheCleanupPending = true;
   private codexAgentMetadataComplete = false;
   private codexAgentMetadataVerifiedCacheKeys = new Set<string>();
   private codexAgentMetadataBackfillPromise: Promise<CodexAgentMetadataBackfillResult> | null = null;
@@ -269,15 +326,33 @@ export class HistoryService {
     verifiedCacheKeys: Set<string>;
     metadataComplete: boolean;
     preserveInventoryGeneration?: boolean;
+    performanceProbe?: PerformanceProbe;
+    fingerprints?: HistoryStateFingerprints | null;
+    cachePersisted?: boolean;
+    logicalPlanSignatures?: ReadonlyMap<string, string>;
+    replaceIndex?: boolean;
+    inventoryChanged?: boolean;
+    advanceGeneration?: boolean;
   }): number {
-    this.index = params.index;
+    const replaceIndex = params.replaceIndex !== false;
+    const inventoryChanged = params.inventoryChanged ?? !params.preserveInventoryGeneration;
+    const advanceGeneration = params.advanceGeneration ?? (replaceIndex || inventoryChanged);
+    if (replaceIndex) this.index = params.index;
     this.indexConfigKey = params.configKey;
     this.codexAgentMetadataVerifiedCacheKeys = params.verifiedCacheKeys;
     this.codexAgentMetadataComplete = params.metadataComplete;
-    if (!params.preserveInventoryGeneration) this.indexInventoryGeneration += 1;
-    this.indexGeneration += 1;
+    if (inventoryChanged) this.indexInventoryGeneration += 1;
+    if (advanceGeneration) this.indexGeneration += 1;
     this.cacheForCurrentIndex = params.cache;
     this.cacheIndexGeneration = this.indexGeneration;
+    this.stateFingerprints = params.fingerprints === undefined ? null : params.fingerprints;
+    if (params.logicalPlanSignatures) {
+      this.logicalPlanSignaturesByCacheKey = params.logicalPlanSignatures;
+    }
+    if (params.cachePersisted) {
+      this.persistedCacheFingerprint = this.stateFingerprints?.cache ?? null;
+    }
+    if (replaceIndex) params.performanceProbe?.add("historyIndexReplacementCount");
     return this.indexGeneration;
   }
 
@@ -368,36 +443,77 @@ export class HistoryService {
     const summaries = Object.values(normalized.entries)
       .map((entry) => applyHistoryDateBasis(entry.summary, config.historyDateBasis));
     const historySources = Array.from(summaries);
+    const logicalPlans = await this.resolveLogicalHistoryPlans(historySources);
+    if (countInconsistentLogicalHistoryPlans(historySources, logicalPlans, normalized.entries) > 0) {
+      this.logger?.debug(`history.cacheImmediate logicalPlanChanged totalMs=${elapsedMs(startedAt)}`);
+      return false;
+    }
     const selectedSummaries = selectPreferredSummariesByIdentity(summaries);
-    const previewResolvedSummaries = await mapWithConcurrency(
+    const previewResults = await mapWithConcurrency(
       selectedSummaries,
       HISTORY_REFRESH_CONCURRENCY,
-      (summary) => rebuildCodexHistoryBasePreview(
-        summary,
-        historySources,
-        config.previewMaxMessages,
-      ),
+      async (summary) => {
+        const plan = logicalPlans.get(summary.cacheKey);
+        const result = await rebuildCodexHistoryBasePreview(
+          summary,
+          historySources,
+          config.previewMaxMessages,
+          undefined,
+          undefined,
+          plan,
+        );
+        return { ...result, plan };
+      },
     );
+    if (previewResults.some((result) => !result.complete)) {
+      this.logger?.debug(`history.cacheImmediate logicalPreviewFailed totalMs=${elapsedMs(startedAt)}`);
+      return false;
+    }
+    if (await this.countChangedLogicalHistorySegments(previewResults.map((result) => result.plan)) > 0) {
+      this.logger?.debug(`history.cacheImmediate logicalPreviewChanged totalMs=${elapsedMs(startedAt)}`);
+      return false;
+    }
+    const previewResolvedSummaries = previewResults.map((result) => result.summary);
     const resolvedSummaries = await this.resolveDisplayTitles(previewResolvedSummaries, config);
     sortSummariesByDisplayDate(resolvedSummaries);
     if (!this.isOperationContextCurrent(operation)) {
       this.logger?.debug(`history.cacheImmediate superseded totalMs=${elapsedMs(startedAt)}`);
       return false;
     }
-    const nextIndex = buildIndex(roots, resolvedSummaries, historySources);
-    const verifiedCacheKeys = collectVerifiedCodexMetadataCacheKeys(normalized.entries);
+    const hydratedEntries: Record<string, CacheEntryV1> = { ...normalized.entries };
+    for (const summary of resolvedSummaries) {
+      const entry = hydratedEntries[summary.cacheKey];
+      if (entry && entry.summary !== summary) {
+        hydratedEntries[summary.cacheKey] = { ...entry, summary };
+      }
+    }
+    const hydratedCache = normalizeCacheFile(normalizedCache, hydratedEntries);
+    const resolvedHistorySources = replaceSummariesByCacheKey(historySources, resolvedSummaries);
+    const nextIndex = buildIndex(roots, resolvedSummaries, resolvedHistorySources);
+    const logicalPlanSignatures = collectLogicalPlanSignatures(logicalPlans);
+    const fingerprints = this.buildHistoryStateFingerprints({
+      roots,
+      sessions: resolvedSummaries,
+      historySources: resolvedHistorySources,
+      cache: hydratedCache,
+      logicalPlanSignatures,
+    });
+    const verifiedCacheKeys = collectVerifiedCodexMetadataCacheKeys(hydratedEntries);
     const metadataComplete = isCompleteCodexAgentMetadataCache(
-      normalizedCache,
-      normalized.entries,
+      hydratedCache,
+      hydratedEntries,
       nextIndex,
     );
     this.commitIndexState({
       index: nextIndex,
-      cache: normalizedCache,
+      cache: hydratedCache,
       configKey: getHistoryServiceConfigKey(operation.config),
       verifiedCacheKeys,
       metadataComplete,
+      fingerprints,
+      logicalPlanSignatures,
     });
+    this.persistedCacheFingerprint = this.buildDurableCacheFingerprint(normalizedCache) ?? null;
     this.logger?.debug(
       [
         "history.cacheImmediate loaded",
@@ -531,6 +647,13 @@ export class HistoryService {
       codexAgentMetadataVersion: complete ? 1 : undefined,
       entries,
     };
+    const nextFingerprints = this.buildHistoryStateFingerprints({
+      roots: nextIndex.roots,
+      sessions: nextIndex.sessions,
+      historySources: nextIndex.historySources ?? nextIndex.sessions,
+      cache: nextCache,
+      logicalPlanSignatures: this.logicalPlanSignaturesByCacheKey,
+    });
     const verifiedCacheKeys = collectVerifiedCodexMetadataCacheKeys(entries);
     if (
       generation !== this.indexGeneration ||
@@ -546,6 +669,8 @@ export class HistoryService {
       verifiedCacheKeys,
       metadataComplete: complete,
       preserveInventoryGeneration: true,
+      fingerprints: nextFingerprints,
+      logicalPlanSignatures: this.logicalPlanSignaturesByCacheKey,
     });
     let supersededDuringWrite = false;
     try {
@@ -561,6 +686,13 @@ export class HistoryService {
           }
         },
       });
+      if (
+        this.isOperationContextCurrent(operation) &&
+        this.indexGeneration === committedGeneration &&
+        this.cacheForCurrentIndex === nextCache
+      ) {
+        this.persistedCacheFingerprint = nextFingerprints?.cache ?? null;
+      }
     } catch (error) {
       if (error instanceof HistoryOperationSupersededError) {
         supersededDuringWrite = true;
@@ -578,7 +710,11 @@ export class HistoryService {
     return { complete, updated, failed, cancelled: false };
   }
 
-  public refresh(options: { forceRebuildCache: boolean; shouldStart?: () => boolean }): Promise<void> {
+  public refresh(options: {
+    forceRebuildCache: boolean;
+    shouldStart?: () => boolean;
+    performanceProbe?: PerformanceProbe;
+  }): Promise<HistoryRefreshResult> {
     return this.enqueueOperation(() => {
       if (options.shouldStart && !options.shouldStart()) {
         throw new HistoryOperationSupersededError();
@@ -616,6 +752,15 @@ export class HistoryService {
       token,
     });
     throwIfHistoryRebuildCancelled(token);
+    if (!built.inventoryComplete) throw new HistoryInventoryIncompleteError();
+    const rebuiltIndex = buildIndex(built.roots, built.sessions, built.historySources);
+    const rebuiltFingerprints = this.buildHistoryStateFingerprints({
+      roots: built.roots,
+      sessions: built.sessions,
+      historySources: built.historySources,
+      cache: built.cache,
+      logicalPlanSignatures: built.logicalPlanSignatures,
+    });
 
     const writeCacheStartedAt = nowMs();
     await writeJson(this.getCacheUri(), built.cache, {
@@ -628,19 +773,39 @@ export class HistoryService {
       getHistoryServiceConfigKey(config) === this.configKey &&
       dateTimeSettingsKey === currentDateTimeSettingsKey;
     if (adopted) {
+      const presentationChanged = fingerprintsDiffer(
+        this.stateFingerprints?.presentation,
+        rebuiltFingerprints?.presentation,
+      );
+      const inventoryChanged = fingerprintsDiffer(
+        this.stateFingerprints?.inventory,
+        rebuiltFingerprints?.inventory,
+      );
       this.commitIndexState({
-        index: built.index,
+        index: rebuiltIndex,
         cache: built.cache,
         configKey: getHistoryServiceConfigKey(config),
         verifiedCacheKeys: built.verifiedCacheKeys,
         metadataComplete: built.metadataComplete,
+        fingerprints: rebuiltFingerprints,
+        cachePersisted: true,
+        logicalPlanSignatures: built.logicalPlanSignatures,
+        replaceIndex: presentationChanged,
+        inventoryChanged,
+        advanceGeneration: presentationChanged || inventoryChanged,
       });
+    } else {
+      this.persistedCacheFingerprint = null;
     }
 
-    try {
-      await cleanupObsoleteHistoryCacheFiles(this.globalStorageUri, HISTORY_CACHE_FILE_NAME);
-    } catch (error) {
-      this.logger?.debug(`history cache cleanup failed error=${sanitizeDebugError(error)}`);
+    if (this.obsoleteHistoryCacheCleanupPending) {
+      try {
+        if (await cleanupObsoleteHistoryCacheFiles(this.globalStorageUri, HISTORY_CACHE_FILE_NAME)) {
+          this.obsoleteHistoryCacheCleanupPending = false;
+        }
+      } catch (error) {
+        this.logger?.debug(`history cache cleanup failed error=${sanitizeDebugError(error)}`);
+      }
     }
 
     const { metrics } = built;
@@ -666,13 +831,16 @@ export class HistoryService {
     return Object.freeze({
       config,
       dateTimeSettingsKey,
-      index: built.index,
-      sessions: Object.freeze(Array.from(built.index.sessions)),
+      index: rebuiltIndex,
+      sessions: Object.freeze(Array.from(rebuiltIndex.sessions)),
       adopted,
     });
   }
 
-  private async refreshCore(options: { forceRebuildCache: boolean }): Promise<void> {
+  private async refreshCore(options: {
+    forceRebuildCache: boolean;
+    performanceProbe?: PerformanceProbe;
+  }): Promise<HistoryRefreshResult> {
     const operation = this.captureOperationContext();
     const { config } = operation;
     const totalStartedAt = nowMs();
@@ -683,6 +851,7 @@ export class HistoryService {
 
     const cacheUri = this.getCacheUri();
     let cache: CacheFileV9 | null = null;
+    let cacheSource: "process" | "disk" | null = null;
     if (!options.forceRebuildCache) {
       const processCache =
         this.cacheIndexGeneration === this.indexGeneration &&
@@ -692,54 +861,164 @@ export class HistoryService {
           : null;
       if (processCache) {
         cache = processCache;
+        cacheSource = "process";
       } else {
-        const diskCache = await this.readCacheFile();
-        if (this.isFreshCache(diskCache, dateTimeSettingsKey, config)) cache = diskCache;
+        const diskCache = await this.readCacheFile(options.performanceProbe);
+        if (this.isFreshCache(diskCache, dateTimeSettingsKey, config)) {
+          cache = diskCache;
+          cacheSource = "disk";
+        }
       }
     }
-    const normalizedCache = cache ? normalizeCacheEntries(cache.entries) : { entries: {}, dropped: 0 };
+    // The process cache is service-owned and already normalized; keep entry identities for no-op detection.
+    const normalizedCache = cacheSource === "process" && cache
+      ? { entries: cache.entries, dropped: 0 }
+      : cache
+        ? normalizeCacheEntries(cache.entries)
+        : { entries: {}, dropped: 0 };
     if (normalizedCache.dropped > 0) {
       this.logger?.debug(`history.cache invalidEntries=${normalizedCache.dropped}`);
     }
+    const normalizedSourceCache = cacheSource === "disk" && cache
+      ? normalizeCacheFile(cache, normalizedCache.entries)
+      : null;
+    const persistedFingerprint = options.forceRebuildCache
+      ? this.persistedCacheFingerprint
+      : cacheSource === "process"
+        ? this.persistedCacheFingerprint
+        : cacheSource === "disk" && normalizedCache.dropped === 0 && normalizedSourceCache
+          ? (this.buildDurableCacheFingerprint(normalizedSourceCache) ?? null)
+          : null;
     const built = await this.buildHistoryState({
       config,
       dateTime,
       dateTimeSettingsKey,
       cachedEntries: normalizedCache.entries,
+      performanceProbe: options.performanceProbe,
+      reuseLogicalPreviews: cacheSource === "process",
     });
     if (!this.isOperationContextCurrent(operation)) throw new HistoryOperationSupersededError();
+    if (!built.inventoryComplete) {
+      options.performanceProbe?.setOutcome("partial");
+      const { metrics } = built;
+      this.logger?.debug(
+        [
+          "history.refresh incomplete",
+          `totalMs=${elapsedMs(totalStartedAt)}`,
+          `files=${metrics.files}`,
+          `discoverMs=${metrics.discoverMs}`,
+          `processMs=${metrics.processMs}`,
+          `statMiss=${metrics.statMiss}`,
+          `cacheHit=${metrics.cacheHit}`,
+          `cacheMiss=${metrics.cacheMiss}`,
+          `summaryOk=${metrics.summaryOk}`,
+          `summaryFailed=${metrics.summaryFailed}`,
+          `unstableFiles=${built.unstableFileCount}`,
+          `discoveryFailures=${built.discoveryFailureCount}`,
+        ].join(" "),
+      );
+      return Object.freeze({
+        presentationChanged: false,
+        inventoryChanged: false,
+        cacheChanged: false,
+        cacheWrite: "skippedIncomplete" as const,
+        unstableFileCount: built.unstableFileCount,
+        inventoryComplete: false,
+        discoveryFailureCount: built.discoveryFailureCount,
+      });
+    }
+    const fingerprints = (
+      cacheSource === "process"
+        ? this.reuseCurrentStateFingerprints(built)
+        : null
+    ) ?? this.buildHistoryStateFingerprints({
+      roots: built.roots,
+      sessions: built.sessions,
+      historySources: built.historySources,
+      cache: built.cache,
+      logicalPlanSignatures: built.logicalPlanSignatures,
+    });
+    const presentationChanged = fingerprintsDiffer(
+      this.stateFingerprints?.presentation,
+      fingerprints?.presentation,
+    );
+    const inventoryChanged = fingerprintsDiffer(
+      this.stateFingerprints?.inventory,
+      fingerprints?.inventory,
+    );
+    const cacheChanged = fingerprintsDiffer(
+      persistedFingerprint ?? undefined,
+      fingerprints?.cache,
+    );
+    const shouldWriteCache = options.forceRebuildCache || cacheChanged;
+    if (!cacheChanged) options.performanceProbe?.add("durableFingerprintHitCount");
+
+    const candidateIndex = presentationChanged
+      ? buildIndex(built.roots, built.sessions, built.historySources, options.performanceProbe)
+      : this.index;
     const committedGeneration = this.commitIndexState({
-      index: built.index,
+      index: candidateIndex,
       cache: built.cache,
       configKey: getHistoryServiceConfigKey(operation.config),
       verifiedCacheKeys: built.verifiedCacheKeys,
       metadataComplete: built.metadataComplete,
+      performanceProbe: options.performanceProbe,
+      fingerprints,
+      logicalPlanSignatures: built.logicalPlanSignatures,
+      replaceIndex: presentationChanged,
+      inventoryChanged,
+      advanceGeneration: presentationChanged || inventoryChanged,
     });
-    const writeCacheStartedAt = nowMs();
     let supersededDuringWrite = false;
-    try {
-      await writeJson(cacheUri, built.cache, {
-        beforeCommit: () => {
-          if (
-            !this.isOperationContextCurrent(operation) ||
-            this.indexGeneration !== committedGeneration ||
-            this.cacheForCurrentIndex !== built.cache
-          ) {
-            throw new HistoryOperationSupersededError();
-          }
-        },
-      });
-      writeCacheMs = elapsedMs(writeCacheStartedAt);
-    } catch (error) {
-      if (error instanceof HistoryOperationSupersededError) {
-        supersededDuringWrite = true;
-      } else {
-        this.logger?.debug(`history cache write failed error=${sanitizeDebugError(error)}`);
-      }
-    }
-    if (!supersededDuringWrite && this.isOperationContextCurrent(operation)) {
+    let cacheWrite: HistoryCacheWriteDisposition = "skippedUnchanged";
+    if (shouldWriteCache) {
+      const writeCacheStartedAt = nowMs();
       try {
-        await cleanupObsoleteHistoryCacheFiles(this.globalStorageUri, HISTORY_CACHE_FILE_NAME);
+        await writeJson(cacheUri, built.cache, {
+          performanceProbe: options.performanceProbe,
+          beforeCommit: () => {
+            if (
+              !this.isOperationContextCurrent(operation) ||
+              this.indexGeneration !== committedGeneration ||
+              this.cacheForCurrentIndex !== built.cache
+            ) {
+              throw new HistoryOperationSupersededError();
+            }
+          },
+        });
+        writeCacheMs = elapsedMs(writeCacheStartedAt);
+        cacheWrite = "succeeded";
+        if (
+          this.isOperationContextCurrent(operation) &&
+          this.indexGeneration === committedGeneration &&
+          this.cacheForCurrentIndex === built.cache
+        ) {
+          this.persistedCacheFingerprint = fingerprints?.cache ?? null;
+        }
+      } catch (error) {
+        if (error instanceof HistoryOperationSupersededError) {
+          supersededDuringWrite = true;
+        } else {
+          cacheWrite = "failed";
+          options.performanceProbe?.setOutcome("partial");
+          this.logger?.debug(`history cache write failed error=${sanitizeDebugError(error)}`);
+        }
+      }
+    } else {
+      this.persistedCacheFingerprint = persistedFingerprint;
+    }
+    const cacheIsDurable = cacheWrite === "succeeded" ||
+      (cacheWrite === "skippedUnchanged" && !cacheChanged);
+    if (
+      cacheIsDurable &&
+      this.obsoleteHistoryCacheCleanupPending &&
+      !supersededDuringWrite &&
+      this.isOperationContextCurrent(operation)
+    ) {
+      try {
+        if (await cleanupObsoleteHistoryCacheFiles(this.globalStorageUri, HISTORY_CACHE_FILE_NAME)) {
+          this.obsoleteHistoryCacheCleanupPending = false;
+        }
       } catch (error) {
         this.logger?.debug(`history cache cleanup failed error=${sanitizeDebugError(error)}`);
       }
@@ -761,11 +1040,24 @@ export class HistoryService {
         `summaryMs=${metrics.summaryMs}`,
         `titleMs=${metrics.titleMs}`,
         `writeCacheMs=${writeCacheMs}`,
+        `presentationChanged=${presentationChanged}`,
+        `inventoryChanged=${inventoryChanged}`,
+        `cacheChanged=${cacheChanged}`,
+        `cacheWrite=${cacheWrite}`,
       ].join(" "),
     );
     if (supersededDuringWrite || !this.isOperationContextCurrent(operation)) {
       throw new HistoryOperationSupersededError();
     }
+    return Object.freeze({
+      presentationChanged,
+      inventoryChanged,
+      cacheChanged,
+      cacheWrite,
+      unstableFileCount: built.unstableFileCount,
+      inventoryComplete: built.inventoryComplete,
+      discoveryFailureCount: built.discoveryFailureCount,
+    });
   }
 
   private async buildHistoryState(params: {
@@ -774,8 +1066,10 @@ export class HistoryService {
     dateTimeSettingsKey: string;
     cachedEntries: Record<string, CacheEntryV1>;
     token?: vscode.CancellationToken;
+    performanceProbe?: PerformanceProbe;
+    reuseLogicalPreviews?: boolean;
   }): Promise<HistoryBuildResult> {
-    const { config, dateTime, dateTimeSettingsKey, cachedEntries, token } = params;
+    const { config, dateTime, dateTimeSettingsKey, cachedEntries, token, performanceProbe } = params;
     const roots = buildHistoryRoots(config);
     let statMiss = 0;
     let cacheHit = 0;
@@ -783,17 +1077,22 @@ export class HistoryService {
     let summaryOk = 0;
     let summaryFailed = 0;
     let summaryMs = 0;
+    let unstableFileCount = 0;
+    let incompleteFileCount = 0;
 
     throwIfHistoryRebuildCancelled(token);
     const discoverStartedAt = nowMs();
-    const files = await findSessionFiles({
+    const discovery = await discoverSessionFiles({
       codexRoot: config.sessionsRoot,
       codexArchivedRoot: config.codexArchivedSessionsRoot,
       claudeRoot: config.claudeSessionsRoot,
       includeCodex: config.enableCodexSource,
       includeCodexArchived: config.enableCodexArchivedSessions,
       includeClaude: config.enableClaudeSource,
+      performanceProbe,
     });
+    const files = discovery.files;
+    performanceProbe?.add("sessionCount", files.length);
     const discoverMs = elapsedMs(discoverStartedAt);
     throwIfHistoryRebuildCancelled(token);
 
@@ -802,14 +1101,21 @@ export class HistoryService {
     const processStartedAt = nowMs();
     const fileResults = await mapWithConcurrency(files, HISTORY_REFRESH_CONCURRENCY, async (file) => {
       if (token?.isCancellationRequested) return emptyRefreshFileResult();
-      const result = await this.refreshFile({
-        file,
-        cachedEntries,
-        previewMaxMessages: config.previewMaxMessages,
-        timeZone: dateTime.timeZone,
-        historyDateBasis: config.historyDateBasis,
-      });
-      return token?.isCancellationRequested ? emptyRefreshFileResult() : result;
+      try {
+        const result = await this.refreshFile({
+          file,
+          cachedEntries,
+          previewMaxMessages: config.previewMaxMessages,
+          timeZone: dateTime.timeZone,
+          historyDateBasis: config.historyDateBasis,
+          performanceProbe,
+          token,
+        });
+        return token?.isCancellationRequested ? emptyRefreshFileResult() : result;
+      } catch (error) {
+        if (token?.isCancellationRequested) return emptyRefreshFileResult();
+        throw error;
+      }
     });
     const processMs = elapsedMs(processStartedAt);
     throwIfHistoryRebuildCancelled(token);
@@ -821,58 +1127,125 @@ export class HistoryService {
       summaryOk += result.summaryOk;
       summaryFailed += result.summaryFailed;
       summaryMs += result.summaryMs;
+      unstableFileCount += result.unstableFileCount;
+      if (result.incomplete) incompleteFileCount += 1;
       if (result.cacheKey && result.entry) nextEntries[result.cacheKey] = result.entry;
       if (result.summary) summaries.push(result.summary);
     }
 
     throwIfHistoryRebuildCancelled(token);
+    const inventoryComplete = discovery.failureCount === 0 && incompleteFileCount === 0;
+    const buildIncompleteResult = (): HistoryBuildResult => ({
+      roots,
+      sessions: [],
+      historySources: [],
+      logicalPlanSignatures: new Map(),
+      cache: buildHistoryCacheCandidate(config, dateTimeSettingsKey, nextEntries, false),
+      verifiedCacheKeys: new Set(),
+      metadataComplete: false,
+      unstableFileCount,
+      inventoryComplete: false,
+      discoveryFailureCount: discovery.failureCount,
+      metrics: {
+        files: files.length,
+        discoverMs,
+        processMs,
+        statMiss,
+        cacheHit,
+        cacheMiss,
+        summaryOk,
+        summaryFailed,
+        summaryMs,
+        titleMs: 0,
+      },
+    });
+    if (!inventoryComplete) {
+      return buildIncompleteResult();
+    }
+
     const titleStartedAt = nowMs();
     const historySources = Array.from(summaries);
+    const logicalPlans = await this.resolveLogicalHistoryPlans(historySources, token);
+    const inconsistentLogicalPlanCount = countInconsistentLogicalHistoryPlans(
+      historySources,
+      logicalPlans,
+      nextEntries,
+    );
+    if (inconsistentLogicalPlanCount > 0) {
+      unstableFileCount += inconsistentLogicalPlanCount;
+      performanceProbe?.setOutcome("partial");
+      return buildIncompleteResult();
+    }
     const selectedSummaries = selectPreferredSummariesByIdentity(summaries);
-    const previewResolvedSummaries = await mapWithConcurrency(
+    const previewResults = await mapWithConcurrency(
       selectedSummaries,
       HISTORY_REFRESH_CONCURRENCY,
-      (summary) => rebuildCodexHistoryBasePreview(
-        summary,
-        historySources,
-        config.previewMaxMessages,
-        token,
-      ),
+      async (summary) => {
+        const plan = logicalPlans.get(summary.cacheKey);
+        if (
+          params.reuseLogicalPreviews &&
+          plan &&
+          this.logicalPlanSignaturesByCacheKey.get(summary.cacheKey) === plan.signature
+        ) {
+          return { summary, complete: true, plan: undefined };
+        }
+        const result = await rebuildCodexHistoryBasePreview(
+          summary,
+          historySources,
+          config.previewMaxMessages,
+          token,
+          performanceProbe,
+          plan,
+        );
+        return { ...result, plan };
+      },
     );
-    const resolvedSummaries = await this.resolveDisplayTitles(previewResolvedSummaries, config);
+    if (previewResults.some((result) => !result.complete)) {
+      performanceProbe?.setOutcome("partial");
+      return buildIncompleteResult();
+    }
+    const changedLogicalSegmentCount = await this.countChangedLogicalHistorySegments(
+      previewResults.map((result) => result.plan),
+      token,
+      performanceProbe,
+    );
+    if (changedLogicalSegmentCount > 0) {
+      unstableFileCount += changedLogicalSegmentCount;
+      performanceProbe?.setOutcome("partial");
+      return buildIncompleteResult();
+    }
+    const previewResolvedSummaries = previewResults.map((result) => result.summary);
+    const resolvedSummaries = await this.resolveDisplayTitles(
+      previewResolvedSummaries,
+      config,
+      performanceProbe,
+    );
     const titleMs = elapsedMs(titleStartedAt);
     throwIfHistoryRebuildCancelled(token);
     const summariesByKey = new Map(resolvedSummaries.map((summary) => [summary.cacheKey, summary] as const));
     for (const [cacheKey, entry] of Object.entries(nextEntries)) {
       const resolvedSummary = summariesByKey.get(cacheKey);
-      if (!resolvedSummary) continue;
-      entry.summary = resolvedSummary;
+      if (!resolvedSummary || entry.summary === resolvedSummary) continue;
+      nextEntries[cacheKey] = { ...entry, summary: resolvedSummary };
     }
 
     summaries.length = 0;
     summaries.push(...resolvedSummaries);
     sortSummariesByDisplayDate(summaries);
+    const resolvedHistorySources = replaceSummariesByCacheKey(historySources, resolvedSummaries);
 
-    const index = buildIndex(roots, summaries, historySources);
-    const metadataComplete = areAllCodexEntriesVerifiedForIndex(nextEntries, index);
+    const metadataComplete = areAllCodexEntriesVerifiedForSessions(nextEntries, summaries);
     return {
-      index,
-      cache: {
-        version: 9,
-        summaryAlgoVersion: SUMMARY_CACHE_ALGO_VERSION,
-        ...(metadataComplete ? { codexAgentMetadataVersion: 1 } : {}),
-        codexSessionsRoot: config.sessionsRoot,
-        codexArchivedSessionsRoot: config.codexArchivedSessionsRoot,
-        claudeSessionsRoot: config.claudeSessionsRoot,
-        includeCodex: config.enableCodexSource,
-        includeCodexArchived: config.enableCodexArchivedSessions,
-        includeClaude: config.enableClaudeSource,
-        previewMaxMessages: config.previewMaxMessages,
-        dateTimeSettingsKey,
-        entries: nextEntries,
-      },
+      roots,
+      sessions: summaries,
+      historySources: resolvedHistorySources,
+      logicalPlanSignatures: collectLogicalPlanSignatures(logicalPlans),
+      cache: buildHistoryCacheCandidate(config, dateTimeSettingsKey, nextEntries, metadataComplete),
       verifiedCacheKeys: collectVerifiedCodexMetadataCacheKeys(nextEntries),
       metadataComplete,
+      unstableFileCount,
+      inventoryComplete: true,
+      discoveryFailureCount: discovery.failureCount,
       metrics: {
         files: files.length,
         discoverMs,
@@ -903,78 +1276,315 @@ export class HistoryService {
     previewMaxMessages: number;
     timeZone: string;
     historyDateBasis: HistoryDateBasis;
+    performanceProbe?: PerformanceProbe;
+    token?: vscode.CancellationToken;
   }): Promise<RefreshFileResult> {
-    const { file, cachedEntries, previewMaxMessages, timeZone, historyDateBasis } = params;
+    const {
+      file,
+      cachedEntries,
+      previewMaxMessages,
+      timeZone,
+      historyDateBasis,
+      performanceProbe,
+      token,
+    } = params;
     const { fsPath } = file;
     const key = normalizeCacheKey(fsPath);
-    let st: { mtimeMs: number; size: number } | null = null;
-    try {
-      const stat = await vscode.workspace.fs.stat(vscode.Uri.file(fsPath));
-      if (!isValidByteCount(stat.size)) return emptyRefreshFileResult({ statMiss: 1 });
-      st = { mtimeMs: stat.mtime, size: stat.size };
-    } catch {
-      // Skip unreadable files.
-      return emptyRefreshFileResult({ statMiss: 1 });
+    throwIfHistoryRebuildCancelled(token);
+    let inputStamp = await readHistoryInputStamp(fsPath, "initial", performanceProbe);
+    throwIfHistoryRebuildCancelled(token);
+    if (!inputStamp) {
+      performanceProbe?.setOutcome("partial");
+      return emptyRefreshFileResult({ statMiss: 1, incomplete: true });
     }
 
     const cached = cachedEntries[key];
-    if (cached && cached.mtimeMs === st.mtimeMs && cached.size === st.size) {
-      const summary = applyHistoryDateBasis(
-        { ...cached.summary, fileSizeBytes: st.size },
-        historyDateBasis,
-      );
+    if (cached && cached.mtimeMs === inputStamp.mtimeMs && cached.size === inputStamp.size) {
+      performanceProbe?.add("cacheHitCount");
+      const sizedSummary = cached.summary.fileSizeBytes === inputStamp.size
+        ? cached.summary
+        : { ...cached.summary, fileSizeBytes: inputStamp.size };
+      const summary = applyHistoryDateBasis(sizedSummary, historyDateBasis);
       return emptyRefreshFileResult({
         cacheKey: key,
-        entry: { ...cached, summary },
+        entry: summary === cached.summary ? cached : { ...cached, summary },
         summary,
         cacheHit: 1,
       });
     }
 
     const summaryStartedAt = nowMs();
-    const builtSummary = await buildSessionSummary({
-      sessionsRoot: file.rootPath,
-      sourceRoot: file.rootPath,
-      storage: {
-        rootKind: file.rootKind,
-        archiveState: file.archiveState,
-        rootPath: file.rootPath,
-      },
-      fsPath,
-      previewMaxMessages,
-      timeZone,
-    });
-    const fileSummaryMs = elapsedMs(summaryStartedAt);
-    if (!builtSummary) {
+    performanceProbe?.add("cacheMissCount");
+    let observedUnstable = false;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      let builtSummary: SessionSummary | null;
+      try {
+        builtSummary = await buildSessionSummary({
+          sessionsRoot: file.rootPath,
+          sourceRoot: file.rootPath,
+          storage: {
+            rootKind: file.rootKind,
+            archiveState: file.archiveState,
+            rootPath: file.rootPath,
+          },
+          fsPath,
+          previewMaxMessages,
+          timeZone,
+          fileStat: inputStamp,
+          performanceProbe,
+          token,
+          cancellationErrorFactory: () => new vscode.CancellationError(),
+        });
+      } catch (error) {
+        throwIfHistoryRebuildCancelled(token);
+        performanceProbe?.setOutcome("partial");
+        return emptyRefreshFileResult({
+          cacheMiss: 1,
+          summaryFailed: 1,
+          summaryMs: elapsedMs(summaryStartedAt),
+          unstableFileCount: 1,
+          incomplete: true,
+        });
+      }
+
+      throwIfHistoryRebuildCancelled(token);
+      const verifiedStamp = await readHistoryInputStamp(fsPath, "postScan", performanceProbe);
+      throwIfHistoryRebuildCancelled(token);
+      if (!verifiedStamp) {
+        performanceProbe?.setOutcome("partial");
+        return emptyRefreshFileResult({
+          statMiss: 1,
+          cacheMiss: 1,
+          summaryFailed: 1,
+          summaryMs: elapsedMs(summaryStartedAt),
+          unstableFileCount: 1,
+          incomplete: true,
+        });
+      }
+      if (!areSameHistoryInputStamp(inputStamp, verifiedStamp)) {
+        observedUnstable = true;
+        if (attempt === 0) {
+          inputStamp = verifiedStamp;
+          continue;
+        }
+        performanceProbe?.setOutcome("partial");
+        return emptyRefreshFileResult({
+          cacheMiss: 1,
+          summaryFailed: 1,
+          summaryMs: elapsedMs(summaryStartedAt),
+          unstableFileCount: 1,
+          incomplete: true,
+        });
+      }
+
+      const fileSummaryMs = elapsedMs(summaryStartedAt);
+      if (!builtSummary) {
+        performanceProbe?.setOutcome("partial");
+        return emptyRefreshFileResult({
+          cacheMiss: 1,
+          summaryFailed: 1,
+          summaryMs: fileSummaryMs,
+          unstableFileCount: observedUnstable ? 1 : 0,
+        });
+      }
+      performanceProbe?.add("cacheEntryRebuildCount");
+      performanceProbe?.observeMemory();
+
+      const summary = applyHistoryDateBasis(
+        { ...builtSummary, fileSizeBytes: inputStamp.size },
+        historyDateBasis,
+      );
       return emptyRefreshFileResult({
+        cacheKey: key,
+        entry: {
+          mtimeMs: inputStamp.mtimeMs,
+          size: inputStamp.size,
+          summary,
+          ...(summary.source === "codex" ? { codexAgentMetadataVersion: 1 as const } : {}),
+        },
+        summary,
         cacheMiss: 1,
-        summaryFailed: 1,
+        summaryOk: 1,
         summaryMs: fileSummaryMs,
+        unstableFileCount: observedUnstable ? 1 : 0,
       });
     }
 
-    const summary = applyHistoryDateBasis(
-      { ...builtSummary, fileSizeBytes: st.size },
-      historyDateBasis,
+    performanceProbe?.setOutcome("partial");
+    return emptyRefreshFileResult({ cacheMiss: 1, summaryFailed: 1, incomplete: true });
+  }
+
+  private async resolveLogicalHistoryPlans(
+    summaries: readonly SessionSummary[],
+    token?: vscode.CancellationToken,
+  ): Promise<ReadonlyMap<string, CodexLogicalHistoryPlan>> {
+    const candidates = summaries.filter(
+      (summary) => summary.source === "codex" && summary.meta.codexHistoryBase,
     );
-    return emptyRefreshFileResult({
-      cacheKey: key,
-      entry: {
-        mtimeMs: st.mtimeMs,
-        size: st.size,
-        summary,
-        ...(summary.source === "codex" ? { codexAgentMetadataVersion: 1 as const } : {}),
+    const resolved = await mapWithConcurrency(
+      candidates,
+      HISTORY_REFRESH_CONCURRENCY,
+      async (summary) => {
+        throwIfHistoryRebuildCancelled(token);
+        try {
+          const plan = await resolveCodexLogicalHistoryPlan(summary.fsPath, summaries);
+          return { cacheKey: summary.cacheKey, plan };
+        } catch (error) {
+          throwIfHistoryRebuildCancelled(token);
+          return { cacheKey: summary.cacheKey, plan: undefined };
+        }
       },
-      summary,
-      cacheMiss: 1,
-      summaryOk: 1,
-      summaryMs: fileSummaryMs,
-    });
+    );
+    throwIfHistoryRebuildCancelled(token);
+
+    const plans = new Map<string, CodexLogicalHistoryPlan>();
+    for (const result of resolved) {
+      if (result.plan) plans.set(result.cacheKey, result.plan);
+    }
+    return plans;
+  }
+
+  private async countChangedLogicalHistorySegments(
+    plans: readonly (CodexLogicalHistoryPlan | undefined)[],
+    token?: vscode.CancellationToken,
+    performanceProbe?: PerformanceProbe,
+  ): Promise<number> {
+    const segmentsByCacheKey = new Map<string, CodexLogicalHistoryPlan["segments"][number]>();
+    for (const plan of plans) {
+      if (!plan) continue;
+      for (const segment of plan.segments) {
+        if (!segmentsByCacheKey.has(segment.cacheKey)) {
+          segmentsByCacheKey.set(segment.cacheKey, segment);
+        }
+      }
+    }
+    const changed = await mapWithConcurrency(
+      Array.from(segmentsByCacheKey.values()),
+      HISTORY_REFRESH_CONCURRENCY,
+      async (segment) => {
+        throwIfHistoryRebuildCancelled(token);
+        const observed = await readHistoryInputStamp(segment.fsPath, "postScan", performanceProbe);
+        throwIfHistoryRebuildCancelled(token);
+        return !observed ||
+          observed.size !== segment.size ||
+          !areCompatibleFileMtimes(observed.mtimeMs, segment.mtimeMs);
+      },
+    );
+    return changed.filter(Boolean).length;
+  }
+
+  private buildHistoryStateFingerprints(params: {
+    roots: HistoryRoots;
+    sessions: readonly SessionSummary[];
+    historySources: readonly SessionSummary[];
+    cache: CacheFileV9;
+    logicalPlanSignatures: ReadonlyMap<string, string>;
+  }): HistoryStateFingerprints | null {
+    const summaryFingerprint = (summary: SessionSummary): string | undefined =>
+      buildSessionSummaryFingerprint(
+        summary,
+        this.summaryFingerprintCache,
+      );
+    const selectedRows = buildSummaryFingerprintRows(params.sessions, summaryFingerprint);
+    const sourceRows = buildSummaryFingerprintRows(params.historySources, summaryFingerprint);
+    if (!selectedRows || !sourceRows) return null;
+
+    const inventoryRows: unknown[] = [];
+    for (const summary of params.historySources) {
+      const entry = params.cache.entries[summary.cacheKey];
+      if (!entry) return null;
+      const historyBase = summary.meta.codexHistoryBase;
+      const logicalPlanSignature = historyBase
+        ? params.logicalPlanSignatures.get(summary.cacheKey)
+        : "physical";
+      if (!logicalPlanSignature) return null;
+      inventoryRows.push([
+        summary.cacheKey,
+        summary.identityKey,
+        summary.source,
+        summary.storage.rootKind,
+        summary.storage.archiveState,
+        summary.storage.rootPath,
+        summary.fsPath,
+        entry.mtimeMs,
+        entry.size,
+        projectCodexHistoryBase(historyBase),
+        logicalPlanSignature,
+      ]);
+    }
+
+    const presentation = buildCanonicalFingerprint("history-presentation:v1", [
+      projectHistoryRoots(params.roots),
+      selectedRows,
+      sourceRows,
+    ]);
+    const inventory = buildCanonicalFingerprint("history-inventory:v1", [
+      projectHistoryRoots(params.roots),
+      inventoryRows,
+    ]);
+    const cache = this.buildDurableCacheFingerprint(params.cache);
+    return presentation && inventory && cache
+      ? Object.freeze({ presentation, inventory, cache })
+      : null;
+  }
+
+  private reuseCurrentStateFingerprints(built: HistoryBuildResult): HistoryStateFingerprints | null {
+    const fingerprints = this.stateFingerprints;
+    const currentCache = this.cacheForCurrentIndex;
+    const currentHistorySources = this.index.historySources ?? this.index.sessions;
+    if (
+      !fingerprints ||
+      !currentCache ||
+      !areHistoryRootsEqual(this.index.roots, built.roots) ||
+      !areSameSummarySequence(this.index.sessions, built.sessions) ||
+      !areSameSummarySequence(currentHistorySources, built.historySources) ||
+      !areSameLogicalPlanSignatures(this.logicalPlanSignaturesByCacheKey, built.logicalPlanSignatures) ||
+      !isCacheStructurallyReused(currentCache, built.cache)
+    ) {
+      return null;
+    }
+    return fingerprints;
+  }
+
+  private buildDurableCacheFingerprint(cache: CacheFileV9): string | undefined {
+    const cacheRows: unknown[] = [];
+    for (const cacheKey of Object.keys(cache.entries).sort()) {
+      const entry = cache.entries[cacheKey];
+      if (!entry) return undefined;
+      const entrySummaryFingerprint = buildSessionSummaryFingerprint(
+        entry.summary,
+        this.summaryFingerprintCache,
+      );
+      if (!entrySummaryFingerprint) return undefined;
+      cacheRows.push([
+        cacheKey,
+        entry.mtimeMs,
+        entry.size,
+        entry.codexAgentMetadataVersion,
+        entrySummaryFingerprint,
+      ]);
+    }
+
+    return buildCanonicalFingerprint("history-durable-cache:v1", [
+      cache.version,
+      cache.summaryAlgoVersion,
+      cache.codexAgentMetadataVersion,
+      cache.codexSessionsRoot,
+      cache.codexArchivedSessionsRoot,
+      cache.claudeSessionsRoot,
+      cache.includeCodex,
+      cache.includeCodexArchived,
+      cache.includeClaude,
+      cache.previewMaxMessages,
+      cache.dateTimeSettingsKey,
+      cacheRows,
+    ]);
   }
 
   private async resolveDisplayTitles(
     summaries: readonly SessionSummary[],
     config: CodexHistoryViewerConfig,
+    performanceProbe?: PerformanceProbe,
   ): Promise<SessionSummary[]> {
     const codexSessionIds = summaries
       .filter((summary) => summary.source === "codex")
@@ -986,6 +1596,7 @@ export class HistoryService {
             sessionsRoot: config.sessionsRoot,
             sessionIds: codexSessionIds,
             pruneToSessionIds: true,
+            performanceProbe,
           })
         : new Map<string, string>();
 
@@ -1001,9 +1612,9 @@ export class HistoryService {
     return vscode.Uri.joinPath(this.globalStorageUri, HISTORY_CACHE_FILE_NAME);
   }
 
-  private async readCacheFile(): Promise<unknown | null> {
+  private async readCacheFile(performanceProbe?: PerformanceProbe): Promise<unknown | null> {
     const cacheUri = this.getCacheUri();
-    const outcome = await readJsonOrDropCorrupt<unknown>(cacheUri);
+    const outcome = await readJsonOrDropCorrupt<unknown>(cacheUri, { performanceProbe });
     const { result } = outcome;
     if (result.ok) return result.value;
     const debugMessage = formatJsonReadOrDropCorruptDebug("history.cacheRead", outcome);
@@ -1053,8 +1664,225 @@ function cloneHistoryConfig(config: CodexHistoryViewerConfig): CodexHistoryViewe
   return Object.freeze(snapshot);
 }
 
+function replaceSummariesByCacheKey(
+  source: readonly SessionSummary[],
+  replacements: readonly SessionSummary[],
+): SessionSummary[] {
+  const replacementsByKey = new Map(
+    replacements.map((summary) => [summary.cacheKey, summary] as const),
+  );
+  return source.map((summary) => replacementsByKey.get(summary.cacheKey) ?? summary);
+}
+
+function collectLogicalPlanSignatures(
+  plans: ReadonlyMap<string, CodexLogicalHistoryPlan>,
+): ReadonlyMap<string, string> {
+  return new Map(Array.from(plans, ([cacheKey, plan]) => [cacheKey, plan.signature] as const));
+}
+
+function countInconsistentLogicalHistoryPlans(
+  summaries: readonly SessionSummary[],
+  plans: ReadonlyMap<string, CodexLogicalHistoryPlan>,
+  entries: Readonly<Record<string, CacheEntryV1>>,
+): number {
+  let inconsistentCount = 0;
+  for (const summary of summaries) {
+    if (summary.source !== "codex" || !summary.meta.codexHistoryBase) continue;
+    const plan = plans.get(summary.cacheKey);
+    if (!plan || plan.segments.some((segment) => {
+      const entry = entries[segment.cacheKey];
+      return !entry ||
+        entry.size !== segment.size ||
+        !areCompatibleFileMtimes(entry.mtimeMs, segment.mtimeMs);
+    })) {
+      inconsistentCount += 1;
+    }
+  }
+  return inconsistentCount;
+}
+
+function areCompatibleFileMtimes(left: number, right: number): boolean {
+  return Number.isFinite(left) && Number.isFinite(right) && Math.abs(left - right) < 1;
+}
+
+function buildSummaryFingerprintRows(
+  summaries: readonly SessionSummary[],
+  fingerprint: (summary: SessionSummary) => string | undefined,
+): unknown[][] | null {
+  const rows: unknown[][] = [];
+  for (const summary of summaries) {
+    const childFingerprint = fingerprint(summary);
+    if (!childFingerprint) return null;
+    rows.push([summary.cacheKey, childFingerprint]);
+  }
+  return rows;
+}
+
+function fingerprintsDiffer(previous: string | undefined, next: string | undefined): boolean {
+  return !previous || !next || previous !== next;
+}
+
+function areHistoryRootsEqual(left: HistoryRoots, right: HistoryRoots): boolean {
+  return left.codexSessionsRoot === right.codexSessionsRoot &&
+    left.codexArchivedSessionsRoot === right.codexArchivedSessionsRoot &&
+    left.claudeSessionsRoot === right.claudeSessionsRoot;
+}
+
+function areSameSummarySequence(
+  left: readonly SessionSummary[],
+  right: readonly SessionSummary[],
+): boolean {
+  return left.length === right.length && left.every((summary, index) => summary === right[index]);
+}
+
+function areSameLogicalPlanSignatures(
+  left: ReadonlyMap<string, string>,
+  right: ReadonlyMap<string, string>,
+): boolean {
+  if (left.size !== right.size) return false;
+  for (const [cacheKey, signature] of left) {
+    if (right.get(cacheKey) !== signature) return false;
+  }
+  return true;
+}
+
+function isCacheStructurallyReused(left: CacheFileV9, right: CacheFileV9): boolean {
+  if (
+    left.version !== right.version ||
+    left.summaryAlgoVersion !== right.summaryAlgoVersion ||
+    left.codexAgentMetadataVersion !== right.codexAgentMetadataVersion ||
+    left.codexSessionsRoot !== right.codexSessionsRoot ||
+    left.codexArchivedSessionsRoot !== right.codexArchivedSessionsRoot ||
+    left.claudeSessionsRoot !== right.claudeSessionsRoot ||
+    left.includeCodex !== right.includeCodex ||
+    left.includeCodexArchived !== right.includeCodexArchived ||
+    left.includeClaude !== right.includeClaude ||
+    left.previewMaxMessages !== right.previewMaxMessages ||
+    left.dateTimeSettingsKey !== right.dateTimeSettingsKey
+  ) {
+    return false;
+  }
+
+  const leftKeys = Object.keys(left.entries);
+  if (leftKeys.length !== Object.keys(right.entries).length) return false;
+  return leftKeys.every((cacheKey) => left.entries[cacheKey] === right.entries[cacheKey]);
+}
+
+function buildSessionSummaryFingerprint(
+  summary: SessionSummary,
+  summaryFingerprintCache: WeakMap<SessionSummary, string>,
+): string | undefined {
+  const cachedSummaryFingerprint = summaryFingerprintCache.get(summary);
+  if (cachedSummaryFingerprint) return cachedSummaryFingerprint;
+
+  const summaryFingerprint = buildCanonicalFingerprint("history-session-summary:v2", [
+    summary.fsPath,
+    summary.fileSizeBytes,
+    summary.cacheKey,
+    summary.identityKey,
+    summary.source,
+    [summary.storage.rootKind, summary.storage.archiveState, summary.storage.rootPath],
+    [
+      summary.meta.id,
+      summary.meta.timestampIso,
+      summary.meta.cwd,
+      summary.meta.originator,
+      summary.meta.cliVersion,
+      summary.meta.modelProvider,
+      summary.meta.source,
+      summary.meta.historySource,
+      projectCodexAgent(summary.meta.codexAgent),
+      projectCodexFork(summary.meta.codexFork),
+      projectCodexHistoryBase(summary.meta.codexHistoryBase),
+    ],
+    summary.inferredYmd
+      ? [summary.inferredYmd.year, summary.inferredYmd.month, summary.inferredYmd.day]
+      : undefined,
+    summary.startedAtIso,
+    summary.lastActivityAtIso,
+    summary.startedLocalDate,
+    summary.startedTimeLabel,
+    summary.lastActivityLocalDate,
+    summary.lastActivityTimeLabel,
+    summary.localDate,
+    summary.timeLabel,
+    summary.snippet,
+    summary.nativeTitle,
+    summary.originalTitle,
+    summary.customTitle,
+    summary.displayTitle,
+    summary.cwdShort,
+    summary.previewMessages.map((message) => [message.role, message.text]),
+  ]);
+  if (summaryFingerprint) summaryFingerprintCache.set(summary, summaryFingerprint);
+  return summaryFingerprint;
+}
+
+function projectHistoryRoots(roots: HistoryRoots): unknown[] {
+  return [roots.codexSessionsRoot, roots.codexArchivedSessionsRoot, roots.claudeSessionsRoot];
+}
+
+function projectCodexAgent(value: SessionSummary["meta"]["codexAgent"]): unknown[] | undefined {
+  return value
+    ? [value.parentThreadId, value.recordedDepth, value.agentPath, value.agentNickname, value.agentRole]
+    : undefined;
+}
+
+function projectCodexFork(value: SessionSummary["meta"]["codexFork"]): unknown[] | undefined {
+  return value ? [value.parentThreadId] : undefined;
+}
+
+function projectCodexHistoryBase(
+  value: SessionSummary["meta"]["codexHistoryBase"],
+): unknown[] | undefined {
+  return value
+    ? [value.sourceRolloutId, value.endOrdinalExclusive, value.endByteOffset, value.firstOrdinal]
+    : undefined;
+}
+
 function throwIfHistoryRebuildCancelled(token?: vscode.CancellationToken): void {
   if (token?.isCancellationRequested) throw new vscode.CancellationError();
+}
+
+async function readHistoryInputStamp(
+  fsPath: string,
+  phase: "initial" | "postScan",
+  performanceProbe?: PerformanceProbe,
+): Promise<HistoryInputStamp | null> {
+  try {
+    performanceProbe?.add(phase === "initial" ? "statCount" : "postScanCheckCount");
+    const stat = await vscode.workspace.fs.stat(vscode.Uri.file(fsPath));
+    if (!Number.isFinite(stat.mtime) || !isValidByteCount(stat.size)) return null;
+    return { mtimeMs: stat.mtime, size: stat.size };
+  } catch {
+    return null;
+  }
+}
+
+function areSameHistoryInputStamp(left: HistoryInputStamp, right: HistoryInputStamp): boolean {
+  return left.mtimeMs === right.mtimeMs && left.size === right.size;
+}
+
+function buildHistoryCacheCandidate(
+  config: CodexHistoryViewerConfig,
+  dateTimeSettingsKey: string,
+  entries: Record<string, CacheEntryV1>,
+  metadataComplete: boolean,
+): CacheFileV9 {
+  return {
+    version: 9,
+    summaryAlgoVersion: SUMMARY_CACHE_ALGO_VERSION,
+    ...(metadataComplete ? { codexAgentMetadataVersion: 1 } : {}),
+    codexSessionsRoot: config.sessionsRoot,
+    codexArchivedSessionsRoot: config.codexArchivedSessionsRoot,
+    claudeSessionsRoot: config.claudeSessionsRoot,
+    includeCodex: config.enableCodexSource,
+    includeCodexArchived: config.enableCodexArchivedSessions,
+    includeClaude: config.enableClaudeSource,
+    previewMaxMessages: config.previewMaxMessages,
+    dateTimeSettingsKey,
+    entries,
+  };
 }
 
 function emptyRefreshFileResult(overrides: Partial<RefreshFileResult> = {}): RefreshFileResult {
@@ -1065,6 +1893,8 @@ function emptyRefreshFileResult(overrides: Partial<RefreshFileResult> = {}): Ref
     summaryOk: 0,
     summaryFailed: 0,
     summaryMs: 0,
+    unstableFileCount: 0,
+    incomplete: false,
     ...overrides,
   };
 }
@@ -1269,9 +2099,16 @@ function areAllCodexEntriesVerifiedForIndex(
   entries: Record<string, CacheEntryV1>,
   index: HistoryIndex,
 ): boolean {
+  return areAllCodexEntriesVerifiedForSessions(entries, index.sessions);
+}
+
+function areAllCodexEntriesVerifiedForSessions(
+  entries: Record<string, CacheEntryV1>,
+  sessions: readonly SessionSummary[],
+): boolean {
   if (!areAllCodexEntriesVerified(entries)) return false;
   const verifiedCacheKeys = collectVerifiedCodexMetadataCacheKeys(entries);
-  return index.sessions.every(
+  return sessions.every(
     (session) => session.source !== "codex" || verifiedCacheKeys.has(session.cacheKey),
   );
 }
@@ -1325,8 +2162,9 @@ function buildIndex(
   roots: HistoryRoots,
   summaries: SessionSummary[],
   historySources: SessionSummary[] = summaries,
+  performanceProbe?: PerformanceProbe,
 ): HistoryIndex {
-  const idx: HistoryIndex = emptyIndex(roots);
+  const idx: HistoryIndex = emptyIndex(roots, performanceProbe);
   idx.sessions = summaries;
   idx.historySources = historySources;
 

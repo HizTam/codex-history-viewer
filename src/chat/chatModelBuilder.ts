@@ -18,7 +18,6 @@ import type {
   ChatSystemEventItem,
   ChatTimelineItem,
   ChatTokenUsage,
-  ChatTokenUsageField,
   ChatToolExecution,
   ChatToolItem,
   ChatTurnStatus,
@@ -71,13 +70,30 @@ import type { SessionSummary } from "../sessions/sessionTypes";
 import {
   readSessionJsonlRecords,
   type CodexLogicalHistoryPlan,
+  type SessionJsonlRecord,
 } from "../sessions/codexHistoryBase";
+import {
+  normalizeCodexCorrelationId,
+  readCodexAsyncQuestionMessage,
+  readCodexContextManagementKind,
+  readCodexControlToolKind,
+  readCodexRolloutRecordKind,
+  readCodexTokenUsageRecord,
+  type CodexControlToolKind,
+  type CodexContextManagementKind,
+  type CodexRolloutRecordKind,
+} from "../sessions/codexRolloutCompatibility";
 import {
   CodexFileChangeEventDeduper,
   isSuccessfulCodexFileChangeEvent,
   readCodexFileChangeEvent,
   type CodexFileChangeEvent,
 } from "../sessions/codexFileChangeEvents";
+import type { PerformanceProbe } from "../performance/performanceCounters";
+import { extractChatTokenUsage } from "./tokenUsage";
+
+const CODEX_USAGE_PAIR_WINDOW_LINES = 64;
+const MAX_PENDING_CODEX_USAGE_PAIRS = 64;
 
 export interface ChatSessionModelBuildOptions {
   images?: ImagesConfig;
@@ -85,6 +101,7 @@ export interface ChatSessionModelBuildOptions {
   turnTimelineMode?: ChatTurnTimelineMode;
   sessionInventory?: readonly SessionSummary[];
   historyPlan?: CodexLogicalHistoryPlan;
+  performanceProbe?: PerformanceProbe;
 }
 
 export interface ChatPatchEntryDetailTarget {
@@ -102,12 +119,24 @@ export interface ChatSessionModelWithActivityEvidence {
   activityEvidence: ChatSourceActivityEvidence;
 }
 
-interface ChatTimelineBuildResult {
+export interface ChatTimelineBuildResult {
   items: ChatTimelineItem[];
   turns?: ChatTurnSummary[];
   activeTurnId?: string;
   latestTurnId?: string;
   activityEvidence?: ChatSourceActivityEvidence;
+}
+
+export interface ChatTimelineRecordInput extends Omit<SessionJsonlRecord, "value"> {
+  readonly value: unknown;
+  readonly codexRecordKind?: CodexRolloutRecordKind;
+  readonly codexControlToolKind?: CodexControlToolKind;
+  readonly codexContextManagementKind?: CodexContextManagementKind;
+}
+
+export interface ChatTimelineRecordAccumulator {
+  accept(record: ChatTimelineRecordInput): void | Promise<boolean>;
+  finalize(): ChatTimelineBuildResult;
 }
 
 // Parse a session JSONL and build a session-view model.
@@ -131,7 +160,7 @@ async function buildChatSessionModelInternal(
   options: ChatSessionModelBuildOptions,
   collectActivityEvidence: boolean,
 ): Promise<ChatSessionModelWithActivityEvidence> {
-  const meta = await readSessionMeta(fsPath);
+  const meta = await readSessionMeta(fsPath, options.performanceProbe);
   const timeline = await readTimelineItems(
     fsPath,
     meta.historySource ?? detectHistorySourceFromPath(fsPath),
@@ -157,6 +186,7 @@ export async function buildChatPatchEntryDetails(
   fsPath: string,
   target: ChatPatchEntryDetailTarget,
   sessionInventory?: readonly SessionSummary[],
+  turnTimelineMode: ChatTurnTimelineMode = "off",
 ): Promise<ChatPatchEntry | null> {
   const entryId = typeof target.entryId === "string" ? target.entryId.trim() : "";
   if (!entryId) return null;
@@ -168,11 +198,15 @@ export async function buildChatPatchEntryDetails(
     meta.cwd,
     { ...target, entryId },
     sessionInventory,
+    turnTimelineMode,
   );
 }
 
-async function readSessionMeta(fsPath: string): Promise<ChatSessionMeta> {
-  const meta = await tryReadSessionMeta(fsPath);
+async function readSessionMeta(
+  fsPath: string,
+  performanceProbe?: PerformanceProbe,
+): Promise<ChatSessionMeta> {
+  const meta = await tryReadSessionMeta(fsPath, performanceProbe);
   if (!meta) return {};
   return {
     id: meta.id,
@@ -193,41 +227,123 @@ async function readTimelineItems(
   options: ChatSessionModelBuildOptions,
   collectActivityEvidence: boolean,
 ): Promise<ChatTimelineBuildResult> {
-  const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
+  const accumulator = await createChatTimelineRecordAccumulator(
+    fsPath,
+    source,
+    sessionCwd,
+    options,
+    collectActivityEvidence,
+  );
+  for await (const record of readSessionJsonlRecords(fsPath, source, {
+    sessionInventory: options.sessionInventory,
+    plan: options.historyPlan,
+    performanceProbe: options.performanceProbe,
+  })) {
+    const pending = accumulator.accept(record);
+    if (pending) await pending;
+  }
+  return accumulator.finalize();
+}
+
+export async function createChatTimelineRecordAccumulator(
+  fsPath: string,
+  source: "codex" | "claude",
+  sessionCwd: string | undefined,
+  options: ChatSessionModelBuildOptions,
+  collectActivityEvidence = false,
+): Promise<ChatTimelineRecordAccumulator> {
+  const pastedPromptResolver = source === "claude" ? await createClaudePastedPromptResolver(fsPath) : undefined;
 
   const items: ChatTimelineItem[] = [];
   const toolByCallId = new Map<string, ChatToolItem>();
+  const suppressedCodexToolCallIds = new Set<string>();
+  const seenCodexAsyncQuestionIds = new Set<string>();
   const pendingPatchGroups = new Map<string, PendingPatchGroup>();
-  const fileChangeDeduper = new CodexFileChangeEventDeduper();
+  const fileChangeDeduper = new CodexFileChangeEventDeduper(undefined, options.performanceProbe);
   const codexTurnMeta: ChatMessageModelMeta = {};
   const usageState: UsageBuildState = {};
   const environmentState: EnvironmentBuildState = {};
   const memoryCitationState: MemoryCitationBuildState = {};
   const interruptionState: InterruptionBuildState = {};
   const turnState: TurnBuildState | undefined = shouldBuildTurnTimeline(options) ? createTurnBuildState() : undefined;
+  const claudeTurnState = source === "claude" && turnState ? createClaudeTurnBuildState(turnState) : undefined;
   const activityEvidence = collectActivityEvidence ? createChatSourceActivityEvidence() : undefined;
   let messageIndex = 0;
-  for await (const record of readSessionJsonlRecords(fsPath, source, {
-    sessionInventory: options.sessionInventory,
-    plan: options.historyPlan,
-  })) {
-    const obj = record.value;
+  let finalizedResult: ChatTimelineBuildResult | undefined;
+
+  const accept = (record: ChatTimelineRecordInput): void | Promise<boolean> => {
+    if (finalizedResult) throw new Error("Chat timeline accumulator is already finalized.");
+    const obj: any = record.value;
     const lineIndex = record.lineIndex;
+    const hasProjectedCodexKind = Object.prototype.hasOwnProperty.call(record, "codexRecordKind");
+    const codexRecordKind = source === "codex"
+      ? record.codexRecordKind ?? readCodexRolloutRecordKind(obj)
+      : undefined;
+    const codexControlToolKind = source === "codex"
+      ? hasProjectedCodexKind
+        ? record.codexControlToolKind
+        : readCodexControlToolKind(obj)
+      : undefined;
+    const codexContextManagementKind = source === "codex"
+      ? hasProjectedCodexKind
+        ? record.codexContextManagementKind
+        : readCodexContextManagementKind(obj)
+      : undefined;
+    const codexResponseItemType = codexRecordKind === "response_item" && obj?.payload
+      ? obj.payload.type
+      : undefined;
+    const codexResponseCallId = codexRecordKind === "response_item"
+      ? normalizeCodexCorrelationId(obj?.payload?.call_id)
+      : undefined;
+    const isSuppressedCodexControlOutput =
+      (codexResponseItemType === "function_call_output" || codexResponseItemType === "custom_tool_call_output") &&
+      !!codexResponseCallId &&
+      suppressedCodexToolCallIds.has(codexResponseCallId);
 
     if (activityEvidence && record.isLeaf) {
       observeChatSourceActivityRecord(activityEvidence, obj, record.physicalLineIndex);
     }
 
-    flushPendingClaudeUsageIfNeeded(obj, items, usageState);
-    appendEnvironmentSnapshotIfChanged(obj, items, environmentState, () => messageIndex, () => turnState?.activeTurnId);
-    if (updateCodexTurnMeta(obj, codexTurnMeta, turnState)) {
-      continue;
+    if (source === "claude") {
+      flushPendingClaudeUsageIfNeeded(obj, items, usageState);
+      const completedTurnId = finalizePendingClaudeCompletionIfNeeded(obj, lineIndex, claudeTurnState);
+      if (completedTurnId) {
+        flushClaudeTurnPatchGroup(items, pendingPatchGroups, completedTurnId, turnState);
+      }
     }
     if (
-      await indexCodexTimelineRecord(
+      source !== "codex" ||
+      (
+        codexRecordKind !== "realtime_item" &&
+        !codexControlToolKind &&
+        !codexContextManagementKind &&
+        !isSuppressedCodexControlOutput
+      )
+    ) {
+      appendEnvironmentSnapshotIfChanged(obj, items, environmentState, () => messageIndex, () => turnState?.activeTurnId);
+    }
+    if (source === "codex" && updateCodexTurnMeta(obj, codexTurnMeta, turnState)) {
+      return;
+    }
+    if (source === "codex" && codexRecordKind === "token_usage_record") {
+      indexCodexDurableUsageRecord(
+        obj,
+        items,
+        () => messageIndex,
+        codexTurnMeta,
+        usageState,
+        turnState,
+        lineIndex,
+      );
+      return;
+    }
+    if (source === "codex" && codexRecordKind === "realtime_item") return;
+    if (source === "codex" && codexRecordKind === "response_item") {
+      return indexCodexTimelineRecord(
         obj,
         items,
         toolByCallId,
+        suppressedCodexToolCallIds,
         pendingPatchGroups,
         () => (messageIndex += 1),
         () => messageIndex,
@@ -238,18 +354,19 @@ async function readTimelineItems(
         sessionCwd,
         options,
         lineIndex,
-      )
-    ) {
-      continue;
+        codexControlToolKind,
+      );
     }
-    if (
+    if (source === "codex" && codexRecordKind === "event_msg") {
       indexCodexEventRecord(
         obj,
         items,
         toolByCallId,
         pendingPatchGroups,
         fileChangeDeduper,
+        () => (messageIndex += 1),
         () => messageIndex,
+        seenCodexAsyncQuestionIds,
         codexTurnMeta,
         memoryCitationState,
         usageState,
@@ -258,40 +375,54 @@ async function readTimelineItems(
         sessionCwd,
         options,
         lineIndex,
-      )
-    ) {
-      continue;
+      );
+      return;
     }
-    if (
-      await indexClaudeTimelineRecord(
-        obj,
-        items,
-        toolByCallId,
-        () => (messageIndex += 1),
-        () => messageIndex,
-        usageState,
-        sessionCwd,
-        options,
-        lineIndex,
-        pastedPromptResolver,
-      )
-    ) {
-      continue;
-    }
-  }
-
-  flushPendingPatchGroups(items, pendingPatchGroups, turnState);
-  flushPendingClaudeUsage(items, usageState);
-  finalizeTimelineItems(items);
-  if (!turnState) return { items, ...(activityEvidence ? { activityEvidence } : {}) };
-  const turnResult = finalizeCodexTurns(items, turnState);
-  return {
-    items,
-    ...(turnResult.turns.length > 0 ? { turns: turnResult.turns } : {}),
-    ...(turnResult.activeTurnId ? { activeTurnId: turnResult.activeTurnId } : {}),
-    ...(turnResult.latestTurnId ? { latestTurnId: turnResult.latestTurnId } : {}),
-    ...(activityEvidence ? { activityEvidence } : {}),
+    if (source !== "claude") return;
+    const claudeRole = detectClaudeMessageRole(obj);
+    if (!claudeRole) return;
+    return indexClaudeTimelineRecord(
+      obj,
+      claudeRole,
+      items,
+      toolByCallId,
+      pendingPatchGroups,
+      () => (messageIndex += 1),
+      () => messageIndex,
+      usageState,
+      sessionCwd,
+      options,
+      lineIndex,
+      pastedPromptResolver,
+      claudeTurnState,
+    );
   };
+
+  const finalize = (): ChatTimelineBuildResult => {
+    if (finalizedResult) return finalizedResult;
+    flushPendingClaudeUsage(items, usageState);
+    const completedTurnId = finalizePendingClaudeCompletion(claudeTurnState);
+    if (completedTurnId) {
+      flushClaudeTurnPatchGroup(items, pendingPatchGroups, completedTurnId, turnState);
+    }
+    flushPendingPatchGroups(items, pendingPatchGroups, turnState);
+    finalizeTimelineItems(items);
+    if (!turnState) {
+      finalizedResult = { items, ...(activityEvidence ? { activityEvidence } : {}) };
+      return finalizedResult;
+    }
+    const turnResult = finalizeTurns(items, turnState);
+    finalizedResult = {
+      items,
+      ...(turnResult.turns.length > 0 ? { turns: turnResult.turns } : {}),
+      ...(turnResult.activeTurnId ? { activeTurnId: turnResult.activeTurnId } : {}),
+      ...(turnResult.latestTurnId ? { latestTurnId: turnResult.latestTurnId } : {}),
+      ...(activityEvidence ? { activityEvidence } : {}),
+    };
+    return finalizedResult;
+  };
+
+  return { accept, finalize };
 }
 
 async function readPatchEntryDetails(
@@ -300,11 +431,16 @@ async function readPatchEntryDetails(
   sessionCwd: string | undefined,
   target: ChatPatchEntryDetailTarget,
   sessionInventory: readonly SessionSummary[] | undefined,
+  turnTimelineMode: ChatTurnTimelineMode,
 ): Promise<ChatPatchEntry | null> {
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
   const pendingApplyPatchEntries = new Map<string, ChatPatchEntry[]>();
   const entriesByGroup = new Map<string, ChatPatchEntry[]>();
   const fileChangeDeduper = new CodexFileChangeEventDeduper();
+  const groupClaudePatchesByTurn = source === "claude" && (turnTimelineMode === "basic" || turnTimelineMode === "live");
+  const claudeDetailTurnState = groupClaudePatchesByTurn
+    ? createClaudeTurnBuildState(createTurnBuildState())
+    : undefined;
   let messageIndex = 0;
 
   const appendGroupEntries = (groupKey: string, entries: ChatPatchEntry[]): void => {
@@ -317,6 +453,8 @@ async function readPatchEntryDetails(
   for await (const record of readSessionJsonlRecords(fsPath, source, { sessionInventory })) {
     const obj = record.value;
     const lineIndex = record.lineIndex;
+
+    if (source === "claude") finalizePendingClaudeCompletionIfNeeded(obj, lineIndex, claudeDetailTurnState);
 
     if (obj?.type === "response_item" && obj?.payload?.type === "message") {
       const role = obj?.payload?.role;
@@ -368,25 +506,52 @@ async function readPatchEntryDetails(
     const rawContent = getClaudeMessageContent(obj);
     const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
     const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
-    if (role === "user" && extractClaudeRequestInterruptionContent(controlContent)) continue;
+    if (role === "user" && extractClaudeRequestInterruptionContent(controlContent)) {
+      const turnId = resolveClaudeControlTurnId(claudeDetailTurnState);
+      markCodexTurnInterrupted(claudeDetailTurnState?.turnState, turnId, readTimestampIso(obj), {
+        itemBacked: true,
+        lineIndex,
+      });
+      if (claudeDetailTurnState) claudeDetailTurnState.pendingResumeTurnId = undefined;
+      continue;
+    }
     if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
     const parsed = parseClaudeMessageContent(rawContent);
     const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, { enabled: false }, { role, pastedPrompt });
+    const compactUserText = role === "user" ? extractCompactUserText(normalizeText(extracted.text)) : null;
+    const turnResolution = resolveClaudeRecordTurnId(
+      obj,
+      role,
+      compactUserText,
+      extracted.attachments,
+      parsed.toolResults,
+      lineIndex,
+      claudeDetailTurnState,
+    );
+    const turnId = turnResolution.turnId;
     if (normalizeText(extracted.text) || extracted.attachments.length > 0) messageIndex += 1;
     for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
       const toolCall = parsed.toolCalls[toolCallIndex]!;
       const callId = resolveClaudeToolCallId(toolCall.callId, lineIndex, toolCallIndex);
       const entries = buildClaudeToolUsePatchEntries(toolCall, sessionCwd, callId, true).filter((entry) =>
-        isPatchEntryDetailCandidate(entry, target),
+        groupClaudePatchesByTurn
+          ? isTurnPatchDetailCandidate(entry, target)
+          : isPatchEntryDetailCandidate(entry, target),
       );
-      appendGroupEntries(buildClaudePatchBookmarkGroupId(toolCall.callId, lineIndex, toolCallIndex, messageIndex), entries);
+      registerClaudeToolTurn(claudeDetailTurnState, toolCall.callId, turnId);
+      const groupKey = turnId && groupClaudePatchesByTurn
+        ? buildClaudeTurnPatchGroupKey(turnId)
+        : buildClaudePatchBookmarkGroupId(toolCall.callId, lineIndex, toolCallIndex, messageIndex);
+      appendGroupEntries(groupKey, entries);
     }
+    observeClaudeAssistantCompletion(obj, role, turnId, lineIndex, claudeDetailTurnState);
   }
 
   for (const [key, entries] of pendingApplyPatchEntries.entries()) {
     appendGroupEntries(`apply:${key}`, entries);
   }
-  return selectPatchEntryDetail(entriesByGroup, target);
+  finalizePendingClaudeCompletion(claudeDetailTurnState);
+  return selectPatchEntryDetail(entriesByGroup, target, source, groupClaudePatchesByTurn);
 }
 
 function detectHistorySourceFromPath(fsPath: string): "codex" | "claude" {
@@ -397,6 +562,7 @@ async function indexCodexTimelineRecord(
   obj: any,
   items: ChatTimelineItem[],
   toolByCallId: Map<string, ChatToolItem>,
+  suppressedToolCallIds: Set<string>,
   pendingPatchGroups: Map<string, PendingPatchGroup>,
   nextMessageIndex: () => number,
   currentMessageIndex: () => number,
@@ -407,6 +573,7 @@ async function indexCodexTimelineRecord(
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
   lineIndex = 0,
+  controlToolKind?: CodexControlToolKind,
 ): Promise<boolean> {
   if (obj?.type !== "response_item") return false;
   const payloadType = obj?.payload?.type;
@@ -497,6 +664,11 @@ async function indexCodexTimelineRecord(
   }
 
   if (payloadType === "function_call" || payloadType === "custom_tool_call") {
+    if (controlToolKind) {
+      const suppressedCallId = normalizeCodexCorrelationId(obj?.payload?.call_id);
+      if (suppressedCallId) suppressedToolCallIds.add(suppressedCallId);
+      return true;
+    }
     const includeDetails = shouldIncludeDetails(options);
     const name = typeof obj?.payload?.name === "string" ? obj.payload.name : payloadType;
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
@@ -523,7 +695,7 @@ async function indexCodexTimelineRecord(
     if (customApplyPatchInput !== undefined) {
       const patchCallId = callId ?? `apply_patch:${lineIndex}`;
       const matchEntries = buildCodexApplyPatchEntries(customApplyPatchInput, sessionCwd, patchCallId, includeDetails);
-      const entries = mergePatchEntriesLikeCodex(matchEntries);
+      const entries = aggregateCodexTurnPatchEntries(matchEntries);
       if (entries.length > 0) {
         const applyGroupKey = buildApplyPatchPendingGroupKey(patchCallId, lineIndex);
         const group: PendingPatchGroup = {
@@ -550,6 +722,8 @@ async function indexCodexTimelineRecord(
   }
 
   if (payloadType === "function_call_output" || payloadType === "custom_tool_call_output") {
+    const suppressedCallId = normalizeCodexCorrelationId(obj?.payload?.call_id);
+    if (suppressedCallId && suppressedToolCallIds.has(suppressedCallId)) return true;
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : undefined;
     const extracted = await extractCodexToolOutput(
       obj?.payload?.output,
@@ -618,7 +792,9 @@ function indexCodexEventRecord(
   toolByCallId: Map<string, ChatToolItem>,
   pendingPatchGroups: Map<string, PendingPatchGroup>,
   fileChangeDeduper: CodexFileChangeEventDeduper,
+  nextMessageIndex: () => number,
   currentMessageIndex: () => number,
+  seenAsyncQuestionIds: Set<string>,
   codexTurnMeta: ChatMessageModelMeta,
   memoryCitationState: MemoryCitationBuildState,
   usageState: UsageBuildState,
@@ -632,6 +808,30 @@ function indexCodexEventRecord(
 
   const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
   const payloadPhase = typeof obj?.payload?.phase === "string" ? obj.payload.phase : "";
+  const asyncQuestion = readCodexAsyncQuestionMessage(obj);
+  if (asyncQuestion) {
+    if (seenAsyncQuestionIds.has(asyncQuestion.itemId)) return true;
+    const text = normalizeText(asyncQuestion.text);
+    if (!text) return true;
+    seenAsyncQuestionIds.add(asyncQuestion.itemId);
+    const timestampIso = readTimestampIso(obj);
+    const turnId = normalizeCodexTurnId(asyncQuestion.turnId) ?? resolveCodexTurnIdForItem(obj, turnState);
+    const item: ChatMessageItem = {
+      type: "message",
+      role: "assistant",
+      messageIndex: nextMessageIndex(),
+      ...(turnId ? { turnId } : {}),
+      ...(timestampIso ? { timestampIso } : {}),
+      ...toMessageModelMeta(codexTurnMeta),
+      text,
+      isContext: false,
+    };
+    items.push(item);
+    observeCodexItemTurn(turnState, turnId, timestampIso);
+    memoryCitationState.lastAssistantItemIndex = items.length - 1;
+    closeCodexInterruptionWindow(interruptionState);
+    return true;
+  }
   if (payloadType === "turn_aborted") {
     const turnId = resolveCodexTurnIdForItem(obj, turnState);
     appendOrMergeCodexInterruption(items, interruptionState, buildCodexInterruptionFromEvent(obj, turnId));
@@ -669,9 +869,14 @@ function indexCodexEventRecord(
       codexTurnMeta,
       resolveCodexUsageTurnId(obj, turnState, lineIndex),
     );
-    if (usageItem && shouldAppendCodexUsage(usageItem, usageState)) {
-      items.push(usageItem);
-      observeCodexItemTurn(turnState, usageItem.turnId, usageItem.timestampIso);
+    if (usageItem) {
+      const pairedDurableUsage = consumePendingCodexDurableUsagePair(usageItem, usageState, lineIndex);
+      if (pairedDurableUsage) {
+        if (pairedDurableUsage.item) mergeLegacyUsageMetadata(pairedDurableUsage.item, usageItem);
+      } else if (shouldAppendCodexUsage(usageItem, usageState)) {
+        items.push(usageItem);
+        observeCodexItemTurn(turnState, usageItem.turnId, usageItem.timestampIso);
+      }
     }
     return true;
   }
@@ -683,7 +888,7 @@ function indexCodexEventRecord(
     return true;
   }
 
-  const fileChangeEvent = readCodexFileChangeEvent(obj);
+  const fileChangeEvent = readCodexFileChangeEvent(obj, options.performanceProbe);
   if (fileChangeEvent) {
     const key = buildPatchGroupKey(fileChangeEvent, lineIndex);
     const bookmarkGroupId = buildCodexPatchBookmarkGroupId(obj, lineIndex);
@@ -697,19 +902,20 @@ function indexCodexEventRecord(
       patchCallId,
       shouldIncludeDetails(options),
     );
-    const entries = mergePatchEntriesLikeCodex(matchEntries);
+    const entries = aggregateCodexTurnPatchEntries(matchEntries);
     const removedByCallId = callId ? removePendingApplyPatchGroup(items, pendingPatchGroups, callId) : false;
     if (!removedByCallId && matchEntries.length > 0) {
       removeMatchingPendingApplyPatchGroup(items, pendingPatchGroups, matchEntries, currentMessageIndex());
     }
-    if (!isSuccessfulCodexFileChangeEvent(fileChangeEvent)) return true;
+    if (!isSuccessfulCodexFileChangeEvent(fileChangeEvent, options.performanceProbe)) return true;
     if (entries.length === 0) return true;
     if (fileChangeDeduper.shouldSuppress(fileChangeEvent)) return true;
 
     const existing = pendingPatchGroups.get(key);
     if (existing) {
       existing.lastTimestampIso = timestampIso ?? existing.lastTimestampIso;
-      existing.entries = mergePatchEntriesLikeCodex([...existing.entries, ...entries]);
+      existing.matchEntries = [...(existing.matchEntries ?? existing.entries), ...matchEntries];
+      existing.entries = aggregateCodexTurnPatchEntries(existing.matchEntries);
       existing.totalAdded = existing.entries.reduce((sum, entry) => sum + entry.added, 0);
       existing.totalRemoved = existing.entries.reduce((sum, entry) => sum + entry.removed, 0);
       return true;
@@ -722,6 +928,7 @@ function indexCodexEventRecord(
       firstTimestampIso: timestampIso,
       lastTimestampIso: timestampIso,
       entries: [...entries],
+      matchEntries: [...matchEntries],
       totalAdded: entries.reduce((sum, entry) => sum + entry.added, 0),
       totalRemoved: entries.reduce((sum, entry) => sum + entry.removed, 0),
     });
@@ -770,8 +977,10 @@ function indexCodexEventRecord(
 
 async function indexClaudeTimelineRecord(
   obj: any,
+  role: "user" | "assistant",
   items: ChatTimelineItem[],
   toolByCallId: Map<string, ChatToolItem>,
+  pendingPatchGroups: Map<string, PendingPatchGroup>,
   nextMessageIndex: () => number,
   currentMessageIndex: () => number,
   usageState: UsageBuildState,
@@ -779,10 +988,8 @@ async function indexClaudeTimelineRecord(
   options: ChatSessionModelBuildOptions = {},
   lineIndex = 0,
   pastedPromptResolver?: ClaudePastedPromptResolver,
+  claudeTurnState?: ClaudeTurnBuildState,
 ): Promise<boolean> {
-  const role = detectClaudeMessageRole(obj);
-  if (!role) return false;
-
   if (isClaudeCrossSessionInboundRecord(obj)) {
     const idx = nextMessageIndex();
     const crossSessionMessage = extractClaudeCrossSessionMessage(obj);
@@ -806,29 +1013,39 @@ async function indexClaudeTimelineRecord(
   const rawContent = getClaudeMessageContent(obj);
   const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
   const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+  const ts = readTimestampIso(obj);
   const interruption = role === "user" ? extractClaudeRequestInterruptionContent(controlContent) : null;
   if (interruption) {
-    const ts = readTimestampIso(obj);
-    items.push({
+    const turnId = resolveClaudeControlTurnId(claudeTurnState);
+    const item: ChatSystemEventItem = {
       type: "systemEvent",
       kind: "requestInterrupted",
       source: "claude",
       scope: interruption.scope,
       ...(ts ? { timestampIso: ts } : {}),
-    });
+      ...(turnId ? { turnId } : {}),
+    };
+    items.push(item);
+    observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
+    markCodexTurnInterrupted(claudeTurnState?.turnState, turnId, ts, { itemBacked: true, lineIndex });
+    if (claudeTurnState) claudeTurnState.pendingResumeTurnId = undefined;
+    if (turnId) flushClaudeTurnPatchGroup(items, pendingPatchGroups, turnId, claudeTurnState?.turnState);
     return true;
   }
 
   const localCommandOutput = role === "user" ? extractClaudeLocalCommandOutputContent(controlContent) : null;
   if (localCommandOutput) {
-    const ts = readTimestampIso(obj);
-    items.push({
+    const turnId = claudeTurnState?.turnState.activeTurnId;
+    const item: ChatSystemEventItem = {
       type: "systemEvent",
       kind: "localCommandOutput",
       source: "claude",
       output: localCommandOutput.output,
       ...(ts ? { timestampIso: ts } : {}),
-    });
+      ...(turnId ? { turnId } : {}),
+    };
+    items.push(item);
+    observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
     return true;
   }
 
@@ -839,10 +1056,27 @@ async function indexClaudeTimelineRecord(
   });
   const attachments = extracted.attachments;
   const text = normalizeText(extracted.text);
-  const ts = readTimestampIso(obj);
+  const compactUserText = role === "user" ? extractCompactUserText(text) : null;
+  const turnResolution = resolveClaudeRecordTurnId(
+    obj,
+    role,
+    compactUserText,
+    attachments,
+    parsed.toolResults,
+    lineIndex,
+    claudeTurnState,
+  );
+  const turnId = turnResolution.turnId;
+  if (turnResolution.previousActiveTurnId) {
+    flushClaudeTurnPatchGroup(
+      items,
+      pendingPatchGroups,
+      turnResolution.previousActiveTurnId,
+      claudeTurnState?.turnState,
+    );
+  }
 
   if (text || attachments.length > 0) {
-    const compactUserText = role === "user" ? extractCompactUserText(text) : null;
     const requestText = role === "user" ? compactUserText ?? text : undefined;
     const isContext = role === "user" ? !compactUserText && attachments.length === 0 : false;
     const idx = nextMessageIndex();
@@ -853,6 +1087,7 @@ async function indexClaudeTimelineRecord(
       type: "message",
       role,
       messageIndex: idx,
+      ...(turnId ? { turnId } : {}),
       timestampIso: ts,
       ...modelMeta,
       text,
@@ -860,6 +1095,7 @@ async function indexClaudeTimelineRecord(
       ...(attachments.length > 0 ? { attachments } : {}),
       isContext,
     });
+    observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
   }
 
   const includeDetails = shouldIncludeDetails(options);
@@ -872,6 +1108,7 @@ async function indexClaudeTimelineRecord(
     const tool: ChatToolItem = {
       type: "tool",
       messageIndex,
+      ...(turnId ? { turnId } : {}),
       timestampIso: ts,
       name,
       callId,
@@ -881,6 +1118,8 @@ async function indexClaudeTimelineRecord(
     if (!includeDetails) tool.presentation = buildToolPresentation({ ...tool, argumentsText });
     items.push(tool);
     if (callId) toolByCallId.set(callId, tool);
+    registerClaudeToolTurn(claudeTurnState, callId, turnId);
+    observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
 
     const patchEntries = buildClaudeToolUsePatchEntries(
       toolCall,
@@ -890,16 +1129,28 @@ async function indexClaudeTimelineRecord(
     );
     if (patchEntries.length > 0) {
       const bookmarkGroupId = buildClaudePatchBookmarkGroupId(callId, lineIndex, toolCallIndex, messageIndex);
-      items.push({
-        type: "patchGroup",
-        bookmarkGroupId,
-        messageIndex: messageIndex > 0 ? messageIndex : undefined,
-        timestampIso: ts,
-        entryCount: patchEntries.length,
-        totalAdded: patchEntries.reduce((sum, entry) => sum + entry.added, 0),
-        totalRemoved: patchEntries.reduce((sum, entry) => sum + entry.removed, 0),
-        entries: patchEntries,
-      });
+      if (turnId && claudeTurnState) {
+        upsertClaudeTurnPatchGroup(
+          items,
+          pendingPatchGroups,
+          turnId,
+          bookmarkGroupId,
+          messageIndex,
+          ts,
+          patchEntries,
+        );
+      } else {
+        items.push({
+          type: "patchGroup",
+          bookmarkGroupId,
+          messageIndex: messageIndex > 0 ? messageIndex : undefined,
+          timestampIso: ts,
+          entryCount: patchEntries.length,
+          totalAdded: patchEntries.reduce((sum, entry) => sum + entry.added, 0),
+          totalRemoved: patchEntries.reduce((sum, entry) => sum + entry.removed, 0),
+          entries: patchEntries,
+        });
+      }
     }
   }
 
@@ -911,15 +1162,17 @@ async function indexClaudeTimelineRecord(
       callId: toolResult.callId,
       outputText,
       fallbackMessageIndex: currentMessageIndex(),
+      turnId,
       timestampIso: ts,
       fallbackName: "tool_result",
       includeDetails,
       execution,
     });
+    observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
   }
 
   if (role === "assistant") {
-    const usageItem = buildClaudeUsageItem(obj, currentMessageIndex(), ts);
+    const usageItem = buildClaudeUsageItem(obj, currentMessageIndex(), ts, turnId);
     if (usageItem) {
       usageState.pendingClaudeUsage = {
         sourceId: getClaudeMessageId(obj),
@@ -927,6 +1180,7 @@ async function indexClaudeTimelineRecord(
       };
     }
   }
+  observeClaudeAssistantCompletion(obj, role, turnId, lineIndex, claudeTurnState);
 
   return true;
 }
@@ -944,10 +1198,19 @@ interface MemoryCitationBuildState {
 interface UsageBuildState {
   lastCodexUsageSignature?: string;
   lastClaudeUsageSignature?: string;
+  seenCodexDurableResponseIds?: Set<string>;
+  pendingCodexDurableUsagePairs?: PendingCodexDurableUsagePair[];
   pendingClaudeUsage?: {
     sourceId?: string;
     item: ChatUsageItem;
   };
+}
+
+interface PendingCodexDurableUsagePair {
+  readonly lineIndex: number;
+  readonly signature: string;
+  readonly usageSignature: string;
+  readonly item?: ChatUsageItem;
 }
 
 interface EnvironmentBuildState {
@@ -986,6 +1249,27 @@ interface TurnBuildState {
   latestTurnId?: string;
 }
 
+interface PendingClaudeTurnCompletion {
+  turnId: string;
+  sourceId?: string;
+  timestampIso?: string;
+  lineIndex?: number;
+}
+
+interface ClaudeTurnBuildState {
+  turnState: TurnBuildState;
+  usedTurnIds: Set<string>;
+  toolTurnIdByCallId: Map<string, string>;
+  fallbackSequence: number;
+  pendingCompletion?: PendingClaudeTurnCompletion;
+  pendingResumeTurnId?: string;
+}
+
+interface ClaudeTurnResolution {
+  turnId?: string;
+  previousActiveTurnId?: string;
+}
+
 interface InterruptionBuildState {
   pendingCodexInterruptionItemIndex?: number;
 }
@@ -995,6 +1279,232 @@ function createTurnBuildState(): TurnBuildState {
     entries: new Map<string, TurnBuildEntry>(),
     order: [],
     terminalStatusByTurnId: new Map<string, PendingTurnTerminalStatus>(),
+  };
+}
+
+function createClaudeTurnBuildState(turnState: TurnBuildState): ClaudeTurnBuildState {
+  return {
+    turnState,
+    usedTurnIds: new Set<string>(),
+    toolTurnIdByCallId: new Map<string, string>(),
+    fallbackSequence: 0,
+  };
+}
+
+function resolveClaudeControlTurnId(state: ClaudeTurnBuildState | undefined): string | undefined {
+  if (!state) return undefined;
+  return normalizeCodexTurnId(state.turnState.activeTurnId);
+}
+
+function resolveClaudeRecordTurnId(
+  obj: any,
+  role: "user" | "assistant",
+  compactUserText: string | null,
+  attachments: readonly ChatAttachment[],
+  toolResults: readonly { callId?: string }[],
+  lineIndex: number,
+  state: ClaudeTurnBuildState | undefined,
+): ClaudeTurnResolution {
+  if (!state || obj?.isSidechain === true) return {};
+  const timestampIso = readTimestampIso(obj);
+
+  if (role === "assistant") {
+    const resumedTurnId = activatePendingClaudeTurnResume(state, timestampIso, lineIndex);
+    return { turnId: resumedTurnId ?? state.turnState.activeTurnId };
+  }
+
+  if (isClaudeHumanTurnStart(obj, compactUserText, attachments, toolResults)) {
+    const previousActiveTurnId = state.turnState.activeTurnId;
+    const turnId = allocateClaudeTurnId(obj?.uuid, lineIndex, state);
+    state.pendingResumeTurnId = undefined;
+    startCodexTurn(state.turnState, turnId, timestampIso, lineIndex);
+    return {
+      turnId,
+      ...(previousActiveTurnId && previousActiveTurnId !== turnId ? { previousActiveTurnId } : {}),
+    };
+  }
+
+  const notificationTurnId = resolveClaudeNotificationTurnId(attachments, state);
+  if (notificationTurnId) {
+    stageClaudeTurnResumeIfNeeded(state, notificationTurnId);
+    return { turnId: notificationTurnId };
+  }
+
+  const toolResultTurnId = resolveClaudeToolResultTurnId(toolResults, state);
+  return { turnId: toolResultTurnId ?? state.turnState.activeTurnId };
+}
+
+function isClaudeHumanTurnStart(
+  obj: any,
+  compactUserText: string | null,
+  attachments: readonly ChatAttachment[],
+  toolResults: readonly { callId?: string }[],
+): boolean {
+  if (obj?.isMeta === true || obj?.isSidechain === true) return false;
+  if (compactUserText) return true;
+  if (toolResults.length > 0) return false;
+  return attachments.some((attachment) => attachment.type === "image" || attachment.type === "document");
+}
+
+function allocateClaudeTurnId(rawUuid: unknown, lineIndex: number, state: ClaudeTurnBuildState): string {
+  const uuid = normalizeClaudeTurnUuid(rawUuid);
+  const safeLineIndex = Number.isSafeInteger(lineIndex) && lineIndex >= 0 ? Math.floor(lineIndex) : 0;
+  const base = uuid ? `claude:${uuid}` : `claude:line:${safeLineIndex}`;
+  if (!state.usedTurnIds.has(base)) {
+    state.usedTurnIds.add(base);
+    return base;
+  }
+
+  do {
+    state.fallbackSequence = state.fallbackSequence >= Number.MAX_SAFE_INTEGER ? 1 : state.fallbackSequence + 1;
+    const candidate = `${base}:line:${safeLineIndex}:${state.fallbackSequence}`.slice(0, 256);
+    if (!state.usedTurnIds.has(candidate)) {
+      state.usedTurnIds.add(candidate);
+      return candidate;
+    }
+  } while (state.fallbackSequence < Number.MAX_SAFE_INTEGER);
+
+  const fallback = `claude:fallback:${safeLineIndex}`;
+  state.usedTurnIds.add(fallback);
+  return fallback;
+}
+
+function normalizeClaudeTurnUuid(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(trimmed)) return undefined;
+  return trimmed.toLowerCase();
+}
+
+function normalizeClaudeCorrelationId(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 512 || /[\u0000-\u001f\u007f]/u.test(trimmed)) return undefined;
+  return trimmed;
+}
+
+function registerClaudeToolTurn(
+  state: ClaudeTurnBuildState | undefined,
+  rawCallId: unknown,
+  turnId: string | undefined,
+): void {
+  if (!state || !turnId) return;
+  const callId = normalizeClaudeCorrelationId(rawCallId);
+  if (callId) state.toolTurnIdByCallId.set(callId, turnId);
+}
+
+function resolveClaudeNotificationTurnId(
+  attachments: readonly ChatAttachment[],
+  state: ClaudeTurnBuildState,
+): string | undefined {
+  for (const attachment of attachments) {
+    if (attachment.type !== "notification") continue;
+    const toolUseId = normalizeClaudeCorrelationId(attachment.toolUseId);
+    const mappedTurnId = toolUseId ? state.toolTurnIdByCallId.get(toolUseId) : undefined;
+    if (mappedTurnId) return mappedTurnId;
+  }
+  const hasNotification = attachments.some((attachment) => attachment.type === "notification");
+  return hasNotification ? state.turnState.activeTurnId ?? state.turnState.latestTurnId : undefined;
+}
+
+function resolveClaudeToolResultTurnId(
+  toolResults: readonly { callId?: string }[],
+  state: ClaudeTurnBuildState,
+): string | undefined {
+  for (const toolResult of toolResults) {
+    const callId = normalizeClaudeCorrelationId(toolResult.callId);
+    const mappedTurnId = callId ? state.toolTurnIdByCallId.get(callId) : undefined;
+    if (mappedTurnId) return mappedTurnId;
+  }
+  return undefined;
+}
+
+function stageClaudeTurnResumeIfNeeded(state: ClaudeTurnBuildState, turnId: string): void {
+  const entry = state.turnState.entries.get(turnId);
+  if (!entry) return;
+  if (state.turnState.activeTurnId === turnId) return;
+  if (entry.status !== "interrupted" && entry.status !== "rolledBack") state.pendingResumeTurnId = turnId;
+}
+
+function activatePendingClaudeTurnResume(
+  state: ClaudeTurnBuildState,
+  timestampIso: string | undefined,
+  lineIndex: number,
+): string | undefined {
+  const turnId = state.pendingResumeTurnId;
+  state.pendingResumeTurnId = undefined;
+  if (!turnId) return undefined;
+  const entry = state.turnState.entries.get(turnId);
+  if (!entry || entry.status === "interrupted" || entry.status === "rolledBack") return undefined;
+
+  if (entry.status === "completed") {
+    entry.status = "incomplete";
+    delete entry.completedAtIso;
+    delete entry.terminalAtIso;
+    delete entry.terminalLineIndex;
+    state.turnState.terminalStatusByTurnId.delete(turnId);
+  }
+  setTurnUpdatedAt(entry, timestampIso);
+  state.turnState.activeTurnId = turnId;
+  state.turnState.latestTurnId = turnId;
+  clearCompletedLatestFallbackBlock(state.turnState);
+  if (typeof entry.startedLineIndex !== "number") setTurnStartedLineIndex(entry, lineIndex);
+  return turnId;
+}
+
+function getClaudeAssistantResponseId(obj: any): string | undefined {
+  return normalizeClaudeCorrelationId(obj?.message?.id ?? obj?.requestId);
+}
+
+function finalizePendingClaudeCompletionIfNeeded(
+  obj: any,
+  lineIndex: number,
+  state: ClaudeTurnBuildState | undefined,
+): string | undefined {
+  const pending = state?.pendingCompletion;
+  if (!state || !pending) return undefined;
+  const role = detectClaudeMessageRole(obj);
+  const sourceId = role === "assistant" ? getClaudeAssistantResponseId(obj) : undefined;
+  if (sourceId && pending.sourceId && sourceId === pending.sourceId) {
+    pending.timestampIso = maxIsoTimestamp(pending.timestampIso, readTimestampIso(obj));
+    pending.lineIndex = maxLineIndex(pending.lineIndex, lineIndex);
+    return undefined;
+  }
+  return finalizePendingClaudeCompletion(state);
+}
+
+function finalizePendingClaudeCompletion(state: ClaudeTurnBuildState | undefined): string | undefined {
+  const pending = state?.pendingCompletion;
+  if (!state || !pending) return undefined;
+  state.pendingCompletion = undefined;
+  markCodexTurnCompleted(state.turnState, pending.turnId, pending.timestampIso, {
+    lineIndex: pending.lineIndex,
+  });
+  return pending.turnId;
+}
+
+function observeClaudeAssistantCompletion(
+  obj: any,
+  role: "user" | "assistant",
+  turnId: string | undefined,
+  lineIndex: number,
+  state: ClaudeTurnBuildState | undefined,
+): void {
+  if (!state || role !== "assistant" || !turnId || obj?.isSidechain === true) return;
+  if (obj?.message?.stop_reason !== "end_turn") return;
+  const sourceId = getClaudeAssistantResponseId(obj);
+  const timestampIso = readTimestampIso(obj);
+  const pending = state.pendingCompletion;
+  if (pending && pending.turnId === turnId && pending.sourceId && sourceId === pending.sourceId) {
+    pending.timestampIso = maxIsoTimestamp(pending.timestampIso, timestampIso);
+    pending.lineIndex = maxLineIndex(pending.lineIndex, lineIndex);
+    return;
+  }
+  state.pendingCompletion = {
+    turnId,
+    ...(sourceId ? { sourceId } : {}),
+    ...(timestampIso ? { timestampIso } : {}),
+    ...(Number.isSafeInteger(lineIndex) && lineIndex >= 0 ? { lineIndex: Math.floor(lineIndex) } : {}),
   };
 }
 
@@ -1028,10 +1538,11 @@ function resolveCodexUsageTurnId(
   state: TurnBuildState | undefined,
   lineIndex?: number,
 ): string | undefined {
-  if (!state) return undefined;
-  if (state.activeTurnId) return state.activeTurnId;
+  // Keep durable/legacy pairing independent from the optional turn-timeline presentation state.
   const explicitTurnId = readCodexRecordTurnId(obj);
   if (explicitTurnId) return explicitTurnId;
+  if (!state) return undefined;
+  if (state.activeTurnId) return state.activeTurnId;
   if (isCompletedLatestFallbackBlocked(state, lineIndex)) return undefined;
   const latestTurnId = state.latestTurnId;
   const latestTurn = latestTurnId ? state.entries.get(latestTurnId) : undefined;
@@ -1303,7 +1814,7 @@ function markCodexTurnRolledBack(
   clearCompletedLatestFallbackBlock(state);
 }
 
-function finalizeCodexTurns(
+function finalizeTurns(
   items: ChatTimelineItem[],
   state: TurnBuildState,
 ): { turns: ChatTurnSummary[]; activeTurnId?: string; latestTurnId?: string } {
@@ -1777,6 +2288,49 @@ function flushPendingClaudeUsage(items: ChatTimelineItem[], state: UsageBuildSta
   state.pendingClaudeUsage = undefined;
 }
 
+function indexCodexDurableUsageRecord(
+  obj: unknown,
+  items: ChatTimelineItem[],
+  currentMessageIndex: () => number,
+  meta: ChatMessageModelMeta,
+  state: UsageBuildState,
+  turnState: TurnBuildState | undefined,
+  lineIndex: number,
+): boolean {
+  const record = readCodexTokenUsageRecord(obj);
+  if (!record) return false;
+  const usage = extractChatTokenUsage(record.usage);
+  if (!usage) return true;
+  const totalUsage = extractChatTokenUsage(record.threadTokenUsage);
+  const turnId = normalizeCodexTurnId(record.turnId) ?? resolveCodexTurnIdForItem(obj, turnState);
+  const timestampIso = readTimestampIso(obj);
+  const item: ChatUsageItem = {
+    type: "usage",
+    messageIndex: currentMessageIndex() > 0 ? currentMessageIndex() : undefined,
+    ...(turnId ? { turnId } : {}),
+    ...(timestampIso ? { timestampIso } : {}),
+    ...toMessageModelMeta(meta),
+    usage,
+    ...(totalUsage ? { totalUsage } : {}),
+  };
+
+  const seenResponseIds = state.seenCodexDurableResponseIds ?? new Set<string>();
+  state.seenCodexDurableResponseIds = seenResponseIds;
+  const duplicate = seenResponseIds.has(record.responseId);
+  if (!duplicate) {
+    seenResponseIds.add(record.responseId);
+    items.push(item);
+    observeCodexItemTurn(turnState, turnId, timestampIso);
+  }
+  enqueuePendingCodexDurableUsagePair(state, {
+    lineIndex,
+    signature: buildCodexUsagePairSignature(item),
+    usageSignature: buildCodexUsageOnlySignature(item),
+    ...(!duplicate ? { item } : {}),
+  });
+  return true;
+}
+
 function buildCodexUsageItem(
   obj: any,
   messageIndex: number,
@@ -1786,10 +2340,10 @@ function buildCodexUsageItem(
   const info = obj?.payload?.info;
   if (!info || typeof info !== "object") return null;
 
-  const usage = extractTokenUsage(info.last_token_usage);
+  const usage = extractChatTokenUsage(info.last_token_usage);
   if (!usage) return null;
 
-  const totalUsage = extractTokenUsage(info.total_token_usage);
+  const totalUsage = extractChatTokenUsage(info.total_token_usage);
   const modelContextWindow = normalizeOptionalInteger(info.model_context_window);
   const rateLimits = extractRateLimits(obj?.payload?.rate_limits);
   const timestampIso = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
@@ -1813,6 +2367,74 @@ function shouldAppendCodexUsage(item: ChatUsageItem, state: UsageBuildState): bo
   return true;
 }
 
+function enqueuePendingCodexDurableUsagePair(
+  state: UsageBuildState,
+  pair: PendingCodexDurableUsagePair,
+): void {
+  const pending = state.pendingCodexDurableUsagePairs ?? [];
+  state.pendingCodexDurableUsagePairs = pending;
+  prunePendingCodexDurableUsagePairs(pending, pair.lineIndex);
+  if (pending.length >= MAX_PENDING_CODEX_USAGE_PAIRS) pending.shift();
+  pending.push(pair);
+}
+
+function consumePendingCodexDurableUsagePair(
+  legacyItem: ChatUsageItem,
+  state: UsageBuildState,
+  lineIndex: number,
+): PendingCodexDurableUsagePair | undefined {
+  const pending = state.pendingCodexDurableUsagePairs;
+  if (!pending || pending.length === 0) return undefined;
+  prunePendingCodexDurableUsagePairs(pending, lineIndex);
+  const signature = buildCodexUsagePairSignature(legacyItem);
+  const matchIndex = pending.findIndex((candidate) => candidate.signature === signature);
+  if (matchIndex >= 0) {
+    const [matched] = pending.splice(matchIndex, 1);
+    return matched;
+  }
+  if (legacyItem.turnId) return undefined;
+
+  const usageSignature = buildCodexUsageOnlySignature(legacyItem);
+  let fallbackMatchIndex = -1;
+  for (let index = 0; index < pending.length; index += 1) {
+    if (pending[index]!.usageSignature !== usageSignature) continue;
+    if (fallbackMatchIndex >= 0) return undefined;
+    fallbackMatchIndex = index;
+  }
+  if (fallbackMatchIndex < 0) return undefined;
+  const [matched] = pending.splice(fallbackMatchIndex, 1);
+  return matched;
+}
+
+function prunePendingCodexDurableUsagePairs(
+  pending: PendingCodexDurableUsagePair[],
+  lineIndex: number,
+): void {
+  while (
+    pending.length > 0 &&
+    lineIndex - pending[0]!.lineIndex > CODEX_USAGE_PAIR_WINDOW_LINES
+  ) {
+    pending.shift();
+  }
+}
+
+function buildCodexUsagePairSignature(item: ChatUsageItem): string {
+  return JSON.stringify({
+    turnId: item.turnId,
+    usage: item.usage,
+  });
+}
+
+function buildCodexUsageOnlySignature(item: ChatUsageItem): string {
+  return JSON.stringify(item.usage);
+}
+
+function mergeLegacyUsageMetadata(target: ChatUsageItem, legacy: ChatUsageItem): void {
+  if (legacy.timestampIso) target.timestampIso = legacy.timestampIso;
+  if (typeof legacy.modelContextWindow === "number") target.modelContextWindow = legacy.modelContextWindow;
+  if (legacy.rateLimits) target.rateLimits = legacy.rateLimits;
+}
+
 function buildUsageSignature(item: ChatUsageItem): string {
   return JSON.stringify({
     messageIndex: item.messageIndex,
@@ -1825,11 +2447,16 @@ function buildUsageSignature(item: ChatUsageItem): string {
   });
 }
 
-function buildClaudeUsageItem(obj: any, messageIndex: number, timestampIso?: string): ChatUsageItem | null {
+function buildClaudeUsageItem(
+  obj: any,
+  messageIndex: number,
+  timestampIso?: string,
+  turnId?: string,
+): ChatUsageItem | null {
   const rawUsage = obj?.message?.usage;
   if (!rawUsage || typeof rawUsage !== "object") return null;
 
-  const usage = extractTokenUsage(rawUsage);
+  const usage = extractChatTokenUsage(rawUsage);
   if (!usage) return null;
 
   const modelMeta = extractClaudeMessageModelMeta(obj);
@@ -1839,6 +2466,7 @@ function buildClaudeUsageItem(obj: any, messageIndex: number, timestampIso?: str
   return {
     type: "usage",
     messageIndex: messageIndex > 0 ? messageIndex : undefined,
+    ...(turnId ? { turnId } : {}),
     timestampIso,
     ...modelMeta,
     usage,
@@ -1846,40 +2474,6 @@ function buildClaudeUsageItem(obj: any, messageIndex: number, timestampIso?: str
     ...(speed ? { speed } : {}),
     ...(stopReason ? { stopReason } : {}),
   };
-}
-
-function extractTokenUsage(value: unknown): ChatTokenUsage | null {
-  if (!value || typeof value !== "object") return null;
-  const raw = value as Record<string, unknown>;
-  const usage: ChatTokenUsage = {};
-  const invalidFields: ChatTokenUsageField[] = [];
-  for (const [key, rawKey] of [
-    ["inputTokens", "input_tokens"],
-    ["cachedInputTokens", "cached_input_tokens"],
-    ["cacheReadInputTokens", "cache_read_input_tokens"],
-    ["cacheCreationInputTokens", "cache_creation_input_tokens"],
-    ["outputTokens", "output_tokens"],
-    ["reasoningOutputTokens", "reasoning_output_tokens"],
-    ["totalTokens", "total_tokens"],
-  ] as const) {
-    if (!(rawKey in raw)) continue;
-    const normalized = normalizeTokenInteger(raw[rawKey]);
-    if (normalized === undefined) {
-      invalidFields.push(key);
-    } else {
-      usage[key] = normalized;
-    }
-  }
-  if (invalidFields.length > 0) usage.invalidFields = invalidFields;
-  return Object.keys(usage).length > 0 ? usage : null;
-}
-
-function normalizeTokenInteger(value: unknown): number | undefined {
-  return typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value >= 0
-    ? value
-    : undefined;
 }
 
 function normalizeOptionalInteger(value: unknown): number | undefined {
@@ -2225,6 +2819,7 @@ interface PendingPatchGroup {
   matchEntries?: ChatPatchEntry[];
   totalAdded: number;
   totalRemoved: number;
+  claudeEntryIndexByPath?: Map<string, number>;
   flushed?: boolean;
   itemIndex?: number;
 }
@@ -2291,6 +2886,72 @@ function toPatchGroupItem(group: PendingPatchGroup): ChatPatchGroupItem {
     totalRemoved: group.totalRemoved,
     entries: group.entries,
   };
+}
+
+function buildClaudeTurnPatchGroupKey(turnId: string): string {
+  return `claude-turn:${turnId}`;
+}
+
+function upsertClaudeTurnPatchGroup(
+  items: ChatTimelineItem[],
+  pendingPatchGroups: Map<string, PendingPatchGroup>,
+  turnId: string,
+  bookmarkGroupId: string,
+  messageIndex: number,
+  timestampIso: string | undefined,
+  nextEntries: readonly ChatPatchEntry[],
+): void {
+  if (nextEntries.length === 0) return;
+  const key = buildClaudeTurnPatchGroupKey(turnId);
+  const existing = pendingPatchGroups.get(key);
+  const group: PendingPatchGroup = existing ?? {
+    turnId,
+    bookmarkGroupId,
+    messageIndex: messageIndex > 0 ? messageIndex : undefined,
+    firstTimestampIso: timestampIso,
+    entries: [],
+    totalAdded: 0,
+    totalRemoved: 0,
+    claudeEntryIndexByPath: new Map<string, number>(),
+  };
+  const entryIndexByPath = group.claudeEntryIndexByPath ?? new Map<string, number>();
+  group.claudeEntryIndexByPath = entryIndexByPath;
+  for (const entry of nextEntries) {
+    const aggregateKey = getCodexPatchAggregatePath(entry);
+    const existingIndex = aggregateKey ? entryIndexByPath.get(aggregateKey) : undefined;
+    if (existingIndex !== undefined) {
+      mergePatchEntryInto(group.entries[existingIndex]!, entry);
+    } else {
+      group.entries.push(clonePatchEntry(entry));
+      if (aggregateKey) entryIndexByPath.set(aggregateKey, group.entries.length - 1);
+    }
+    group.totalAdded = addPatchLineCounts(group.totalAdded, entry.added);
+    group.totalRemoved = addPatchLineCounts(group.totalRemoved, entry.removed);
+  }
+  group.lastTimestampIso = maxIsoTimestamp(group.lastTimestampIso ?? group.firstTimestampIso, timestampIso);
+  pendingPatchGroups.set(key, group);
+
+  if (!group.flushed) return;
+  const itemIndex = group.itemIndex;
+  if (typeof itemIndex === "number" && items[itemIndex]?.type === "patchGroup") {
+    items[itemIndex] = toPatchGroupItem(group);
+  }
+}
+
+function flushClaudeTurnPatchGroup(
+  items: ChatTimelineItem[],
+  pendingPatchGroups: Map<string, PendingPatchGroup>,
+  turnId: string,
+  turnState?: TurnBuildState,
+): boolean {
+  const group = pendingPatchGroups.get(buildClaudeTurnPatchGroupKey(turnId));
+  if (!group || group.flushed) return false;
+  const item = toPatchGroupItem(group);
+  group.flushed = true;
+  group.itemIndex = items.length;
+  items.push(item);
+  observeCodexItemTurn(turnState, item.turnId, item.timestampIso);
+  return true;
 }
 
 function buildPatchGroupKey(event: CodexFileChangeEvent, fallbackIndex?: number): string {
@@ -2388,16 +3049,239 @@ function removeFlushedPatchGroupItem(
   if (fallbackIndex >= 0) removeAt(fallbackIndex);
 }
 
-function mergePatchEntriesLikeCodex(entries: readonly ChatPatchEntry[]): ChatPatchEntry[] {
+function aggregateCodexTurnPatchEntries(entries: readonly ChatPatchEntry[]): ChatPatchEntry[] {
+  const out: ChatPatchEntry[] = [];
+  const aggregateByPath = new Map<string, CodexPatchPathAggregate>();
+
+  for (const entry of entries) {
+    const aggregateKey = getCodexPatchAggregatePath(entry);
+    if (aggregateKey) {
+      const aggregate = aggregateByPath.get(aggregateKey);
+      if (aggregate) {
+        const merged = mergeCodexTurnPatchEntry(aggregate, entry);
+        out[aggregate.index] = merged;
+        continue;
+      }
+    }
+
+    const cloned = clonePatchEntry(entry);
+    out.push(cloned);
+    if (aggregateKey) {
+      aggregateByPath.set(aggregateKey, createCodexPatchPathAggregate(out.length - 1, cloned));
+    }
+  }
+
+  return out;
+}
+
+interface CodexPatchPathAggregate {
+  index: number;
+  entry: ChatPatchEntry;
+  createdLineCount?: number;
+  createdLines?: string[];
+}
+
+function createCodexPatchPathAggregate(index: number, entry: ChatPatchEntry): CodexPatchPathAggregate {
+  const aggregate: CodexPatchPathAggregate = { index, entry };
+  if (!isCodexCreateAnchor(entry)) return aggregate;
+
+  aggregate.createdLineCount = entry.added;
+  if (entry.detailsOmitted !== true) {
+    const lines = extractCreatedFileLines(entry);
+    if (lines) aggregate.createdLines = lines;
+  }
+  return aggregate;
+}
+
+function mergeCodexTurnPatchEntry(
+  aggregate: CodexPatchPathAggregate,
+  next: ChatPatchEntry,
+): ChatPatchEntry {
+  const base = aggregate.entry;
+  const operationMerged = mergePatchEntry(base, next);
+  const currentLineCount = aggregate.createdLineCount;
+  if (
+    currentLineCount === undefined ||
+    next.changeType !== "update" ||
+    !!next.movePath ||
+    !!next.moveDisplayPath
+  ) {
+    aggregate.createdLineCount = undefined;
+    aggregate.createdLines = undefined;
+    aggregate.entry = operationMerged;
+    return operationMerged;
+  }
+
+  if (!isSafePatchLineCount(next.added) || !isSafePatchLineCount(next.removed)) {
+    aggregate.createdLineCount = undefined;
+    aggregate.createdLines = undefined;
+    aggregate.entry = operationMerged;
+    return operationMerged;
+  }
+
+  const nextLineCount = currentLineCount + next.added - next.removed;
+  if (!Number.isSafeInteger(nextLineCount) || nextLineCount < 0) {
+    aggregate.createdLineCount = undefined;
+    aggregate.createdLines = undefined;
+    aggregate.entry = operationMerged;
+    return operationMerged;
+  }
+
+  let hunks = operationMerged.hunks;
+  if (aggregate.createdLines) {
+    const updatedLines = applyPatchHunksToKnownLines(aggregate.createdLines, next.hunks);
+    if (!updatedLines || updatedLines.length !== nextLineCount) {
+      aggregate.createdLines = undefined;
+    } else {
+      aggregate.createdLines = updatedLines;
+      hunks = buildCreatedFileNetHunks(updatedLines);
+    }
+  }
+
+  const merged: ChatPatchEntry = {
+    ...operationMerged,
+    added: nextLineCount,
+    removed: 0,
+    hunks,
+  };
+  aggregate.createdLineCount = nextLineCount;
+  aggregate.entry = merged;
+  return merged;
+}
+
+function isCodexCreateAnchor(entry: ChatPatchEntry): boolean {
+  return (
+    entry.changeType === "create" &&
+    !entry.movePath &&
+    !entry.moveDisplayPath &&
+    isSafePatchLineCount(entry.added) &&
+    entry.removed === 0
+  );
+}
+
+function normalizePatchLineCount(value: number): number {
+  return isSafePatchLineCount(value) ? value : 0;
+}
+
+function isSafePatchLineCount(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+function extractCreatedFileLines(entry: ChatPatchEntry): string[] | null {
+  const rows = entry.hunks.flatMap((hunk) => hunk.rows);
+  if (rows.length !== normalizePatchLineCount(entry.added)) return null;
+  if (rows.some((row) => row.kind !== "add")) return null;
+  return rows.map((row) => row.rightText);
+}
+
+function applyPatchHunksToKnownLines(currentLines: readonly string[], hunks: readonly ChatPatchHunk[]): string[] | null {
+  if (hunks.length === 0) return null;
+  const updated: string[] = [];
+  let originalCursor = 0;
+
+  for (const hunk of hunks) {
+    const range = parsePatchRangeHeader(hunk.header);
+    if (!range) return null;
+
+    const oldLines: string[] = [];
+    const newLines: string[] = [];
+    for (const row of hunk.rows) {
+      if (row.kind === "context" || row.kind === "modify" || row.kind === "delete") oldLines.push(row.leftText);
+      if (row.kind === "context" || row.kind === "modify" || row.kind === "add") newLines.push(row.rightText);
+    }
+    if (oldLines.length !== range.leftCount || newLines.length !== range.rightCount) return null;
+
+    const originalStart = range.leftCount === 0 ? range.leftStart : range.leftStart - 1;
+    const updatedStart = range.rightCount === 0 ? range.rightStart : range.rightStart - 1;
+    if (
+      !Number.isSafeInteger(originalStart) ||
+      !Number.isSafeInteger(updatedStart) ||
+      originalStart < originalCursor ||
+      originalStart > currentLines.length
+    ) {
+      return null;
+    }
+    appendPatchLineRange(updated, currentLines, originalCursor, originalStart);
+    if (updated.length !== updatedStart || originalStart + oldLines.length > currentLines.length) return null;
+    for (let index = 0; index < oldLines.length; index += 1) {
+      if (currentLines[originalStart + index] !== oldLines[index]) return null;
+    }
+
+    appendPatchLineRange(updated, newLines, 0, newLines.length);
+    originalCursor = originalStart + oldLines.length;
+  }
+  appendPatchLineRange(updated, currentLines, originalCursor, currentLines.length);
+  return updated;
+}
+
+function appendPatchLineRange(
+  target: string[],
+  source: readonly string[],
+  start: number,
+  end: number,
+): void {
+  for (let index = start; index < end; index += 1) target.push(source[index]!);
+}
+
+function buildCreatedFileNetHunks(lines: readonly string[]): ChatPatchHunk[] {
+  if (lines.length === 0) return [];
+  return [{
+    header: `@@ -0,0 +1,${lines.length} @@`,
+    rows: lines.map((line, index) => ({
+      kind: "add",
+      leftText: "",
+      rightLine: index + 1,
+      rightText: line,
+    })),
+  }];
+}
+
+function parsePatchRangeHeader(header: string): {
+  leftStart: number;
+  leftCount: number;
+  rightStart: number;
+  rightCount: number;
+} | null {
+  const match = header.match(/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/u);
+  if (!match) return null;
+  const leftStart = Number(match[1]);
+  const leftCount = match[2] === undefined ? 1 : Number(match[2]);
+  const rightStart = Number(match[3]);
+  const rightCount = match[4] === undefined ? 1 : Number(match[4]);
+  if (![leftStart, leftCount, rightStart, rightCount].every(Number.isSafeInteger)) return null;
+  return { leftStart, leftCount, rightStart, rightCount };
+}
+
+function aggregateClaudeTurnPatchEntries(entries: readonly ChatPatchEntry[]): ChatPatchEntry[] {
+  const out: ChatPatchEntry[] = [];
+  const entryIndexByPath = new Map<string, number>();
+
+  for (const entry of entries) {
+    const aggregateKey = getCodexPatchAggregatePath(entry);
+    if (aggregateKey) {
+      const existingIndex = entryIndexByPath.get(aggregateKey);
+      if (existingIndex !== undefined) {
+        mergePatchEntryInto(out[existingIndex]!, entry);
+        continue;
+      }
+    }
+
+    out.push(clonePatchEntry(entry));
+    if (aggregateKey) entryIndexByPath.set(aggregateKey, out.length - 1);
+  }
+
+  return out;
+}
+
+function mergeRepeatedPatchUpdates(entries: readonly ChatPatchEntry[]): ChatPatchEntry[] {
   const out: ChatPatchEntry[] = [];
   const updateIndexByPath = new Map<string, number>();
 
   for (const entry of entries) {
-    const resetKey = getCodexPatchMergePath(entry);
+    const aggregateKey = getCodexPatchAggregatePath(entry);
     const canMerge = entry.changeType === "update" && !entry.movePath && !entry.moveDisplayPath;
-
-    if (canMerge && resetKey) {
-      const existingIndex = updateIndexByPath.get(resetKey);
+    if (canMerge && aggregateKey) {
+      const existingIndex = updateIndexByPath.get(aggregateKey);
       if (existingIndex !== undefined) {
         out[existingIndex] = mergePatchEntry(out[existingIndex]!, entry);
         continue;
@@ -2405,22 +3289,36 @@ function mergePatchEntriesLikeCodex(entries: readonly ChatPatchEntry[]): ChatPat
     }
 
     out.push(clonePatchEntry(entry));
-    if (!resetKey) continue;
-    if (canMerge) updateIndexByPath.set(resetKey, out.length - 1);
-    else updateIndexByPath.delete(resetKey);
+    if (!aggregateKey) continue;
+    if (canMerge) updateIndexByPath.set(aggregateKey, out.length - 1);
+    else updateIndexByPath.delete(aggregateKey);
   }
-
   return out;
 }
 
 function mergePatchEntry(base: ChatPatchEntry, next: ChatPatchEntry): ChatPatchEntry {
   return {
     ...base,
-    added: (base.added || 0) + (next.added || 0),
-    removed: (base.removed || 0) + (next.removed || 0),
+    added: addPatchLineCounts(base.added, next.added),
+    removed: addPatchLineCounts(base.removed, next.removed),
     detailsOmitted: base.detailsOmitted === true || next.detailsOmitted === true ? true : undefined,
     hunks: [...(base.hunks ?? []), ...(next.hunks ?? [])],
   };
+}
+
+function mergePatchEntryInto(base: ChatPatchEntry, next: ChatPatchEntry): void {
+  base.added = addPatchLineCounts(base.added, next.added);
+  base.removed = addPatchLineCounts(base.removed, next.removed);
+  if (base.detailsOmitted === true || next.detailsOmitted === true) base.detailsOmitted = true;
+  for (const hunk of next.hunks) base.hunks.push(hunk);
+}
+
+function addPatchLineCounts(left: number, right: number): number {
+  const safeLeft = normalizePatchLineCount(left);
+  const safeRight = normalizePatchLineCount(right);
+  return safeLeft > Number.MAX_SAFE_INTEGER - safeRight
+    ? Number.MAX_SAFE_INTEGER
+    : safeLeft + safeRight;
 }
 
 function clonePatchEntry(entry: ChatPatchEntry): ChatPatchEntry {
@@ -2430,9 +3328,9 @@ function clonePatchEntry(entry: ChatPatchEntry): ChatPatchEntry {
   };
 }
 
-function getCodexPatchMergePath(entry: ChatPatchEntry): string {
+function getCodexPatchAggregatePath(entry: ChatPatchEntry): string {
   const raw = entry.movePath || entry.moveDisplayPath || entry.path || entry.displayPath;
-  return normalizePatchSignaturePath(raw).toLowerCase();
+  return normalizeCodexPatchAggregatePath(raw);
 }
 
 function buildPatchEntries(
@@ -2584,7 +3482,7 @@ function buildCodexPatchEntriesForDetailTarget(
       moveDisplayPath,
       changeType,
     };
-    if (isPatchEntryDetailCandidate(candidate, target)) {
+    if (isTurnPatchDetailCandidate(candidate, target)) {
       const unifiedDiff = typeof change.unified_diff === "string" ? change.unified_diff : "";
       const content = typeof change.content === "string" ? change.content : undefined;
       const parsed = parseCodexPatchApplyEndChange(changeType, unifiedDiff, content, true);
@@ -2614,7 +3512,7 @@ function buildCodexApplyPatchEntriesForDetailTarget(
 
   const refreshCurrentDetailsFlag = (): void => {
     if (!current) return;
-    includeCurrentDetails = isPatchEntryDetailCandidate(
+    includeCurrentDetails = isTurnPatchDetailCandidate(
       {
         id: `${callId}:apply:${index}`,
         callId,
@@ -2729,14 +3627,24 @@ function buildPatchEntriesSignature(entries: ChatPatchEntry[]): string {
 function selectPatchEntryDetail(
   entriesByGroup: Map<string, ChatPatchEntry[]>,
   target: ChatPatchEntryDetailTarget,
+  source: "codex" | "claude",
+  groupClaudePatchesByTurn = false,
 ): ChatPatchEntry | null {
   let fallback: ChatPatchEntry | null = null;
   for (const entries of entriesByGroup.values()) {
-    const merged = mergePatchEntriesLikeCodex(entries);
+    const merged = source === "codex"
+      ? aggregateCodexTurnPatchEntries(entries)
+      : groupClaudePatchesByTurn
+        ? aggregateClaudeTurnPatchEntries(entries)
+        : mergeRepeatedPatchUpdates(entries);
     const exact = merged.find((entry) => entry.id === target.entryId);
     if (exact) return toLoadedPatchEntryDetail(exact);
     if (!fallback) {
-      const candidate = merged.find((entry) => isPatchEntryDetailCandidate(entry, target));
+      const candidate = merged.find((entry) =>
+        source === "codex" || groupClaudePatchesByTurn
+          ? isTurnPatchDetailCandidate(entry, target)
+          : isPatchEntryDetailCandidate(entry, target),
+      );
       if (candidate) fallback = candidate;
     }
   }
@@ -2772,6 +3680,31 @@ function isPatchEntryDetailCandidate(
   return entryPaths.some((value) => targetPaths.has(value));
 }
 
+function isTurnPatchDetailCandidate(
+  entry: Pick<
+    ChatPatchEntry,
+    "id" | "callId" | "path" | "displayPath" | "movePath" | "moveDisplayPath" | "changeType"
+  >,
+  target: ChatPatchEntryDetailTarget,
+): boolean {
+  if (entry.id && entry.id === target.entryId) return true;
+  const targetPaths = new Set(
+    [target.path, target.displayPath, target.movePath, target.moveDisplayPath]
+      .map((value) => normalizeCodexPatchAggregatePath(value))
+      .filter((value) => value.length > 0),
+  );
+  if (targetPaths.size === 0) return false;
+  const entryPaths = [
+    entry.path,
+    entry.displayPath,
+    entry.movePath,
+    entry.moveDisplayPath,
+  ]
+    .map((value) => normalizeCodexPatchAggregatePath(value))
+    .filter((value) => value.length > 0);
+  return entryPaths.some((value) => targetPaths.has(value));
+}
+
 function getPatchDetailTargetPaths(target: ChatPatchEntryDetailTarget): Set<string> {
   const values = [target.path, target.displayPath, target.movePath, target.moveDisplayPath]
     .map((value) => normalizePatchSignaturePath(value))
@@ -2796,6 +3729,11 @@ function normalizePatchSignaturePath(value: string | undefined): string {
   if (text.startsWith("a/") || text.startsWith("b/")) text = text.slice(2);
   if (text === "/dev/null") return "";
   return path.normalize(text).replace(/\\/g, "/");
+}
+
+function normalizeCodexPatchAggregatePath(value: string | undefined): string {
+  const normalized = normalizePatchSignaturePath(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function createApplyPatchFileAccumulator(filePath: string, changeType: ChatPatchChangeType): ApplyPatchFileAccumulator {

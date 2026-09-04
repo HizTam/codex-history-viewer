@@ -5,6 +5,7 @@ import { getConfig, type CodexHistoryViewerConfig } from "./settings";
 import {
   HistoryService,
   isHistoryOperationSupersededError,
+  type HistoryRefreshResult,
   type HistoryRebuildSnapshot,
 } from "./services/historyService";
 import type { ArchiveLocationFilter, HistoryIndex, SessionSourceFilter, SessionSummary } from "./sessions/sessionTypes";
@@ -2843,19 +2844,42 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   };
 
+  const copyHandoffPath = async (handoff: HandoffResult): Promise<boolean> => {
+    try {
+      await vscode.env.clipboard.writeText(handoff.handoffPath);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
   const showHandoffActions = async (message: string, handoff: HandoffResult): Promise<void> => {
     const openAction = t("handoff.action.openFile");
-    const copyAction = t("handoff.action.copyPrompt");
-    const choice = await vscode.window.showInformationMessage(message, openAction, copyAction);
+    const copyPromptAction = t("handoff.action.copyPrompt");
+    const copyPathAction = t("handoff.action.copyPath");
+    const choice = await vscode.window.showInformationMessage(
+      message,
+      openAction,
+      copyPromptAction,
+      copyPathAction,
+    );
     if (choice === openAction) {
       await openHandoffDocument(handoff.handoffUri);
       return;
     }
-    if (choice === copyAction) {
+    if (choice === copyPromptAction) {
       if (await copyHandoffPrompt(handoff)) {
         void vscode.window.showInformationMessage(t("handoff.copyPromptDone"));
       } else {
         void vscode.window.showErrorMessage(t("handoff.copyPromptFailed"));
+      }
+      return;
+    }
+    if (choice === copyPathAction) {
+      if (await copyHandoffPath(handoff)) {
+        void vscode.window.showInformationMessage(t("handoff.copyPathDone"));
+      } else {
+        void vscode.window.showErrorMessage(t("handoff.copyPathFailed"));
       }
     }
   };
@@ -3115,7 +3139,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!reusable) await refreshHandoffStorageState();
 
     try {
-      await vscode.env.clipboard.writeText(handoff.handoffPath);
+      if (!(await copyHandoffPath(handoff))) {
+        void vscode.window.showErrorMessage(t("handoff.copyPathFailed"));
+        return false;
+      }
       await showHandoffPromptCopied(t(reusable ? "handoff.copyPathDone" : "handoff.copyPathCreatedDone"), handoff);
       return true;
     } catch {
@@ -3432,8 +3459,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const finalizeAdoptedHistoryIndex = async (
     config: CodexHistoryViewerConfig,
     activationGeneration: number,
-    options: { refreshStorage: boolean },
+    options: { refreshStorage: boolean; refreshResult?: HistoryRefreshResult },
   ): Promise<number> => {
+    if (options.refreshResult && !options.refreshResult.inventoryComplete) return activationGeneration;
+    const indexGenerationBeforeAgentFinalization = historyService.getIndexGeneration();
     if (isCurrentAgentRunsHistoryIndex(config, activationGeneration)) {
       try {
         if (!historyService.hasCompleteCodexAgentMetadata()) {
@@ -3461,6 +3490,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       discardStaleAgentRunsRefresh(config, activationGeneration);
     }
     if (!historyService.isCurrentIndexForConfig(config)) return activationGeneration;
+    const sessionStateChanged = !options.refreshResult ||
+      options.refreshResult.presentationChanged ||
+      options.refreshResult.inventoryChanged ||
+      historyService.getIndexGeneration() !== indexGenerationBeforeAgentFinalization;
+    if (!sessionStateChanged) {
+      lastHistoryRefreshAt = Date.now();
+      return activationGeneration;
+    }
     const reconciledPins = await pinStore.reconcile(historyService.getIndex());
     for (const move of reconciledPins.moves) {
       await sessionReferenceRelocator.relocate(move.oldFsPath, move.newFsPath);
@@ -3477,7 +3514,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return activationGeneration;
   };
 
-  const performHistoryIndexRefresh = async (forceRebuildCache: boolean): Promise<number> => {
+  const performHistoryIndexRefresh = async (
+    forceRebuildCache: boolean,
+  ): Promise<{ activationGeneration: number; refreshResult: HistoryRefreshResult }> => {
     const latestConfig = getConfig();
     const agentRunsActivationGeneration = codexAgentRunsActivationGeneration;
     historyService.updateConfig(latestConfig);
@@ -3499,23 +3538,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await applyPinnedSourceFilter(constrainedPinnedSource, { persist: true });
     } else {
       pinnedProvider.setDisplayTarget(resolveEffectivePinnedDisplayTargetValue());
-      pinnedProvider.refresh();
       updateArchivedSessionsContext();
     }
     if (!hasSameHistoryIndexConfig(latestConfig, getConfig())) {
-      return agentRunsActivationGeneration;
+      return {
+        activationGeneration: agentRunsActivationGeneration,
+        refreshResult: Object.freeze({
+          presentationChanged: false,
+          inventoryChanged: false,
+          cacheChanged: false,
+          cacheWrite: "skippedIncomplete",
+          unstableFileCount: 0,
+          inventoryComplete: false,
+          discoveryFailureCount: 0,
+        }),
+      };
     }
+    let refreshResult: HistoryRefreshResult;
     try {
-      await historyService.refresh({
+      refreshResult = await historyService.refresh({
         forceRebuildCache,
         shouldStart: () => hasSameHistoryIndexConfig(latestConfig, getConfig()),
       });
-      markAuthoritativeHistoryIndex(latestConfig);
+      if (refreshResult.inventoryComplete) markAuthoritativeHistoryIndex(latestConfig);
     } catch (error) {
       transitionAgentRunsToMatchingIndexLoading(latestConfig, agentRunsActivationGeneration);
       throw error;
     }
-    return finalizeAdoptedHistoryIndex(latestConfig, agentRunsActivationGeneration, { refreshStorage: true });
+    const indexGenerationBeforeFinalization = historyService.getIndexGeneration();
+    const completedActivationGeneration = await finalizeAdoptedHistoryIndex(
+      latestConfig,
+      agentRunsActivationGeneration,
+      { refreshStorage: true, refreshResult },
+    );
+    const completedRefreshResult = historyService.getIndexGeneration() === indexGenerationBeforeFinalization ||
+        refreshResult.presentationChanged
+      ? refreshResult
+      : Object.freeze({ ...refreshResult, presentationChanged: true });
+    return {
+      activationGeneration: completedActivationGeneration,
+      refreshResult: completedRefreshResult,
+    };
   };
   const settleAgentRunsAfterHistoryRefreshFailure = (force = false): void => {
     const currentConfig = getConfig();
@@ -3530,12 +3593,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     chatPanels.handleCodexAgentRunsLoadFailure();
     chatPanels.setCodexAgentRunsLoading(false);
   };
-  const performCurrentHistoryIndexRefresh = async (forceRebuildCache: boolean): Promise<void> => {
+  const performCurrentHistoryIndexRefresh = async (
+    forceRebuildCache: boolean,
+  ): Promise<HistoryRefreshResult> => {
     let retryCount = 0;
     for (;;) {
-      let completedAgentRunsActivationGeneration: number;
+      let completed: Awaited<ReturnType<typeof performHistoryIndexRefresh>>;
       try {
-        completedAgentRunsActivationGeneration = await performHistoryIndexRefresh(forceRebuildCache);
+        completed = await performHistoryIndexRefresh(forceRebuildCache);
       } catch (error) {
         if (!isHistoryOperationSupersededError(error)) {
           if (pendingHistoryConfigurationRefreshGeneration === null) {
@@ -3548,10 +3613,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         continue;
       }
       if (
-        completedAgentRunsActivationGeneration === codexAgentRunsActivationGeneration &&
+        completed.activationGeneration === codexAgentRunsActivationGeneration &&
         historyService.isCurrentIndexForConfig(getConfig())
       ) {
-        return;
+        return completed.refreshResult;
       }
       retryCount += 1;
       logger.debug(`history.refresh staleAfterCompletion retry=${retryCount}`);
@@ -3560,11 +3625,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const enqueueHistoryOperation = <T>(
     operation: () => Promise<T>,
-    onSuccess?: () => void,
+    onSuccess?: (value: T) => void,
   ): Promise<T> => {
     const nextOperation = historyRefreshQueue.then(operation, operation);
     const completedOperation = nextOperation.then((value) => {
-      onSuccess?.();
+      onSuccess?.(value);
       return value;
     });
     historyRefreshQueue = completedOperation.then(
@@ -3574,23 +3639,31 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return completedOperation;
   };
 
-  const refreshHistoryIndex = (
+  const refreshHistoryIndexWithResult = (
     forceRebuildCache: boolean,
     preparation?: PromiseLike<unknown>,
-  ): Promise<void> => {
+  ): Promise<HistoryRefreshResult> => {
     const refreshConfigurationGeneration = historyConfigurationRefreshGeneration;
     return enqueueHistoryOperation(
       async () => {
         if (preparation) await preparation;
-        await performCurrentHistoryIndexRefresh(forceRebuildCache);
+        return performCurrentHistoryIndexRefresh(forceRebuildCache);
       },
-      () => {
-        if (refreshConfigurationGeneration === historyConfigurationRefreshGeneration) {
+      (result) => {
+        if (
+          result.inventoryComplete &&
+          refreshConfigurationGeneration === historyConfigurationRefreshGeneration
+        ) {
           failedHistoryConfigurationRefreshGeneration = null;
         }
       },
     );
   };
+  const refreshHistoryIndex = (
+    forceRebuildCache: boolean,
+    preparation?: PromiseLike<unknown>,
+  ): Promise<void> =>
+    refreshHistoryIndexWithResult(forceRebuildCache, preparation).then(() => undefined);
 
   const rebuildHistorySnapshot = (
     config: CodexHistoryViewerConfig,
@@ -3684,8 +3757,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const reloadProjectAssociationCacheForRefresh = (
     options: { followCurrentGroup?: boolean } = {},
-  ): Promise<void> =>
+  ): Promise<boolean> =>
     enqueueHistoryStateTransition(async () => {
+      const previousFingerprint = projectAssociationStore.getPresentationFingerprint();
       projectAssociationStore.invalidateCache();
       const reconciledProjects = reconcileProjectSelection(historyProjectSelection, resolveHistoryProjectGroupKey);
       const currentGroupProjects = resolveCurrentHistoryProjectSelection(
@@ -3721,6 +3795,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       updatePinnedViewDescription();
       updateHistoryViewDescription();
       updateSearchViewDescription();
+      const nextFingerprint = projectAssociationStore.getPresentationFingerprint();
+      return changed || !previousFingerprint || !nextFingerprint || previousFingerprint !== nextFingerprint;
     });
 
   const clearVisibleSearchResults = (): void => {
@@ -3753,6 +3829,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       setHasSearchResultsContext(searchProvider.root !== null);
     }
     statusProvider.refresh();
+  };
+
+  const refreshHistoryPresentationViews = (): void => {
+    syncProjectScopeFiltersToProviders();
+    pinnedProvider.refresh();
+    historyProvider.refresh();
+    searchProvider.refresh();
+    setHasSearchResultsContext(searchProvider.root !== null);
   };
 
   const applyArchiveLocationFilter = (
@@ -3834,10 +3918,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   autoRefreshService = new AutoRefreshService(
     async (changedFsPaths) => {
-      await refreshHistoryIndex(false);
-      await reloadProjectAssociationCacheForRefresh();
-      refreshViews();
-      chatPanels.refreshTitles();
+      const refreshResult = await refreshHistoryIndexWithResult(false);
+      const associationPresentationChanged = await reloadProjectAssociationCacheForRefresh();
+      if (refreshResult.presentationChanged || associationPresentationChanged) {
+        refreshHistoryPresentationViews();
+      }
+      if (refreshResult.presentationChanged) chatPanels.refreshTitles();
+      if (associationPresentationChanged) chatPanels.refreshProjectAssociations();
+      statusProvider.refresh();
       chatPanels.refreshAutoRefreshPanels(changedFsPaths);
     },
     () => chatPanels.getAutoRefreshSessionFsPaths(),
@@ -8129,11 +8217,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const runInitialBackgroundRefresh = (): void => {
     void (async () => {
       try {
-        await refreshHistoryIndex(false);
-        refreshViews();
+        const refreshResult = await refreshHistoryIndexWithResult(false);
+        if (refreshResult.presentationChanged) {
+          refreshHistoryPresentationViews();
+          chatPanels.refreshTitles();
+          chatPanels.refreshResumePresentation();
+        }
+        statusProvider.refresh();
         controlProvider.refresh();
-        chatPanels.refreshTitles();
-        chatPanels.refreshResumePresentation();
       } catch (error) {
         logger.debug(`history.backgroundRefresh failed error=${sanitizeDebugError(error)}`);
       } finally {

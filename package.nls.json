@@ -218,7 +218,7 @@
   "cfg.chatAssistantLongMessageFolding.enumAuto": "Collapse only long assistant messages when details are hidden.",
   "cfg.chatAssistantLongMessageFolding.enumAlways": "Always start eligible assistant messages collapsed when details are hidden.",
   "cfg.chatStickyUserPrompt": "Show the current user prompt summary as a sticky header in the history view. Already-open history views are not updated immediately; reload or reopen the history view after changing this setting.",
-  "cfg.chatTurnTimelineMode": "Choose the Codex session turn display. Basic shows turn boundaries, duration, item and token summaries, and completed-turn folding. Live also enables running turns, elapsed-time updates, activity cues, and a fixed locator for the running position.",
+  "cfg.chatTurnTimelineMode": "Choose the turn display for Codex and Claude Code sessions. Basic shows turn boundaries, duration, item and token summaries, and completed-turn folding. Live also enables running turns, elapsed-time updates, activity cues, and a fixed locator for the running position.",
   "cfg.chatTurnTimelineMode.labelOff": "Off",
   "cfg.chatTurnTimelineMode.labelBasic": "Basic",
   "cfg.chatTurnTimelineMode.labelLive": "Live",

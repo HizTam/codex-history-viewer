@@ -19,7 +19,10 @@ import {
   isCodexProtocolContextContent,
   selectClaudeControlContent,
 } from "../chat/chatAttachments";
-import { createClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
+import {
+  createClaudePastedPromptResolver,
+  type ClaudePastedPromptResolver,
+} from "../chat/claudePastedPrompt";
 import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
 import type { ChatAttachment } from "../chat/chatTypes";
 import type {
@@ -36,12 +39,20 @@ import { boundSessionIdentityKey } from "./sessionIdentity";
 import {
   extractCodexHistoryBaseMetadata,
   readSessionJsonlRecords,
+  type CodexLogicalHistoryPlan,
+  type SessionJsonlReadOptions,
 } from "./codexHistoryBase";
+import type { PerformanceProbe } from "../performance/performanceCounters";
 
 const META_SCAN_LINE_LIMIT = 400;
 
 // Read session meta from the top of JSONL. Supports both Codex and Claude logs.
-export async function tryReadSessionMeta(fsPath: string): Promise<SessionMetaInfo | null> {
+export async function tryReadSessionMeta(
+  fsPath: string,
+  performanceProbe?: PerformanceProbe,
+): Promise<SessionMetaInfo | null> {
+  performanceProbe?.add("segmentCount");
+  performanceProbe?.add("streamOpenCount");
   const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
@@ -51,46 +62,26 @@ export async function tryReadSessionMeta(fsPath: string): Promise<SessionMetaInf
 
   try {
     for await (const line of rl) {
+      if (performanceProbe) observeEstimatedJsonlLine(performanceProbe, line);
       if (!line) continue;
       scanned += 1;
 
       let obj: any;
       try {
         obj = JSON.parse(line);
+        performanceProbe?.add("parseSuccessCount");
       } catch {
+        performanceProbe?.add("malformedLineCount");
         if (scanned >= META_SCAN_LINE_LIMIT) break;
         continue;
       }
       const isFirstParsedRecord = !hasParsedRecord;
       hasParsedRecord = true;
 
-      if (obj?.type === "session_meta" && obj?.payload && typeof obj.payload === "object") {
-        const payload = obj.payload as Record<string, unknown>;
-        const codexAgent = extractCodexAgentMetadata(payload.source);
-        const codexFork = extractCodexForkMetadata(payload);
-        const codexHistoryBase = isFirstParsedRecord
-          ? extractCodexHistoryBaseMetadata(payload, obj?.ordinal)
-          : undefined;
-        return {
-          id: typeof payload.id === "string" ? payload.id : undefined,
-          timestampIso: typeof payload.timestamp === "string" ? payload.timestamp : undefined,
-          cwd: typeof payload.cwd === "string" ? payload.cwd : undefined,
-          originator: typeof payload.originator === "string" ? payload.originator : undefined,
-          cliVersion: typeof payload.cli_version === "string" ? payload.cli_version : undefined,
-          modelProvider: typeof payload.model_provider === "string" ? payload.model_provider : undefined,
-          source: typeof payload.source === "string" ? payload.source : undefined,
-          historySource: "codex",
-          ...(codexAgent ? { codexAgent } : {}),
-          ...(codexFork ? { codexFork } : {}),
-          ...(codexHistoryBase ? { codexHistoryBase } : {}),
-        };
-      }
+      const codexMeta = extractCodexSessionMeta(obj, isFirstParsedRecord);
+      if (codexMeta) return codexMeta;
 
-      if (!claudeMeta.id && typeof obj?.sessionId === "string") claudeMeta.id = obj.sessionId;
-      if (!claudeMeta.timestampIso && typeof obj?.timestamp === "string") claudeMeta.timestampIso = obj.timestamp;
-      if (!claudeMeta.cwd && typeof obj?.cwd === "string") claudeMeta.cwd = obj.cwd;
-      if (!claudeMeta.cliVersion && typeof obj?.version === "string") claudeMeta.cliVersion = obj.version;
-      if (!claudeMeta.source) claudeMeta.source = "claude-vscode";
+      observeClaudeSessionMeta(claudeMeta, obj);
 
       if (scanned >= META_SCAN_LINE_LIMIT) break;
     }
@@ -99,8 +90,42 @@ export async function tryReadSessionMeta(fsPath: string): Promise<SessionMetaInf
     stream.close();
   }
 
-  if (!claudeMeta.id && !claudeMeta.timestampIso && !claudeMeta.cwd) return null;
-  return claudeMeta;
+  return hasClaudeSessionMeta(claudeMeta) ? claudeMeta : null;
+}
+
+function extractCodexSessionMeta(obj: any, isFirstParsedRecord: boolean): SessionMetaInfo | undefined {
+  if (obj?.type !== "session_meta" || !obj?.payload || typeof obj.payload !== "object") return undefined;
+  const payload = obj.payload as Record<string, unknown>;
+  const codexAgent = extractCodexAgentMetadata(payload.source);
+  const codexFork = extractCodexForkMetadata(payload);
+  const codexHistoryBase = isFirstParsedRecord
+    ? extractCodexHistoryBaseMetadata(payload, obj?.ordinal)
+    : undefined;
+  return {
+    id: typeof payload.id === "string" ? payload.id : undefined,
+    timestampIso: typeof payload.timestamp === "string" ? payload.timestamp : undefined,
+    cwd: typeof payload.cwd === "string" ? payload.cwd : undefined,
+    originator: typeof payload.originator === "string" ? payload.originator : undefined,
+    cliVersion: typeof payload.cli_version === "string" ? payload.cli_version : undefined,
+    modelProvider: typeof payload.model_provider === "string" ? payload.model_provider : undefined,
+    source: typeof payload.source === "string" ? payload.source : undefined,
+    historySource: "codex",
+    ...(codexAgent ? { codexAgent } : {}),
+    ...(codexFork ? { codexFork } : {}),
+    ...(codexHistoryBase ? { codexHistoryBase } : {}),
+  };
+}
+
+function observeClaudeSessionMeta(meta: SessionMetaInfo, obj: any): void {
+  if (!meta.id && typeof obj?.sessionId === "string") meta.id = obj.sessionId;
+  if (!meta.timestampIso && typeof obj?.timestamp === "string") meta.timestampIso = obj.timestamp;
+  if (!meta.cwd && typeof obj?.cwd === "string") meta.cwd = obj.cwd;
+  if (!meta.cliVersion && typeof obj?.version === "string") meta.cliVersion = obj.version;
+  if (!meta.source) meta.source = "claude-vscode";
+}
+
+function hasClaudeSessionMeta(meta: SessionMetaInfo): boolean {
+  return Boolean(meta.id || meta.timestampIso || meta.cwd);
 }
 
 function inferYmdFromPath(sessionsRoot: string, fsPath: string): { year: number; month: number; day: number } | null {
@@ -214,63 +239,6 @@ function extractClaudeRenameTitle(obj: any): string | undefined {
   return undefined;
 }
 
-async function readSessionActivityInfo(
-  fsPath: string,
-  source: SessionSource,
-): Promise<{ lastActivityTimestampIso?: string; nativeTitle?: string }> {
-  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
-
-  let lastTimestampIso: string | undefined;
-  let claudeCustomTitle: string | undefined;
-  let claudeAiTitle: string | undefined;
-  let claudeSummaryTitle: string | undefined;
-  let claudeRenameTitle: string | undefined;
-  try {
-    for await (const line of rl) {
-      if (!line) continue;
-
-      let obj: any;
-      try {
-        obj = JSON.parse(line);
-      } catch {
-        continue;
-      }
-
-      const timestampIso =
-        source === "claude"
-          ? extractClaudeActivityTimestampIso(obj)
-          : extractCodexActivityTimestampIso(obj);
-      if (timestampIso) lastTimestampIso = timestampIso;
-
-      if (source === "claude") {
-        const customTitle = extractClaudeCustomTitle(obj);
-        if (customTitle) claudeCustomTitle = customTitle;
-
-        const aiTitle = extractClaudeAiTitle(obj);
-        if (aiTitle) claudeAiTitle = aiTitle;
-
-        const summaryTitle = extractClaudeSummaryTitle(obj);
-        if (summaryTitle) claudeSummaryTitle = summaryTitle;
-
-        const renameTitle = extractClaudeRenameTitle(obj);
-        if (renameTitle) claudeRenameTitle = renameTitle;
-      }
-    }
-  } finally {
-    rl.close();
-    stream.close();
-  }
-
-  return {
-    lastActivityTimestampIso: lastTimestampIso,
-    nativeTitle:
-      source === "claude"
-        ? claudeCustomTitle ?? claudeAiTitle ?? claudeRenameTitle ?? claudeSummaryTitle
-        : undefined,
-  };
-}
-
 function toLocalDateString(date: Date, timeZone: string): string {
   return ymdToString(toYmdInTimeZone(date, timeZone));
 }
@@ -284,8 +252,10 @@ export async function readPreviewMessages(
   maxMessages: number,
   options: {
     sessionInventory?: readonly SessionSummary[];
+    plan?: CodexLogicalHistoryPlan;
     source?: SessionSource;
     token?: { readonly isCancellationRequested: boolean };
+    performanceProbe?: PerformanceProbe;
   } = {},
 ): Promise<PreviewMessage[]> {
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
@@ -294,56 +264,170 @@ export async function readPreviewMessages(
   const result: PreviewMessage[] = [];
   for await (const record of readSessionJsonlRecords(fsPath, source, {
     sessionInventory: options.sessionInventory,
+    plan: options.plan,
     token: options.token,
+    performanceProbe: options.performanceProbe,
   })) {
     if (result.length >= maxMessages) break;
-    const obj = record.value;
+    await appendPreviewMessage(record.value, pastedPromptResolver, result);
+  }
 
-    if (obj?.type === "response_item" && obj?.payload?.type === "message") {
-      const role = obj?.payload?.role;
-      if (role !== "user" && role !== "assistant") continue;
+  return result;
+}
 
-      const content = obj?.payload?.content;
-      if (role === "user" && isCodexProtocolContextContent(content)) continue;
-      const extracted = await extractCodexMessageContent(content, undefined, { enabled: false });
-      const cleanText = normalizeWhitespace(extracted.text);
-      const attachmentSummary = buildPreviewAttachmentText(extracted.attachments);
-      const textNormalized = normalizeWhitespace([cleanText, attachmentSummary].filter(Boolean).join("\n"));
-      if (!textNormalized) continue;
-      const userText =
-        role === "user"
-          ? extractCodexCompactUserText(content, cleanText) ?? (attachmentSummary || null)
-          : null;
-      if (role === "user" && !userText) continue;
-      const text = role === "user" ? userText! : textNormalized;
+async function appendPreviewMessage(
+  obj: any,
+  pastedPromptResolver: ClaudePastedPromptResolver | undefined,
+  result: PreviewMessage[],
+): Promise<void> {
+  if (obj?.type === "response_item" && obj?.payload?.type === "message") {
+    const role = obj?.payload?.role;
+    if (role !== "user" && role !== "assistant") return;
 
-      const trimmed = text.length > 1200 ? `${text.slice(0, 1199)}...` : text;
-      result.push({ role, text: trimmed });
-      continue;
-    }
-
-    const role = detectClaudeMessageRole(obj);
-    if (!role) continue;
-    if (isClaudeCrossSessionInboundRecord(obj)) continue;
-
-    const rawContent = getClaudeMessageContent(obj);
-    const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
-    const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
-    if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
-    const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
+    const content = obj?.payload?.content;
+    if (role === "user" && isCodexProtocolContextContent(content)) return;
+    const extracted = await extractCodexMessageContent(content, undefined, { enabled: false });
+    const cleanText = normalizeWhitespace(extracted.text);
     const attachmentSummary = buildPreviewAttachmentText(extracted.attachments);
-    const textRaw = [buildClaudePreviewText(extracted.text), attachmentSummary].filter(Boolean).join("\n");
-    const textNormalized = normalizeWhitespace(textRaw);
-    if (!textNormalized) continue;
-    const userText = role === "user" ? extractCompactUserText(textNormalized) : null;
-    if (role === "user" && !userText) continue;
+    const textNormalized = normalizeWhitespace([cleanText, attachmentSummary].filter(Boolean).join("\n"));
+    if (!textNormalized) return;
+    const userText =
+      role === "user"
+        ? extractCodexCompactUserText(content, cleanText) ?? (attachmentSummary || null)
+        : null;
+    if (role === "user" && !userText) return;
     const text = role === "user" ? userText! : textNormalized;
 
     const trimmed = text.length > 1200 ? `${text.slice(0, 1199)}...` : text;
     result.push({ role, text: trimmed });
+    return;
   }
 
-  return result;
+  const role = detectClaudeMessageRole(obj);
+  if (!role || isClaudeCrossSessionInboundRecord(obj)) return;
+
+  const rawContent = getClaudeMessageContent(obj);
+  const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
+  const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+  if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) return;
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
+  const attachmentSummary = buildPreviewAttachmentText(extracted.attachments);
+  const textRaw = [buildClaudePreviewText(extracted.text), attachmentSummary].filter(Boolean).join("\n");
+  const textNormalized = normalizeWhitespace(textRaw);
+  if (!textNormalized) return;
+  const userText = role === "user" ? extractCompactUserText(textNormalized) : null;
+  if (role === "user" && !userText) return;
+  const text = role === "user" ? userText! : textNormalized;
+
+  const trimmed = text.length > 1200 ? `${text.slice(0, 1199)}...` : text;
+  result.push({ role, text: trimmed });
+}
+
+interface PhysicalSessionSummaryScan {
+  readonly meta: SessionMetaInfo | null;
+  readonly codexLastActivityTimestampIso?: string;
+  readonly claudeLastActivityTimestampIso?: string;
+  readonly claudeNativeTitle?: string;
+  readonly previewMessages: PreviewMessage[];
+}
+
+async function scanPhysicalSessionSummary(
+  fsPath: string,
+  maxMessages: number,
+  performanceProbe?: PerformanceProbe,
+  token?: SessionJsonlReadOptions["token"],
+  cancellationErrorFactory?: SessionJsonlReadOptions["cancellationErrorFactory"],
+): Promise<PhysicalSessionSummaryScan> {
+  throwIfSummaryScanCancelled(token, cancellationErrorFactory);
+  const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
+  const claudeMeta: SessionMetaInfo = { historySource: "claude" };
+  const previewMessages: PreviewMessage[] = [];
+  let codexMeta: SessionMetaInfo | undefined;
+  let metaScanComplete = false;
+  let metaScannedLineCount = 0;
+  let hasParsedMetaRecord = false;
+  let codexLastActivityTimestampIso: string | undefined;
+  let claudeLastActivityTimestampIso: string | undefined;
+  let claudeCustomTitle: string | undefined;
+  let claudeAiTitle: string | undefined;
+  let claudeSummaryTitle: string | undefined;
+  let claudeRenameTitle: string | undefined;
+
+  performanceProbe?.add("segmentCount");
+  performanceProbe?.add("streamOpenCount");
+  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  try {
+    for await (const line of rl) {
+      throwIfSummaryScanCancelled(token, cancellationErrorFactory);
+      if (performanceProbe) {
+        observeEstimatedJsonlLine(performanceProbe, line);
+        performanceProbe.add("logicalLineCount");
+      }
+      if (!line) continue;
+
+      let obj: any;
+      try {
+        obj = JSON.parse(line);
+        performanceProbe?.add("parseSuccessCount");
+      } catch {
+        performanceProbe?.add("malformedLineCount");
+        if (!metaScanComplete) {
+          metaScannedLineCount += 1;
+          if (metaScannedLineCount >= META_SCAN_LINE_LIMIT) metaScanComplete = true;
+        }
+        continue;
+      }
+
+      if (!metaScanComplete) {
+        metaScannedLineCount += 1;
+        const isFirstParsedRecord = !hasParsedMetaRecord;
+        hasParsedMetaRecord = true;
+        codexMeta = extractCodexSessionMeta(obj, isFirstParsedRecord);
+        if (codexMeta) {
+          metaScanComplete = true;
+        } else {
+          observeClaudeSessionMeta(claudeMeta, obj);
+          if (metaScannedLineCount >= META_SCAN_LINE_LIMIT) metaScanComplete = true;
+        }
+      }
+
+      const codexTimestampIso = extractCodexActivityTimestampIso(obj);
+      if (codexTimestampIso) codexLastActivityTimestampIso = codexTimestampIso;
+      const claudeTimestampIso = extractClaudeActivityTimestampIso(obj);
+      if (claudeTimestampIso) claudeLastActivityTimestampIso = claudeTimestampIso;
+
+      const customTitle = extractClaudeCustomTitle(obj);
+      if (customTitle) claudeCustomTitle = customTitle;
+      const aiTitle = extractClaudeAiTitle(obj);
+      if (aiTitle) claudeAiTitle = aiTitle;
+      const summaryTitle = extractClaudeSummaryTitle(obj);
+      if (summaryTitle) claudeSummaryTitle = summaryTitle;
+      const renameTitle = extractClaudeRenameTitle(obj);
+      if (renameTitle) claudeRenameTitle = renameTitle;
+
+      if (!(previewMessages.length >= maxMessages)) {
+        await appendPreviewMessage(obj, pastedPromptResolver, previewMessages);
+      }
+    }
+  } finally {
+    rl.close();
+    stream.close();
+  }
+
+  const claudeNativeTitle = claudeCustomTitle ?? claudeAiTitle ?? claudeRenameTitle ?? claudeSummaryTitle;
+  return {
+    meta: codexMeta ?? (hasClaudeSessionMeta(claudeMeta) ? claudeMeta : null),
+    ...(codexLastActivityTimestampIso ? { codexLastActivityTimestampIso } : {}),
+    ...(claudeLastActivityTimestampIso ? { claudeLastActivityTimestampIso } : {}),
+    ...(claudeNativeTitle ? { claudeNativeTitle } : {}),
+    previewMessages,
+  };
+}
+
+export interface CodexHistoryBasePreviewRebuildResult {
+  readonly summary: SessionSummary;
+  readonly complete: boolean;
 }
 
 export async function rebuildCodexHistoryBasePreview(
@@ -351,26 +435,55 @@ export async function rebuildCodexHistoryBasePreview(
   sessionInventory: readonly SessionSummary[],
   maxMessages: number,
   token?: { readonly isCancellationRequested: boolean },
-): Promise<SessionSummary> {
-  if (summary.source !== "codex" || !summary.meta.codexHistoryBase) return summary;
+  performanceProbe?: PerformanceProbe,
+  plan?: CodexLogicalHistoryPlan,
+): Promise<CodexHistoryBasePreviewRebuildResult> {
+  if (summary.source !== "codex" || !summary.meta.codexHistoryBase) {
+    return { summary, complete: true };
+  }
   try {
     const previewMessages = await readPreviewMessages(summary.fsPath, maxMessages, {
       source: "codex",
       sessionInventory,
+      plan,
       token,
+      performanceProbe,
     });
     const snippetSource = resolvePreviewSessionTitleCandidate(previewMessages);
     const snippet = snippetSource ? singleLineSnippet(snippetSource, 70) : path.basename(summary.fsPath);
+    const displayTitle = summary.customTitle ?? summary.originalTitle ?? summary.nativeTitle ?? snippet;
+    if (
+      summary.snippet === snippet &&
+      summary.displayTitle === displayTitle &&
+      arePreviewMessagesEqual(summary.previewMessages, previewMessages)
+    ) {
+      return { summary, complete: true };
+    }
     return {
-      ...summary,
-      previewMessages,
-      snippet,
-      displayTitle: summary.customTitle ?? summary.originalTitle ?? summary.nativeTitle ?? snippet,
+      summary: {
+        ...summary,
+        previewMessages,
+        snippet,
+        displayTitle,
+      },
+      complete: true,
     };
   } catch (error) {
     if (token?.isCancellationRequested) throw error;
-    return summary;
+    return { summary, complete: false };
   }
+}
+
+function arePreviewMessagesEqual(
+  left: readonly PreviewMessage[],
+  right: readonly PreviewMessage[],
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((message, index) => {
+    const candidate = right[index];
+    return candidate?.role === message.role && candidate.text === message.text;
+  });
 }
 
 export async function buildSessionSummary(params: {
@@ -380,14 +493,37 @@ export async function buildSessionSummary(params: {
   fsPath: string;
   previewMaxMessages: number;
   timeZone: string;
+  fileStat?: Readonly<{ mtimeMs: number; size: number }>;
+  performanceProbe?: PerformanceProbe;
+  token?: SessionJsonlReadOptions["token"];
+  cancellationErrorFactory?: SessionJsonlReadOptions["cancellationErrorFactory"];
 }): Promise<SessionSummary | null> {
   const { sessionsRoot, fsPath, previewMaxMessages, timeZone } = params;
   const sourceRoot = params.sourceRoot ?? sessionsRoot;
-  const stat = await statSafe(fsPath);
+  throwIfSummaryScanCancelled(params.token, params.cancellationErrorFactory);
+  let stat = params.fileStat;
+  if (
+    stat &&
+    (!Number.isFinite(stat.mtimeMs) || !Number.isSafeInteger(stat.size) || stat.size < 0)
+  ) {
+    return null;
+  }
+  if (!stat) {
+    params.performanceProbe?.add("statCount");
+    stat = await statSafe(fsPath) ?? undefined;
+  }
+  throwIfSummaryScanCancelled(params.token, params.cancellationErrorFactory);
   if (!stat) return null;
 
   const cacheKey = normalizeCacheKey(fsPath);
-  const readMeta = (await tryReadSessionMeta(fsPath)) ?? {};
+  const scan = await scanPhysicalSessionSummary(
+    fsPath,
+    previewMaxMessages,
+    params.performanceProbe,
+    params.token,
+    params.cancellationErrorFactory,
+  );
+  const readMeta = scan.meta ?? {};
   const source = detectSessionSource(readMeta, fsPath);
   const storage: SessionStorageLocation =
     params.storage ??
@@ -396,8 +532,9 @@ export async function buildSessionSummary(params: {
       : { rootKind: "codexSessions", archiveState: "active", rootPath: sourceRoot });
   const meta: SessionMetaInfo = { ...readMeta, historySource: source };
   const identityKey = resolveSessionIdentityKey(source, meta, fsPath, cacheKey);
-  const activityInfo = await readSessionActivityInfo(fsPath, source);
-  const lastActivityIso = activityInfo.lastActivityTimestampIso;
+  const lastActivityIso = source === "claude"
+    ? scan.claudeLastActivityTimestampIso
+    : scan.codexLastActivityTimestampIso;
 
   const inferred = source === "codex" ? inferYmdFromPath(sourceRoot, fsPath) ?? undefined : undefined;
   const startValid = parseTimestampDate(meta.timestampIso);
@@ -431,7 +568,7 @@ export async function buildSessionSummary(params: {
       ? toTimeLabel(startValid, timeZone)
       : "--:--";
 
-  const previewMessages = await readPreviewMessages(fsPath, previewMaxMessages);
+  const previewMessages = scan.previewMessages;
   const snippetSource = resolvePreviewSessionTitleCandidate(previewMessages);
   const snippet = snippetSource ? singleLineSnippet(snippetSource, 70) : path.basename(fsPath);
   const cwdShort = meta.cwd ? safeDisplayPath(meta.cwd, 80) : "";
@@ -453,11 +590,24 @@ export async function buildSessionSummary(params: {
     localDate: startedLocalDate,
     timeLabel: startedTimeLabel,
     snippet,
-    nativeTitle: activityInfo.nativeTitle,
+    nativeTitle: source === "claude" ? scan.claudeNativeTitle : undefined,
     displayTitle: snippet,
     cwdShort,
     previewMessages,
   };
+}
+
+function throwIfSummaryScanCancelled(
+  token?: SessionJsonlReadOptions["token"],
+  cancellationErrorFactory?: SessionJsonlReadOptions["cancellationErrorFactory"],
+): void {
+  if (!token?.isCancellationRequested) return;
+  throw cancellationErrorFactory?.() ?? new Error("Session summary scan was cancelled.");
+}
+
+function observeEstimatedJsonlLine(performanceProbe: PerformanceProbe, line: string): void {
+  performanceProbe.add("physicalLineCount");
+  performanceProbe.add("readByteEstimatedCount", Buffer.byteLength(line, "utf8") + 1);
 }
 
 function detectSessionSource(meta: SessionMetaInfo, fsPath: string): SessionSource {

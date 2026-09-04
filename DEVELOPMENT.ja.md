@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-09-03
-- 対象バージョン: 2.13.1
+- 最終更新: 2026-09-04
+- 対象バージョン: 2.14.0
 
 ## 1. 概要
 
@@ -237,7 +237,7 @@
   - `Sources: Enabled` を見るのは、Codex セッションの `Claude Code へ引き継ぐ` メニュー表示だけに限定する
 - メニュー構成:
   - `Claude Code へ引き継ぐ`: Codex セッションかつ Codex / Claude の両ソースが有効な場合のみ表示し、Handoff ファイルを作成または既存利用して Claude Code を開く
-  - `引き継ぎファイルを作成`: 選択セッションの Handoff ファイルを作成する
+  - `引き継ぎファイルを作成`: 選択セッションの Handoff ファイルを作成し、完了通知からファイルを開く、プロンプトをコピーする、または生成済みファイルの絶対OSパスをコピーできる
   - `引き継ぎプロンプトをクリップボードにコピー`: Handoff ファイルを参照するプロンプトをクリップボードへコピーする
   - `引き継ぎファイルのパスをクリップボードにコピー`: Handoff ファイルを作成または更新し、その絶対OSパスだけをクリップボードへコピーする
   - `引き継ぎファイルを開く`: 選択セッションに対応する Handoff ファイルを開く。存在しない場合は作成確認トーストを出し、承認時は作成後に開く
@@ -320,7 +320,7 @@
   - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
-  - 内部 file version: 20
+  - 内部 file version: 21
   - 用途: 繰り返し検索を高速化する増分インデックス
   - `search-index.v2.json` が破損して JSON parse error になった場合は、破損内容を退避せず削除し、次回検索時に再構築する
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
@@ -338,6 +338,7 @@
   - Codex の `custom_tool_call` は `toolCalls` / `toolCallsAndOutputs` のとき、tool 名、action、command、files、paths などの軽量メタだけを保存する
   - `custom_tool_call` の patch / diff 本文、巨大 JSON、base64 / data URI、secret / token / password 系キーの値は保存しない
   - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ、取得できる場合に status / exitCode / durationMs / success / error などの短い実行メタと画像添付 metadata だけを保存する。`input_text` の stdout / stderr / diff 全文は保存しない
+  - Codex の完了済み非同期質問は assistant message として1回だけ保存し、対応する `request_user_input_async` / `new_context` の制御callとoutputは保存しない
   - ファイル履歴向けの `fileChangeHints` は関連セッションの優先付け補助として使う。最終的な diff 抽出結果の正しさは元のセッション JSONL の再解析で担保する
   - セッションの attachment metadata は label、path、MIME type、file kind を検索対象に含める
   - Claude Code text document の text は上限内だけ検索対象にし、PDF / Office / binary / base64 document の本文は検索対象にしない
@@ -348,7 +349,7 @@
   - 用途: History Insights の統計と Claude Code Branch Navigation の構造化 occurrence を共用する差分解析キャッシュ。履歴キャッシュや検索インデックスの代替にはしない
   - History Insights、Claude Code Branch Navigation、または `Rebuild Cache` を要求したときだけ lazy load / lazy build し、拡張機能の起動や通常の History / Search 表示を待たせない
   - セッションごとの `cacheKey`、source、`mtime`、`size`、parser version と、sessions root / 有効ソースを含む cache context を検証し、変更された entry だけを再解析する
-  - 現行source parser versionはCodex `11` / Claude Code `10`とする。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析する
+  - 現行source parser versionはCodex `13` / Claude Code `10`とする。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析する
   - 既存 Chat model builder と同じ抽出結果を使って message index、turn、usage、file change、ツール名別呼び出し回数を集計し、解析側で独自の message index を採番しない
   - 同一セッションの重複解析を共有し、全体の更新、保存、clear は直列化する。進捗通知とキャンセルに対応する
   - 破損 JSON は削除して次回要求時に再生成し、権限エラーなどの read error では既存ファイルを削除しない
@@ -498,6 +499,11 @@
 - セッションビューのヘッダーには、ピン留めボタンの右にカスタムタイトルの pencil アイコンを置き、QuickPick から設定 / 消去を選べるようにする
 - セッションタイムラインでは、現在のユーザープロンプトを上部に追従表示できる
 - assistant 応答に Codex のメモリー引用情報が含まれる場合は、本文末尾ではなく折りたたみ表示として扱う
+- Codexの`request_user_input_async`は、完了した`AgentMessage`だけを通常のassistant messageへ1回投影し、Session Viewer、検索、Markdown transcript、Resume、Handoffで共通の会話として扱う。開始eventと制御用function call / outputは表示せず、質問本文の重複、tool件数への混入、通常turnの早期完了を防ぐ
+- Codexの`token_usage_record`は応答単位usageの正本として扱い、同じ`response_id`を重複加算しない。直後64 logical lines以内でturn IDとusage全fieldが完全一致する旧`token_count`は同一記録として抑止する。旧側のturn IDを明示またはturn stateから解決できない場合に限り、同じ範囲の未消費な新recordにusage完全一致候補がちょうど1件あれば、その新recordのturn IDをpair判定に利用する。候補が0件・複数件、または解決済みturn IDが競合する場合はfail-openし、旧recordだけの履歴との互換性を維持する。`compacted.latest_token_usage_record`は応答単位の確定値がない場合の累積fallbackにだけ使う
+- `cache_write_input_tokens`と`cache_creation_input_tokens`は同じcache作成指標へ1回だけ正規化する。両方が同値なら1値として扱い、不一致、負数、少数、非数値、unsafe integerは加算せず不正値として部分解析へ隔離する
+- Codexの`realtime_item`、`new_context`、`context_compacted`、`ContextCompaction`は既知recordとして型分類するが、現時点では会話本文、検索、メッセージ・tool統計へ投影しない。正しいJSONを破損行とは数えず、未知・巨大・不正な入れ子payloadもboundedに無視する
+- `realtime_item`の可視化は、本家機能が既定有効となり永続形式と順序・重複規則を実ログで確定できた時点で再設計する。context管理の可視化は、history notesと利用者本文の境界、Search / Resume / Handoffへの含有規則、機密情報の扱いを確定できた時点で再設計する。再開時はUI、ローカライズ、アクセシビリティ、cache/parser versionを同時に更新する
 - Codex の最初の通常会話より前にある text-only protocol bundle は、既知の完全 block だけで構成され、開始 marker を持つ場合に限って専用 `protocolContext` item へ変換する。通常 user message とは分離し、既定で閉じた `Codex 実行コンテキスト` カードとして通常表示・詳細表示の両方に出す
 - protocol context 判定は可変の本文、件数、path、hash ではなく raw content の block 構造で行う。未知 content type、raw 添付、閉じ tag 欠落、余剰の自然文があれば通常 user message へ fail-open し、単独の environment / user instructions は従来どおり詳細表示用 context とする。strict 判定後に本文から file reference attachment が派生しても、raw 判定を覆さず context のまま扱う
 - 専用 context card は raw message index を消費して後続番号を維持するが、user 件数、sticky user、user 前後移動、role filter、branch anchor、全体 Search、ページ内検索、Resume / Handoff の通常依頼には含めない。展開本文は `textContent` で描画し、同一セッション自動更新では開閉状態を維持する
@@ -524,6 +530,7 @@
 - `prefers-reduced-motion: reduce` では running chip の pulse / flash / border glint と running marker dot pulse を止め、静的な accent 表示だけにする
 - sticky user header は、次の user card の上端が sticky 表示領域に到達した時点で次の user に切り替える
 - patch group card は collapsed state で compact file summary を表示し、先頭 3 file rows と `あと N 個のファイルを表示` / `表示を減らす` を持つ。全ファイルの diff をまとめて読む操作は `レビューする` ではなく、`全差分を開く` / `全差分を閉じる` として扱う。`元に戻す` は初期実装に含めない
+- Codexの保存済みターンでは、同一ターン内の同一正規化対象パスをcompact file summaryの1行へ集約する。完全contentを持つ非move createから同じパスへの非move updateだけが続く系列は、保存protocolのcreate意味に従って本家liveと同じ開始時から最終状態までの正味create diffを表示する。完全な基準内容がない複数update、move、破損hunk等は、推測せず保存された各操作の追加行数、削除行数、diff hunkを記録順に合算する
 - `全差分を開く` は patch group card 内の in-place all-diff mode として動作し、オーバーレイ、別タブ、別パネルは使わない。押下時は対象 card だけを全幅にし、file list を全件表示し、全 file の patch detail を同じ card 内で展開する
 - `全差分を閉じる` は同じ card の全 patch detail を閉じ、compact file summary に戻す。解除時は all-diff mode に入る前の card 幅状態を復元する。file row の個別クリックによる単体 patch detail 展開は従来どおり残す
 - all-diff mode でも diff body は既存の deferred rendering / loading 表示を使い、全 entry の wrapper は描画しつつ、diff body の実体を同期的に一括描画しない
@@ -803,11 +810,13 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - Codex source と Codex archived sessions が有効な場合は archived root も `rollout-*.jsonl` の再帰走査対象にする
   - 収集結果には `rootKind` / `rootPath` を付与し、通常 Codex と archived Codex を区別する
   - Claude Code は `.claude/projects/<project>/<session>.jsonl` の 2 階層構造のみを対象にする
+  - 有効rootまたは再帰走査中のsubtreeを読み取れなかった場合は失敗scope数を返し、空inventoryと区別する。root自体のFileNotFoundだけは存在しないsource rootとして扱う
 
 ### 4.2 セッション要約
 
 - `src/sessions/sessionSummary.ts`
-  - `session_meta` を読み取り、一覧用メタ情報を構築する
+  - Historyのcache missでは物理JSONLを1 streamで走査し、`session_meta`、最終activity、Claude native title、上限付きpreviewを同じparse結果から構築する。単独のmeta読取とlogical preview APIは他用途および`history_base`二段階処理用に維持する
+  - scanはphysical lineごとにキャンセルを確認し、空行・破損行を飛ばす既存規則を維持する。`history_base`のlogical / physical line indexは後段のlogical readerで継続する
   - `DiscoveredSessionFile` の root 情報から `storage.archiveState` と `rootKind` を設定する
   - Codex は session id から identity key を作り、path が active / archived 間で変わっても同一 session として扱えるようにする
   - `user` / `assistant` メッセージを先頭から最大 `preview.maxMessages` 件だけ読んでスニペットを作る
@@ -830,7 +839,10 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 有効な cache context から `HistoryIndex` を復元し、初回表示を先に完了できるようにする
   - cache 読み込み時の parse error は cache を削除して `null` 扱いにし、read error は削除せず `null` 扱いにする
   - 変更のないファイルはキャッシュ済み `summary` を再利用する
-  - ファイルごとの `stat` / キャッシュ判定 / `buildSessionSummary` は最大 4 並列で処理する
+  - ファイルごとの `stat` / キャッシュ判定 / `buildSessionSummary` は最大 4 並列で処理し、同じrefresh内で検証済みのfile stampをsummary構築へ渡してcache miss時の重複`stat`を行わない
+  - cache missのscan後にmtime / sizeを再確認する。変化時は一度だけ再走査し、二度目の変化、scan中の消失、または不完全discoveryでは候補全体を公開・保存しない。`history_base`はlogical planの各segment stampを安定済みphysical inventoryと照合し、固定したsegment sizeを超えて読まず、実際にlogical previewを読んだsegmentを読取後に再確認する。logical読取失敗または読取中の変化でも候補全体を非公開にする。通常refreshは`skippedIncomplete`、strict rebuildは失敗として扱う
+  - presentation、inventory、durable cacheを独立fingerprintで比較する。完全no-opでは既存`HistoryIndex`とgenerationを維持し、cache書き込み、Index用Map再生成、History / Pinned Tree通知を省略する
+  - mtime / sizeだけが変わり表示内容が同じ場合はinventoryだけを更新し、cache保存失敗時はdurable fingerprintを進めず次回refreshで再試行する
   - `HistoryIndex.byCacheKey` を構築し、`findByFsPath()` は `Map` で引く
   - `HistoryIndex.byIdentityKey` を構築し、active / archived 間の path 移動や pin 追従に使う
   - active と archived に同じ identity がある場合は active を優先して dedupe する
@@ -852,6 +864,16 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `generated` / `nativeWhenAvailable` の設定値に応じて `displayTitle` を決定する
   - カスタムタイトルがある場合は `displayTitle` として最優先する
 
+### 4.3.1 性能計測基盤
+
+- `src/performance/performanceCounters.ts`
+  - History、Search、Analysisの処理時間、I/O、JSONL、cache、公開、応答性、memoryを固定名の集計counterだけで測定する
+  - 計測sinkがない通常実行ではprobeとcounter setを生成せず、path、session ID、本文、query、fingerprintを計測sampleへ含めない
+  - `statCount`とscan後の安全確認`postScanCheckCount`を分離し、stream、logical / physical line、parse、cache write、Map / snapshot生成と合わせて比較する
+- `test/performance/v214BaselineRunner.ts`
+  - 固定seedのsynthetic fixture、warm-up 3回、計測10回で2.13.1 baselineと2.14.0 candidateを同じgoldenに照合する
+  - 集計reportは`.private-docs/v2.14-performance-*.ja.md`、全counterのraw値は対応する`.raw.json`へ保存し、実セッションをfixtureや出力へ使わない
+
 ### 4.4 自動更新
 
 - `src/services/autoRefreshService.ts`
@@ -866,9 +888,10 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - polling の起動条件と間隔 (`debounceMs / 2`、下限500ms、上限2秒) は変更せず、size 比較用の追加 `stat` や全履歴 scan を行わない
   - `History` view が非表示かつ自動更新オンのセッションタブが開いていない場合、または VS Code ウィンドウが非フォーカスの場合は timer を止めて pending を保持する
   - `vscode.window.state.focused` と `onDidChangeWindowState` により、フォーカス中のウィンドウだけ自動 refresh を実行する
-  - 自動 refresh は `refreshHistoryIndex(false)`、view refresh、セッションビューのタイトル更新、対象セッションタブ更新を行い、Search 結果のクリアや検索インデックス再構築は行わない
+  - 自動 refresh は `refreshHistoryIndex(false)` を行い、change maskに応じたview / title更新と、変更pathに対応する対象セッションタブ更新を行う。Search 結果のクリアや検索インデックス再構築は行わない
 - `src/extension.ts`
   - 自動更新 consumer は `History` view が表示中、または `ChatPanelManager` に自動更新オンの開いているセッションタブがある場合に存在するとみなす
+  - History refreshのchange maskを使い、session presentationとproject association表示のどちらも変わらない場合はHistory / Pinned Treeの再描画とtitle再解決を省略する。Status時刻と変更pathによるopen panel更新は独立して維持する
   - `historyView.onDidChangeVisibility`、セッションビュー consumer 変更イベント、`onDidChangeWindowState` で `AutoRefreshService` の実行条件を更新する
   - ウィンドウのフォーカス復帰時は、staleness expiry などにより保留された可視セッションタブの更新も1回だけ再開する
   - `codexHistoryViewer.manageProjectAlias` / `setProjectAlias` / `clearProjectAlias` を登録し、Project node 文脈がない direct / UI command では active project を推定せず no-op にする
@@ -897,15 +920,18 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 - `src/services/searchIndexService.ts`
   - `search-index.v2.json` を管理する。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
-  - `SEARCH_INDEX_FILE_VERSION = 20` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item / Codex `history_base`論理履歴 / Codex `item_completed` / `FileChange`のfile change hint対応前に生成した既存インデックスは再構築対象にする
+  - `SEARCH_INDEX_FILE_VERSION = 21` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item / Codex `history_base`論理履歴 / Codex `item_completed` / `FileChange`のfile change hint / Codex非同期質問対応前に生成した既存インデックスは再構築対象にする
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
   - 検索インデックス読み込み時の parse error はインデックスを削除して `null` 扱いにし、次回検索時に再構築する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
+  - 更新・保存用Maintenance stateと検索consumer向けimmutable Read snapshotを分離する。全hitではMapを複製せず既存snapshotを返し、mtimeだけの変更でmessages / hintsが構造同値ならprocess-local opaque identityを引き継いでRead snapshotを再利用する
+  - 初期file / logical plan observationは共有cursorを持つ最大8 workerで並行化し、同一sessionのJSONL scanと公開順は直列のまま維持する。キャンセル後は新しいstatを発行せず、発行済みworkerの完了を待つ
   - index context に `codexArchivedSessionsRoot` と `includeCodexArchived` を含め、archived root / 有効状態の変更を検知する
   - JSONL をストリーミングで読み、検索対象メッセージ列を構築する
   - `search.indexToolContent` に応じてツール名 / 引数 / 出力を検索インデックスへ入れる範囲を変える
   - Codex の `custom_tool_call` は既存 tool 検索と同じ `role: tool` / `source: toolArguments` 粒度で、軽量メタだけを入れる
   - Codex の `custom_tool_call_output` は `toolCallsAndOutputs` のときだけ `role: tool` / `source: toolOutput` として短い実行メタと画像添付metadataを入れる。配列内`input_text`の全文は入れない
+  - 完了済みCodex非同期質問はassistant messageとして一度だけ索引化し、`request_user_input_async` / `new_context`の制御callと対応output、`realtime_item`、context管理eventは索引化しない
   - Codex の通常 `function_call_output` は string と `input_text` / `input_image` 配列を共通抽出し、`toolCallsAndOutputs` のときに本文と画像添付metadataを入れる
   - Codex の `local_shell_call` / `web_search_call` / `image_generation_call` は許可した action/prompt metadataをtool callとして扱い、shellの`env` / `user`と生成画像のBase64は保存しない
   - `conversationOnly` のときは `custom_tool_call` の callId 紐付けだけを維持し、検索用メタ生成は行わない
@@ -914,8 +940,9 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - PDF / Office / binary / base64 document の本文と、Codex file reference の参照先ファイル本文は検索インデックスへ入れない
   - 旧キャッシュに `indexToolContent` がない場合は `toolCallsAndOutputs` とみなし、既定設定のままなら不要な再作成を避ける
   - `cleanupOrphanEntries()` で現在の履歴に存在しない cacheKey を削除する
-  - 実ファイルが消えている場合は `stat` 失敗時に該当エントリを削除する
-  - `forceRebuild` 指定時は内部エントリをクリアして最初から作り直す
+  - JSONL再構築後にleaf stampとlogical planを再観測し、変化時は一度だけ再走査する。二度目も変わる場合は新stateを保存・公開しない
+  - FileNotFoundは再確認できた場合だけ該当entryを削除し、permission、sharing violation、未知I/O errorでは既存entryを保持する。対応する旧entryがないtransient、または再利用stateがないstrict経路では不完全indexを成功公開しない
+  - `forceRebuild` 指定時は専用working stateで最初から作り直し、atomic保存成功後だけprocess-local stateを置き換える
 
 ### 4.5.1 File AI Change History 実装
 
@@ -994,14 +1021,17 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - source 共通の message / usage / tool usage / file change 統計、解析完全性、Claude Code occurrence、cache context / file schema を定義する
   - `complete` / `partial` / `unsupported` / `failed` と、指標単位の `available` / `partial` / `unavailable` を分離する
 - `src/analysis/sessionAnalysisAdapter.ts`
-  - 1 セッション単位で JSONL を streaming 解析し、既存 `buildChatSessionModel()` の message item / turn / tool / patch / usage を共通の意味として再利用する
+  - 1 セッション単位でJSONLを一度だけstreaming解析する。readonly Record EnvelopeをChat timeline、integrity / usage、Claude graphの固定Reducerへ流し、既存`buildChatSessionModel()`のmessage item / turn / tool / patch / usageを共通の意味として再利用する
+  - empty、whitespace、malformed、parsedを区別し、logical / physical line index、segment、leafを保持する。通常Chat経路にはAnalysis専用Reducerやrecordごとの不要な`await`を追加しない
   - tool item は正規化済みの名前ごとに呼び出し回数を集計し、名前長と種類数をboundedに保持する。切り詰めまたは種類数上限超過を検出したentryは `partial` とする
   - Codex と Claude Code の token 規則を混同せず、Claude Code だけは branch relation 用の bounded occurrence と既存のセッションタイムライン表示に一致する visible message anchor を追加する
+  - Codexのdurable `token_usage_record`と旧`token_count`の近接完全一致を1件へまとめ、応答単位usageを加算する。`compacted`内の最新usage recordは累積fallbackとして保持する
   - prompt / response 本文、tool output、認証情報候補を cache ID や debug log へ保存しない
 - `src/analysis/sessionAnalysisIndexService.ts`
   - `session-analysis-index.v1.json` の lazy load、context / version 検証、mtime / size による差分更新、orphan cleanup、single-flight、キャンセル、進捗、atomic save、clear、strict な `rebuildAll()` を担当する
   - 解析要求を直列化し、再構築と通常の Insights / Branch 要求が同じ cache を競合更新しないようにする
   - 通常の `ensureEntries()` は保存失敗後も process-local 結果を返すが、`rebuildAll()` は削除 / 保存失敗を伝播し、保存成功前の結果を current cache として公開しない
+  - 解析完了後にleafまたは固定logical planの全segment stampを確認し、変化時は一度だけ再解析する。二度目も変化した結果は既存process / disk cacheへ公開しない
 - `src/insights/historyInsightsSnapshot.ts` / `src/insights/historyInsightsAggregator.ts`
   - History provider が確定した session reference 集合と `bucketLocalDate` を snapshot の正本にし、Webview や集計側で History の条件述語 / 日付境界を再実装しない
   - workspaceStateからsnapshotを復元するときは、`descriptor.sortOrder`を`HistorySortOrder`と同期した完全な型付き許可表で検証し、正規の表示順は保持しつつ未知値をfail-closedで拒否する
@@ -1199,11 +1229,11 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `metadata.json` は Handoff ディレクトリの作成時刻、元セッション情報、生成サイズなどを保持する
   - 生成時に 30 日超または 100 ディレクトリ超の古い Handoff ディレクトリを整理する
 - `src/extension.ts`
-  - `handoffToClaude` は Codex セッションを対象に、既存ファイル確認後に `claude-vscode.editor.open` へ localized prompt を渡す
+  - `handoffToClaude` は Codex セッションを対象に、既存ファイル確認後に `claude-vscode.editor.open` へ localized prompt を渡し、完了通知からファイルを開く、プロンプトをコピーする、または準備済みファイルの絶対OSパスをコピーできる
   - Claude Code セッションから Codex への直接引き継ぎコマンドは提供しない。Codex の入力欄へプロンプトを渡す公開連携手段がないため、`copyHandoffPrompt` でコピーしたプロンプトを利用者が手動で貼り付ける
   - `copyHandoffPrompt` は既存 Handoff ファイルを確認なしで使い、存在しない場合だけ作成して、作成有無に応じたコピー完了通知と `引き継ぎファイルを開く` action を出す
   - `copyHandoffPathToClipboard` は同じ作成 / 再利用処理で Handoff ファイルを用意し、その完全パスだけをクリップボードへコピーする
-  - `createHandoffFile` は既存 Handoff ファイルがある場合に「既存を使う / 再作成」を確認する
+  - `createHandoffFile` は既存 Handoff ファイルがある場合に「既存を使う / 再作成」を確認し、完了通知へファイルを開く、プロンプトをコピーする、ファイルの絶対OSパスをコピーするactionを出す
   - `openSessionHandoff` は選択セッションに対応する Handoff ファイルを開き、存在しない場合は作成確認トーストから生成して開けるようにする
 - `package.json`
   - `codexHistoryViewer.handoff.enabled` が有効な場合だけ、Codex / Claude Code の表示中セッションに Handoff 階層メニューを表示する
@@ -1263,22 +1293,26 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `patchEntry` reveal target で開く場合は、`revealMessageIndex` があっても `summary` を維持する
   - `ChatPanelManager` は対応画像の data URI をパネル単位で保持し、Webview からの `requestImageData` に応じて必要な画像データだけ返す
   - `ChatPanelManager` は usage 行のラベルを Webview i18n として渡し、表示文字列を `l10n/bundle.l10n.*` で管理する
-  - `ChatPanelManager` は Codex turn の永続状態を変更せず、`chatTurnTimelineMode=live` の場合だけ active Codex root、archive 状態、auto-refresh 観測状態、source activity evidence を使って live 表示の `running` を `displayStatus` として付与する
+  - `ChatPanelManager` は Codex / Claude Code turn の永続状態を変更せず、`chatTurnTimelineMode=live` の場合だけ各sourceのactive sessions root、archive 状態、auto-refresh 観測状態、source activity evidence を使って live 表示の `running` を `displayStatus` として付与する
   - `src/chat/liveActivity.ts` は bounded な record signature、`{mtimeMs, size}` fingerprint、process-local observation、bootstrap、reset、monotonic merge、freshness、expiry の pure helper を提供する。継続観測では最後の有効 record 自身の validated top-level timestamp を activity とし、未来値は観測時刻までに clamp する。末尾 record の timestamp が欠損または不正な場合だけ観測時刻を使い、mtime は有効な top-level timestamp がない初回または reset 後だけ fallback に使う
   - `chatModelBuilder.ts` の panel 専用 `buildChatSessionModelWithActivityEvidence()` は、既存の1回の JSONL parse 中に最後の有効 record と最新の有効 top-level timestampだけを収集する。本文、tool output、raw JSON、完全 path を evidence に保持せず、公開 `ChatSessionModel` と既存 `buildChatSessionModel()` の戻り値を変更しない
   - `chatModelBuilder.ts` は Codex の `turn_context.payload.model` / `effort` を assistant メッセージと usage 行へ付与する
   - `chatModelBuilder.ts` は Codex の `event_msg.payload.type = token_count` から `last_token_usage` / `total_token_usage` / `model_context_window` / `rate_limits` を usage 行に変換する
   - `chatModelBuilder.ts` は Codex の `task_started` を turn 開始の主シグナルとし、`turn_context.payload.turn_id` は active turn と一致する場合だけ補助観測として扱う
-  - `chatModelBuilder.ts` は Codex timeline item に `turnId` を付与し、`ChatTurnSummary` で `sequenceNumber`、`incomplete` / `completed` / `interrupted` / `rolledBack` / `unknown` の永続状態、item / tool / patch / usage / token 合計を構築する
+  - `chatModelBuilder.ts` は Codex / Claude Code timeline item にsource固有の境界から解決した `turnId` を付与し、共通の `ChatTurnSummary` で `sequenceNumber`、`incomplete` / `completed` / `interrupted` / `rolledBack` / `unknown` の永続状態、item / tool / patch / usage / token 合計を構築する
   - `chatModelBuilder.ts` は `sequenceNumber` を turn 観測順から決め、item を持たない turn を表示から除外しても後続 turn を再採番しない。表示番号の安定を優先し、歯抜けは許容する
   - `chatModelBuilder.ts` は raw `<turn_aborted>` を active turn にフォールバックして紐づけ、structured `turn_aborted` / `thread_rolled_back` と同じ turn summary に反映する
   - `chatModelBuilder.ts` は `token_count` usage の turn を active turn、明示 `turn_id`、explicit unknown terminal 由来の scoped block、直近 completed turn の順で解決し、`task_complete` 後に末尾 usage が来る場合も直近 turn に含める。turn token 合計には `last_token_usage` 相当の usage item を使い、累計値になり得る `total_token_usage` は直接合算しない
   - `chatModelBuilder.ts` は turn_id なしの重複 `task_complete` と explicit unknown `task_complete` を区別する。turn_id なしでは直近 completed turn の latest fallback を維持し、explicit unknown では古い completed turn への trailing usage 誤帰属を止める
   - `chatModelBuilder.ts` は turn_id なしの `task_started` で古い active turn への帰属を解除し、非 active の environment-only turn は空の turn marker として表示しない。一方、live 観測中の active turn は environment だけを持つ段階でも running 表示用に保持する
-  - `chatModelBuilder.ts` は Claude Code の `message.model` / `message.usage` から usage 行を生成し、連続する同一 usage の重複表示を抑制する
+  - `chatModelBuilder.ts` は Claude Code の通常user入力をturn開始、同一`message.id`のassistant block列にある`stop_reason=end_turn`の終端を完了として扱う。tool result、`isMeta`、sidechain、queued prompt、cross-session受信は偽のturnを開始せず、request interruptionはactive turnを中断する
+  - Claude Codeのtask notificationは`tool-use-id`から元のtool callとturnを解決し、完了後にassistant処理が継続した場合も元の開始時刻とturn IDを保って再開する。対応IDがない場合はactive turn、直近turnの順に限定して補完する
+  - `chatModelBuilder.ts` は Claude Code の `message.model` / `message.usage` から usage 行を生成し、同一assistant応答の連続blockにあるusageを1件へ畳み、解決済みturnへ帰属させる
+  - `chatTurnTimelineMode=basic` / `live`ではClaude CodeのEdit / MultiEdit / Writeをturnごとに1枚のdiffカードへまとめ、同一正規化対象パスの操作量とhunkを履歴順に合算する。Writeの新規作成・上書きは推測せず、`off`では従来のtool call単位カードとturnなし表示を維持する。compact summaryと遅延詳細読込は同じturn・path照合を使う
   - `chatModelBuilder.ts` は `session_meta` などから CWD / Git ブランチ / Git コミット / dirty 状態を environment 行に変換し、同一 snapshot の重複表示を抑制する
   - `chatModelBuilder.ts` は Codex の `custom_tool_call` / `custom_tool_call_output`、`local_shell_call`、`web_search_call`、`image_generation_call` を tool カードとして扱う
   - `src/sessions/codexFileChangeEvents.ts` は旧 `patch_apply_end` と新 `item_completed` / `FileChange` を共通イベントへ正規化し、成功判定と旧新形式間のboundedな一対一重複排除をSession Viewer、File AI Change History、検索、History Insights、Handoffで共有する
+  - `chatModelBuilder.ts` はCodexの同一ターン・同一正規化対象パスに属する保存済み変更を最初の出現位置へ集約する。完全contentを持つ非move create系列では概要の現在行数を追跡し、遅延詳細でupdate hunkの範囲とold側を検証して最終内容の正味create diffを生成する。再構築できない系列は操作量とhunkの合算へ縮退する。compact summaryと遅延詳細読込は同じパス照合を使い、File AI Change Historyは調査用途の操作単位カードを維持する
   - `codexResponseItems.ts` は string / 配列 tool output と standalone response itemをboundedに検証し、`input_image`と`image_generation_call.result`を既存画像添付へ正規化する。shellの`env` / `user`、暗号化content、unknown fieldは投影しない
   - `chatModelBuilder.ts` は Codex の `exec_command_end`、tool output の JSON / plain text、Claude Code の tool result から tool 実行メタ情報を抽出する
   - `chatModelBuilder.ts` は `extractCodexMessageContent()` / `extractClaudeMessageContent()` の結果から clean text と `attachments` を message item へ設定し、Codex tool output由来の画像はtool itemへ設定する
@@ -1497,6 +1531,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - Claude Code tool use は `tool_use.id` を優先し、欠如時は JSONL 行番号と同一行内 tool call index から fallback call id を作る
 - `src/chat/chatModelBuilder.ts`
   - Codex の旧 `patch_apply_end` と新 `item_completed` / `FileChange` の grouped diff に `bookmarkGroupId` を付与する
+  - Codex grouped diffは同じターン内の同一正規化対象パスを1 entryに集約する。完全contentを持つ非move create系列は最終状態との正味create差分へ再構築し、それ以外は保存された操作の追加・削除行数とhunkを記録順に合算する。先頭entryのIDを安定IDとして維持し、遅延詳細読込ではchange typeが異なる後続操作もパス一致で取り込む
   - `turn_id` がある場合は `turn:<turn_id>` を `bookmarkGroupId` とする
   - `turn_id` がない場合は `bookmarkIdentity.ts` の共通規則で callId / timestamp / line fallback へフォールバックする
   - `apply_patch` 入力由来の pending patch group は `apply:<callId>` を `bookmarkGroupId` として扱い、callId 欠如時は JSONL 行番号由来の fallback callId を使う
@@ -1712,7 +1747,7 @@ npm run package
 
 **変更された機能**
 
-- parser は JSONL だけで決まる永続状態を構築し、live 表示の `running` は `chatTurnTimelineMode=live` の場合だけ `ChatPanelManager` が active Codex root、archive 状態、mtime、auto-refresh 観測状態から付与するようにした
+- parser は JSONL だけで決まる永続状態を構築し、live 表示の `running` は `chatTurnTimelineMode=live` の場合だけ `ChatPanelManager` が source と一致する active Codex / Claude Code root、archive 状態、source activity、auto-refresh 観測状態から付与するようにした
 - Codex turn は `task_started` を主シグナルとして開始し、`turn_context` は model / effort と active turn の補助観測に限定するようにした
 - `token_count` usage は active turn、明示 `turn_id`、explicit unknown terminal 由来の scoped block、直近 completed turn の順で turn を解決し、`task_complete` 後に末尾 usage が来る場合も直近 turn に含めるようにした
 - turn token 合計は `last_token_usage` 相当の usage item を合算し、累計値になり得る `total_token_usage` を直接合算しないようにした
@@ -2073,6 +2108,11 @@ npm run package
 - More Actionsから`すべて` / `現在のプロジェクトグループ`を直接指定した場合も1回で対象とアイコンが一致し、現在値の再指定はno-opになる。workspaceが無い状態、association再読込、保存失敗時にもV2、scope、providerの一部だけが切り替わらない
 - `currentGroup`中に現在workspaceとは別groupの明示selectionが残る不整合を作った場合、非project条件変更または再読込でselectionを別groupへ置き換えず、scopeだけ`all`へ正規化する。関連付け追加 / 解除 / 種類変更の直後にもcurrent-group selectionを再解決し、保存失敗時は関連付けとV2 / scopeの両方が操作前へ戻る
 - History の source を Codex / All から Claude Code のみへ切り替えると実効 archive 条件が `すべて` になり、Codex / All へ戻すと直前の Codex 用 archive 条件が復元される。Claude Code のまま再起動してから Codex / All へ戻した場合も同じ条件が復元される
+- 入力と設定が同じHistory refreshでは`HistoryIndex` object、generation、cache file timestamp、History / Pinnedの表示状態が変わらず、mtime / sizeだけを更新した場合は表示を再生成せずinventoryとdurable cacheだけが更新される
+- History cache miss中に一度だけ追記した場合は安定した再走査結果だけが表示され、二度続けて追記、物理scanとlogical plan解決の間またはlogical preview読取中の変更、scan後の移動、logical読取失敗、directory走査失敗では直前の完全なHistoryとcacheを維持する。次回の安定refreshでは最新inventoryへ収束する
+- Search全hitでは同じreadonly snapshotを再利用し、mtimeだけを変更して検索内容が同じ場合も旧snapshotを維持する。scan中追記は一回だけ再走査し、連続変更では当該keyだけを今回のRead snapshotから省略して旧Maintenance entryとdisk cacheを保護し、他sessionの安定した更新は保存・公開する。一時的stat失敗とcancelでも旧stateを壊さず、確認済みFileNotFoundだけentryを削除する
+- Session Analysisは空行、空白行、破損行、巨大JSONL、複数`history_base` segmentを一走査で処理し、scan中変更は一回だけ再解析する。連続変更では当該sessionを`sourceChangedDuringAnalysis` warning付きの非永続failed entryとしてconsumerへ返し、旧cacheを上書きせず他sessionの安定entryを保存する。cancelでは部分entryをprocess / disk cacheへ公開しない
+- Auto Refreshまたは初期background refreshでHistory／project associationのpresentationが変化した場合は、既存のSearch結果をclearまたは再検索せずSearch Treeを再描画し、agent状態、alias、annotationなどから算出する表示を更新する
 - History Insights の概要、ヒートマップ、ソース / モデル / プロジェクト / ツール内訳、アクティブセッション、ファイル一覧、利用詳細で、確定値、取得できた下限、取得不能が区別され、確定 0 と partial 0 / 不明を混同しない
 - History Insights のツール内訳を呼び出し回数 / 利用セッション数で切り替えると順位、合計、省略件数が対応する指標へ切り替わり、長いツール名や2,000種類を超えるセッションはboundedな `partial` として扱われる
 - History Insights のアクティブセッションをユーザー依頼数 / ツール呼び出し数 / 推論トークン数 / 合計トークン数 / 変更行数で切り替えると、同じsnapshot内の上位候補が決定的な順序で表示される。行から開けるのはhost側が現在model用に保持するopaque IDと一致するセッションだけで、未知IDや古いmodelから任意パスを開けない
@@ -2081,7 +2121,7 @@ npm run package
 - History Insights の解析をキャンセルしても既存表示を stale として安全に保持し、panel を閉じて開き直した場合に旧 panel の進捗、エラー、model、VS Code通知が新しい panel へ混入しない。2秒未満のloadでは通知が出ず、2秒を超える初回load／model保持refreshでは通知からキャンセルできる。完了済みcancel後の新しいopen／条件適用はloadを開始し、snapshot保存中の最後の意図がcancelなら自動loadを抑止、cancel後にretryした場合は再開する
 - 新規 storage では `session-analysis-index.v1.json` は History Insights / Claude Code Branch Navigation / `Rebuild Cache` の初回解析要求まで作成されず、通常の History / Search / Pinned / セッションタイムライン表示を待たせない
 - Session Analysis Index は cache context が一致する限り未変更セッションを再利用し、mtime / size または parser version が変わった entry だけを再解析する。root / source context が変わった場合は新しい context で対象 entry を構築する
-- Session Analysis のsource parser versionはCodex `11` / Claude Code `10`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、`history_base`論理履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`を集計しないversion 10 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析される
+- Session Analysis のsource parser versionはCodex `13` / Claude Code `10`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、`history_base`論理履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`を集計しないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析される
 - 破損した `session-analysis-index.v1.json` は次の解析要求で安全に再生成され、read error では既存ファイルを削除しない
 - `Rebuild Cache` は確認後に履歴キャッシュ、検索インデックス、Session Analysis Index を同じ履歴集合から順番に再作成し、進捗とキャンセルが機能する。独立した Session Analysis 再構築コマンドは公開しない
 - `Rebuild Cache` をSession Analysis Index削除前にキャンセルした場合は既存indexが残り、削除後のキャンセルでは不完全なindexが保存されない。削除 / 保存失敗時は成功通知が出ない
@@ -2248,6 +2288,8 @@ npm run package
 - `他の AI へ引き継ぎ` 配下で、Codex と Claude Code の両方が有効な Codex セッションには `Claude Code へ引き継ぐ` が表示され、Claude Code セッションや Claude Code 無効時の Codex セッションには表示されない
 - `codexHistoryViewer.handoff.enabled = false` のとき、表示中セッション右クリックに `他の AI へ引き継ぎ` 階層メニューが表示されず、Control の `Delete Handoff Files` と Status の Handoff 件数 / 容量は表示される
 - `引き継ぎファイルを作成` で `globalStorageUri/handoffs/<source>/.../handoff.md` が作成され、同じセッションでは同じファイルが使われる
+- `引き継ぎファイルを作成` の完了通知から、生成済みファイルを開く、引き継ぎプロンプトをコピーする、または引用符や改行を付けず絶対OSパスだけをコピーできる
+- 完了通知からのパスコピーに失敗しても生成済みHandoffファイルは残り、ローカライズ済みの失敗通知が表示される
 - 既存 Handoff ファイルがある状態で `Claude Code へ引き継ぐ` または `引き継ぎファイルを作成` を実行すると、既存利用 / 再作成の確認が出る
 - `引き継ぎプロンプトをクリップボードにコピー` は、既存 Handoff ファイルがある場合に確認なしで既存ファイル参照プロンプトをコピーする
 - `引き継ぎファイルのパスをコピー` は、既存 Handoff ファイルを再利用し、存在しない場合は作成してから完全パスだけをクリップボードへコピーする
@@ -2373,6 +2415,10 @@ npm run package
 - `Show details` OFF 時は usage 行が表示されない
 - `Show details` ON 時は Codex / Claude Code の assistant 応答後に usage 行が表示され、クリックで詳細が展開 / 折りたたみされる
 - Codex の usage 行には取得できる場合、model / effort / in-out token / cached input / reasoning / cumulative / context window / rate limit が表示される
+- Codexの完了済み`request_user_input_async`は、Session Viewer、Search、Markdown transcript、Resume、Handoff、Session Analysisでassistant messageとして1回だけ扱われ、開始event、制御call、対応outputは表示・索引化・tool集計されない
+- 同じ応答のdurable `token_usage_record`と旧`token_count`が併存しても1件だけ加算され、旧recordだけの履歴、重複`response_id`、`compacted.latest_token_usage_record`だけの累積fallbackもそれぞれ正しく処理される
+- Codexの`cache_write_input_tokens`は既存のcache作成tokenへ反映され、同値の`cache_creation_input_tokens`と併存しても二重加算されない。不一致または不正値は0へ変換せず部分解析として隔離される
+- `realtime_item`、`new_context`、`context_compacted`、`ContextCompaction`は通常message、Search、tool・message統計へ漏れず、正しいJSON recordは破損行として数えられない
 - Claude Code の usage 行には取得できる場合、model / in-out token / cache read-write / service tier / speed が表示される
 - `Show details` ON 時は、取得できる場合に environment 行として CWD / Git branch / Git commit / dirty 状態が表示される
 - `Show details` ON 時は、tool カードに取得できる場合の status / exit code / duration / interruption / error が表示される

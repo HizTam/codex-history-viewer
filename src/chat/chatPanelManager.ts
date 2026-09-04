@@ -35,7 +35,7 @@ import {
   type MermaidExportScope,
 } from "./mermaidExport";
 import { t } from "../i18n";
-import { getConfig, type ResumeMethod } from "../settings";
+import { getConfig, type ChatTurnTimelineMode, type ResumeMethod } from "../settings";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 import type { DebugLogger } from "../services/logger";
@@ -158,6 +158,7 @@ type ChatPanelState = {
   detailMode?: ChatSessionDetailMode;
   pathMode?: ChatWebviewPathMode;
   pathModeEnabled?: boolean;
+  turnTimelineMode?: ChatTurnTimelineMode;
   pendingAutoRefresh: boolean;
 };
 type ResumePresentationCheckpoint = {
@@ -3446,6 +3447,7 @@ export class ChatPanelManager implements vscode.Disposable {
       detailMode,
       pathMode: pathModeState.mode,
       pathModeEnabled: pathModeState.enabled,
+      turnTimelineMode: config.chatTurnTimelineMode,
       restoreScrollY: undefined,
       restoreTopMessageIndex: undefined,
     };
@@ -3819,6 +3821,7 @@ export class ChatPanelManager implements vscode.Disposable {
         state.fsPath,
         target,
         this.historyService.getIndex().historySources ?? this.historyService.getIndex().sessions,
+        state.turnTimelineMode ?? getConfig().chatTurnTimelineMode,
       );
       if (this.stateByPanel.get(panel) !== state) return;
       if (!entry) {
@@ -4586,9 +4589,13 @@ export class ChatPanelManager implements vscode.Disposable {
     activityEvidence: ChatSourceActivityEvidence,
     requestSequence: number,
   ): Promise<PreparedLiveSessionActivity> {
-    const isActiveCodexSession =
-      state.historySource === "codex" && isActiveCodexSessionPath(state.fsPath, summary, config);
-    if (!isActiveCodexSession || !state.sessionId) {
+    const isActiveTurnTimelineSession = isActiveTurnTimelineSessionPath(
+      state.fsPath,
+      state.historySource,
+      summary,
+      config,
+    );
+    if (!isActiveTurnTimelineSession || !state.sessionId) {
       return { clearPathObservation: true };
     }
     const observedAtMs = Date.now();
@@ -4651,8 +4658,7 @@ export class ChatPanelManager implements vscode.Disposable {
     if (
       activeTurn &&
       activeTurn.status === "incomplete" &&
-      state.historySource === "codex" &&
-      isActiveCodexSessionPath(state.fsPath, summary, config) &&
+      isActiveTurnTimelineSessionPath(state.fsPath, state.historySource, summary, config) &&
       isPanelObservingLiveSession(state, this.readyByPanel.get(panel) === true) &&
       isLiveActivityFresh(effectiveActivityAtMs, Date.now())
     ) {
@@ -5184,19 +5190,23 @@ async function readSessionFingerprint(fsPath: string): Promise<SessionFileFinger
   }
 }
 
-function isActiveCodexSessionPath(
+function isActiveTurnTimelineSessionPath(
   fsPath: string,
+  source: "codex" | "claude" | undefined,
   summary: SessionSummary | undefined,
   config: ReturnType<typeof getConfig>,
 ): boolean {
+  if (source !== "codex" && source !== "claude") return false;
   if (summary) {
+    const expectedRootKind = source === "codex" ? "codexSessions" : "claudeSessions";
     return (
-      summary.source === "codex" &&
+      summary.source === source &&
       summary.storage.archiveState === "active" &&
-      summary.storage.rootKind === "codexSessions"
+      summary.storage.rootKind === expectedRootKind
     );
   }
-  return isPathInsideRoot(fsPath, config.sessionsRoot);
+  const sessionsRoot = source === "codex" ? config.sessionsRoot : config.claudeSessionsRoot;
+  return isPathInsideRoot(fsPath, sessionsRoot);
 }
 
 function isPanelObservingLiveSession(

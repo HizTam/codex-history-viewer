@@ -62,6 +62,15 @@ export function resolveSessionDisplayTitle(params: {
   const customTitle = sanitizeTitle(params.customTitle);
   const displayTitle = customTitle ?? originalTitle;
 
+  if (
+    params.session.nativeTitle === nativeTitle &&
+    params.session.originalTitle === originalTitle &&
+    params.session.customTitle === customTitle &&
+    params.session.displayTitle === displayTitle
+  ) {
+    return params.session;
+  }
+
   return {
     ...params.session,
     nativeTitle,

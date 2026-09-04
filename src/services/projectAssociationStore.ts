@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { normalizeProjectKey } from "../utils/fsUtils";
+import { buildCanonicalFingerprint } from "../utils/canonicalFingerprint";
 
 export type ProjectAssociationMode = "relocate" | "groupOnly";
 export type ProjectAssociationSetPreflight = "ok" | "invalid" | "sameProject" | "circular" | "sameTarget" | "sameGroup";
@@ -37,6 +38,19 @@ export class ProjectAssociationStore {
       if (a.targetKey !== b.targetKey) return a.targetKey.localeCompare(b.targetKey);
       return a.sourceKey.localeCompare(b.sourceKey);
     });
+  }
+
+  public getPresentationFingerprint(): string | undefined {
+    return buildCanonicalFingerprint(
+      "project-association-presentation:v1",
+      this.getAll().map((entry) => [
+        entry.sourceKey,
+        entry.targetKey,
+        entry.sourceCwd,
+        entry.targetCwd,
+        entry.mode,
+      ]),
+    );
   }
 
   public invalidateCache(): void {

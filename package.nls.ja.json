@@ -218,7 +218,7 @@
   "cfg.chatAssistantLongMessageFolding.enumAuto": "詳細を表示していないときだけ、長い assistant メッセージを折りたたみます。",
   "cfg.chatAssistantLongMessageFolding.enumAlways": "詳細を表示していないときは、対象の assistant メッセージを常に折りたたみます。",
   "cfg.chatStickyUserPrompt": "履歴ビューで現在のユーザー指示を上部に固定表示します。既に開いている履歴ビューには即時反映されません。変更後は履歴ビューを再読み込みするか開き直してください。",
-  "cfg.chatTurnTimelineMode": "Codex セッションのターン表示を選択します。「基本」はターン境界、所要時間、件数・トークン集計、完了ターンの折りたたみを表示します。「ライブ」は実行中ターン、経過時間の更新、更新時の視覚効果、実行位置への固定表示も有効にします。",
+  "cfg.chatTurnTimelineMode": "Codex / Claude Code セッションのターン表示を選択します。「基本」はターン境界、所要時間、件数・トークン集計、完了ターンの折りたたみを表示します。「ライブ」は実行中ターン、経過時間の更新、更新時の視覚効果、実行位置への固定表示も有効にします。",
   "cfg.chatTurnTimelineMode.labelOff": "オフ",
   "cfg.chatTurnTimelineMode.labelBasic": "基本",
   "cfg.chatTurnTimelineMode.labelLive": "ライブ",

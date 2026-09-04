@@ -3,7 +3,12 @@ import * as vscode from "vscode";
 import type { SearchIndexToolContent } from "../settings";
 import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
 import { SEARCH_INDEX_FILE_NAME } from "../storage/cacheFiles";
-import { formatJsonReadOrDropCorruptDebug, readJsonOrDropCorrupt, writeJson } from "../storage/jsonStorage";
+import {
+  formatJsonReadOrDropCorruptDebug,
+  isFileNotFoundError,
+  readJsonOrDropCorrupt,
+  writeJson,
+} from "../storage/jsonStorage";
 import { normalizeWhitespace } from "../utils/textUtils";
 import {
   buildAttachmentSearchText,
@@ -39,8 +44,17 @@ import {
   isSuccessfulCodexFileChangeEvent,
   readCodexFileChangeEvent,
 } from "../sessions/codexFileChangeEvents";
+import type { PerformanceProbe } from "../performance/performanceCounters";
+import { isValidByteCount } from "../utils/formatBytes";
+import {
+  normalizeCodexCorrelationId,
+  readCodexAsyncQuestionMessage,
+  readCodexControlToolKind,
+  readCodexRolloutRecordKind,
+} from "../sessions/codexRolloutCompatibility";
 
-const SEARCH_INDEX_FILE_VERSION = 20;
+const SEARCH_INDEX_FILE_VERSION = 21;
+const SEARCH_STAT_CONCURRENCY = 8;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
 
@@ -104,6 +118,47 @@ interface SearchIndexFileV2 {
 interface SearchIndexWorkingState {
   context: SearchIndexContext;
   entries: Map<string, SearchIndexEntryV1>;
+  sharesPublishedEntries: boolean;
+}
+
+interface SearchIndexReadGeneration {
+  readonly signature: SearchIndexReadSignature;
+  readonly snapshot: SearchIndexReadSnapshot;
+}
+
+interface SearchIndexReadSignature {
+  readonly version: typeof SEARCH_INDEX_FILE_VERSION;
+  readonly context: SearchIndexContext;
+  readonly readableKeys: readonly string[];
+  readonly entryIdentities: readonly (object | null)[];
+}
+
+interface SearchFileObservationOk {
+  readonly kind: "ok";
+  readonly mtimeMs: number;
+  readonly size: number;
+  readonly historyPlan?: CodexLogicalHistoryPlan;
+  readonly historySignature?: string;
+}
+
+type SearchFileObservation =
+  | SearchFileObservationOk
+  | { readonly kind: "missing" }
+  | { readonly kind: "transient" };
+
+type SearchInitialFileObservation =
+  | SearchFileObservation
+  | { readonly kind: "unchanged" };
+
+const SEARCH_FILE_MISSING = Object.freeze({ kind: "missing" } as const);
+const SEARCH_FILE_TRANSIENT = Object.freeze({ kind: "transient" } as const);
+const SEARCH_FILE_UNCHANGED = Object.freeze({ kind: "unchanged" } as const);
+
+class SearchIndexObservationIncompleteError extends Error {
+  constructor() {
+    super("Search index input could not be observed completely.");
+    this.name = "SearchIndexObservationIncompleteError";
+  }
 }
 
 // Maintains an incremental on-disk search index for session files.
@@ -120,7 +175,10 @@ export class SearchIndexService {
     includeClaude: false,
     indexToolContent: "toolCallsAndOutputs",
   };
-  private readonly entries = new Map<string, SearchIndexEntryV1>();
+  private entries = new Map<string, SearchIndexEntryV1>();
+  private readableKeys: ReadonlySet<string> = new Set();
+  private readGeneration: SearchIndexReadGeneration | undefined;
+  private readonly semanticIdentityByEntry = new WeakMap<SearchIndexEntryV1, object>();
   private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(globalStorageUri: vscode.Uri, logger?: DebugLogger) {
@@ -141,6 +199,7 @@ export class SearchIndexService {
     token?: vscode.CancellationToken;
     progress?: vscode.Progress<{ message?: string; increment?: number }>;
     forceRebuild?: boolean;
+    performanceProbe?: PerformanceProbe;
   }): Promise<SearchIndexReadSnapshot> {
     const operation = this.operationQueue.then(
       () => this.ensureUpToDateCore(params),
@@ -166,9 +225,10 @@ export class SearchIndexService {
     token?: vscode.CancellationToken;
     progress?: vscode.Progress<{ message?: string; increment?: number }>;
     forceRebuild?: boolean;
+    performanceProbe?: PerformanceProbe;
   }): Promise<SearchIndexReadSnapshot> {
     const totalStartedAt = nowMs();
-    const { index, token, progress, forceRebuild } = params;
+    const { index, token, progress, forceRebuild, performanceProbe } = params;
     const sessions = params.sessionInventory ?? index.sessions;
     const historyInventory = index.historySources ?? sessions;
     let orphanRemoved = 0;
@@ -176,6 +236,7 @@ export class SearchIndexService {
     let missingRemoved = 0;
     let cacheHit = 0;
     let rebuilt = 0;
+    let unstableSkipped = 0;
     let buildMs = 0;
     let writeMs = 0;
 
@@ -189,80 +250,181 @@ export class SearchIndexService {
       indexToolContent: params.indexToolContent,
     };
     throwIfCancelled(token);
-    const workingState = await this.loadWorkingState(context, !!forceRebuild);
+    let workingState = await this.loadWorkingState(context, !!forceRebuild, performanceProbe);
     throwIfCancelled(token);
 
     let dirty = !!forceRebuild;
+    const ensureWritableEntries = (): void => {
+      if (!workingState.sharesPublishedEntries) return;
+      performanceProbe?.add("mapMaterializationCount");
+      workingState = {
+        context: workingState.context,
+        entries: new Map(workingState.entries),
+        sharesPublishedEntries: false,
+      };
+    };
 
     const activeKeys = new Set(sessions.map((s) => s.cacheKey));
-    orphanRemoved = this.cleanupOrphanEntries(workingState.entries, activeKeys);
-    if (orphanRemoved > 0) dirty = true;
+    const readableKeys = new Set(activeKeys);
+    const orphanKeys = Array.from(workingState.entries.keys()).filter((key) => !activeKeys.has(key));
+    if (orphanKeys.length > 0) {
+      ensureWritableEntries();
+      for (const key of orphanKeys) workingState.entries.delete(key);
+      orphanRemoved = orphanKeys.length;
+      dirty = true;
+    }
 
     const total = sessions.length;
+    performanceProbe?.add("sessionCount", total);
+    const observations = await mapSearchWithConcurrency(
+      sessions,
+      SEARCH_STAT_CONCURRENCY,
+      async (session) => {
+        throwIfCancelled(token);
+        const observation = await observeSearchFile(
+          session,
+          historyInventory,
+          "initial",
+          performanceProbe,
+          workingState.entries.get(session.cacheKey),
+        );
+        throwIfCancelled(token);
+        return observation;
+      },
+    );
+    throwIfCancelled(token);
+    const missingCandidates: SessionSummary[] = [];
+    let hasUnretainedTransientObservation = false;
     for (let i = 0; i < total; i += 1) {
       throwIfCancelled(token);
       const session = sessions[i]!;
       progress?.report({ message: `index ${i + 1}/${total}` });
 
-      const uri = vscode.Uri.file(session.fsPath);
-      let stat: vscode.FileStat | null = null;
-      try {
-        stat = await vscode.workspace.fs.stat(uri);
-      } catch {
+      const observed = observations[i]!;
+      if (observed.kind === "unchanged") {
+        cacheHit += 1;
+        performanceProbe?.add("cacheHitCount");
+        continue;
+      }
+      if (observed.kind === "missing") {
         statMiss += 1;
-        if (workingState.entries.delete(session.cacheKey)) {
-          missingRemoved += 1;
-          dirty = true;
+        performanceProbe?.setOutcome("partial");
+        missingCandidates.push(session);
+        continue;
+      }
+      if (observed.kind === "transient") {
+        statMiss += 1;
+        if (!workingState.entries.has(session.cacheKey)) {
+          hasUnretainedTransientObservation = true;
         }
+        performanceProbe?.setOutcome("partial");
         continue;
       }
 
       const cached = workingState.entries.get(session.cacheKey);
-      const historyPlan =
-        session.source === "codex" && session.meta.codexHistoryBase
-          ? await resolveCodexLogicalHistoryPlan(session.fsPath, historyInventory)
-          : undefined;
-      const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
-      const unchanged =
-        !!cached &&
-        cached.fsPath === session.fsPath &&
-        cached.mtimeMs === stat.mtime &&
-        cached.size === stat.size &&
-        cached.historySignature === historySignature;
-      if (unchanged) {
-        cacheHit += 1;
+      performanceProbe?.add("cacheMissCount");
+
+      let input = observed;
+      let nextEntry: SearchIndexEntryV1 | undefined;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const buildStartedAt = nowMs();
+        const indexed = await buildIndexedSession(session.fsPath, {
+          indexToolContent: context.indexToolContent,
+          token,
+          source: session.source,
+          sessionInventory: historyInventory,
+          historyPlan: input.historyPlan,
+          performanceProbe,
+        });
+        buildMs += elapsedMs(buildStartedAt);
+        throwIfCancelled(token);
+        const verified = await observeSearchFile(
+          session,
+          historyInventory,
+          "postScan",
+          performanceProbe,
+        );
+        throwIfCancelled(token);
+        if (verified.kind === "transient") throw new SearchIndexObservationIncompleteError();
+        if (verified.kind === "ok" && areSameSearchFileObservation(input, verified)) {
+          nextEntry = freezeSearchIndexEntry({
+            fsPath: session.fsPath,
+            mtimeMs: input.mtimeMs,
+            size: input.size,
+            ...(input.historySignature ? { historySignature: input.historySignature } : {}),
+            messages: indexed.messages,
+            fileChangeHints: indexed.fileChangeHints,
+          });
+          break;
+        }
+        if (attempt === 0 && verified.kind === "ok") {
+          input = verified;
+          continue;
+        }
+        break;
+      }
+      if (!nextEntry) {
+        readableKeys.delete(session.cacheKey);
+        unstableSkipped += 1;
+        performanceProbe?.setOutcome("partial");
         continue;
       }
-
-      const buildStartedAt = nowMs();
-      const indexed = await buildIndexedSession(session.fsPath, {
-        indexToolContent: context.indexToolContent,
-        token,
-        source: session.source,
-        sessionInventory: historyInventory,
-        historyPlan,
-      });
-      buildMs += elapsedMs(buildStartedAt);
-      workingState.entries.set(session.cacheKey, freezeSearchIndexEntry({
-        fsPath: session.fsPath,
-        mtimeMs: stat.mtime,
-        size: stat.size,
-        ...(historySignature ? { historySignature } : {}),
-        messages: indexed.messages,
-        fileChangeHints: indexed.fileChangeHints,
-      }));
+      const semanticReference = cached ?? (
+        this.loaded && isSameContext(this.context, workingState.context)
+          ? this.entries.get(session.cacheKey)
+          : undefined
+      );
+      if (semanticReference && areSearchIndexEntriesSemanticallyEqual(semanticReference, nextEntry)) {
+        this.semanticIdentityByEntry.set(
+          nextEntry,
+          getOrCreateSearchIndexEntrySemanticIdentity(semanticReference, this.semanticIdentityByEntry),
+        );
+      }
+      ensureWritableEntries();
+      workingState.entries.set(session.cacheKey, nextEntry);
       rebuilt += 1;
+      performanceProbe?.add("cacheEntryRebuildCount");
+      performanceProbe?.observeMemory();
       dirty = true;
     }
 
     throwIfCancelled(token);
+    for (const session of missingCandidates) {
+      const confirmed = await observeSearchFile(
+        session,
+        historyInventory,
+        "postScan",
+        performanceProbe,
+      );
+      throwIfCancelled(token);
+      if (confirmed.kind === "ok") {
+        readableKeys.delete(session.cacheKey);
+        unstableSkipped += 1;
+        performanceProbe?.setOutcome("partial");
+        continue;
+      }
+      if (confirmed.kind === "transient") {
+        if (!workingState.entries.has(session.cacheKey)) {
+          hasUnretainedTransientObservation = true;
+        }
+        continue;
+      }
+      if (workingState.entries.has(session.cacheKey)) {
+        ensureWritableEntries();
+        workingState.entries.delete(session.cacheKey);
+        missingRemoved += 1;
+        dirty = true;
+      }
+    }
+    if (hasUnretainedTransientObservation) {
+      throw new SearchIndexObservationIncompleteError();
+    }
     if (dirty) {
       const writeStartedAt = nowMs();
-      await this.save(workingState, () => throwIfCancelled(token));
+      await this.save(workingState, () => throwIfCancelled(token), performanceProbe);
       writeMs = elapsedMs(writeStartedAt);
     }
-    this.publishWorkingState(workingState);
-    const readSnapshot = createSearchIndexReadSnapshot(workingState.entries);
+    const readSnapshot = this.publishWorkingState(workingState, readableKeys, performanceProbe);
 
     this.logger?.debug(
       [
@@ -274,6 +436,7 @@ export class SearchIndexService {
         `missingRemoved=${missingRemoved}`,
         `cacheHit=${cacheHit}`,
         `rebuilt=${rebuilt}`,
+        `unstableSkipped=${unstableSkipped}`,
         `buildMs=${buildMs}`,
         `writeMs=${writeMs}`,
         `forceRebuild=${forceRebuild ? 1 : 0}`,
@@ -290,48 +453,44 @@ export class SearchIndexService {
     return this.entries.get(cacheKey)?.fileChangeHints ?? null;
   }
 
-  private cleanupOrphanEntries(
-    entries: Map<string, SearchIndexEntryV1>,
-    activeKeys: ReadonlySet<string>,
-  ): number {
-    let removed = 0;
-    for (const key of Array.from(entries.keys())) {
-      if (activeKeys.has(key)) continue;
-      entries.delete(key);
-      removed += 1;
-    }
-    return removed;
-  }
-
   private async loadWorkingState(
     nextContext: SearchIndexContext,
     forceRebuild: boolean,
+    performanceProbe?: PerformanceProbe,
   ): Promise<SearchIndexWorkingState> {
     const normalizedContext = normalizeContext(nextContext);
     if (forceRebuild) {
-      return { context: normalizedContext, entries: new Map() };
+      performanceProbe?.add("mapMaterializationCount");
+      return { context: normalizedContext, entries: new Map(), sharesPublishedEntries: false };
     }
     if (this.loaded) {
       if (!isSameContext(this.context, normalizedContext)) {
-        return { context: normalizedContext, entries: new Map() };
+        performanceProbe?.add("mapMaterializationCount");
+        return { context: normalizedContext, entries: new Map(), sharesPublishedEntries: false };
       }
-      return { context: this.context, entries: new Map(this.entries) };
+      return { context: this.context, entries: this.entries, sharesPublishedEntries: true };
     }
 
-    const raw = await this.readCacheFile();
+    const raw = await this.readCacheFile(performanceProbe);
     if (!isValidCacheFile(raw) || !isSameContext(raw.context, normalizedContext)) {
-      return { context: normalizedContext, entries: new Map() };
+      performanceProbe?.add("mapMaterializationCount");
+      return { context: normalizedContext, entries: new Map(), sharesPublishedEntries: false };
     }
 
+    performanceProbe?.add("mapMaterializationCount");
     const entries = new Map<string, SearchIndexEntryV1>();
     for (const [key, entry] of Object.entries(raw.entries)) {
       entries.set(key, freezeSearchIndexEntry(entry));
     }
-    return { context: normalizeContext(raw.context), entries };
+    return {
+      context: normalizeContext(raw.context),
+      entries,
+      sharesPublishedEntries: false,
+    };
   }
 
-  private async readCacheFile(): Promise<SearchIndexFileV2 | null> {
-    const outcome = await readJsonOrDropCorrupt<SearchIndexFileV2>(this.cacheUri);
+  private async readCacheFile(performanceProbe?: PerformanceProbe): Promise<SearchIndexFileV2 | null> {
+    const outcome = await readJsonOrDropCorrupt<SearchIndexFileV2>(this.cacheUri, { performanceProbe });
     const { result } = outcome;
     if (result.ok) return result.value;
     const debugMessage = formatJsonReadOrDropCorruptDebug("search.index readCache", outcome);
@@ -339,14 +498,55 @@ export class SearchIndexService {
     return null;
   }
 
-  private publishWorkingState(state: SearchIndexWorkingState): void {
+  private publishWorkingState(
+    state: SearchIndexWorkingState,
+    readableKeys: ReadonlySet<string>,
+    performanceProbe?: PerformanceProbe,
+  ): SearchIndexReadSnapshot {
+    const reusesPublishedState =
+      this.loaded &&
+      state.entries === this.entries &&
+      isSameContext(this.context, state.context) &&
+      areSameStringSets(this.readableKeys, readableKeys);
+    if (reusesPublishedState && this.readGeneration) {
+      performanceProbe?.add("snapshotReuseCount");
+      return this.readGeneration.snapshot;
+    }
+
+    const signature = buildSearchIndexReadSignature(
+      state.context,
+      readableKeys,
+      state.entries,
+      this.semanticIdentityByEntry,
+    );
+    const previousGeneration = this.readGeneration;
+    const canReuseSnapshot =
+      previousGeneration !== undefined &&
+      areSearchIndexReadSignaturesEqual(previousGeneration.signature, signature);
+
     this.context = state.context;
-    this.entries.clear();
-    for (const [key, entry] of state.entries) this.entries.set(key, entry);
+    this.entries = state.entries;
+    this.readableKeys = readableKeys;
     this.loaded = true;
+
+    if (canReuseSnapshot) {
+      performanceProbe?.add("snapshotReuseCount");
+      return previousGeneration.snapshot;
+    }
+
+    const snapshot = createSearchIndexReadSnapshot(state.entries, readableKeys, performanceProbe);
+    this.readGeneration = Object.freeze({
+      signature,
+      snapshot,
+    });
+    return snapshot;
   }
 
-  private async save(state: SearchIndexWorkingState, beforeCommit: () => void): Promise<void> {
+  private async save(
+    state: SearchIndexWorkingState,
+    beforeCommit: () => void,
+    performanceProbe?: PerformanceProbe,
+  ): Promise<void> {
     const entries: Record<string, SearchIndexEntryV1> = {};
     for (const [key, value] of state.entries) entries[key] = value;
     const payload: SearchIndexFileV2 = {
@@ -355,21 +555,229 @@ export class SearchIndexService {
       entries,
     };
     // Search index files can grow large, so save without pretty-printing to reduce size.
-    await writeJson(this.cacheUri, payload, { pretty: false, beforeCommit });
+    await writeJson(this.cacheUri, payload, { pretty: false, beforeCommit, performanceProbe });
   }
+}
+
+async function mapSearchWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) return [];
+  const results = new Array<R>(items.length);
+  const workerCount = Math.min(items.length, Math.max(1, Math.floor(concurrency)));
+  let nextIndex = 0;
+  let failed = false;
+  let firstError: unknown;
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (!failed) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      try {
+        results[index] = await mapper(items[index]!, index);
+      } catch (error) {
+        if (!failed) firstError = error;
+        failed = true;
+      }
+    }
+  });
+  await Promise.all(workers);
+  if (failed) throw firstError;
+  return results;
+}
+
+async function observeSearchFile(
+  session: SessionSummary,
+  historyInventory: readonly SessionSummary[],
+  phase: "initial" | "postScan",
+  performanceProbe?: PerformanceProbe,
+): Promise<SearchFileObservation>;
+async function observeSearchFile(
+  session: SessionSummary,
+  historyInventory: readonly SessionSummary[],
+  phase: "initial" | "postScan",
+  performanceProbe: PerformanceProbe | undefined,
+  unchangedEntry: SearchIndexEntryV1 | undefined,
+): Promise<SearchInitialFileObservation>;
+async function observeSearchFile(
+  session: SessionSummary,
+  historyInventory: readonly SessionSummary[],
+  phase: "initial" | "postScan",
+  performanceProbe?: PerformanceProbe,
+  unchangedEntry?: SearchIndexEntryV1,
+): Promise<SearchInitialFileObservation> {
+  let stat: vscode.FileStat;
+  try {
+    performanceProbe?.add(phase === "initial" ? "statCount" : "postScanCheckCount");
+    stat = await vscode.workspace.fs.stat(vscode.Uri.file(session.fsPath));
+  } catch (error) {
+    return isFileNotFoundError(error) ? SEARCH_FILE_MISSING : SEARCH_FILE_TRANSIENT;
+  }
+  if (
+    (stat.type & vscode.FileType.File) === 0 ||
+    !Number.isFinite(stat.mtime) ||
+    !isValidByteCount(stat.size)
+  ) {
+    return SEARCH_FILE_TRANSIENT;
+  }
+  try {
+    const historyPlan =
+      session.source === "codex" && session.meta.codexHistoryBase
+        ? await resolveCodexLogicalHistoryPlan(session.fsPath, historyInventory)
+        : undefined;
+    const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
+    if (
+      unchangedEntry &&
+      unchangedEntry.fsPath === session.fsPath &&
+      unchangedEntry.mtimeMs === stat.mtime &&
+      unchangedEntry.size === stat.size &&
+      unchangedEntry.historySignature === historySignature
+    ) {
+      return SEARCH_FILE_UNCHANGED;
+    }
+    return {
+      kind: "ok",
+      mtimeMs: stat.mtime,
+      size: stat.size,
+      ...(historyPlan ? { historyPlan } : {}),
+      ...(historySignature ? { historySignature } : {}),
+    };
+  } catch {
+    return SEARCH_FILE_TRANSIENT;
+  }
+}
+
+function areSameSearchFileObservation(
+  left: SearchFileObservationOk,
+  right: SearchFileObservationOk,
+): boolean {
+  return left.mtimeMs === right.mtimeMs &&
+    left.size === right.size &&
+    left.historySignature === right.historySignature;
 }
 
 function createSearchIndexReadSnapshot(
   entries: ReadonlyMap<string, SearchIndexEntryV1>,
+  readableKeys: ReadonlySet<string>,
+  performanceProbe?: PerformanceProbe,
 ): SearchIndexReadSnapshot {
   // Keep readers isolated from later operation-queue publications.
-  const snapshotEntries = new Map(entries);
+  performanceProbe?.add("mapMaterializationCount");
+  performanceProbe?.add("snapshotGenerationCount");
+  const snapshotEntries = new Map<string, SearchIndexEntryV1>();
+  for (const cacheKey of readableKeys) {
+    const entry = entries.get(cacheKey);
+    if (entry) snapshotEntries.set(cacheKey, entry);
+  }
   return Object.freeze({
     getMessages: (cacheKey: string): readonly IndexedSearchMessage[] | null =>
       snapshotEntries.get(cacheKey)?.messages ?? null,
     getFileChangeHints: (cacheKey: string): readonly IndexedFileChangeHint[] | null =>
       snapshotEntries.get(cacheKey)?.fileChangeHints ?? null,
   });
+}
+
+function buildSearchIndexReadSignature(
+  context: SearchIndexContext,
+  readableKeys: ReadonlySet<string>,
+  entries: ReadonlyMap<string, SearchIndexEntryV1>,
+  identityCache: WeakMap<SearchIndexEntryV1, object>,
+): SearchIndexReadSignature {
+  const sortedReadableKeys = Array.from(readableKeys).sort();
+  const entryIdentities: Array<object | null> = [];
+  for (const cacheKey of sortedReadableKeys) {
+    const entry = entries.get(cacheKey);
+    entryIdentities.push(entry
+      ? getOrCreateSearchIndexEntrySemanticIdentity(entry, identityCache)
+      : null);
+  }
+  return Object.freeze({
+    version: SEARCH_INDEX_FILE_VERSION,
+    context: Object.freeze({ ...context }),
+    readableKeys: Object.freeze(sortedReadableKeys),
+    entryIdentities: Object.freeze(entryIdentities),
+  });
+}
+
+function areSearchIndexReadSignaturesEqual(
+  left: SearchIndexReadSignature,
+  right: SearchIndexReadSignature,
+): boolean {
+  if (left === right) return true;
+  if (left.version !== right.version || !isSameContext(left.context, right.context)) return false;
+  if (left.readableKeys.length !== right.readableKeys.length) return false;
+  for (let index = 0; index < left.readableKeys.length; index += 1) {
+    if (left.readableKeys[index] !== right.readableKeys[index]) return false;
+    if (left.entryIdentities[index] !== right.entryIdentities[index]) return false;
+  }
+  return true;
+}
+
+function getOrCreateSearchIndexEntrySemanticIdentity(
+  entry: SearchIndexEntryV1,
+  identityCache: WeakMap<SearchIndexEntryV1, object>,
+): object {
+  const existing = identityCache.get(entry);
+  if (existing) return existing;
+  const identity = Object.freeze({});
+  identityCache.set(entry, identity);
+  return identity;
+}
+
+function areSearchIndexEntriesSemanticallyEqual(
+  left: SearchIndexEntryV1,
+  right: SearchIndexEntryV1,
+): boolean {
+  if (left === right) return true;
+  if (!areIndexedSearchMessagesEqual(left.messages, right.messages)) return false;
+  return areIndexedFileChangeHintsEqual(left.fileChangeHints, right.fileChangeHints);
+}
+
+function areIndexedSearchMessagesEqual(
+  left: readonly IndexedSearchMessage[],
+  right: readonly IndexedSearchMessage[],
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((message, index) => {
+    const candidate = right[index];
+    return candidate?.messageIndex === message.messageIndex &&
+      candidate.role === message.role &&
+      candidate.source === message.source &&
+      candidate.text === message.text;
+  });
+}
+
+function areIndexedFileChangeHintsEqual(
+  left: readonly IndexedFileChangeHint[] | undefined,
+  right: readonly IndexedFileChangeHint[] | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((hint, index) => {
+    const candidate = right[index];
+    if (
+      candidate?.messageIndex !== hint.messageIndex ||
+      candidate.timestampIso !== hint.timestampIso ||
+      candidate.origin !== hint.origin ||
+      candidate.hasDiffLikeContent !== hint.hasDiffLikeContent ||
+      candidate.paths.length !== hint.paths.length
+    ) {
+      return false;
+    }
+    return hint.paths.every((value, pathIndex) => candidate.paths[pathIndex] === value);
+  });
+}
+
+function areSameStringSets(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left === right) return true;
+  if (left.size !== right.size) return false;
+  for (const value of left) {
+    if (!right.has(value)) return false;
+  }
+  return true;
 }
 
 function freezeSearchIndexEntry(entry: SearchIndexEntryV1): SearchIndexEntryV1 {
@@ -432,6 +840,7 @@ async function buildIndexedSession(
     source?: "codex" | "claude";
     sessionInventory?: readonly SessionSummary[];
     historyPlan?: CodexLogicalHistoryPlan;
+    performanceProbe?: PerformanceProbe;
   },
 ): Promise<{ messages: IndexedSearchMessage[]; fileChangeHints: IndexedFileChangeHint[] }> {
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
@@ -440,9 +849,12 @@ async function buildIndexedSession(
     fileChangeHints: [],
     messageIndex: 0,
     toolAnchorByCallId: new Map(),
-    fileChangeDeduper: new CodexFileChangeEventDeduper(),
+    suppressedCodexToolCallIds: new Set(),
+    seenCodexAsyncQuestionIds: new Set(),
+    fileChangeDeduper: new CodexFileChangeEventDeduper(undefined, options.performanceProbe),
     indexToolContent: options.indexToolContent,
     pastedPromptResolver,
+    performanceProbe: options.performanceProbe,
   };
 
   const source = options.source ?? (path.basename(fsPath).toLowerCase().startsWith("rollout-") ? "codex" : "claude");
@@ -451,6 +863,7 @@ async function buildIndexedSession(
     plan: options.historyPlan,
     token: options.token,
     cancellationErrorFactory: () => new vscode.CancellationError(),
+    performanceProbe: options.performanceProbe,
   })) {
     throwIfCancelled(options.token);
     const obj = record.value;
@@ -469,17 +882,36 @@ interface BuildState {
   fileChangeHints: IndexedFileChangeHint[];
   messageIndex: number;
   toolAnchorByCallId: Map<string, number>;
+  suppressedCodexToolCallIds: Set<string>;
+  seenCodexAsyncQuestionIds: Set<string>;
   fileChangeDeduper: CodexFileChangeEventDeduper;
   indexToolContent: SearchIndexToolContent;
   pastedPromptResolver?: ClaudePastedPromptResolver;
+  performanceProbe?: PerformanceProbe;
 }
 
 async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
   if (obj?.type === "event_msg") {
-    const fileChangeEvent = readCodexFileChangeEvent(obj);
+    const asyncQuestion = obj?.payload?.type === "item_completed"
+      ? readCodexAsyncQuestionMessage(obj)
+      : undefined;
+    if (asyncQuestion && !state.seenCodexAsyncQuestionIds.has(asyncQuestion.itemId)) {
+      state.seenCodexAsyncQuestionIds.add(asyncQuestion.itemId);
+      const text = normalizeWhitespace(asyncQuestion.text);
+      if (text) {
+        state.messageIndex += 1;
+        state.messages.push({
+          messageIndex: state.messageIndex,
+          role: "assistant",
+          source: "message",
+          text,
+        });
+      }
+    }
+    const fileChangeEvent = readCodexFileChangeEvent(obj, state.performanceProbe);
     if (
       fileChangeEvent &&
-      isSuccessfulCodexFileChangeEvent(fileChangeEvent) &&
+      isSuccessfulCodexFileChangeEvent(fileChangeEvent, state.performanceProbe) &&
       !state.fileChangeDeduper.shouldSuppress(fileChangeEvent)
     ) {
       const anchor = Math.max(1, state.messageIndex);
@@ -494,7 +926,9 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
     return true;
   }
 
-  if (obj?.type !== "response_item") return false;
+  if (obj?.type !== "response_item") {
+    return readCodexRolloutRecordKind(obj) !== undefined;
+  }
   const payloadType = obj?.payload?.type;
 
   if (payloadType === "message") {
@@ -520,6 +954,11 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
   }
 
   if (payloadType === "function_call" || payloadType === "custom_tool_call") {
+    if (readCodexControlToolKind(obj)) {
+      const callId = normalizeCodexCorrelationId(obj?.payload?.call_id);
+      if (callId) state.suppressedCodexToolCallIds.add(callId);
+      return true;
+    }
     const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : "";
     const anchor = Math.max(1, state.messageIndex);
     if (callId) state.toolAnchorByCallId.set(callId, anchor);
@@ -574,9 +1013,13 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
   }
 
   if (payloadType === "function_call_output" || payloadType === "custom_tool_call_output") {
+    const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : "";
+    if (state.suppressedCodexToolCallIds.size > 0) {
+      const normalizedCallId = normalizeCodexCorrelationId(callId);
+      if (normalizedCallId && state.suppressedCodexToolCallIds.has(normalizedCallId)) return true;
+    }
     if (!shouldIndexToolOutputs(state.indexToolContent)) return true;
 
-    const callId = typeof obj?.payload?.call_id === "string" ? obj.payload.call_id : "";
     const extracted = await extractCodexToolOutput(obj?.payload?.output, undefined, { enabled: false });
     const attachmentText = buildAttachmentSearchText(extracted.attachments);
     const outText =

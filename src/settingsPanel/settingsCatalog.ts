@@ -341,7 +341,6 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
     "off",
     {
       options: ["off", "basic", "live"].map((value) => option("chat.turnTimeline.mode", value)),
-      sourceBadge: "codex",
       resourceImpact: true
     }
   ),

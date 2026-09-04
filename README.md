@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.13.1** (2026-09-03).
+Latest release: **2.14.0** (2026-09-04).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -22,7 +22,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Search across prompts, responses, tool output, tags, notes, and attachment metadata, with shared search history.
 - View sessions in the Session Viewer with Markdown, including individually copyable tables, GFM task lists, Mermaid diagrams, code highlighting, math rendering, tool cards, and file-change diffs.
 - Manage the extension's primary settings from a categorized settings page, with supported User, Workspace, and Workspace Folder targets, scope-specific JSON backups, maintenance actions, and project resource links.
-- Enable an opt-in Codex turn timeline to see turn boundaries, turn summaries, completed-turn folding, and running state in live mode.
+- Enable an opt-in turn timeline for Codex and Claude Code sessions to see turn boundaries, turn summaries, completed-turn folding, and running state in live mode.
 - Use Agent Runs to distinguish Codex sub-agent sessions and inspect parent, sibling, and descendant relationships in a right-side tree. (Experimental; disabled by default.)
 - Use Branch Navigation to inspect and switch between locally forked Codex histories and Claude Code **Fork conversation** histories in their respective session views. (Experimental; disabled by default.)
 - Show Codex / Claude Code request interruptions as dedicated timeline cards.
@@ -85,9 +85,9 @@ Tree context menus distinguish single-session actions from bulk actions. Resume,
 
 Large histories can use the `auto`, `normal`, or `simplified` performance mode. Heavy tool details and large diff rows can be deferred until **Show details** is enabled or an individual entry is expanded.
 
-Codex sessions can use an opt-in turn timeline. `basic` mode shows turn start/end markers, range rails, summaries, token counts, duration, and manual folding for completed turns. `live` mode adds running-turn indicators, elapsed time, and update activity effects.
+Codex and Claude Code sessions can use an opt-in turn timeline. `basic` mode shows turn start/end markers, range rails, summaries, token counts, duration, and manual folding for completed turns. `live` mode adds running-turn indicators, elapsed time, and update activity effects.
 
-Patch group cards can show compact file summaries and an in-place **Open all diffs** / **Close all diffs** action.
+Patch group cards can show compact file summaries and an in-place **Open all diffs** / **Close all diffs** action. With the turn timeline enabled, Codex and Claude Code changes are grouped into one diff card per turn, with each changed file listed once.
 
 Request interruptions from Codex and Claude Code render as dedicated timeline cards. When available, details include reason, duration, turn ID, rollback state, and rolled-back turn count.
 
@@ -153,6 +153,8 @@ Use **Hide Sessions** and **Show Sessions** from History, Pinned, or Search to c
 
 Handoff actions appear under **Handoff to Other AI** for eligible active Codex / Claude Code sessions when `codexHistoryViewer.handoff.enabled` is enabled. They can create a reusable handoff file, copy a prompt that points another AI to that file, copy the handoff file path to the clipboard, or open the handoff file for manual use. Codex sessions can also be handed off directly to Claude Code when the Claude Code extension is available.
 
+After a handoff file is created, the completion notification can open the file, copy the handoff prompt, or copy the generated file's absolute path to the clipboard.
+
 Handoff files are stored in this extension's VS Code global storage and include a tail-prioritized transcript excerpt, the latest user request, the source session path, recoverable file changes, and attachment summaries. Tool calls, tool outputs, and binary attachment payloads are intentionally omitted.
 
 When project associations are configured, handoff generation follows the associated project display and includes path mapping context for the receiving AI.
@@ -181,7 +183,7 @@ History Insights turns the current History target into a fixed analytics snapsho
 
 ![History Insights screenshot](media/screenshot_4.png)
 
-The view includes overview metrics, an activity heatmap, breakdowns by source, model, project, and tool, the most active sessions, frequently changed files, usage details, and data quality information. The overview includes reasoning tokens and change events, and the heatmap can visualize reasoning tokens. Tool breakdowns can switch between call count and session count. Most-active-session rankings can switch between user requests, tool calls, reasoning tokens, total tokens, and changed lines, and each available row can open its session. Usage details summarize cached, cache-read, and cache-creation input tokens and reasoning tokens; user requests, assistant responses, developer messages, tool calls, and tool outputs; all, completed, interrupted, and rolled-back turns; and changed file types by distinct-file and change-event count. Partial logs are shown as confirmed lower bounds or unavailable values instead of being treated as exact zeros.
+The view includes overview metrics, an activity heatmap, breakdowns by source, model, project, and tool, the most active sessions, frequently changed files, usage details, and data quality information. The overview includes reasoning tokens and change events, and the heatmap can visualize reasoning tokens. Tool breakdowns can switch between call count and session count. Most-active-session rankings can switch between user requests, tool calls, reasoning tokens, total tokens, and changed lines, and each available row can open its session. Usage details summarize cached, cache-read, and cache-creation input tokens (including Codex cache-write input tokens) and reasoning tokens; user requests, assistant responses, developer messages, tool calls, and tool outputs; all, completed, interrupted, and rolled-back turns; and changed file types by distinct-file and change-event count. Partial logs are shown as confirmed lower bounds or unavailable values instead of being treated as exact zeros.
 
 **Reaggregate** updates changed sessions while keeping the same target set. **Apply History filters** replaces the snapshot with the current History target. The filter panel can refine source, date range, visibility target, related project groups, and tags. These changes stay inside History Insights by default; they update the History view only when **Also apply to History** is selected before applying them.
 
@@ -232,7 +234,7 @@ Common settings include:
 - `codexHistoryViewer.chat.openPosition`: open the session view at the top, the last viewed message, or the latest rendered card.
 - `codexHistoryViewer.chat.stickyUserPrompt`: keep the current user prompt visible while scrolling the session timeline.
 - `codexHistoryViewer.chat.performanceMode`: choose the default session rendering performance mode.
-- `codexHistoryViewer.chat.turnTimeline.mode`: enable the opt-in Codex turn timeline with `off`, `basic`, or `live`.
+- `codexHistoryViewer.chat.turnTimeline.mode`: enable the opt-in turn timeline for Codex and Claude Code sessions with `off`, `basic`, or `live`.
 - `codexHistoryViewer.webview.restoreAfterReload`: experimental opt-in to restoring session tabs, File AI Change History, History Insights, and the dedicated settings page after Reload Window or VS Code restart.
 - `codexHistoryViewer.images.enabled`: show supported image attachments.
 - `codexHistoryViewer.ui.timeGuide.enabled`: enable compact date guides and bookmark controls.
@@ -245,8 +247,8 @@ The defaults are designed for regular use. These settings are useful starting po
 | Situation                                            | Suggested settings                                                                                                                                        |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Large sessions or many diffs                         | Keep `codexHistoryViewer.chat.performanceMode` set to `auto`, or use `simplified` if session views feel heavy.                                            |
-| Codex turn boundaries without live effects           | Set `codexHistoryViewer.chat.turnTimeline.mode` to `basic`.                                                                                               |
-| Live Codex turn tracking                             | Set `codexHistoryViewer.chat.turnTimeline.mode` to `live`.                                                                                                |
+| Turn boundaries without live effects                 | Set `codexHistoryViewer.chat.turnTimeline.mode` to `basic`.                                                                                               |
+| Live turn tracking                                   | Set `codexHistoryViewer.chat.turnTimeline.mode` to `live`.                                                                                                |
 | Agent Runs                                          | Enable `codexHistoryViewer.agentRuns.enabled` to navigate stored parent and sub-agent sessions in the session view.                                       |
 | Branch Navigation                                   | Enable `codexHistoryViewer.branchNavigation.enabled` to navigate locally forked Codex histories and Claude Code Fork conversation histories. |
 | Faster, narrower search                              | Use `codexHistoryViewer.search.indexToolContent: toolCalls` instead of `toolCallsAndOutputs`, and lower `codexHistoryViewer.search.maxResults` if needed. |
@@ -272,9 +274,14 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.13.1
+## What's New in 2.14.0
 
-- Fixed missing file changes in sessions using Codex's newer `item_completed` / `FileChange` format.
+- Added a completion-notification action that copies the generated handoff file's absolute path to the clipboard.
+- Added turn timeline support for Claude Code sessions.
+- Reworked caching and history-reading paths to improve overall performance.
+- Added support for newer Codex history records.
+- Fixed an issue where the same file could be counted and displayed more than once in a Session Viewer diff summary when it was modified multiple times within the same Codex turn.
+- Fixed Codex token totals excluding cache-write input tokens or double-counting usage when durable and legacy usage records coexist.
 
 ## Changelog
 

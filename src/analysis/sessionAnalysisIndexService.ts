@@ -17,6 +17,7 @@ import {
   type CodexLogicalHistoryPlan,
 } from "../sessions/codexHistoryBase";
 import {
+  buildSourceChangedSessionAnalysisEntry,
   buildUnsupportedSessionAnalysisEntry,
   ClaudeSessionAnalysisAdapter,
   CodexSessionAnalysisAdapter,
@@ -74,6 +75,13 @@ export class SessionAnalysisCancelledError extends Error {
   constructor() {
     super("Session analysis was cancelled.");
     this.name = "SessionAnalysisCancelledError";
+  }
+}
+
+class SessionAnalysisInputChangedError extends Error {
+  constructor() {
+    super("Session analysis input changed while it was being read.");
+    this.name = "SessionAnalysisInputChangedError";
   }
 }
 
@@ -370,39 +378,74 @@ export class SessionAnalysisIndexService {
       if (!isSharedBuildCacheKeyRequested(job, cacheKey)) continue;
       const session = job.sessionsByCacheKey.get(cacheKey);
       if (!session) continue;
-      const stat = await statSessionFile(session.fsPath);
       if (historyInventoryRevision !== job.historyInventoryRevision) {
         historyInventory = Array.from(job.historyInventoryByCacheKey.values());
         historyInventoryRevision = job.historyInventoryRevision;
       }
-      const historyPlan = await resolveHistoryPlan(session, historyInventory);
-      const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
-      this.pruneCancelledSharedBuildConsumers(job);
-      if (!hasActiveSharedBuildConsumer(job)) throw new SessionAnalysisCancelledError();
-      if (!isSharedBuildCacheKeyRequested(job, cacheKey)) continue;
-      const cached = cache.entries[cacheKey];
-      let outcome: SharedBuildOutcome;
-      if (cached && stat && isEntryFresh(
-        cached,
-        session,
-        stat.mtimeMs,
-        stat.size,
-        historySignature,
-      )) {
-        outcome = { entry: cached, cacheHit: true };
-      } else {
-        const entry = await this.getOrBuildEntry(
+      let outcome: SharedBuildOutcome | undefined;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const stat = await statSessionFile(session.fsPath);
+        const historyPlan = await resolveHistoryPlan(session, historyInventory);
+        const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
+        this.pruneCancelledSharedBuildConsumers(job);
+        if (!hasActiveSharedBuildConsumer(job)) throw new SessionAnalysisCancelledError();
+        if (!isSharedBuildCacheKeyRequested(job, cacheKey)) break;
+        const cached = cache.entries[cacheKey];
+        if (cached && stat && isEntryFresh(
+          cached,
           session,
-          stat,
-          job.config,
-          historyInventory,
-          historyPlan,
+          stat.mtimeMs,
+          stat.size,
           historySignature,
-        );
-        cache.entries[cacheKey] = entry;
-        cacheChanged = true;
-        outcome = { entry, cacheHit: false };
+        )) {
+          outcome = { entry: cached, cacheHit: true };
+          break;
+        }
+
+        const analysisToken = this.createSharedBuildAnalysisToken(job, cacheKey);
+        try {
+          const entry = await this.getOrBuildEntry(
+            session,
+            stat,
+            job.config,
+            historyInventory,
+            historyPlan,
+            historySignature,
+            analysisToken,
+          );
+          cache.entries[cacheKey] = entry;
+          cacheChanged = true;
+          outcome = { entry, cacheHit: false };
+          break;
+        } catch (error) {
+          this.pruneCancelledSharedBuildConsumers(job);
+          if (
+            error instanceof SessionAnalysisCancelledError &&
+            hasActiveSharedBuildConsumer(job) &&
+            !isSharedBuildCacheKeyRequested(job, cacheKey)
+          ) {
+            break;
+          }
+          if (error instanceof SessionAnalysisInputChangedError) {
+            if (attempt === 0) continue;
+            outcome = {
+              entry: buildSourceChangedSessionAnalysisEntry({
+                session,
+                mtimeMs: stat?.mtimeMs ?? 0,
+                size: stat?.size ?? 0,
+                claudeSessionsRoot: job.config.claudeSessionsRoot,
+                sessionInventory: historyInventory,
+                historyPlan,
+                historySignature,
+              }),
+              cacheHit: false,
+            };
+            break;
+          }
+          throw error;
+        }
       }
+      if (!outcome) continue;
       job.outcomes.set(cacheKey, outcome);
       for (const consumer of job.consumers.values()) {
         if (consumer.settled || !consumer.sessionKeys.has(cacheKey)) continue;
@@ -522,6 +565,19 @@ export class SessionAnalysisIndexService {
     job.committing = true;
   }
 
+  private createSharedBuildAnalysisToken(
+    job: SharedBuildJob,
+    cacheKey: string,
+  ): AnalysisCancellationToken {
+    const service = this;
+    return {
+      get isCancellationRequested(): boolean {
+        service.pruneCancelledSharedBuildConsumers(job);
+        return !isSharedBuildCacheKeyRequested(job, cacheKey);
+      },
+    };
+  }
+
   private notifySharedBuildConsumer(
     consumer: SharedBuildConsumer,
     progress: SessionAnalysisProgress,
@@ -564,33 +620,65 @@ export class SessionAnalysisIndexService {
     for (let index = 0; index < options.sessions.length; index += 1) {
       this.throwIfCancelled(options.token);
       const session = options.sessions[index]!;
-      const stat = await statSessionFile(session.fsPath);
-      const historyPlan = await resolveHistoryPlan(session, historyInventory);
-      const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
-      const cached = cache.entries[session.cacheKey];
-      if (cached && stat && isEntryFresh(
-        cached,
-        session,
-        stat.mtimeMs,
-        stat.size,
-        historySignature,
-      )) {
-        entries.push(cached);
+      let selectedEntry: SessionAnalysisEntry | undefined;
+      let selectedFromCache = false;
+      let selectedForPersistence = true;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const stat = await statSessionFile(session.fsPath);
+        const historyPlan = await resolveHistoryPlan(session, historyInventory);
+        const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
+        const cached = cache.entries[session.cacheKey];
+        if (cached && stat && isEntryFresh(
+          cached,
+          session,
+          stat.mtimeMs,
+          stat.size,
+          historySignature,
+        )) {
+          selectedEntry = cached;
+          selectedFromCache = true;
+          break;
+        }
+        try {
+          selectedEntry = await this.getOrBuildEntry(
+            session,
+            stat,
+            options.config,
+            historyInventory,
+            historyPlan,
+            historySignature,
+            options.token,
+          );
+          break;
+        } catch (error) {
+          if (error instanceof SessionAnalysisInputChangedError) {
+            if (attempt === 0) continue;
+            selectedEntry = buildSourceChangedSessionAnalysisEntry({
+              session,
+              mtimeMs: stat?.mtimeMs ?? 0,
+              size: stat?.size ?? 0,
+              claudeSessionsRoot: options.config.claudeSessionsRoot,
+              sessionInventory: historyInventory,
+              historyPlan,
+              historySignature,
+            });
+            selectedForPersistence = false;
+            break;
+          }
+          throw error;
+        }
+      }
+      if (!selectedEntry) throw new SessionAnalysisInputChangedError();
+      entries.push(selectedEntry);
+      if (selectedFromCache) {
         cacheHitCount += 1;
       } else {
-        const entry = await this.getOrBuildEntry(
-          session,
-          stat,
-          options.config,
-          historyInventory,
-          historyPlan,
-          historySignature,
-        );
-        cache.entries[session.cacheKey] = entry;
-        entries.push(entry);
-        cacheChanged = true;
+        if (selectedForPersistence) {
+          cache.entries[session.cacheKey] = selectedEntry;
+          cacheChanged = true;
+        }
         rebuiltCount += 1;
-        if (entry.completeness === "failed") failedCount += 1;
+        if (selectedEntry.completeness === "failed") failedCount += 1;
       }
       options.onProgress?.({
         phase: "analyzeSessions",
@@ -692,12 +780,22 @@ export class SessionAnalysisIndexService {
     sessionInventory: readonly SessionSummary[],
     historyPlan: CodexLogicalHistoryPlan | undefined,
     historySignature: string | undefined,
+    token?: AnalysisCancellationToken,
   ): Promise<SessionAnalysisEntry> {
-    const inFlightKey = historySignature
-      ? `${session.cacheKey}\u0000${historySignature}`
-      : session.cacheKey;
+    const inFlightKey = [
+      session.cacheKey,
+      historySignature ?? "",
+      stat?.mtimeMs ?? "missing",
+      stat?.size ?? "missing",
+    ].join("\u0000");
     const existing = this.inFlightByCacheKey.get(inFlightKey);
-    if (existing) return existing;
+    if (existing) {
+      const entry = await existing;
+      if (!await isAnalysisInputStable(session, stat, historyPlan)) {
+        throw new SessionAnalysisInputChangedError();
+      }
+      return entry;
+    }
     const input = {
       session,
       mtimeMs: stat?.mtimeMs ?? 0,
@@ -706,6 +804,12 @@ export class SessionAnalysisIndexService {
       sessionInventory,
       historyPlan,
       historySignature,
+      ...(token
+        ? {
+            token,
+            cancellationErrorFactory: () => new SessionAnalysisCancelledError(),
+          }
+        : {}),
     };
     const analysisInputSize = historyPlan
       ? getLogicalHistorySize(historyPlan)
@@ -717,7 +821,11 @@ export class SessionAnalysisIndexService {
       : (session.source === "codex" ? this.codexAdapter : this.claudeAdapter).analyze(input);
     this.inFlightByCacheKey.set(inFlightKey, build);
     try {
-      return await build;
+      const entry = await build;
+      if (!await isAnalysisInputStable(session, stat, historyPlan)) {
+        throw new SessionAnalysisInputChangedError();
+      }
+      return entry;
     } finally {
       if (this.inFlightByCacheKey.get(inFlightKey) === build) this.inFlightByCacheKey.delete(inFlightKey);
     }
@@ -1039,7 +1147,7 @@ function isUsageStats(value: unknown): value is SessionAnalysisEntry["usageStats
   if (!value || typeof value !== "object") return false;
   const raw = value as Record<string, unknown>;
   if (!["inputTokens", "outputTokens", "cachedInputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "reasoningOutputTokens", "reportedTotalTokens", "derivedTotalTokens"].every((key) => isAnalysisNumber(raw[key]))) return false;
-  if (!["codexLastUsageSum", "codexCumulativeFallback", "claudeMessageSum", "mixedPartial", "unavailable"].includes(String(raw.aggregationMethod))) return false;
+  if (!["codexLastUsageSum", "codexResponseUsageSum", "codexCumulativeFallback", "claudeMessageSum", "mixedPartial", "unavailable"].includes(String(raw.aggregationMethod))) return false;
   if (!Array.isArray(raw.modelUsage) || raw.modelUsage.length > 2_000) return false;
   const modelTotals = new Map<string, number>();
   for (const value of raw.modelUsage) {
@@ -1285,6 +1393,29 @@ async function statSessionFile(fsPath: string): Promise<{ mtimeMs: number; size:
   } catch {
     return null;
   }
+}
+
+async function isAnalysisInputStable(
+  session: SessionSummary,
+  initialStat: { mtimeMs: number; size: number } | null,
+  historyPlan: CodexLogicalHistoryPlan | undefined,
+): Promise<boolean> {
+  if (!historyPlan) {
+    return areSameAnalysisFileStamp(initialStat, await statSessionFile(session.fsPath));
+  }
+  for (const segment of historyPlan.segments) {
+    const current = await statSessionFile(segment.fsPath);
+    if (!current || current.mtimeMs !== segment.mtimeMs || current.size !== segment.size) return false;
+  }
+  return true;
+}
+
+function areSameAnalysisFileStamp(
+  left: { mtimeMs: number; size: number } | null,
+  right: { mtimeMs: number; size: number } | null,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.mtimeMs === right.mtimeMs && left.size === right.size;
 }
 
 function progressOf(

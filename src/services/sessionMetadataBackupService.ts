@@ -157,7 +157,7 @@ export function createSessionMetadataBackup(
   index: HistoryIndex,
   stores: SessionMetadataStores,
   sessions: readonly SessionSummary[] = index.sessions,
-  extensionVersion = "2.13.1",
+  extensionVersion = "2.14.0",
 ): SessionMetadataBackupFile {
   if (sessions.length > MAX_BACKUP_SESSIONS) {
     throw new Error("Too many sessions for a complete metadata sidecar.");
@@ -236,7 +236,7 @@ export function createSessionMetadataBackup(
     format: SESSION_METADATA_BACKUP_FORMAT,
     version: SESSION_METADATA_BACKUP_VERSION,
     generatedAtIso: new Date().toISOString(),
-    extensionVersion: isBoundedExtensionVersion(extensionVersion) ? extensionVersion : "2.13.1",
+    extensionVersion: isBoundedExtensionVersion(extensionVersion) ? extensionVersion : "2.14.0",
     scope: sessions === index.sessions ? "all" : "selection",
     sessions: output,
   };

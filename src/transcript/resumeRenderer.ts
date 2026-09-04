@@ -17,6 +17,10 @@ import {
 } from "../chat/chatAttachments";
 import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
 import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
+import {
+  readCodexAsyncQuestionMessage,
+  readCodexRolloutRecordKind,
+} from "../sessions/codexRolloutCompatibility";
 
 type ResumeRole = "user" | "assistant";
 
@@ -47,6 +51,7 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
 
   let taskText: string | null = null;
   const recent: ResumeMessage[] = [];
+  const seenCodexAsyncQuestionIds = new Set<string>();
   const setTaskIfEmpty = (nextTask: string): void => {
     if (!taskText) taskText = nextTask;
   };
@@ -56,7 +61,14 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
   })) {
     const obj = record.value;
 
-    if (await collectCodexResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty)) {
+    if (await collectCodexResumeMessage(
+      obj,
+      includeContext,
+      recent,
+      maxMessages,
+      setTaskIfEmpty,
+      seenCodexAsyncQuestionIds,
+    )) {
       continue;
     }
     await collectClaudeResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty, pastedPromptResolver);
@@ -134,7 +146,27 @@ async function collectCodexResumeMessage(
   recent: ResumeMessage[],
   maxMessages: number,
   setTask: (task: string) => void,
+  seenAsyncQuestionIds: Set<string>,
 ): Promise<boolean> {
+  const asyncQuestion = readCodexAsyncQuestionMessage(obj);
+  if (asyncQuestion) {
+    if (seenAsyncQuestionIds.has(asyncQuestion.itemId)) return true;
+    const text = normalizeWhitespace(asyncQuestion.text);
+    if (!text) return true;
+    seenAsyncQuestionIds.add(asyncQuestion.itemId);
+    pushRecent(
+      recent,
+      {
+        role: "assistant",
+        timestampIso: typeof obj?.timestamp === "string" ? obj.timestamp : undefined,
+        text,
+      },
+      maxMessages,
+    );
+    return true;
+  }
+  const recordKind = readCodexRolloutRecordKind(obj);
+  if (recordKind && recordKind !== "response_item") return true;
   if (obj?.type !== "response_item") return false;
   if (obj?.payload?.type !== "message") return true;
 

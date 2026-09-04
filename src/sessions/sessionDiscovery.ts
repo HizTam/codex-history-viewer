@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import * as path from "node:path";
 import type { SessionArchiveState, SessionRootKind, SessionSource } from "./sessionTypes";
-import { pathExists } from "../utils/fsUtils";
+import type { PerformanceProbe } from "../performance/performanceCounters";
 
 export interface SessionDiscoveryOptions {
   codexRoot: string;
@@ -11,6 +11,7 @@ export interface SessionDiscoveryOptions {
   includeCodex: boolean;
   includeCodexArchived: boolean;
   includeClaude: boolean;
+  performanceProbe?: PerformanceProbe;
 }
 
 export interface DiscoveredSessionFile {
@@ -21,10 +22,26 @@ export interface DiscoveredSessionFile {
   rootPath: string;
 }
 
+export interface SessionDiscoveryResult {
+  readonly files: DiscoveredSessionFile[];
+  readonly failureCount: number;
+}
+
+interface SessionFileCollection {
+  readonly files: string[];
+  readonly failureCount: number;
+}
+
 // Collect session files from enabled roots.
 export async function findSessionFiles(options: SessionDiscoveryOptions): Promise<DiscoveredSessionFile[]> {
+  return (await discoverSessionFiles(options)).files;
+}
+
+// Preserve failed discovery scopes so callers do not publish an incomplete inventory.
+export async function discoverSessionFiles(options: SessionDiscoveryOptions): Promise<SessionDiscoveryResult> {
   const results: DiscoveredSessionFile[] = [];
   const seen = new Set<string>();
+  let failureCount = 0;
 
   const pushUnique = (file: DiscoveredSessionFile): void => {
     const key = path.normalize(file.fsPath).toLowerCase();
@@ -33,9 +50,14 @@ export async function findSessionFiles(options: SessionDiscoveryOptions): Promis
     results.push(file);
   };
 
-  if (options.includeCodex && (await pathExists(options.codexRoot))) {
-    const codexFiles = await collectCodexSessionFiles(options.codexRoot);
-    for (const fsPath of codexFiles) {
+  if (options.includeCodex) {
+    const collected = await collectExistingRoot(
+      options.codexRoot,
+      collectCodexSessionFiles,
+      options.performanceProbe,
+    );
+    failureCount += collected.failureCount;
+    for (const fsPath of collected.files) {
       pushUnique({
         fsPath,
         source: "codex",
@@ -46,9 +68,14 @@ export async function findSessionFiles(options: SessionDiscoveryOptions): Promis
     }
   }
 
-  if (options.includeCodexArchived && (await pathExists(options.codexArchivedRoot))) {
-    const codexFiles = await collectCodexSessionFiles(options.codexArchivedRoot);
-    for (const fsPath of codexFiles) {
+  if (options.includeCodexArchived) {
+    const collected = await collectExistingRoot(
+      options.codexArchivedRoot,
+      collectCodexSessionFiles,
+      options.performanceProbe,
+    );
+    failureCount += collected.failureCount;
+    for (const fsPath of collected.files) {
       pushUnique({
         fsPath,
         source: "codex",
@@ -59,9 +86,14 @@ export async function findSessionFiles(options: SessionDiscoveryOptions): Promis
     }
   }
 
-  if (options.includeClaude && (await pathExists(options.claudeRoot))) {
-    const claudeFiles = await collectClaudeSessionFiles(options.claudeRoot);
-    for (const fsPath of claudeFiles) {
+  if (options.includeClaude) {
+    const collected = await collectExistingRoot(
+      options.claudeRoot,
+      collectClaudeSessionFiles,
+      options.performanceProbe,
+    );
+    failureCount += collected.failureCount;
+    for (const fsPath of collected.files) {
       pushUnique({
         fsPath,
         source: "claude",
@@ -72,12 +104,31 @@ export async function findSessionFiles(options: SessionDiscoveryOptions): Promis
     }
   }
 
-  return results;
+  return { files: results, failureCount };
 }
 
-async function collectCodexSessionFiles(codexRoot: string): Promise<string[]> {
+async function collectExistingRoot(
+  rootPath: string,
+  collector: (rootPath: string, performanceProbe?: PerformanceProbe) => Promise<SessionFileCollection>,
+  performanceProbe?: PerformanceProbe,
+): Promise<SessionFileCollection> {
+  try {
+    await fs.stat(rootPath);
+  } catch (error) {
+    if (isNotFoundError(error)) return { files: [], failureCount: 0 };
+    observeDiscoveryFailure(performanceProbe);
+    return { files: [], failureCount: 1 };
+  }
+  return collector(rootPath, performanceProbe);
+}
+
+async function collectCodexSessionFiles(
+  codexRoot: string,
+  performanceProbe?: PerformanceProbe,
+): Promise<SessionFileCollection> {
   const results: string[] = [];
   const stack: string[] = [codexRoot];
+  let failureCount = 0;
 
   while (stack.length > 0) {
     const dir = stack.pop();
@@ -85,8 +136,11 @@ async function collectCodexSessionFiles(codexRoot: string): Promise<string[]> {
 
     let entries: Dirent[];
     try {
+      performanceProbe?.add("discoveryDirectoryCount");
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
+      failureCount += 1;
+      observeDiscoveryFailure(performanceProbe);
       continue;
     }
 
@@ -102,12 +156,16 @@ async function collectCodexSessionFiles(codexRoot: string): Promise<string[]> {
     }
   }
 
-  return results;
+  return { files: results, failureCount };
 }
 
-async function collectClaudeSessionFiles(claudeRoot: string): Promise<string[]> {
+async function collectClaudeSessionFiles(
+  claudeRoot: string,
+  performanceProbe?: PerformanceProbe,
+): Promise<SessionFileCollection> {
   const results: string[] = [];
   const stack: string[] = [claudeRoot];
+  let failureCount = 0;
 
   while (stack.length > 0) {
     const dir = stack.pop();
@@ -115,8 +173,11 @@ async function collectClaudeSessionFiles(claudeRoot: string): Promise<string[]> 
 
     let entries: Dirent[];
     try {
+      performanceProbe?.add("discoveryDirectoryCount");
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
+      failureCount += 1;
+      observeDiscoveryFailure(performanceProbe);
       continue;
     }
 
@@ -136,5 +197,16 @@ async function collectClaudeSessionFiles(claudeRoot: string): Promise<string[]> 
     }
   }
 
-  return results;
+  return { files: results, failureCount };
+}
+
+function observeDiscoveryFailure(performanceProbe?: PerformanceProbe): void {
+  performanceProbe?.add("discoveryFailureScopeCount");
+  performanceProbe?.setOutcome("partial");
+}
+
+function isNotFoundError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as { code?: unknown }).code;
+  return code === "ENOENT" || code === "FileNotFound";
 }

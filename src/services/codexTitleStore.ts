@@ -4,6 +4,8 @@ import * as vscode from "vscode";
 import { readJson, writeJson } from "../storage/jsonStorage";
 import { normalizeWhitespace } from "../utils/textUtils";
 import { normalizeCacheKey } from "../utils/fsUtils";
+import type { PerformanceProbe } from "../performance/performanceCounters";
+import { buildCanonicalFingerprint } from "../utils/canonicalFingerprint";
 
 interface CodexTitleCacheEntry {
   threadName: string;
@@ -167,13 +169,17 @@ export class CodexTitleStore {
     sessionsRoot: string;
     sessionIds: readonly string[];
     pruneToSessionIds: boolean;
+    performanceProbe?: PerformanceProbe;
   }): Promise<Map<string, string>> {
     const sessionIds = Array.from(
       new Set(params.sessionIds.map((sessionId) => normalizeSessionId(sessionId)).filter((sessionId): sessionId is string => !!sessionId)),
     );
     const requestedIds = new Set(sessionIds);
 
-    const cache = sanitizeCacheFile(await readJson<unknown>(this.cacheUri));
+    const cache = sanitizeCacheFile(await readJson<unknown>(this.cacheUri, {
+      performanceProbe: params.performanceProbe,
+    }));
+    const previousFingerprint = buildCodexTitleCacheFingerprint(cache);
     const { bucket, bucketKey, created, updated } = ensureBucket(cache, params.sessionsRoot);
     let dirty = created || updated;
     if (updated) bucket.sessionsRoot = params.sessionsRoot;
@@ -233,7 +239,25 @@ export class CodexTitleStore {
       delete cache.roots[bucketKey];
     }
     dropEmptyBuckets(cache);
-    await writeJson(this.cacheUri, cache);
+    const nextFingerprint = buildCodexTitleCacheFingerprint(cache);
+    if (previousFingerprint && nextFingerprint && previousFingerprint === nextFingerprint) return resolved;
+    await writeJson(this.cacheUri, cache, { performanceProbe: params.performanceProbe });
     return resolved;
   }
+}
+
+function buildCodexTitleCacheFingerprint(cache: CodexTitleCacheFileV1): string | undefined {
+  const roots = Object.keys(cache.roots)
+    .sort()
+    .map((bucketKey) => {
+      const bucket = cache.roots[bucketKey]!;
+      const entries = Object.keys(bucket.entries)
+        .sort()
+        .map((sessionId) => {
+          const entry = bucket.entries[sessionId]!;
+          return [sessionId, entry.threadName, entry.updatedAt, entry.lastSeenAt];
+        });
+      return [bucketKey, bucket.sessionsRoot, entries];
+    });
+  return buildCanonicalFingerprint("codex-title-cache:v1", [cache.version, roots]);
 }

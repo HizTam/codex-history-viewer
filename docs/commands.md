@@ -171,7 +171,7 @@ Handoff context-menu actions are shown only when `codexHistoryViewer.handoff.ena
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
 | Handoff to Claude Code | `codexHistoryViewer.handoffToClaude` | Creates or reuses a Codex session handoff file, then opens Claude Code with a prompt that points to it. |
-| Create Handoff File | `codexHistoryViewer.createHandoffFile` | Creates or reuses the target session's `handoff.md` without opening another agent. |
+| Create Handoff File | `codexHistoryViewer.createHandoffFile` | Creates or reuses the target session's `handoff.md` without opening another agent. Its completion notification can open the file, copy the handoff prompt, or copy the file's absolute path. |
 | Copy Handoff Prompt to Clipboard | `codexHistoryViewer.copyHandoffPrompt` | Copies a prompt that tells the target agent to read the target session's handoff file, creating it first if needed. |
 | Copy Handoff File Path to Clipboard | `codexHistoryViewer.copyHandoffPath` | Copies the full path of an active target session's handoff file, creating or refreshing the file first if needed. |
 | Open Handoff File | `codexHistoryViewer.openSessionHandoff` | Opens the target session's handoff file, with an option to create it if it does not exist. |

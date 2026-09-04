@@ -9,6 +9,7 @@ import type {
 } from "./sessionTypes";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { stableTextSha256 } from "../utils/stableTextHash";
+import type { PerformanceProbe } from "../performance/performanceCounters";
 
 const MAX_HISTORY_ID_LENGTH = 256;
 const MAX_HISTORY_DEPTH = 32;
@@ -66,6 +67,7 @@ export interface SessionJsonlReadOptions {
   readonly plan?: CodexLogicalHistoryPlan;
   readonly token?: { readonly isCancellationRequested: boolean };
   readonly cancellationErrorFactory?: () => Error;
+  readonly performanceProbe?: PerformanceProbe;
 }
 
 interface HistoryBoundary {
@@ -191,12 +193,15 @@ export async function* readSessionJsonlRecords(
   source: SessionSource,
   options: SessionJsonlReadOptions = {},
 ): AsyncGenerator<SessionJsonlRecord> {
+  const performanceProbe = options.performanceProbe;
   for await (const record of readSessionJsonlLines(fsPath, source, options)) {
     if (!record.line) continue;
     let value: any;
     try {
       value = JSON.parse(record.line);
+      performanceProbe?.add("parseSuccessCount");
     } catch {
+      performanceProbe?.add("malformedLineCount");
       continue;
     }
     yield {
@@ -214,6 +219,7 @@ export async function* readSessionJsonlLines(
   source: SessionSource,
   options: SessionJsonlReadOptions = {},
 ): AsyncGenerator<SessionJsonlLine> {
+  const performanceProbe = options.performanceProbe;
   throwIfCancelled(options.token, options.cancellationErrorFactory);
   const providedPlan = options.plan &&
     normalizeCacheKey(options.plan.leafFsPath) === normalizeCacheKey(fsPath)
@@ -227,11 +233,19 @@ export async function* readSessionJsonlLines(
   let lineIndex = 0;
   for (const segment of plan.segments) {
     throwIfCancelled(options.token, options.cancellationErrorFactory);
-    if (segment.endByteOffset === 0) continue;
+    performanceProbe?.add("segmentCount");
+    // A resolved plan is a point-in-time snapshot; do not consume bytes appended after it was fixed.
+    const readEndByteOffset = segment.endByteOffset ?? (
+      providedPlan && Number.isSafeInteger(segment.size) && segment.size >= 0
+        ? segment.size
+        : undefined
+    );
+    if (readEndByteOffset === 0) continue;
+    performanceProbe?.add("streamOpenCount");
     const stream = fs.createReadStream(segment.fsPath, {
       encoding: "utf8",
-      ...(segment.endByteOffset !== undefined
-        ? { start: 0, end: segment.endByteOffset - 1 }
+      ...(readEndByteOffset !== undefined
+        ? { start: 0, end: readEndByteOffset - 1 }
         : {}),
     });
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
@@ -241,6 +255,11 @@ export async function* readSessionJsonlLines(
         throwIfCancelled(options.token, options.cancellationErrorFactory);
         lineIndex += 1;
         physicalLineIndex += 1;
+        if (performanceProbe) {
+          performanceProbe.add("physicalLineCount");
+          performanceProbe.add("logicalLineCount");
+          performanceProbe.add("readByteEstimatedCount", Buffer.byteLength(line, "utf8") + 1);
+        }
         yield {
           line,
           lineIndex,

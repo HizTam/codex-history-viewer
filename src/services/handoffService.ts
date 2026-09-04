@@ -23,6 +23,10 @@ import {
   isSuccessfulCodexFileChangeEvent,
   readCodexFileChangeEvent,
 } from "../sessions/codexFileChangeEvents";
+import {
+  readCodexAsyncQuestionMessage,
+  readCodexRolloutRecordKind,
+} from "../sessions/codexRolloutCompatibility";
 
 export type HandoffTarget = "codex" | "claude";
 
@@ -317,6 +321,7 @@ async function parseSessionForHandoff(
   const pastedPromptResolver = await createClaudePastedPromptResolver(session.fsPath);
   const messages: HandoffMessage[] = [];
   const diffBlocks: HandoffDiffBlock[] = [];
+  const seenCodexAsyncQuestionIds = new Set<string>();
   const fileChangeDeduper = new CodexFileChangeEventDeduper();
   let invalidJsonLines = 0;
   let totalLines = 0;
@@ -336,7 +341,7 @@ async function parseSessionForHandoff(
       continue;
     }
 
-    if (await collectCodexMessage(obj, messages)) {
+    if (await collectCodexMessage(obj, messages, seenCodexAsyncQuestionIds)) {
       collectCodexDiffBlocks(obj, diffBlocks, fileChangeDeduper);
       continue;
     }
@@ -348,7 +353,22 @@ async function parseSessionForHandoff(
   return { messages, diffBlocks, invalidJsonLines, totalLines };
 }
 
-async function collectCodexMessage(obj: any, messages: HandoffMessage[]): Promise<boolean> {
+async function collectCodexMessage(
+  obj: any,
+  messages: HandoffMessage[],
+  seenAsyncQuestionIds: Set<string>,
+): Promise<boolean> {
+  const asyncQuestion = readCodexAsyncQuestionMessage(obj);
+  if (asyncQuestion) {
+    if (seenAsyncQuestionIds.has(asyncQuestion.itemId)) return true;
+    const text = sanitizeMessageText(asyncQuestion.text);
+    if (!text) return true;
+    seenAsyncQuestionIds.add(asyncQuestion.itemId);
+    messages.push({ role: "assistant", text });
+    return true;
+  }
+  const recordKind = readCodexRolloutRecordKind(obj);
+  if (recordKind && recordKind !== "response_item") return true;
   if (obj?.type !== "response_item") return false;
   if (obj?.payload?.type !== "message") return true;
 

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { PerformanceProbe } from "../performance/performanceCounters";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -28,7 +29,11 @@ interface UnmatchedSourceCounts {
 }
 
 // Normalizes the two verified Codex rollout envelopes without interpreting diff contents.
-export function readCodexFileChangeEvent(value: unknown): CodexFileChangeEvent | undefined {
+export function readCodexFileChangeEvent(
+  value: unknown,
+  performanceProbe?: PerformanceProbe,
+): CodexFileChangeEvent | undefined {
+  performanceProbe?.add("fileChangeNormalizerCallCount");
   const root = asRecord(value);
   if (!root || root.type !== "event_msg") return undefined;
 
@@ -36,6 +41,7 @@ export function readCodexFileChangeEvent(value: unknown): CodexFileChangeEvent |
   if (!payload) return undefined;
 
   if (payload.type === "patch_apply_end") {
+    performanceProbe?.add("fileChangeRecognizedCount");
     return compactEvent({
       source: "patchApplyEnd",
       changes: payload.changes,
@@ -52,6 +58,7 @@ export function readCodexFileChangeEvent(value: unknown): CodexFileChangeEvent |
   const item = asRecord(payload.item);
   if (!item || item.type !== "FileChange") return undefined;
 
+  performanceProbe?.add("fileChangeRecognizedCount");
   return compactEvent({
     source: "fileChangeItemCompleted",
     changes: item.changes,
@@ -65,7 +72,11 @@ export function readCodexFileChangeEvent(value: unknown): CodexFileChangeEvent |
 }
 
 // New completed-item records fail closed; legacy records retain their permissive compatibility behavior.
-export function isSuccessfulCodexFileChangeEvent(event: CodexFileChangeEvent): boolean {
+export function isSuccessfulCodexFileChangeEvent(
+  event: CodexFileChangeEvent,
+  performanceProbe?: PerformanceProbe,
+): boolean {
+  performanceProbe?.add("fileChangeSuccessCheckCount");
   const status = normalizeStatus(event.status);
   if (event.success === false || FAILURE_STATUSES.has(status)) return false;
   if (event.source === "fileChangeItemCompleted") {
@@ -79,13 +90,16 @@ export class CodexFileChangeEventDeduper {
   private readonly unmatchedBySignature = new Map<string, UnmatchedSourceCounts>();
   private readonly maxTrackedSignatures: number;
 
-  public constructor(maxTrackedSignatures = MAX_TRACKED_CODEX_FILE_CHANGE_SIGNATURES) {
+  public constructor(
+    maxTrackedSignatures = MAX_TRACKED_CODEX_FILE_CHANGE_SIGNATURES,
+    private readonly performanceProbe?: PerformanceProbe,
+  ) {
     this.maxTrackedSignatures = normalizeTrackerLimit(maxTrackedSignatures);
   }
 
   public shouldSuppress(event: CodexFileChangeEvent): boolean {
-    if (!isSuccessfulCodexFileChangeEvent(event)) return false;
-    const signature = buildEventSignature(event);
+    if (!isSuccessfulCodexFileChangeEvent(event, this.performanceProbe)) return false;
+    const signature = buildEventSignature(event, this.performanceProbe);
     if (!signature) return false;
 
     let counts = this.unmatchedBySignature.get(signature);
@@ -93,6 +107,7 @@ export class CodexFileChangeEventDeduper {
       this.evictOldestIfFull();
       counts = { patchApplyEnd: 0, fileChangeItemCompleted: 0 };
       this.unmatchedBySignature.set(signature, counts);
+      this.performanceProbe?.observeMax("fileChangeTrackingPeak", this.unmatchedBySignature.size);
     }
 
     const opposite: CodexFileChangeEventSource =
@@ -102,6 +117,7 @@ export class CodexFileChangeEventDeduper {
       if (counts.patchApplyEnd === 0 && counts.fileChangeItemCompleted === 0) {
         this.unmatchedBySignature.delete(signature);
       }
+      this.performanceProbe?.add("fileChangeDuplicateHitCount");
       return true;
     }
 
@@ -114,6 +130,7 @@ export class CodexFileChangeEventDeduper {
       const oldest = this.unmatchedBySignature.keys().next().value as string | undefined;
       if (!oldest) break;
       this.unmatchedBySignature.delete(oldest);
+      this.performanceProbe?.add("fileChangeEvictionCount");
     }
   }
 }
@@ -132,7 +149,10 @@ function compactEvent(event: CodexFileChangeEvent): CodexFileChangeEvent {
   };
 }
 
-function buildEventSignature(event: CodexFileChangeEvent): string | undefined {
+function buildEventSignature(
+  event: CodexFileChangeEvent,
+  performanceProbe?: PerformanceProbe,
+): string | undefined {
   // Without a turn boundary, pairing could hide two independent edits with identical contents.
   if (!event.turnId) return undefined;
   const changes = asRecord(event.changes);
@@ -140,29 +160,41 @@ function buildEventSignature(event: CodexFileChangeEvent): string | undefined {
   const paths = Object.keys(changes).sort();
   if (paths.length === 0) return undefined;
 
+  performanceProbe?.add("fileChangeSignatureCalculationCount");
   const hash = createHash("sha256");
-  updateHashPart(hash, "codex-file-change-v1");
-  updateHashPart(hash, event.turnId ?? "");
+  updateHashPart(hash, "codex-file-change-v1", performanceProbe);
+  updateHashPart(hash, event.turnId ?? "", performanceProbe);
   for (const rawPath of paths) {
-    updateHashPart(hash, rawPath);
+    updateHashPart(hash, rawPath, performanceProbe);
     const change = asRecord(changes[rawPath]);
     if (!change) {
-      updateHashPart(hash, "invalid");
+      updateHashPart(hash, "invalid", performanceProbe);
       continue;
     }
-    updateHashPart(hash, readRawString(change.type));
-    updateHashPart(hash, readRawString(change.move_path));
-    updateHashPart(hash, readRawString(change.unified_diff));
-    updateHashPart(hash, readRawString(change.content));
+    updateHashPart(hash, readRawString(change.type), performanceProbe);
+    updateHashPart(hash, readRawString(change.move_path), performanceProbe);
+    updateHashPart(hash, readRawString(change.unified_diff), performanceProbe);
+    updateHashPart(hash, readRawString(change.content), performanceProbe);
   }
   return hash.digest("hex");
 }
 
-function updateHashPart(hash: ReturnType<typeof createHash>, value: string): void {
-  hash.update(String(value.length), "utf8");
+function updateHashPart(
+  hash: ReturnType<typeof createHash>,
+  value: string,
+  performanceProbe?: PerformanceProbe,
+): void {
+  const length = String(value.length);
+  hash.update(length, "utf8");
   hash.update(":", "utf8");
   hash.update(value, "utf8");
   hash.update(";", "utf8");
+  if (performanceProbe) {
+    performanceProbe.add(
+      "fileChangeSignatureInputByteCount",
+      Buffer.byteLength(length, "utf8") + Buffer.byteLength(value, "utf8") + 2,
+    );
+  }
 }
 
 function normalizeTrackerLimit(value: unknown): number {
