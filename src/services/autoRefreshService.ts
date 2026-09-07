@@ -297,9 +297,10 @@ export class AutoRefreshService implements vscode.Disposable {
           continue;
         }
         this.polledFingerprintByKey.set(key, nextFingerprint);
-        if (previousFingerprint && hasSessionFileFingerprintChanged(previousFingerprint, nextFingerprint)) {
+        // The first observation must also catch writes made before monitoring began.
+        if (!previousFingerprint || hasSessionFileFingerprintChanged(previousFingerprint, nextFingerprint)) {
           this.markPendingFsPath(fsPath);
-          this.logger?.debug(`autoRefresh poll change file=${path.basename(fsPath)}`);
+          this.logger?.debug(`autoRefresh poll change initial=${!previousFingerprint}`);
           this.schedule();
         }
       } catch {

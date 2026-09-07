@@ -176,7 +176,7 @@ async function collectCodexResumeMessage(
   const content = obj?.payload?.content;
   if (role === "user" && isCodexProtocolContextContent(content)) return true;
 
-  const extracted = await extractCodexMessageContent(content, undefined, { enabled: false });
+  const extracted = await extractCodexMessageContent(content, undefined, { enabled: false }, { role });
   const textNormalized = normalizeWhitespace(extracted.text);
   const attachmentSummary = buildResumeAttachmentSummary(extracted.attachments);
   const combinedText = combineResumeText(attachmentSummary, textNormalized);

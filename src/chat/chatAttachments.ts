@@ -31,6 +31,11 @@ import {
 } from "../utils/textUtils";
 import { inferFilePresentationKind } from "../utils/fileKind";
 import type { ClaudePastedPromptEntry, ClaudePastedPromptResolution } from "./claudePastedPrompt";
+import {
+  formatCodexQuestionRepliesText,
+  readCodexQuestionReplies,
+  type CodexQuestionReply,
+} from "../sessions/codexQuestionReplies";
 
 export const CHAT_TEXT_DOCUMENT_PREVIEW_CHARS = 16_000;
 export const CHAT_TEXT_DOCUMENT_SEARCH_CHARS = 64_000;
@@ -66,6 +71,7 @@ type CodexFileBlockKind = "mentioned" | "pasted";
 export interface ExtractedMessageContent {
   text: string;
   attachments: ChatAttachment[];
+  questionReplies?: readonly CodexQuestionReply[];
 }
 
 export interface ExtractedCodexTextContent {
@@ -223,6 +229,8 @@ export function extractCodexProtocolContextText(content: unknown): string | null
 }
 
 export function extractCodexCompactUserText(content: unknown, extractedText: string): string | null {
+  const questionReplies = readCodexQuestionReplies(content);
+  if (questionReplies) return formatCodexQuestionRepliesText(questionReplies);
   const textOnlyContent = extractCodexTextOnlyContentForContext(content);
   if (textOnlyContent !== null) {
     const fileReferences = extractCodexFilesMentionedFromText(textOnlyContent);
@@ -354,7 +362,12 @@ export async function extractCodexMessageContent(
   content: unknown,
   sessionCwd?: string,
   options?: ChatImageExtractionOptions,
+  messageOptions?: { role?: ChatRole },
 ): Promise<ExtractedMessageContent> {
+  const questionReplies = messageOptions?.role === "user" ? readCodexQuestionReplies(content) : undefined;
+  if (questionReplies) {
+    return { text: formatCodexQuestionRepliesText(questionReplies), attachments: [], questionReplies };
+  }
   const imageOptions = normalizeImageOptions(options);
   const items = normalizeContentItems(content);
   const texts: string[] = [];

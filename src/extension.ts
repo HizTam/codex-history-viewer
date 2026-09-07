@@ -2264,6 +2264,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const sessionRowDisplayChanged =
         e.affectsConfiguration("codexHistoryViewer.sessionRow.showTimestamp") ||
         e.affectsConfiguration("codexHistoryViewer.sessionRow.showProject");
+      const previewOpenOnSelectionChanged = e.affectsConfiguration("codexHistoryViewer.preview.openOnSelection");
       const previewMaxMessagesChanged = e.affectsConfiguration("codexHistoryViewer.preview.maxMessages");
       const previewTooltipModeChanged = e.affectsConfiguration("codexHistoryViewer.preview.tooltipMode");
       const autoRefreshChanged = e.affectsConfiguration("codexHistoryViewer.autoRefresh");
@@ -2297,6 +2298,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         !historyDateBasisChanged &&
         !historyTitleSourceChanged &&
         !sessionRowDisplayChanged &&
+        !previewOpenOnSelectionChanged &&
         !previewMaxMessagesChanged &&
         !previewTooltipModeChanged &&
         !autoRefreshChanged &&
@@ -8212,6 +8214,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     pinnedProvider.markInitialLoadComplete();
     refreshViews();
     controlProvider.refresh();
+    // Restored panels can become ready before the initial History snapshot exists.
+    chatPanels.refreshTitles();
+    chatPanels.refreshResumePresentation();
   };
 
   const runInitialBackgroundRefresh = (): void => {
@@ -8221,8 +8226,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (refreshResult.presentationChanged) {
           refreshHistoryPresentationViews();
           chatPanels.refreshTitles();
-          chatPanels.refreshResumePresentation();
         }
+        chatPanels.refreshResumePresentation();
         statusProvider.refresh();
         controlProvider.refresh();
       } catch (error) {

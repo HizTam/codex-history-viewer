@@ -15,7 +15,7 @@ import {
   toTreeItemContextValue,
 } from "./treeNodes";
 import { t } from "../i18n";
-import { getConfig } from "../settings";
+import { getConfig, type CodexHistoryViewerConfig } from "../settings";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 import {
   buildSessionDescriptionPresentation,
@@ -28,6 +28,7 @@ import {
   appendSessionTooltipTitleLines,
   buildTreeRowTooltip,
   escapeForMarkdown,
+  resolveTreeItemTooltip,
 } from "./sessionTooltipUtils";
 import { CodexAgentRunsService } from "../agents/codexAgentRunsService";
 import type { CodexAgentPresentation } from "../agents/codexAgentRunsTypes";
@@ -48,6 +49,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 
   private rootNode: SearchRootNode | null = null;
   private sessionNodes: SearchSessionNode[] = [];
+  private configSnapshot: Readonly<CodexHistoryViewerConfig> | null = null;
   private readonly helpNode = new SearchHelpNode();
 
   constructor(
@@ -82,6 +84,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   }
 
   public refresh(): void {
+    this.configSnapshot = null;
     this.emitter.fire();
   }
 
@@ -111,36 +114,11 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       return item;
     }
     if (element instanceof SearchSessionNode) {
-      const pinned = this.pinStore.isPinned(element.session.fsPath);
-      const hidden = this.hiddenSessionStore?.isHidden(element.session) ?? false;
-      const annotation = this.annotationStore.get(element.session.fsPath);
-      // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
-      const shortTitle = truncateByDisplayWidth(element.session.displayTitle, 40, "...");
-      const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(element.session));
-      const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
-      const config = getConfig();
-      const agentPresentation = config.agentRunsEnabled && element.session.source === "codex"
-        ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"))
-        : undefined;
-      const titleWithHitCount = `${shortTitle} (${element.hits.length})`;
-      const timestamp = `${element.session.localDate} ${element.session.timeLabel}`;
-      const rowLabel = buildSessionRowLabelPresentation(
-        timestamp,
-        titleWithHitCount,
-        config.sessionRow.showTimestamp,
-      );
+      const presentation = this.getSessionTreePresentation(element);
+      const { pinned, hidden, config, rowLabel, descriptionPresentation, agentPresentation } = presentation;
       const item = new vscode.TreeItem(
         rowLabel.label,
         vscode.TreeItemCollapsibleState.Collapsed,
-      );
-      const descriptionPresentation = buildSessionDescriptionPresentation(
-        element.session,
-        annotation?.tags ?? [],
-        projectAlias,
-        projectDisplayCwd,
-        agentPresentation,
-        hidden,
-        config.sessionRow.showProject,
       );
       item.description = descriptionPresentation.rowDescription || undefined;
       const node = new SessionNode(element.session, pinned);
@@ -164,17 +142,6 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         title: "",
         arguments: [element],
       };
-      item.tooltip = buildSearchSessionTooltip(
-        element,
-        annotation?.tags ?? [],
-        annotation?.note ?? "",
-        rowLabel.tooltipLabel,
-        descriptionPresentation.tooltipDescription,
-        projectAlias,
-        projectDisplayCwd,
-        agentPresentation,
-        hidden,
-      );
       return item;
     }
     if (element instanceof SearchHitNode) {
@@ -188,7 +155,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         vscode.TreeItemCollapsibleState.None,
       );
       const node = new SessionNode(element.session, pinned);
-      const config = getConfig();
+      const config = this.getConfigSnapshot();
       const agentPresentation = config.agentRunsEnabled && element.session.source === "codex"
         ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"))
         : undefined;
@@ -200,14 +167,14 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       );
       item.iconPath = new vscode.ThemeIcon("search");
 
-      const previewOnSelection = getConfig().previewOpenOnSelection;
+      const previewOnSelection = config.previewOpenOnSelection;
       item.command = {
         command: previewOnSelection ? "codexHistoryViewer.openSessionReusable" : "codexHistoryViewer.openSession",
         title: "",
         arguments: [element],
       };
       item.tooltip =
-        getConfig().previewTooltipMode === "titleOnly" ? buildTreeRowTooltip(label) : buildSearchHitTooltip(element, hidden);
+        config.previewTooltipMode === "titleOnly" ? buildTreeRowTooltip(label) : buildSearchHitTooltip(element, hidden);
       return item;
     }
     if (element instanceof SearchHelpNode) {
@@ -219,6 +186,38 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       return item;
     }
     return new vscode.TreeItem("?");
+  }
+
+  public resolveTreeItem(
+    item: vscode.TreeItem,
+    element: TreeNode,
+    token: vscode.CancellationToken,
+  ): vscode.TreeItem {
+    if (!(element instanceof SearchSessionNode)) return item;
+    return resolveTreeItemTooltip(item, token, () => {
+      const {
+        annotation,
+        rowLabel,
+        descriptionPresentation,
+        projectAlias,
+        projectDisplayCwd,
+        agentPresentation,
+        hidden,
+        config,
+      } = this.getSessionTreePresentation(element);
+      return buildSearchSessionTooltip(
+        element,
+        annotation?.tags ?? [],
+        annotation?.note ?? "",
+        rowLabel.tooltipLabel,
+        descriptionPresentation.tooltipDescription,
+        projectAlias,
+        projectDisplayCwd,
+        agentPresentation,
+        hidden,
+        config.previewTooltipMode,
+      );
+    });
   }
 
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
@@ -263,6 +262,52 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     return this.sessionNodes;
   }
 
+  private getSessionTreePresentation(element: SearchSessionNode) {
+    // Build row metadata from current stores so a refreshed item never reuses stale tooltip state.
+    const pinned = this.pinStore.isPinned(element.session.fsPath);
+    const hidden = this.hiddenSessionStore?.isHidden(element.session) ?? false;
+    const annotation = this.annotationStore.get(element.session.fsPath);
+    const shortTitle = truncateByDisplayWidth(element.session.displayTitle, 40, "...");
+    const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(element.session));
+    const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
+    const config = this.getConfigSnapshot();
+    const agentPresentation = config.agentRunsEnabled && element.session.source === "codex"
+      ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"))
+      : undefined;
+    const titleWithHitCount = `${shortTitle} (${element.hits.length})`;
+    const timestamp = `${element.session.localDate} ${element.session.timeLabel}`;
+    const rowLabel = buildSessionRowLabelPresentation(
+      timestamp,
+      titleWithHitCount,
+      config.sessionRow.showTimestamp,
+    );
+    const descriptionPresentation = buildSessionDescriptionPresentation(
+      element.session,
+      annotation?.tags ?? [],
+      projectAlias,
+      projectDisplayCwd,
+      agentPresentation,
+      hidden,
+      config.sessionRow.showProject,
+    );
+    return {
+      pinned,
+      hidden,
+      annotation,
+      projectDisplayCwd,
+      projectAlias,
+      config,
+      agentPresentation,
+      rowLabel,
+      descriptionPresentation,
+    };
+  }
+
+  private getConfigSnapshot(): Readonly<CodexHistoryViewerConfig> {
+    if (this.configSnapshot === null) this.configSnapshot = getConfig();
+    return this.configSnapshot;
+  }
+
   private getProjectDisplayCwd(cwd: string | null): string | null {
     if (!cwd) return null;
     return this.projectAssociationStore.getDisplayCwd(cwd) ?? cwd;
@@ -303,8 +348,8 @@ function buildSearchSessionTooltip(
   projectDisplayCwd?: string | null,
   agentPresentation?: CodexAgentPresentation,
   hidden = false,
+  mode: CodexHistoryViewerConfig["previewTooltipMode"] = "full",
 ): string | vscode.MarkdownString {
-  const mode = getConfig().previewTooltipMode;
   if (mode === "titleOnly") return buildTreeRowTooltip(label, description);
 
   const md = new vscode.MarkdownString(undefined, true);

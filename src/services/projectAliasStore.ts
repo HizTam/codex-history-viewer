@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { normalizeProjectKey } from "../utils/fsUtils";
+import { MementoSnapshotCache } from "./mementoSnapshotCache";
 
 export interface ProjectAlias {
   key: string;
@@ -14,16 +15,27 @@ const NO_CWD_PROJECT_KEY = "__no_cwd__";
 
 // Stores extension-local project aliases without changing source history files.
 export class ProjectAliasStore {
-  private readonly memento: vscode.Memento;
+  private readonly cache: MementoSnapshotCache<Map<string, ProjectAlias>>;
+  private mutationQueue: Promise<void> = Promise.resolve();
 
   constructor(memento: vscode.Memento) {
-    this.memento = memento;
+    this.cache = new MementoSnapshotCache(memento, PROJECT_ALIASES_KEY, (raw) => {
+      const entries = new Map<string, ProjectAlias>();
+      if (raw && typeof raw === "object") {
+        for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+          const entry = sanitizeEntry(key, value);
+          if (entry) entries.set(entry.key, entry);
+        }
+      }
+      return entries;
+    });
   }
 
   public getByCwd(cwd: string | null | undefined): ProjectAlias | null {
     const key = resolveProjectAliasKey(cwd);
     if (!key) return null;
-    return this.getAllByKey().get(key) ?? null;
+    const entry = this.cache.read().get(key);
+    return entry ? { ...entry } : null;
   }
 
   public getAliasByCwd(cwd: string | null | undefined): string | undefined {
@@ -39,43 +51,45 @@ export class ProjectAliasStore {
       return;
     }
 
-    const entries = this.getAllByKey();
-    entries.set(key, {
-      key,
-      alias: normalized,
-      cwd: cwd.trim(),
-      updatedAt: Date.now(),
+    await this.enqueueMutation(async () => {
+      const entries = this.getAllByKey();
+      entries.set(key, {
+        key,
+        alias: normalized,
+        cwd: cwd.trim(),
+        updatedAt: Date.now(),
+      });
+      await this.save(entries);
     });
-    await this.save(entries);
   }
 
   public async clearByCwd(cwd: string | null | undefined): Promise<boolean> {
     const key = resolveProjectAliasKey(cwd);
     if (!key) return false;
-    const entries = this.getAllByKey();
-    const changed = entries.delete(key);
-    if (changed) await this.save(entries);
-    return changed;
+    return this.enqueueMutation(async () => {
+      const entries = this.getAllByKey();
+      const changed = entries.delete(key);
+      if (changed) await this.save(entries);
+      return changed;
+    });
   }
 
   private getAllByKey(): Map<string, ProjectAlias> {
-    const raw = this.memento.get<unknown>(PROJECT_ALIASES_KEY);
-    if (!raw || typeof raw !== "object") return new Map();
-
-    const out = new Map<string, ProjectAlias>();
-    for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-      const entry = sanitizeEntry(key, value);
-      if (entry) out.set(entry.key, entry);
-    }
-    return out;
+    return new Map(Array.from(this.cache.read().entries(), ([key, entry]) => [key, { ...entry }]));
   }
 
   private async save(entries: ReadonlyMap<string, ProjectAlias>): Promise<void> {
     const payload: Record<string, ProjectAlias> = {};
     for (const [key, entry] of entries.entries()) {
-      payload[key] = entry;
+      payload[key] = { ...entry };
     }
-    await this.memento.update(PROJECT_ALIASES_KEY, payload);
+    await this.cache.write(payload);
+  }
+
+  private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const next = this.mutationQueue.then(operation, operation);
+    this.mutationQueue = next.then(() => undefined, () => undefined);
+    return next;
   }
 }
 

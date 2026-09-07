@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.14.0** (2026-09-04).
+Latest release: **2.14.1** (2026-09-07).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -274,14 +274,15 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.14.0
+## What's New in 2.14.1
 
-- Added a completion-notification action that copies the generated handoff file's absolute path to the clipboard.
-- Added turn timeline support for Claude Code sessions.
-- Reworked caching and history-reading paths to improve overall performance.
-- Added support for newer Codex history records.
-- Fixed an issue where the same file could be counted and displayed more than once in a Session Viewer diff summary when it was modified multiple times within the same Codex turn.
-- Fixed Codex token totals excluding cache-write input tokens or double-counting usage when durable and legacy usage records coexist.
+- Improved History, Pinned, and Search tree construction performance for large histories.
+- Made the dedicated settings page header more compact.
+- Changed the dedicated settings page to show the results of settings export, import, and reset operations as standard notifications.
+- Added support for displaying Codex questions and user answers.
+- Improved auto-refresh and resume control visibility when restoring Session Viewer tabs.
+
+Related history, search, and analysis caches are rebuilt for question-and-answer support. With large histories, the first history load, search, or analysis after updating may take longer.
 
 ## Changelog
 

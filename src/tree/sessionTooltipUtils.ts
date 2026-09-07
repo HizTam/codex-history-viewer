@@ -17,6 +17,18 @@ export interface SessionTooltipAnnotation {
 export type SessionDateAxis = "display" | "started" | "lastActivity";
 export type SessionDateLabelKey = "tree.tooltip.sessionDate.started" | "tree.tooltip.sessionDate.lastActivity";
 
+export function resolveTreeItemTooltip(
+  item: vscode.TreeItem,
+  token: vscode.CancellationToken,
+  buildTooltip: () => string | vscode.MarkdownString,
+): vscode.TreeItem {
+  // Resolve only missing tooltips and never publish a value after cancellation.
+  if (token.isCancellationRequested || item.tooltip !== undefined) return item;
+  const tooltip = buildTooltip();
+  if (!token.isCancellationRequested) item.tooltip = tooltip;
+  return item;
+}
+
 export function buildTreeRowTooltip(label: string, description?: string): string {
   const parts = [label.trim(), String(description ?? "").trim()].filter((x) => x.length > 0);
   return parts.join(" ");

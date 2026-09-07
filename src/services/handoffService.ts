@@ -378,7 +378,7 @@ async function collectCodexMessage(
   const content = obj?.payload?.content;
   if (role === "user" && isCodexProtocolContextContent(content)) return true;
 
-  const extracted = await extractCodexMessageContent(content, undefined, { enabled: false });
+  const extracted = await extractCodexMessageContent(content, undefined, { enabled: false }, { role });
   const text = sanitizeMessageText(
     combineHandoffText(buildHandoffAttachmentSummary(extracted.attachments), extracted.text),
   );

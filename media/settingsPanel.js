@@ -8,6 +8,7 @@
   const settingStatuses = new Map();
   const settingDrafts = new Map();
   const ABOUT_TAB_IDS = ["version", "license", "thirdParty"];
+  const HEADER_COMPACT_GUARD_PX = 8;
   const mobileNavigationMedia = window.matchMedia("(max-width: 760px)");
   let snapshot;
   let activePageId = readPersistedString("activePageId");
@@ -19,10 +20,16 @@
   let globalStatus = "";
   let globalStatusIsError = false;
   let focusMemory;
+  let headerResizeObserver;
 
   if (!app) {
     return;
   }
+
+  headerResizeObserver = typeof ResizeObserver === "function"
+    ? new ResizeObserver(() => updateResponsiveHeader())
+    : undefined;
+  window.addEventListener("resize", updateResponsiveHeader);
 
   mobileNavigationMedia.addEventListener("change", (event) => {
     if (event.matches || !mobileNavigationOpen) {
@@ -182,6 +189,7 @@
     const contentScrollPosition = readScrollPosition(app.querySelector(".page-content"));
     const navigationScrollPosition = readScrollPosition(app.querySelector(".page-navigation"));
     const scrollToTop = Boolean(options && options.scrollToTop === true);
+    headerResizeObserver?.disconnect();
     app.replaceChildren();
     app.classList.toggle("navigation-collapsed", navigationCollapsed);
 
@@ -190,6 +198,12 @@
     const layout = element("div", "settings-layout");
     layout.append(createNavigation(), createPageContent(activePage));
     app.append(header, layout);
+    updateResponsiveHeader(header);
+    headerResizeObserver?.observe(header);
+    const titleBlock = header.querySelector(".title-block");
+    if (titleBlock instanceof HTMLElement) {
+      headerResizeObserver?.observe(titleBlock);
+    }
     if (isMobileNavigationModalOpen()) {
       const backdrop = button("", "navigation-backdrop");
       backdrop.setAttribute("aria-label", snapshot.labels.closeNavigation);
@@ -209,6 +223,35 @@
     window.scrollTo(
       scrollToTop ? 0 : windowScrollPosition.left,
       scrollToTop ? 0 : windowScrollPosition.top
+    );
+  }
+
+  function updateResponsiveHeader(candidate) {
+    const header = candidate instanceof HTMLElement
+      ? candidate
+      : app.querySelector(".page-header");
+    if (!(header instanceof HTMLElement)) {
+      return;
+    }
+    header.classList.remove("compact-brand");
+    const titleBlock = header.querySelector(".title-block");
+    const fullTitle = header.querySelector(".page-title-full");
+    const fullMetadata = header.querySelector(".page-metadata-full");
+    if (
+      !(titleBlock instanceof HTMLElement) ||
+      !(fullTitle instanceof HTMLElement) ||
+      !(fullMetadata instanceof HTMLElement) ||
+      titleBlock.clientWidth <= 0
+    ) {
+      return;
+    }
+    const requiredWidth = Math.max(
+      fullTitle.getBoundingClientRect().width,
+      fullMetadata.getBoundingClientRect().width
+    );
+    header.classList.toggle(
+      "compact-brand",
+      requiredWidth + HEADER_COMPACT_GUARD_PX > titleBlock.clientWidth
     );
   }
 
@@ -239,10 +282,17 @@
     const mark = createIcon("extension", "page-brand-icon");
     mark.setAttribute("aria-hidden", "true");
     const titleBlock = element("div", "title-block");
-    titleBlock.append(
-      element("h1", "page-title", snapshot.title),
-      element("div", "page-metadata", snapshot.about.headerMetadata)
+    const title = element("h1", "page-title");
+    title.append(
+      element("span", "page-title-full", snapshot.title),
+      element("span", "page-title-compact", snapshot.compactTitle)
     );
+    const metadata = element("div", "page-metadata");
+    metadata.append(
+      element("span", "page-metadata-full", snapshot.about.headerMetadata),
+      element("span", "page-metadata-compact", snapshot.about.compactHeaderVersion)
+    );
+    titleBlock.append(title, metadata);
     brand.append(mark, titleBlock);
     header.append(mobileMenu, brand);
 
@@ -930,7 +980,7 @@
     }
     const requestId = allocateRequestId();
     pendingRequests.set(requestId, { actionId });
-    globalStatus = snapshot.labels.saving;
+    globalStatus = "";
     globalStatusIsError = false;
     vscode.postMessage({ type: "runMaintenanceAction", requestId, actionId });
     render();
@@ -1161,6 +1211,7 @@
     return isRecord(value) && [
       "displayName",
       "headerMetadata",
+      "compactHeaderVersion",
       "versionLabel",
       "version",
       "licenseLabel",
@@ -1194,6 +1245,7 @@
       value.revision >= 0 &&
       (value.language === "ja" || value.language === "en") &&
       typeof value.title === "string" &&
+      typeof value.compactTitle === "string" &&
       typeof value.activeTargetId === "string" &&
       Array.isArray(value.targets) &&
       Array.isArray(value.pages) &&

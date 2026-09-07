@@ -196,6 +196,13 @@ export interface ChatMemoryCitation {
   rolloutIds: string[];
 }
 
+export interface ChatQuestionReply {
+  question: string;
+  answer: string;
+  options?: readonly string[];
+  selectedOptionIndex?: number;
+}
+
 export interface ChatMessageItem {
   type: "message";
   role: ChatRole;
@@ -207,6 +214,7 @@ export interface ChatMessageItem {
   effort?: string;
   text: string;
   requestText?: string;
+  questionReplies?: readonly ChatQuestionReply[];
   attachments?: ChatAttachment[];
   memoryCitation?: ChatMemoryCitation;
   // Treat large environment/rule messages as "context".

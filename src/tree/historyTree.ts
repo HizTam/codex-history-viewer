@@ -43,7 +43,7 @@ import {
   totalSessionFileSizeBytes,
 } from "../sessions/sessionFileSizeSort";
 import type { DateScope } from "../types/dateScope";
-import { getConfig } from "../settings";
+import { getConfig, type CodexHistoryViewerConfig } from "../settings";
 import { normalizeProjectKey } from "../utils/fsUtils";
 import { formatSessionFileSize } from "../utils/formatBytes";
 import { safeDisplayPath, truncateByDisplayWidth } from "../utils/textUtils";
@@ -56,6 +56,7 @@ import {
   buildSessionHoverTooltip,
   formatSessionDateTimeForAxis,
   getSessionDatePartsForAxis,
+  resolveTreeItemTooltip,
   sessionDateLabelKeyForAxis,
   type SessionDateAxis,
 } from "./sessionTooltipUtils";
@@ -142,6 +143,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private filteredSessionsCache: SessionSummary[] | null = null;
   private sortedSessionsCache: SessionSummary[] | null = null;
   private projectSessionsByRelocationKey = new Map<string, SessionSummary[]>();
+  private configSnapshot: Readonly<CodexHistoryViewerConfig> | null = null;
   private insightsSnapshotGeneration = 0;
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   public readonly onDidChangeTreeData = this.emitter.event;
@@ -198,6 +200,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   public refresh(): void {
+    this.configSnapshot = null;
     this.canonicalProjectKeyCache.clear();
     this.clearSessionDerivedCaches();
     this.emitter.fire();
@@ -427,7 +430,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   private buildNoHistoryNodes(): HistoryEmptyNode[] {
-    const config = getConfig();
+    const config = this.getConfigSnapshot();
     const nodes = [new HistoryEmptyNode(t("history.empty.noHistory.title"), "info")];
 
     if (config.enableCodexSource && config.enableClaudeSource) {
@@ -540,37 +543,22 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     return new vscode.TreeItem("?");
   }
 
+  public resolveTreeItem(
+    item: vscode.TreeItem,
+    element: TreeNode,
+    token: vscode.CancellationToken,
+  ): vscode.TreeItem {
+    if (!(element instanceof SessionNode)) return item;
+    return resolveTreeItemTooltip(item, token, () => this.buildSessionTooltip(element.session));
+  }
+
   private sessionToTreeItem(session: SessionSummary, pinned: boolean): vscode.TreeItem {
-    // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
-    const shortTitle = truncateByDisplayWidth(session.displayTitle, 40, "...");
-    const dateAxis = this.getSessionRowDateAxis();
-    const prefix = this.formatSessionRowDatePrefix(session, dateAxis);
-    const config = getConfig();
-    const rowLabel = buildSessionRowLabelPresentation(
-      prefix,
-      shortTitle,
-      config.sessionRow.showTimestamp,
-    );
+    const presentation = this.getSessionTreePresentation(session);
+    const { config, rowLabel, descriptionPresentation, agentPresentation, hidden } = presentation;
     const label = rowLabel.label;
     const node = new SessionNode(session, pinned);
     const item = new vscode.TreeItem(label, vscode.TreeItemCollapsibleState.None);
     item.id = buildHistoryTreeItemId(node);
-    const annotation = this.annotationStore.get(session.fsPath);
-    const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(session));
-    const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
-    const agentPresentation = config.agentRunsEnabled && session.source === "codex"
-      ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent"))
-      : undefined;
-    const hidden = this.hiddenSessionStore.isHidden(session);
-    const descriptionPresentation = buildSessionDescriptionPresentation(
-      session,
-      annotation?.tags ?? [],
-      projectAlias,
-      projectDisplayCwd,
-      agentPresentation,
-      hidden,
-      config.sessionRow.showProject,
-    );
     item.description = descriptionPresentation.rowDescription || undefined;
     item.contextValue = toTreeItemContextValue(
       node,
@@ -592,8 +580,22 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       title: "",
       arguments: [node],
     };
+    return item;
+  }
 
-    item.tooltip = buildSessionHoverTooltip({
+  private buildSessionTooltip(session: SessionSummary): string | vscode.MarkdownString {
+    const {
+      config,
+      rowLabel,
+      annotation,
+      projectDisplayCwd,
+      projectAlias,
+      dateAxis,
+      agentPresentation,
+      hidden,
+      descriptionPresentation,
+    } = this.getSessionTreePresentation(session);
+    return buildSessionHoverTooltip({
       session,
       annotation: annotation ? { tags: annotation.tags, note: annotation.note } : null,
       label: rowLabel.tooltipLabel,
@@ -606,7 +608,46 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       agentPresentation,
       hidden,
     });
-    return item;
+  }
+
+  private getSessionTreePresentation(session: SessionSummary) {
+    // Build row metadata from current stores so a refreshed item never reuses stale tooltip state.
+    const shortTitle = truncateByDisplayWidth(session.displayTitle, 40, "...");
+    const dateAxis = this.getSessionRowDateAxis();
+    const prefix = this.formatSessionRowDatePrefix(session, dateAxis);
+    const config = this.getConfigSnapshot();
+    const rowLabel = buildSessionRowLabelPresentation(
+      prefix,
+      shortTitle,
+      config.sessionRow.showTimestamp,
+    );
+    const annotation = this.annotationStore.get(session.fsPath);
+    const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(session));
+    const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
+    const agentPresentation = config.agentRunsEnabled && session.source === "codex"
+      ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent"))
+      : undefined;
+    const hidden = this.hiddenSessionStore.isHidden(session);
+    const descriptionPresentation = buildSessionDescriptionPresentation(
+      session,
+      annotation?.tags ?? [],
+      projectAlias,
+      projectDisplayCwd,
+      agentPresentation,
+      hidden,
+      config.sessionRow.showProject,
+    );
+    return {
+      config,
+      rowLabel,
+      annotation,
+      projectDisplayCwd,
+      projectAlias,
+      dateAxis,
+      agentPresentation,
+      hidden,
+      descriptionPresentation,
+    };
   }
 
   private getSessionRowDateAxis(): SessionDateAxis {
@@ -641,7 +682,12 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   private getDateBasisAxis(): SessionDateAxis {
-    return getConfig().historyDateBasis === "lastActivity" ? "lastActivity" : "started";
+    return this.getConfigSnapshot().historyDateBasis === "lastActivity" ? "lastActivity" : "started";
+  }
+
+  private getConfigSnapshot(): Readonly<CodexHistoryViewerConfig> {
+    if (this.configSnapshot === null) this.configSnapshot = getConfig();
+    return this.configSnapshot;
   }
 
   private getFilteredSessions(): SessionSummary[] {

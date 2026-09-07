@@ -77,7 +77,9 @@ select:focus-visible,
 }
 
 .title-block {
+  flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
 }
 
 .page-title {
@@ -92,6 +94,28 @@ select:focus-visible,
   color: var(--muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.page-title-full,
+.page-title-compact,
+.page-metadata-full,
+.page-metadata-compact {
+  white-space: nowrap;
+}
+
+.page-title-compact,
+.page-metadata-compact {
+  display: none;
+}
+
+.page-header.compact-brand .page-title-full,
+.page-header.compact-brand .page-metadata-full {
+  display: none;
+}
+
+.page-header.compact-brand .page-title-compact,
+.page-header.compact-brand .page-metadata-compact {
+  display: inline;
 }
 
 .target-selector {
@@ -112,6 +136,10 @@ select:focus-visible,
   min-height: 18px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.global-status:empty {
+  display: none;
 }
 
 .global-status.error {
@@ -1028,6 +1056,34 @@ button:disabled {
   }
 }
 
+@media (min-width: 761px) {
+  .settings-app {
+    padding: 14px 24px 32px;
+  }
+
+  .page-header {
+    gap: 4px 28px;
+    margin-bottom: 10px;
+  }
+
+  .page-brand {
+    gap: 12px;
+  }
+
+  .page-brand-icon {
+    width: 38px;
+    height: 38px;
+  }
+
+  .page-title {
+    font-size: 24px;
+  }
+
+  .page-metadata {
+    margin-top: 2px;
+  }
+}
+
 @media (max-width: 760px) {
   body {
     overflow: auto;
@@ -1043,8 +1099,13 @@ button:disabled {
 
   .page-header {
     grid-template-columns: 34px minmax(0, 1fr);
-    gap: 12px 10px;
+    gap: 8px 10px;
     align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .page-brand {
+    gap: 10px;
   }
 
   .page-brand-icon {
@@ -1057,6 +1118,7 @@ button:disabled {
   }
 
   .page-metadata {
+    margin-top: 1px;
     font-size: 11px;
   }
 

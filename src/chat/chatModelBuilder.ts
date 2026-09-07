@@ -83,6 +83,7 @@ import {
   type CodexContextManagementKind,
   type CodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
+import { CodexQuestionReplyResolver } from "../sessions/codexQuestionReplies";
 import {
   CodexFileChangeEventDeduper,
   isSuccessfulCodexFileChangeEvent,
@@ -258,6 +259,7 @@ export async function createChatTimelineRecordAccumulator(
   const toolByCallId = new Map<string, ChatToolItem>();
   const suppressedCodexToolCallIds = new Set<string>();
   const seenCodexAsyncQuestionIds = new Set<string>();
+  const codexQuestionReplyResolver = new CodexQuestionReplyResolver();
   const pendingPatchGroups = new Map<string, PendingPatchGroup>();
   const fileChangeDeduper = new CodexFileChangeEventDeduper(undefined, options.performanceProbe);
   const codexTurnMeta: ChatMessageModelMeta = {};
@@ -344,6 +346,7 @@ export async function createChatTimelineRecordAccumulator(
         items,
         toolByCallId,
         suppressedCodexToolCallIds,
+        codexQuestionReplyResolver,
         pendingPatchGroups,
         () => (messageIndex += 1),
         () => messageIndex,
@@ -367,6 +370,7 @@ export async function createChatTimelineRecordAccumulator(
         () => (messageIndex += 1),
         () => messageIndex,
         seenCodexAsyncQuestionIds,
+        codexQuestionReplyResolver,
         codexTurnMeta,
         memoryCitationState,
         usageState,
@@ -563,6 +567,7 @@ async function indexCodexTimelineRecord(
   items: ChatTimelineItem[],
   toolByCallId: Map<string, ChatToolItem>,
   suppressedToolCallIds: Set<string>,
+  questionReplyResolver: CodexQuestionReplyResolver,
   pendingPatchGroups: Map<string, PendingPatchGroup>,
   nextMessageIndex: () => number,
   currentMessageIndex: () => number,
@@ -597,6 +602,7 @@ async function indexCodexTimelineRecord(
       content,
       sessionCwd,
       toImageExtractionOptions(options.images),
+      { role },
     );
     let text = normalizeText(protocolContextText ?? parsed.text);
     const attachments = protocolContextText ? [] : parsed.attachments;
@@ -652,6 +658,14 @@ async function indexCodexTimelineRecord(
       ...(role === "assistant" ? toMessageModelMeta(codexTurnMeta) : {}),
       text,
       requestText,
+      ...(parsed.questionReplies ? {
+        questionReplies: questionReplyResolver.resolve(parsed.questionReplies).map(({ question, answer, options, selectedOptionIndex }) => ({
+          question,
+          answer,
+          ...(options ? { options } : {}),
+          ...(selectedOptionIndex !== undefined ? { selectedOptionIndex } : {}),
+        })),
+      } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(memoryCitation ? { memoryCitation } : {}),
       isContext,
@@ -795,6 +809,7 @@ function indexCodexEventRecord(
   nextMessageIndex: () => number,
   currentMessageIndex: () => number,
   seenAsyncQuestionIds: Set<string>,
+  questionReplyResolver: CodexQuestionReplyResolver,
   codexTurnMeta: ChatMessageModelMeta,
   memoryCitationState: MemoryCitationBuildState,
   usageState: UsageBuildState,
@@ -810,6 +825,7 @@ function indexCodexEventRecord(
   const payloadPhase = typeof obj?.payload?.phase === "string" ? obj.payload.phase : "";
   const asyncQuestion = readCodexAsyncQuestionMessage(obj);
   if (asyncQuestion) {
+    questionReplyResolver.observe(asyncQuestion);
     if (seenAsyncQuestionIds.has(asyncQuestion.itemId)) return true;
     const text = normalizeText(asyncQuestion.text);
     if (!text) return true;

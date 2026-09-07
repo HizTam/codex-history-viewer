@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.14.1] - 2026-09-07
+
+### Changed
+
+- Improved History, Pinned, and Search tree construction performance for large histories.
+- Made the dedicated settings page header more compact.
+- Changed the dedicated settings page to show the results of settings export, import, and reset operations as standard notifications.
+- Improved the labels and icons for code-execution and wait/result-retrieval tool cards.
+
+### Added
+
+- Added readable displays for questions from Codex and user answers.
+
+### Fixed
+
+- Fixed Session Viewer auto-refresh not running or resume controls remaining hidden after startup or window reload.
+- Fixed an issue where changes to pinned sessions, annotations, and project aliases were sometimes not reflected when using multiple windows.
+- Fixed some project alias changes being lost when aliases were updated in quick succession.
+
 ## [2.14.0] - 2026-09-04
 
 ### Added

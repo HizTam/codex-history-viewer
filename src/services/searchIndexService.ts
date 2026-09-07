@@ -53,7 +53,7 @@ import {
   readCodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
 
-const SEARCH_INDEX_FILE_VERSION = 21;
+const SEARCH_INDEX_FILE_VERSION = 22;
 const SEARCH_STAT_CONCURRENCY = 8;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
@@ -939,7 +939,7 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
 
     const suppressMessageText =
       role === "user" && isCodexProtocolContextContent(obj?.payload?.content);
-    const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false });
+    const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false }, { role });
     const messageText =
       role === "assistant" ? splitTrailingMemoryCitationBlock(extracted.text).text : extracted.text;
     const text = normalizeWhitespace(

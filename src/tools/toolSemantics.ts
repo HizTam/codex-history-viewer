@@ -9,12 +9,14 @@ const TOOL_KIND_ALIASES: Record<NormalizedToolKind, readonly string[]> = {
   read: ["read", "read_file", "open_file", "cat", "view_file", "read_mcp_resource"],
   write: ["write", "write_file", "create_file", "create", "delete_file", "rename_file", "move_file"],
   edit: ["edit", "apply_patch", "multi_edit", "str_replace", "replace", "insert", "delete", "rename", "move"],
+  exec: ["exec", "functions_exec"],
   grep: ["grep", "search_file_content", "search_text", "find_in_file"],
   glob: ["glob", "find_files", "search_files", "list_files"],
   webSearch: ["web_search", "search_query", "image_query", "websearch"],
   webFetch: ["web_fetch", "fetch", "open", "open_url"],
   imageGeneration: ["image_generation", "image_generation_call", "imagegen"],
   agent: ["agent", "spawn_agent", "send_input", "wait_agent", "resume_agent", "close_agent", "update_plan"],
+  wait: ["wait", "functions_wait"],
   unknown: [],
 };
 
@@ -141,6 +143,15 @@ export function buildToolPresentation(tool: ChatToolItem): ChatToolPresentation 
         secondaryText: buildAgentSecondary(parsedArgs),
         messageIndex: tool.messageIndex,
       };
+    case "exec":
+    case "wait":
+      // Describe the operation without guessing its target or duplicating the call ID tag.
+      return {
+        toolKind,
+        title: fallbackTitle,
+        primaryText: primaryFallback,
+        messageIndex: tool.messageIndex,
+      };
     default:
       return {
         toolKind: "unknown",
@@ -171,6 +182,8 @@ function getLocalizedTitle(toolKind: NormalizedToolKind): string {
       return t("chat.toolCard.title.write");
     case "edit":
       return t("chat.toolCard.title.edit");
+    case "exec":
+      return t("chat.toolCard.title.exec");
     case "grep":
       return t("chat.toolCard.title.grep");
     case "glob":
@@ -183,6 +196,8 @@ function getLocalizedTitle(toolKind: NormalizedToolKind): string {
       return t("chat.toolCard.title.imageGeneration");
     case "agent":
       return t("chat.toolCard.title.agent");
+    case "wait":
+      return t("chat.toolCard.title.wait");
     default:
       return t("chat.toolCard.title.unknown");
   }

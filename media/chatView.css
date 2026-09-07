@@ -3887,6 +3887,11 @@ body.vscode-high-contrast-light .branchTreeViewport {
   --tool-accent: color-mix(in srgb, var(--chv-border) 55%, var(--chv-muted) 45%);
 }
 
+.toolCard.toolCard-kind-exec,
+.toolCard.toolCard-kind-wait {
+  --tool-accent: var(--chv-muted);
+}
+
 .toolCard.toolCard-severity-error {
   --tool-accent: var(--vscode-errorForeground, #f48771);
   border-color: var(--vscode-errorForeground, #f48771);
@@ -4518,6 +4523,59 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
 
 .textBlock {
   white-space: pre-wrap;
+}
+
+.questionReplies {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.questionReply {
+  min-width: 0;
+  border-left: 2px solid var(--vscode-widget-border, var(--chv-border));
+  padding-left: 12px;
+  overflow-wrap: anywhere;
+}
+
+.questionReplyLabel {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.9em;
+  margin-bottom: 3px;
+}
+
+.questionReplyQuestion,
+.questionReplyAnswer,
+.questionReplyOptionText {
+  white-space: pre-wrap;
+}
+
+.questionReplyQuestion {
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.questionReplyOptions {
+  padding-left: 20px;
+  margin: 0 0 12px;
+}
+
+.questionReplyOption {
+  padding: 4px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+}
+
+.questionReplyOption-selected {
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-list-inactiveSelectionBackground, transparent);
+}
+
+.questionReplySelected {
+  display: inline-block;
+  font-size: 0.9em;
+  font-weight: 600;
+  margin-left: 8px;
 }
 
 .messageBody {

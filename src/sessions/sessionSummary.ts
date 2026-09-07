@@ -286,7 +286,7 @@ async function appendPreviewMessage(
 
     const content = obj?.payload?.content;
     if (role === "user" && isCodexProtocolContextContent(content)) return;
-    const extracted = await extractCodexMessageContent(content, undefined, { enabled: false });
+    const extracted = await extractCodexMessageContent(content, undefined, { enabled: false }, { role });
     const cleanText = normalizeWhitespace(extracted.text);
     const attachmentSummary = buildPreviewAttachmentText(extracted.attachments);
     const textNormalized = normalizeWhitespace([cleanText, attachmentSummary].filter(Boolean).join("\n"));

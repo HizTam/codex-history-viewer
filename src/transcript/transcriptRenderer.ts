@@ -164,7 +164,7 @@ async function renderCodexRecord(
       return { handled: true, msgIndex, lastToolCallId };
     }
 
-    const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false });
+    const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false }, { role });
     const text = normalizeWhitespace(extracted.text);
     const attachmentLines = buildAttachmentSummaryLines(extracted.attachments);
     if (!text && attachmentLines.length === 0) return { handled: true, msgIndex, lastToolCallId };

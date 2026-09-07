@@ -1,3 +1,5 @@
+import type { CodexAsyncQuestionDefinition } from "./codexQuestionReplies";
+
 export type CodexRolloutRecordKind =
   | "session_meta"
   | "response_item"
@@ -21,6 +23,7 @@ export interface CodexAsyncQuestionMessage {
   readonly itemId: string;
   readonly text: string;
   readonly turnId?: string;
+  readonly questions?: readonly CodexAsyncQuestionDefinition[];
 }
 
 export interface CodexTokenUsageRecord {
@@ -112,6 +115,12 @@ export function readCodexAsyncQuestionMessage(value: unknown): CodexAsyncQuestio
     itemId,
     text: content,
     ...(turnId ? { turnId } : {}),
+    ...(Array.isArray(item.questions) && item.questions.length > 0 ? {
+      questions: item.questions.map((question: CodexAsyncQuestionDefinition) => ({
+        title: question.title,
+        ...(question.options ? { options: [...question.options] } : {}),
+      })),
+    } : {}),
   };
 }
 

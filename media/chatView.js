@@ -155,6 +155,9 @@
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 2h10.5C14.216 2 15 2.784 15 3.75v8.5c0 .966-.784 1.75-1.75 1.75H2.75A1.75 1.75 0 0 1 1 12.25v-8.5C1 2.784 1.784 2 2.75 2Zm0 1.5a.25.25 0 0 0-.25.25v8.5c0 .14.11.25.25.25h10.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25H2.75Zm1.66 2.03a.75.75 0 0 1 1.06 0l1.94 1.94a.75.75 0 0 1 0 1.06l-1.94 1.94a.75.75 0 1 1-1.06-1.06L5.81 8 4.41 6.59a.75.75 0 0 1 0-1.06ZM8 10.25h3a.75.75 0 0 1 0 1.5H8a.75.75 0 0 1 0-1.5Z"/></svg>',
     edit:
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M11.56 1.56a1.9 1.9 0 0 1 2.68 2.68l-7.4 7.4a2.25 2.25 0 0 1-1.01.57l-2.24.56a.75.75 0 0 1-.91-.91l.56-2.24c.1-.4.3-.74.57-1.01l7.4-7.4Zm1.62 1.06a.4.4 0 0 0-.56 0l-1.04 1.04 1.62 1.62 1.04-1.04a.4.4 0 0 0 0-.56l-1.06-1.06ZM10.52 4.72 4.31 10.93a.75.75 0 0 0-.19.34l-.3 1.2 1.2-.3a.75.75 0 0 0 .34-.19l6.21-6.21-1.05-1.05Z"/></svg>',
+    // Code brackets identify code execution without implying a shell or a browser.
+    exec:
+      '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M5.5 3.94 1.44 8l4.06 4.06 1.06-1.06-3-3 3-3-1.06-1.06Zm5 0L9.44 5l3 3-3 3 1.06 1.06L14.56 8 10.5 3.94ZM8.73 2.5l-2.9 11 1.45.38 2.9-11-1.45-.38Z"/></svg>',
     glob:
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 3A1.75 1.75 0 0 0 1 4.75v6.5C1 12.216 1.784 13 2.75 13h5.7a.75.75 0 0 0 0-1.5h-5.7a.25.25 0 0 1-.25-.25v-6.5c0-.14.11-.25.25-.25h3.12l1.5 1.5h1.88a.25.25 0 0 1 .25.25v1.2a.75.75 0 0 0 1.5 0v-1.2A1.75 1.75 0 0 0 9.25 4.5H7.99L6.49 3H2.75Zm9.82 5.6a2.6 2.6 0 1 1-1.84 4.44l-1.7 1.7a.75.75 0 1 1-1.06-1.06l1.7-1.7A2.6 2.6 0 0 1 12.57 8.6Zm0 1.5a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2Z"/></svg>',
     grep:
@@ -165,6 +168,8 @@
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M3.25 1.75h6.7c.4 0 .78.16 1.06.44l1.8 1.8c.28.28.44.66.44 1.06v7.7c0 .97-.78 1.75-1.75 1.75h-8A1.75 1.75 0 0 1 1.75 12.75v-9c0-.97.78-1.75 1.75-1.75Zm0 1.5a.25.25 0 0 0-.25.25v9c0 .14.11.25.25.25h8a.25.25 0 0 0 .25-.25V5.56L9.69 3.75H3.25Zm1.5 3.5h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1 0-1.5Zm0 2.5h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1 0-1.5Z"/></svg>',
     unknown:
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 1.75a3.25 3.25 0 0 1 3.25 3.25c0 1.11-.53 1.88-1.1 2.43-.27.26-.52.45-.72.6-.14.1-.27.2-.36.29-.18.16-.32.34-.32.68v.25a.75.75 0 0 1-1.5 0V9c0-.9.43-1.44.82-1.79.16-.15.34-.28.51-.41.17-.12.33-.24.47-.38.42-.4.7-.82.7-1.42A1.75 1.75 0 0 0 6.25 5a.75.75 0 0 1-1.5 0A3.25 3.25 0 0 1 8 1.75Zm0 11.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2Z"/></svg>',
+    // A static clock indicates the operation category, not an in-progress status.
+    wait: PATH_RECORDED_ICON_SVG,
     webFetch:
       '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 1.75a6.25 6.25 0 1 1 0 12.5 6.25 6.25 0 0 1 0-12.5Zm0 1.5A4.75 4.75 0 0 0 5.15 12h1.28c-.28-.78-.45-1.7-.45-2.7H3.55a4.74 4.74 0 0 0 1.6 2.7H8Zm2.85-1.25h-1.28c.28.78.45 1.7.45 2.7h2.43a4.74 4.74 0 0 0-1.6-2.7Zm-5.7 0a4.74 4.74 0 0 0-1.6 2.7h2.43c0-1 .17-1.92.45-2.7H5.15ZM8 3.37c-.35.52-.68 1.4-.68 2.83h1.36c0-1.43-.33-2.31-.68-2.83Zm2.02 4.33H6c0 1.24.18 2.28.48 3.05h3.04c.3-.77.48-1.81.48-3.05Zm-.77 5.55h1.6a4.76 4.76 0 0 0 1.6-2.7h-2.43c0 .99-.17 1.92-.45 2.7Zm-2.5 0c-.28-.78-.45-1.71-.45-2.7H3.55a4.76 4.76 0 0 0 1.6 2.7h1.6Zm1.25-.62c.35-.52.68-1.4.68-2.83H7.32c0 1.43.33 2.31.68 2.83Z"/></svg>',
     webSearch:
@@ -11014,6 +11019,7 @@
     if (role !== "assistant" && !showDetails && item.isContext) return null;
 
     const textToRender = getMessageTextToRender(item, role);
+    const questionReplies = role === "user" ? getCodexQuestionReplies(item) : [];
     const attachments = getMessageAttachments(item);
     if (role === "user" && !showDetails && !textToRender.trim() && attachments.length === 0) return null;
     if (role === "developer" && !showDetails) return null;
@@ -11069,7 +11075,10 @@
     metaLine.appendChild(headerActions);
     bubble.appendChild(metaLine);
 
-    const collapseState = resolveMessageCollapseState(item, role, textToRender);
+    const collapseText = questionReplies.length > 0
+      ? questionReplies.map((reply) => [reply.question, ...reply.options, reply.answer].join("\n")).join("\n\n")
+      : textToRender;
+    const collapseState = resolveMessageCollapseState(item, role, collapseText);
     const body = el("div", { className: `messageBody messageBody-${role}` });
     if (collapseState.canCollapse && collapseState.collapsed) {
       body.classList.add("messageBody-collapsed", `messageBody-collapsed-${role}`);
@@ -11080,7 +11089,10 @@
     }
 
     const content = el("div", { className: role === "assistant" ? "messageBodyContent markdown" : "messageBodyContent" });
-    if (textToRender.trim()) {
+    if (questionReplies.length > 0) {
+      content.appendChild(renderCodexQuestionReplies(questionReplies));
+      body.appendChild(content);
+    } else if (textToRender.trim()) {
       if (role === "assistant") {
         renderAssistantMarkdownInto(content, textToRender, {
           cardKey,
@@ -14331,6 +14343,68 @@
       i = end + 3;
     }
     return out;
+  }
+
+  function getCodexQuestionReplies(item) {
+    const replies = item && item.questionReplies;
+    if (!Array.isArray(replies) || replies.length === 0 || replies.length > 32) return [];
+    const validated = [];
+    let totalLength = 0;
+    for (const reply of replies) {
+      if (!reply || typeof reply !== "object" || Array.isArray(reply)) return [];
+      if (typeof reply.question !== "string" || !reply.question.trim() || reply.question.length > 16384) return [];
+      if (typeof reply.answer !== "string" || reply.answer.length > 16384) return [];
+      const options = reply.options === undefined ? [] : reply.options;
+      if (!Array.isArray(options) || options.length > 64) return [];
+      if (options.some((option) => typeof option !== "string" || !option.trim() || option.length > 16384)) return [];
+      totalLength += reply.question.length + reply.answer.length + options.reduce((sum, option) => sum + option.length, 0);
+      if (totalLength > 1310720) return [];
+      const index = reply.selectedOptionIndex;
+      // A selection is evidence-based, including at the Webview message boundary.
+      const selectedOptionIndex = Number.isInteger(index) && index >= 0 && index < options.length &&
+        options[index] === reply.answer && options.filter((option) => option === reply.answer).length === 1
+        ? index : undefined;
+      validated.push({ question: reply.question, answer: reply.answer, options, selectedOptionIndex });
+    }
+    return validated;
+  }
+
+  function renderCodexQuestionReplies(replies) {
+    const group = el("div", { className: "questionReplies" });
+    for (const reply of replies) {
+      const card = el("section", { className: "questionReply" });
+      const questionLabel = el("div", { className: "questionReplyLabel" });
+      questionLabel.textContent = i18n.questionReplyQuestion || "";
+      card.appendChild(questionLabel);
+      const question = el("div", { className: "questionReplyQuestion" });
+      question.textContent = reply.question;
+      card.appendChild(question);
+      if (reply.options.length > 0) {
+        const options = el("ul", { className: "questionReplyOptions" });
+        for (const [index, text] of reply.options.entries()) {
+          const selected = index === reply.selectedOptionIndex;
+          const option = el("li", { className: selected ? "questionReplyOption questionReplyOption-selected" : "questionReplyOption" });
+          const label = el("span", { className: "questionReplyOptionText" });
+          label.textContent = text;
+          option.appendChild(label);
+          if (selected) {
+            const badge = el("span", { className: "questionReplySelected" });
+            badge.textContent = i18n.questionReplySelected || "";
+            option.appendChild(badge);
+          }
+          options.appendChild(option);
+        }
+        card.appendChild(options);
+      }
+      const answerLabel = el("div", { className: "questionReplyLabel" });
+      answerLabel.textContent = i18n.questionReplyAnswer || "";
+      card.appendChild(answerLabel);
+      const answer = el("div", { className: "questionReplyAnswer" });
+      answer.textContent = reply.answer || i18n.questionReplyEmptyAnswer || "";
+      card.appendChild(answer);
+      group.appendChild(card);
+    }
+    return group;
   }
 
   function getMessageTextToRender(item, role) {

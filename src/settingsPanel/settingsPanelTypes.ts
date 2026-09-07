@@ -98,6 +98,7 @@ export interface SettingsMaintenanceCardModel {
 export interface SettingsAboutModel {
   displayName: string;
   headerMetadata: string;
+  compactHeaderVersion: string;
   versionLabel: string;
   version: string;
   licenseLabel: string;
@@ -152,6 +153,7 @@ export interface SettingsPanelSnapshot {
   revision: number;
   language: "ja" | "en";
   title: string;
+  compactTitle: string;
   activeTargetId: string;
   targets: readonly SettingsTargetModel[];
   pages: readonly SettingsPageModel[];

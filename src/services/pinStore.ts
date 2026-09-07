@@ -9,6 +9,7 @@ import type {
 } from "../sessions/sessionTypes";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import type { SessionMetadataMutationCoordinator } from "./sessionMetadataMutationCoordinator";
+import { MementoSnapshotCache } from "./mementoSnapshotCache";
 
 // Stores pin state in Memento (globalState).
 export interface PinEntry {
@@ -29,17 +30,23 @@ export interface PinReconcileResult {
 export const PINS_KEY = "codexHistoryViewer.pins.v1";
 
 export class PinStore implements vscode.Disposable {
-  private readonly memento: vscode.Memento;
+  private readonly coordinator?: SessionMetadataMutationCoordinator;
+  private readonly cache: MementoSnapshotCache<{ entries: PinEntry[]; pathKeys: Set<string> }>;
   private readonly onDidChangeEmitter = new vscode.EventEmitter<void>();
   private mutationQueue: Promise<void> = Promise.resolve();
 
   public readonly onDidChange = this.onDidChangeEmitter.event;
 
-  constructor(memento: vscode.Memento, private readonly coordinator?: SessionMetadataMutationCoordinator) {
-    this.memento = memento;
+  constructor(memento: vscode.Memento, coordinator?: SessionMetadataMutationCoordinator) {
+    this.coordinator = coordinator;
+    this.cache = new MementoSnapshotCache(memento, PINS_KEY, (raw) => {
+      const entries = sanitizePins(raw);
+      return { entries, pathKeys: new Set(entries.map((entry) => entry.cacheKey)) };
+    });
   }
 
   public dispose(): void {
+    this.cache.invalidate();
     this.onDidChangeEmitter.dispose();
   }
 
@@ -82,34 +89,12 @@ export class PinStore implements vscode.Disposable {
   }
 
   public getAll(): PinEntry[] {
-    const raw = this.memento.get<unknown>(PINS_KEY);
-    if (!Array.isArray(raw)) return [];
-    return raw
-      .map((x) => {
-        if (!x || typeof x !== "object") return null;
-        const fsPath = (x as any).fsPath;
-        const pinnedAt = (x as any).pinnedAt;
-        if (typeof fsPath !== "string" || typeof pinnedAt !== "number") return null;
-        const identityKey = typeof (x as any).identityKey === "string" ? (x as any).identityKey.trim() : "";
-        const source = (x as any).source === "codex" || (x as any).source === "claude" ? (x as any).source : undefined;
-        const archiveState = sanitizeArchiveState((x as any).archiveState);
-        const rootKind = sanitizeRootKind((x as any).rootKind);
-        return {
-          fsPath,
-          cacheKey: normalizeCacheKey(fsPath),
-          ...(identityKey ? { identityKey } : {}),
-          ...(source ? { source } : {}),
-          ...(archiveState ? { archiveState } : {}),
-          ...(rootKind ? { rootKind } : {}),
-          pinnedAt,
-        } satisfies PinEntry;
-      })
-      .filter((x): x is PinEntry => x !== null);
+    return this.cache.read().entries.map((entry) => ({ ...entry }));
   }
 
   public isPinned(fsPath: string): boolean {
     const key = normalizeCacheKey(fsPath);
-    return this.getAll().some((p) => p.cacheKey === key);
+    return this.cache.read().pathKeys.has(key);
   }
 
   public async pin(fsPath: string): Promise<void> {
@@ -134,8 +119,7 @@ export class PinStore implements vscode.Disposable {
       }
 
       if (toAdd.length > 0) {
-        await this.memento.update(PINS_KEY, [...pins, ...toAdd]);
-        this.onDidChangeEmitter.fire();
+        await this.persist([...pins, ...toAdd]);
       }
 
       return { pinned: toAdd.length, skipped: normalized.length - toAdd.length };
@@ -160,8 +144,7 @@ export class PinStore implements vscode.Disposable {
       }
 
       if (toAdd.length > 0) {
-        await this.memento.update(PINS_KEY, compactPins([...pins, ...toAdd]));
-        this.onDidChangeEmitter.fire();
+        await this.persist(compactPins([...pins, ...toAdd]));
       }
 
       return {
@@ -215,8 +198,7 @@ export class PinStore implements vscode.Disposable {
 
       const compacted = compactPins(next);
       if (updated > 0 || compacted.length !== pins.length) {
-        await this.memento.update(PINS_KEY, compacted);
-        this.onDidChangeEmitter.fire();
+        await this.persist(compacted);
       }
 
       return { updated, moves };
@@ -234,8 +216,7 @@ export class PinStore implements vscode.Disposable {
       const current = this.getAll();
       const next = compactPins([...current, ...toRestore]);
       if (arePinsEqual(current, next)) return;
-      await this.memento.update(PINS_KEY, next);
-      this.onDidChangeEmitter.fire();
+      await this.persist(next);
     });
   }
 
@@ -245,14 +226,14 @@ export class PinStore implements vscode.Disposable {
       return;
     }
     const replace = async (): Promise<void> => {
-      await this.memento.update(PINS_KEY, compactPins(entries));
-      if (options?.notify !== false) this.onDidChangeEmitter.fire();
+      await this.persist(compactPins(entries), options);
     };
     if (options?.skipCoordinator === true) await replace();
     else await this.enqueueMutation(replace);
   }
 
   public notifyChanged(): void {
+    this.cache.invalidate();
     this.onDidChangeEmitter.fire();
   }
 
@@ -270,12 +251,16 @@ export class PinStore implements vscode.Disposable {
       const removedKeysCount = Array.from(removeKeys.values()).filter((k) => beforeKeys.has(k)).length;
 
       if (removedKeysCount > 0) {
-        await this.memento.update(PINS_KEY, nextPins);
-        this.onDidChangeEmitter.fire();
+        await this.persist(nextPins);
       }
 
       return { unpinned: removedKeysCount, skipped: normalized.length - removedKeysCount };
     });
+  }
+
+  private async persist(entries: readonly PinEntry[], options?: { notify?: boolean }): Promise<void> {
+    await this.cache.write(entries);
+    if (options?.notify !== false) this.onDidChangeEmitter.fire();
   }
 
   private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
@@ -287,6 +272,34 @@ export class PinStore implements vscode.Disposable {
     );
     return next;
   }
+}
+
+function sanitizePins(value: unknown): PinEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => sanitizePinEntry(entry))
+    .filter((entry): entry is PinEntry => entry !== null);
+}
+
+function sanitizePinEntry(value: unknown): PinEntry | null {
+  if (!value || typeof value !== "object") return null;
+  const fsPath = (value as any).fsPath;
+  const pinnedAt = (value as any).pinnedAt;
+  if (typeof fsPath !== "string" || typeof pinnedAt !== "number") return null;
+  const identityKey = typeof (value as any).identityKey === "string" ? (value as any).identityKey.trim() : "";
+  const source =
+    (value as any).source === "codex" || (value as any).source === "claude" ? (value as any).source : undefined;
+  const archiveState = sanitizeArchiveState((value as any).archiveState);
+  const rootKind = sanitizeRootKind((value as any).rootKind);
+  return {
+    fsPath,
+    cacheKey: normalizeCacheKey(fsPath),
+    ...(identityKey ? { identityKey } : {}),
+    ...(source ? { source } : {}),
+    ...(archiveState ? { archiveState } : {}),
+    ...(rootKind ? { rootKind } : {}),
+    pinnedAt,
+  };
 }
 
 function findByIdentityKeys(index: HistoryIndex, identityKeys: readonly string[]): SessionSummary | undefined {

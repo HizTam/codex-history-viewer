@@ -335,6 +335,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly sessionDataCommitSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private readonly sessionDataInFlightSequencesByPanel =
     new WeakMap<vscode.WebviewPanel, Set<number>>();
+  private readonly deferredAutoRefreshPathByPanel = new WeakMap<vscode.WebviewPanel, string>();
   private readonly liveRunningExpiryByPanel = new WeakMap<vscode.WebviewPanel, LiveRunningExpiry>();
   private readonly liveExpiryRefreshPendingByPanel = new WeakSet<vscode.WebviewPanel>();
   private readonly liveSessionObservationByPath = new Map<string, LiveSessionObservation>();
@@ -769,23 +770,19 @@ export class ChatPanelManager implements vscode.Disposable {
       if (!state || state.autoRefreshMode === "off") continue;
       if (!changedKeys.has(normalizeCacheKey(state.fsPath))) continue;
 
-      if (!this.readyByPanel.get(panel)) {
-        this.stateByPanel.set(panel, { ...state, pendingAutoRefresh: true });
-        continue;
-      }
       this.requestAutoRefresh(panel, state.autoRefreshMode);
     }
   }
 
   public flushPendingAutoRefreshPanels(): void {
     if (!vscode.window.state.focused) return;
+    // Retained hidden tabs also need pending updates after window focus returns.
     for (const panel of this.getOpenPanels()) {
       const state = this.stateByPanel.get(panel);
       if (
         !state?.pendingAutoRefresh ||
         state.autoRefreshMode === "off" ||
-        !this.readyByPanel.get(panel) ||
-        !panel.visible
+        !this.readyByPanel.get(panel)
       ) {
         continue;
       }
@@ -1060,6 +1057,7 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private clearSessionBoundPanelData(panel: vscode.WebviewPanel): void {
+    this.deferredAutoRefreshPathByPanel.delete(panel);
     this.cancelLiveRunningExpiry(panel);
     this.liveExpiryRefreshPendingByPanel.delete(panel);
     this.imageDataByPanel.delete(panel);
@@ -1133,20 +1131,7 @@ export class ChatPanelManager implements vscode.Disposable {
       });
     });
     panel.onDidChangeViewState(() => {
-      const viewStateRevision = (this.viewStateRevisionByPanel.get(panel) ?? 0) + 1;
-      this.viewStateRevisionByPanel.set(panel, viewStateRevision);
-      this.stableViewLayoutReadyPanels.delete(panel);
-      const viewStateDelivery = panel.webview.postMessage({
-        type: "viewState",
-        visible: panel.visible,
-        revision: viewStateRevision,
-      });
-      void Promise.resolve(viewStateDelivery).then(
-        (delivered) => {
-          if (!delivered) this.acceptStableViewLayoutReady(panel, viewStateRevision);
-        },
-        () => this.acceptStableViewLayoutReady(panel, viewStateRevision),
-      );
+      this.publishViewState(panel);
       const state = this.stateByPanel.get(panel);
       if (
         !this.stableViewLayoutCapablePanels.has(panel) &&
@@ -1175,6 +1160,7 @@ export class ChatPanelManager implements vscode.Disposable {
       this.sessionDataTransitionByPanel.delete(panel);
       this.sessionDataCommitSequenceByPanel.delete(panel);
       this.sessionDataInFlightSequencesByPanel.delete(panel);
+      this.deferredAutoRefreshPathByPanel.delete(panel);
       this.stableViewLayoutCapablePanels.delete(panel);
       this.stableViewLayoutReadyPanels.delete(panel);
       this.viewStateRevisionByPanel.delete(panel);
@@ -1445,6 +1431,8 @@ export class ChatPanelManager implements vscode.Disposable {
           this.stableViewLayoutReadyPanels.delete(panel);
         }
         this.readyByPanel.set(panel, true);
+        // Earlier visibility messages may have preceded the Webview listener.
+        this.publishViewState(panel);
         const detailMode = normalizeChatSessionDetailMode(msg?.detailMode);
         const restoreState = this.stateByPanel.get(panel);
         const shouldRestorePosition =
@@ -1785,6 +1773,7 @@ export class ChatPanelManager implements vscode.Disposable {
         };
         this.stateByPanel.set(panel, nextState);
         if (autoRefreshMode === "off") {
+          this.deferredAutoRefreshPathByPanel.delete(panel);
           this.cancelLiveRunningExpiry(panel);
           this.liveExpiryRefreshPendingByPanel.delete(panel);
         }
@@ -3730,6 +3719,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const inFlightSequences = this.sessionDataInFlightSequencesByPanel.get(panel);
     if (inFlightSequences?.delete(request.sequence) && inFlightSequences.size === 0) {
       this.sessionDataInFlightSequencesByPanel.delete(panel);
+      this.flushDeferredAutoRefresh(panel);
       this.flushPendingLiveExpiryRefresh(panel);
     }
   }
@@ -4352,6 +4342,10 @@ export class ChatPanelManager implements vscode.Disposable {
       crossSessionMessageTitle: t("chat.crossSession.title"),
       crossSessionMessageFrom: t("chat.crossSession.from"),
       crossSessionMessageTruncated: t("chat.crossSession.truncated"),
+      questionReplyQuestion: t("chat.questionReply.question"),
+      questionReplyAnswer: t("chat.questionReply.answer"),
+      questionReplySelected: t("chat.questionReply.selected"),
+      questionReplyEmptyAnswer: t("chat.questionReply.emptyAnswer"),
       roleUser: t("chat.role.user"),
       roleAssistant: t("chat.role.assistant"),
       roleDeveloper: t("chat.role.developer"),
@@ -5006,13 +5000,49 @@ export class ChatPanelManager implements vscode.Disposable {
     }
   }
 
+  private publishViewState(panel: vscode.WebviewPanel): void {
+    const viewStateRevision = (this.viewStateRevisionByPanel.get(panel) ?? 0) + 1;
+    this.viewStateRevisionByPanel.set(panel, viewStateRevision);
+    this.stableViewLayoutReadyPanels.delete(panel);
+    const viewStateDelivery = panel.webview.postMessage({
+      type: "viewState",
+      visible: panel.visible,
+      revision: viewStateRevision,
+    });
+    void Promise.resolve(viewStateDelivery).then(
+      (delivered) => {
+        if (!delivered) this.acceptStableViewLayoutReady(panel, viewStateRevision);
+      },
+      () => this.acceptStableViewLayoutReady(panel, viewStateRevision),
+    );
+  }
+
+  private flushDeferredAutoRefresh(panel: vscode.WebviewPanel): void {
+    const deferredPath = this.deferredAutoRefreshPathByPanel.get(panel);
+    this.deferredAutoRefreshPathByPanel.delete(panel);
+    const state = this.stateByPanel.get(panel);
+    if (
+      state &&
+      (state.pendingAutoRefresh || deferredPath === normalizeCacheKey(state.fsPath))
+    ) {
+      this.requestAutoRefresh(panel, state.autoRefreshMode);
+    }
+  }
+
   private requestAutoRefresh(panel: vscode.WebviewPanel, mode: ChatWebviewAutoRefreshMode): void {
     const state = this.stateByPanel.get(panel);
-    if (!state || state.autoRefreshMode === "off" || !this.readyByPanel.get(panel)) return;
+    if (!state || state.autoRefreshMode === "off") return;
+    if ((this.sessionDataInFlightSequencesByPanel.get(panel)?.size ?? 0) > 0) {
+      // Keep request identity intact until model loading and delivery have settled.
+      this.deferredAutoRefreshPathByPanel.set(panel, normalizeCacheKey(state.fsPath));
+      return;
+    }
     if (
-      panel.visible &&
-      this.stableViewLayoutCapablePanels.has(panel) &&
-      !this.stableViewLayoutReadyPanels.has(panel)
+      !this.readyByPanel.get(panel) ||
+      !vscode.window.state.focused ||
+      (panel.visible &&
+        this.stableViewLayoutCapablePanels.has(panel) &&
+        !this.stableViewLayoutReadyPanels.has(panel))
     ) {
       if (!state.pendingAutoRefresh) {
         this.stateByPanel.set(panel, { ...state, pendingAutoRefresh: true });

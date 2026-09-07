@@ -2,6 +2,7 @@ export type ToolDisplayMode = "detailsOnly" | "compactCards";
 
 export type NormalizedToolKind =
   | "bash"
+  | "exec"
   | "read"
   | "write"
   | "edit"
@@ -11,6 +12,7 @@ export type NormalizedToolKind =
   | "webFetch"
   | "imageGeneration"
   | "agent"
+  | "wait"
   | "unknown";
 
 export type ChatToolSeverity = "info" | "warning" | "error";

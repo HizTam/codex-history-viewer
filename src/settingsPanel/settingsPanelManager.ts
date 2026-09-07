@@ -642,7 +642,11 @@ export class SettingsPanelManager implements vscode.Disposable {
       } else {
         const command = MAINTENANCE_COMMANDS.get(request.actionId);
         if (!command) {
-          await this.postActionFailed(request.requestId, t("settingsPanel.error.invalidRequest"), generation);
+          await this.postMaintenanceFailed(
+            request.requestId,
+            t("settingsPanel.error.invalidRequest"),
+            generation
+          );
           return;
         }
         await vscode.commands.executeCommand(command);
@@ -652,7 +656,7 @@ export class SettingsPanelManager implements vscode.Disposable {
       const errorMessage = request.actionId === "openNativeSettings"
         ? t("settingsPanel.error.openNativeSettings")
         : t("settingsPanel.error.actionFailed");
-      await this.postActionFailed(request.requestId, errorMessage, generation);
+      await this.postMaintenanceFailed(request.requestId, errorMessage, generation);
     }
   }
 
@@ -670,8 +674,9 @@ export class SettingsPanelManager implements vscode.Disposable {
       }
     }
     if (configured.length === 0) {
-      await this.postMessage(
-        { type: "actionCompleted", requestId, message: t("settingsPanel.maintenance.reset.none") },
+      await this.postMaintenanceCompleted(
+        requestId,
+        t("settingsPanel.maintenance.reset.none"),
         generation
       );
       return;
@@ -694,7 +699,11 @@ export class SettingsPanelManager implements vscode.Disposable {
     for (const item of configured) {
       const latest = configuration.inspect<unknown>(item.definitionItem.relativeKey)?.globalValue;
       if (fingerprintValue(latest) !== item.fingerprint) {
-        await this.postActionFailed(requestId, t("settingsPanel.maintenance.reset.stale"), generation);
+        await this.postMaintenanceFailed(
+          requestId,
+          t("settingsPanel.maintenance.reset.stale"),
+          generation
+        );
         return;
       }
     }
@@ -728,7 +737,7 @@ export class SettingsPanelManager implements vscode.Disposable {
         }
       }
       await this.publishSnapshot(generation, true);
-      await this.postActionFailed(
+      await this.postMaintenanceFailed(
         requestId,
         rollbackFailed
           ? t("settingsPanel.maintenance.reset.partialFailed")
@@ -739,12 +748,9 @@ export class SettingsPanelManager implements vscode.Disposable {
     }
 
     await this.publishSnapshot(generation, true);
-    await this.postMessage(
-      {
-        type: "actionCompleted",
-        requestId,
-        message: t("settingsPanel.maintenance.reset.completed", configured.length)
-      },
+    await this.postMaintenanceCompleted(
+      requestId,
+      t("settingsPanel.maintenance.reset.completed", configured.length),
       generation
     );
   }
@@ -756,7 +762,11 @@ export class SettingsPanelManager implements vscode.Disposable {
   ): Promise<void> {
     const target = await this.resolveBackupOperationTarget(kind, "export");
     if (target === null) {
-      await this.postActionFailed(requestId, t("settingsPanel.maintenance.backup.targetUnavailable"), generation);
+      await this.postMaintenanceFailed(
+        requestId,
+        t("settingsPanel.maintenance.backup.targetUnavailable"),
+        generation
+      );
       return;
     }
     if (!target) {
@@ -779,7 +789,7 @@ export class SettingsPanelManager implements vscode.Disposable {
       }
       const validation = validateSettingValue(definitionItem, value);
       if (!validation.ok || validation.value === undefined) {
-        await this.postActionFailed(
+        await this.postMaintenanceFailed(
           requestId,
           t(
             "settingsPanel.maintenance.export.invalidSetting",
@@ -832,7 +842,7 @@ export class SettingsPanelManager implements vscode.Disposable {
       return;
     }
     if (!this.isSameTargetAvailable(target)) {
-      await this.postActionFailed(
+      await this.postMaintenanceFailed(
         requestId,
         t("settingsPanel.maintenance.backup.targetChanged"),
         generation
@@ -853,17 +863,26 @@ export class SettingsPanelManager implements vscode.Disposable {
     };
     const bytes = new TextEncoder().encode(JSON.stringify(payload, undefined, 2) + "\n");
     if (bytes.byteLength > MAX_SETTINGS_BACKUP_BYTES) {
-      await this.postActionFailed(requestId, t("settingsPanel.maintenance.export.tooLarge"), generation);
+      await this.postMaintenanceFailed(
+        requestId,
+        t("settingsPanel.maintenance.export.tooLarge"),
+        generation
+      );
       return;
     }
     try {
       await vscode.workspace.fs.writeFile(destination, bytes);
-      await this.postMessage(
-        { type: "actionCompleted", requestId, message: t("settingsPanel.maintenance.export.completed") },
+      await this.postMaintenanceCompleted(
+        requestId,
+        t("settingsPanel.maintenance.export.completed"),
         generation
       );
     } catch {
-      await this.postActionFailed(requestId, t("settingsPanel.maintenance.export.failed"), generation);
+      await this.postMaintenanceFailed(
+        requestId,
+        t("settingsPanel.maintenance.export.failed"),
+        generation
+      );
     }
   }
 
@@ -892,16 +911,28 @@ export class SettingsPanelManager implements vscode.Disposable {
     try {
       const stat = await vscode.workspace.fs.stat(selected[0]);
       if ((stat.type & vscode.FileType.File) === 0 || stat.size > MAX_SETTINGS_BACKUP_BYTES) {
-        await this.postActionFailed(requestId, t("settingsPanel.maintenance.import.invalidFile"), generation);
+        await this.postMaintenanceFailed(
+          requestId,
+          t("settingsPanel.maintenance.import.invalidFile"),
+          generation
+        );
         return;
       }
       fileBytes = await vscode.workspace.fs.readFile(selected[0]);
       if (fileBytes.byteLength > MAX_SETTINGS_BACKUP_BYTES) {
-        await this.postActionFailed(requestId, t("settingsPanel.maintenance.import.invalidFile"), generation);
+        await this.postMaintenanceFailed(
+          requestId,
+          t("settingsPanel.maintenance.import.invalidFile"),
+          generation
+        );
         return;
       }
     } catch {
-      await this.postActionFailed(requestId, t("settingsPanel.maintenance.import.readFailed"), generation);
+      await this.postMaintenanceFailed(
+        requestId,
+        t("settingsPanel.maintenance.import.readFailed"),
+        generation
+      );
       return;
     }
 
@@ -909,22 +940,38 @@ export class SettingsPanelManager implements vscode.Disposable {
     try {
       parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(fileBytes));
     } catch {
-      await this.postActionFailed(requestId, t("settingsPanel.maintenance.import.invalidFile"), generation);
+      await this.postMaintenanceFailed(
+        requestId,
+        t("settingsPanel.maintenance.import.invalidFile"),
+        generation
+      );
       return;
     }
     const backupTarget = this.validateSettingsBackup(parsed);
     if (!backupTarget) {
-      await this.postActionFailed(requestId, t("settingsPanel.maintenance.import.invalidFile"), generation);
+      await this.postMaintenanceFailed(
+        requestId,
+        t("settingsPanel.maintenance.import.invalidFile"),
+        generation
+      );
       return;
     }
     if (backupTarget.kind !== expectedKind) {
-      await this.postActionFailed(requestId, t("settingsPanel.maintenance.import.scopeMismatch"), generation);
+      await this.postMaintenanceFailed(
+        requestId,
+        t("settingsPanel.maintenance.import.scopeMismatch"),
+        generation
+      );
       return;
     }
 
     const target = await this.resolveBackupOperationTarget(expectedKind, "import");
     if (target === null) {
-      await this.postActionFailed(requestId, t("settingsPanel.maintenance.backup.targetUnavailable"), generation);
+      await this.postMaintenanceFailed(
+        requestId,
+        t("settingsPanel.maintenance.backup.targetUnavailable"),
+        generation
+      );
       return;
     }
     if (!target) {
@@ -955,12 +1002,9 @@ export class SettingsPanelManager implements vscode.Disposable {
       }
     }
     if (changes.length === 0) {
-      await this.postMessage(
-        {
-          type: "actionCompleted",
-          requestId,
-          message: t("settingsPanel.maintenance.import.noChanges", this.getTargetDisplayLabel(target))
-        },
+      await this.postMaintenanceCompleted(
+        requestId,
+        t("settingsPanel.maintenance.import.noChanges", this.getTargetDisplayLabel(target)),
         generation
       );
       return;
@@ -985,7 +1029,7 @@ export class SettingsPanelManager implements vscode.Disposable {
       return;
     }
     if (!this.isSameTargetAvailable(target)) {
-      await this.postActionFailed(
+      await this.postMaintenanceFailed(
         requestId,
         t("settingsPanel.maintenance.backup.targetChanged"),
         generation
@@ -995,7 +1039,11 @@ export class SettingsPanelManager implements vscode.Disposable {
     for (const change of changes) {
       const latest = this.readTargetValue(change.definitionItem, change.target);
       if (fingerprintValue(latest) !== change.fingerprint) {
-        await this.postActionFailed(requestId, t("settingsPanel.maintenance.import.stale"), generation);
+        await this.postMaintenanceFailed(
+          requestId,
+          t("settingsPanel.maintenance.import.stale"),
+          generation
+        );
         return;
       }
     }
@@ -1037,7 +1085,7 @@ export class SettingsPanelManager implements vscode.Disposable {
         }
       }
       await this.publishSnapshot(generation, true);
-      await this.postActionFailed(
+      await this.postMaintenanceFailed(
         requestId,
         rollbackFailed
           ? t("settingsPanel.maintenance.import.partialFailed")
@@ -1048,16 +1096,13 @@ export class SettingsPanelManager implements vscode.Disposable {
     }
 
     await this.publishSnapshot(generation, true);
-    await this.postMessage(
-      {
-        type: "actionCompleted",
-        requestId,
-        message: t(
-          "settingsPanel.maintenance.import.completed",
-          changes.length,
-          this.getTargetDisplayLabel(target)
-        )
-      },
+    await this.postMaintenanceCompleted(
+      requestId,
+      t(
+        "settingsPanel.maintenance.import.completed",
+        changes.length,
+        this.getTargetDisplayLabel(target)
+      ),
       generation
     );
   }
@@ -1245,6 +1290,34 @@ export class SettingsPanelManager implements vscode.Disposable {
     await this.postMessage({ type: "actionFailed", requestId, message }, generation);
   }
 
+  private async postMaintenanceCompleted(
+    requestId: number,
+    message: string,
+    generation: number
+  ): Promise<void> {
+    if (!this.isCurrentPanelGeneration(generation)) {
+      return;
+    }
+    await this.postMessage({ type: "actionCompleted", requestId, message: "" }, generation);
+    if (message && this.isCurrentPanelGeneration(generation)) {
+      void vscode.window.showInformationMessage(message);
+    }
+  }
+
+  private async postMaintenanceFailed(
+    requestId: number,
+    message: string,
+    generation: number
+  ): Promise<void> {
+    if (!this.isCurrentPanelGeneration(generation)) {
+      return;
+    }
+    await this.postMessage({ type: "actionFailed", requestId, message: "" }, generation);
+    if (this.isCurrentPanelGeneration(generation)) {
+      void vscode.window.showErrorMessage(message);
+    }
+  }
+
   private scheduleSnapshot(): void {
     if (!this.panel || this.disposed) {
       return;
@@ -1387,6 +1460,7 @@ export class SettingsPanelManager implements vscode.Disposable {
       revision: this.revision,
       language: resolveUiLanguage(),
       title: t("settingsPanel.title"),
+      compactTitle: t("settingsPanel.compactTitle"),
       activeTargetId: target.id,
       targets,
       pages,
@@ -1488,7 +1562,7 @@ export class SettingsPanelManager implements vscode.Disposable {
 
   private buildAboutModel(): SettingsAboutModel {
     const packageJson: unknown = this.context.extension.packageJSON;
-    const version = readPackageString(packageJson, "version") ?? "2.14.0";
+    const version = readPackageString(packageJson, "version") ?? "2.14.1";
     const licenseName = readPackageString(packageJson, "license") ?? "MIT";
     const currentYear = new Date().getFullYear();
     const copyrightEndYear = Number.isSafeInteger(currentYear) && currentYear >= COPYRIGHT_START_YEAR
@@ -1501,6 +1575,7 @@ export class SettingsPanelManager implements vscode.Disposable {
     return {
       displayName: t("settingsPanel.productName"),
       headerMetadata: t("settingsPanel.headerMetadata", version, licenseName, copyright),
+      compactHeaderVersion: t("settingsPanel.compactHeaderVersion", version),
       versionLabel: t("settingsPanel.about.version"),
       version,
       licenseLabel: t("settingsPanel.about.license"),

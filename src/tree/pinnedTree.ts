@@ -33,7 +33,7 @@ import {
   missingPinnedLabel,
   toTreeItemContextValue,
 } from "./treeNodes";
-import { getConfig } from "../settings";
+import { getConfig, type CodexHistoryViewerConfig } from "../settings";
 import { formatYmdHmInTimeZone } from "../utils/dateUtils";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import { normalizeProjectKey } from "../utils/fsUtils";
@@ -47,6 +47,7 @@ import {
 import {
   buildSessionHoverTooltip,
   formatSessionDateTimeForAxis,
+  resolveTreeItemTooltip,
   sessionDateLabelKeyForAxis,
   type SessionDateAxis,
 } from "./sessionTooltipUtils";
@@ -119,6 +120,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   private readonly canonicalProjectKeyCache = new Map<string, string>();
   private visibleEntriesCache: PinnedVisibleEntry[] | null = null;
   private projectEntriesByRelocationKey = new Map<string, PinnedVisibleEntry[]>();
+  private configSnapshot: Readonly<CodexHistoryViewerConfig> | null = null;
   private readonly emitter = new vscode.EventEmitter<TreeNode | undefined | null | void>();
   private initialLoadComplete = false;
   public readonly onDidChangeTreeData = this.emitter.event;
@@ -167,6 +169,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
   }
 
   public refresh(): void {
+    this.configSnapshot = null;
     this.canonicalProjectKeyCache.clear();
     this.clearVisibleEntriesCache();
     this.recomputeProjectFilterKeys();
@@ -272,14 +275,15 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 
   private matchesMissingPinnedSource(fsPath: string): boolean {
     if (this.sourceFilter === "all") return true;
-    const inferred = inferSourceFromFsPath(fsPath);
+    const inferred = inferSourceFromFsPath(fsPath, this.getConfigSnapshot());
     if (!inferred) return true;
     return inferred === this.sourceFilter;
   }
 
   private matchesMissingPinnedDisplayTarget(pin: PinEntry): boolean {
-    const archived = isArchivedPinEntry(pin);
-    if (archived && !getConfig().enableCodexArchivedSessions) return false;
+    const config = this.getConfigSnapshot();
+    const archived = isArchivedPinEntry(pin, config);
+    if (archived && !config.enableCodexArchivedSessions) return false;
     const hidden = this.hiddenSessionStore.isHidden({
       identityKey: pin.identityKey ?? "",
       cacheKey: pin.cacheKey,
@@ -310,33 +314,9 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       return item;
     }
     if (element instanceof SessionNode) {
-      // Truncate the tree title to ~20 full-width characters (40 half-width units) and append "...".
-      const shortTitle = truncateByDisplayWidth(element.session.displayTitle, 40, "...");
-      const annotation = this.annotationStore.get(element.session.fsPath);
-      const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(element.session));
-      const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
-      const dateAxis = getSessionDateAxisForPinnedSortMode(this.sortMode);
-      const config = getConfig();
-      const agentPresentation = config.agentRunsEnabled && element.session.source === "codex"
-        ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"))
-        : undefined;
-      const hidden = this.hiddenSessionStore.isHidden(element.session);
-      const timestamp = formatSessionDateTimeForAxis(element.session, dateAxis);
-      const rowLabel = buildSessionRowLabelPresentation(
-        timestamp,
-        shortTitle,
-        config.sessionRow.showTimestamp,
-      );
+      const presentation = this.getSessionTreePresentation(element.session);
+      const { config, rowLabel, descriptionPresentation, agentPresentation, hidden } = presentation;
       const item = new vscode.TreeItem(rowLabel.label);
-      const descriptionPresentation = buildSessionDescriptionPresentation(
-        element.session,
-        annotation?.tags ?? [],
-        projectAlias,
-        projectDisplayCwd,
-        agentPresentation,
-        hidden,
-        config.sessionRow.showProject,
-      );
       item.description = descriptionPresentation.rowDescription || undefined;
       item.contextValue = toTreeItemContextValue(
         element,
@@ -358,20 +338,6 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         title: "",
         arguments: [element],
       };
-
-      item.tooltip = buildSessionHoverTooltip({
-        session: element.session,
-        annotation: annotation ? { tags: annotation.tags, note: annotation.note } : null,
-        label: rowLabel.tooltipLabel,
-        description: descriptionPresentation.tooltipDescription,
-        mode: config.previewTooltipMode,
-        projectAlias,
-        projectDisplayCwd,
-        primaryDateTime: getPinnedSessionTooltipDateTime(element.session, dateAxis),
-        primaryDateLabelKey: getPinnedSessionTooltipDateLabelKey(dateAxis),
-        agentPresentation,
-        hidden,
-      });
       return item;
     }
     if (element instanceof MissingPinnedNode) {
@@ -398,6 +364,87 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       return item;
     }
     return new vscode.TreeItem("?");
+  }
+
+  public resolveTreeItem(
+    item: vscode.TreeItem,
+    element: TreeNode,
+    token: vscode.CancellationToken,
+  ): vscode.TreeItem {
+    if (!(element instanceof SessionNode)) return item;
+    return resolveTreeItemTooltip(item, token, () => this.buildSessionTooltip(element.session));
+  }
+
+  private buildSessionTooltip(session: SessionSummary): string | vscode.MarkdownString {
+    const {
+      config,
+      rowLabel,
+      annotation,
+      projectDisplayCwd,
+      projectAlias,
+      dateAxis,
+      agentPresentation,
+      hidden,
+      descriptionPresentation,
+    } = this.getSessionTreePresentation(session);
+    return buildSessionHoverTooltip({
+      session,
+      annotation: annotation ? { tags: annotation.tags, note: annotation.note } : null,
+      label: rowLabel.tooltipLabel,
+      description: descriptionPresentation.tooltipDescription,
+      mode: config.previewTooltipMode,
+      projectAlias,
+      projectDisplayCwd,
+      primaryDateTime: getPinnedSessionTooltipDateTime(session, dateAxis, config.historyDateBasis),
+      primaryDateLabelKey: getPinnedSessionTooltipDateLabelKey(dateAxis, config.historyDateBasis),
+      agentPresentation,
+      hidden,
+    });
+  }
+
+  private getSessionTreePresentation(session: SessionSummary) {
+    // Build row metadata from current stores so a refreshed item never reuses stale tooltip state.
+    const shortTitle = truncateByDisplayWidth(session.displayTitle, 40, "...");
+    const annotation = this.annotationStore.get(session.fsPath);
+    const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(session));
+    const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
+    const dateAxis = getSessionDateAxisForPinnedSortMode(this.sortMode);
+    const config = this.getConfigSnapshot();
+    const agentPresentation = config.agentRunsEnabled && session.source === "codex"
+      ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent"))
+      : undefined;
+    const hidden = this.hiddenSessionStore.isHidden(session);
+    const timestamp = formatSessionDateTimeForAxis(session, dateAxis);
+    const rowLabel = buildSessionRowLabelPresentation(
+      timestamp,
+      shortTitle,
+      config.sessionRow.showTimestamp,
+    );
+    const descriptionPresentation = buildSessionDescriptionPresentation(
+      session,
+      annotation?.tags ?? [],
+      projectAlias,
+      projectDisplayCwd,
+      agentPresentation,
+      hidden,
+      config.sessionRow.showProject,
+    );
+    return {
+      config,
+      rowLabel,
+      annotation,
+      projectDisplayCwd,
+      projectAlias,
+      dateAxis,
+      agentPresentation,
+      hidden,
+      descriptionPresentation,
+    };
+  }
+
+  private getConfigSnapshot(): Readonly<CodexHistoryViewerConfig> {
+    if (this.configSnapshot === null) this.configSnapshot = getConfig();
+    return this.configSnapshot;
   }
 
   public async getChildren(element?: TreeNode): Promise<TreeNode[]> {
@@ -865,25 +912,35 @@ function getSessionDateAxisForPinnedSortMode(sortMode: PinnedSortMode): SessionD
   return "display";
 }
 
-function getPinnedSessionTooltipDateLabelKey(axis: SessionDateAxis) {
-  if (!isPinnedSessionDateAxisDifferentFromBasis(axis)) return undefined;
-  return sessionDateLabelKeyForAxis(getDateBasisAxis());
+function getPinnedSessionTooltipDateLabelKey(
+  axis: SessionDateAxis,
+  historyDateBasis: CodexHistoryViewerConfig["historyDateBasis"],
+) {
+  if (!isPinnedSessionDateAxisDifferentFromBasis(axis, historyDateBasis)) return undefined;
+  return sessionDateLabelKeyForAxis(getDateBasisAxis(historyDateBasis));
 }
 
-function getPinnedSessionTooltipDateTime(session: SessionSummary, axis: SessionDateAxis): string {
+function getPinnedSessionTooltipDateTime(
+  session: SessionSummary,
+  axis: SessionDateAxis,
+  historyDateBasis: CodexHistoryViewerConfig["historyDateBasis"],
+): string {
   return formatSessionDateTimeForAxis(
     session,
-    isPinnedSessionDateAxisDifferentFromBasis(axis) ? getDateBasisAxis() : axis,
+    isPinnedSessionDateAxisDifferentFromBasis(axis, historyDateBasis) ? getDateBasisAxis(historyDateBasis) : axis,
   );
 }
 
-function isPinnedSessionDateAxisDifferentFromBasis(axis: SessionDateAxis): boolean {
+function isPinnedSessionDateAxisDifferentFromBasis(
+  axis: SessionDateAxis,
+  historyDateBasis: CodexHistoryViewerConfig["historyDateBasis"],
+): boolean {
   if (axis === "display") return false;
-  return axis !== getDateBasisAxis();
+  return axis !== getDateBasisAxis(historyDateBasis);
 }
 
-function getDateBasisAxis(): SessionDateAxis {
-  return getConfig().historyDateBasis === "lastActivity" ? "lastActivity" : "started";
+function getDateBasisAxis(historyDateBasis: CodexHistoryViewerConfig["historyDateBasis"]): SessionDateAxis {
+  return historyDateBasis === "lastActivity" ? "lastActivity" : "started";
 }
 
 function formatProjectLatestLabel(entry: PinnedVisibleEntry | null, sortMode: PinnedSortMode): string {
@@ -985,11 +1042,13 @@ function normalizeSourceFilter(value: SessionSourceFilter): SessionSourceFilter 
   return "all";
 }
 
-function inferSourceFromFsPath(fsPath: string): SessionSource | null {
-  const cfg = getConfig();
-  if (isPathInsideRoot(fsPath, cfg.sessionsRoot)) return "codex";
-  if (isPathInsideRoot(fsPath, cfg.codexArchivedSessionsRoot)) return "codex";
-  if (isPathInsideRoot(fsPath, cfg.claudeSessionsRoot)) return "claude";
+function inferSourceFromFsPath(
+  fsPath: string,
+  config: Pick<CodexHistoryViewerConfig, "sessionsRoot" | "codexArchivedSessionsRoot" | "claudeSessionsRoot">,
+): SessionSource | null {
+  if (isPathInsideRoot(fsPath, config.sessionsRoot)) return "codex";
+  if (isPathInsideRoot(fsPath, config.codexArchivedSessionsRoot)) return "codex";
+  if (isPathInsideRoot(fsPath, config.claudeSessionsRoot)) return "claude";
 
   const base = path.basename(fsPath).toLowerCase();
   if (base.startsWith("rollout-")) return "codex";
@@ -997,11 +1056,13 @@ function inferSourceFromFsPath(fsPath: string): SessionSource | null {
   return null;
 }
 
-function isArchivedPinEntry(pin: PinEntry): boolean {
-  const cfg = getConfig();
+function isArchivedPinEntry(
+  pin: PinEntry,
+  config: Pick<CodexHistoryViewerConfig, "codexArchivedSessionsRoot">,
+): boolean {
   if (pin.archiveState === "archived") return true;
   if (pin.rootKind === "codexArchivedSessions") return true;
-  return isPathInsideRoot(pin.fsPath, cfg.codexArchivedSessionsRoot);
+  return isPathInsideRoot(pin.fsPath, config.codexArchivedSessionsRoot);
 }
 
 function isPathInsideRoot(fsPath: string, rootPath: string): boolean {

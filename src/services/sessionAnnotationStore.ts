@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import type { SessionMetadataMutationCoordinator } from "./sessionMetadataMutationCoordinator";
+import { MementoSnapshotCache } from "./mementoSnapshotCache";
 
 export interface SessionAnnotation {
   fsPath: string;
@@ -19,31 +20,38 @@ export const ANNOTATION_KEY = "codexHistoryViewer.sessionAnnotations.v1";
 
 // Stores per-session tags/notes in Memento.
 export class SessionAnnotationStore implements vscode.Disposable {
-  private readonly memento: vscode.Memento;
+  private readonly coordinator?: SessionMetadataMutationCoordinator;
+  private readonly cache: MementoSnapshotCache<{ entries: SessionAnnotation[]; byPathKey: Map<string, SessionAnnotation> }>;
   private readonly onDidChangeEmitter = new vscode.EventEmitter<void>();
+  private mutationQueue: Promise<void> = Promise.resolve();
 
   public readonly onDidChange = this.onDidChangeEmitter.event;
 
-  constructor(memento: vscode.Memento, private readonly coordinator?: SessionMetadataMutationCoordinator) {
-    this.memento = memento;
+  constructor(memento: vscode.Memento, coordinator?: SessionMetadataMutationCoordinator) {
+    this.coordinator = coordinator;
+    this.cache = new MementoSnapshotCache(memento, ANNOTATION_KEY, (raw) => {
+      const entries = sanitizeAnnotations(raw);
+      const byPathKey = new Map<string, SessionAnnotation>();
+      for (const entry of entries) {
+        if (!byPathKey.has(entry.cacheKey)) byPathKey.set(entry.cacheKey, entry);
+      }
+      return { entries, byPathKey };
+    });
   }
 
   public dispose(): void {
+    this.cache.invalidate();
     this.onDidChangeEmitter.dispose();
   }
 
   public get(fsPath: string): SessionAnnotation | null {
     const key = normalizeCacheKey(fsPath);
-    return this.getAll().find((x) => x.cacheKey === key) ?? null;
+    const annotation = this.cache.read().byPathKey.get(key);
+    return annotation ? cloneAnnotation(annotation) : null;
   }
 
   public getAll(): SessionAnnotation[] {
-    const raw = this.memento.get<unknown>(ANNOTATION_KEY);
-    if (!Array.isArray(raw)) return [];
-    return raw
-      .map((x) => sanitizeAnnotation(x))
-      .filter((x): x is SessionAnnotation => x !== null)
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+    return this.cache.read().entries.map((entry) => cloneAnnotation(entry));
   }
 
   public listTagStats(): AnnotationTagStat[] {
@@ -133,6 +141,7 @@ export class SessionAnnotationStore implements vscode.Disposable {
   }
 
   public notifyChanged(): void {
+    this.cache.invalidate();
     this.onDidChangeEmitter.fire();
   }
 
@@ -238,13 +247,21 @@ export class SessionAnnotationStore implements vscode.Disposable {
   }
 
   private async persist(values: readonly SessionAnnotation[], options?: { notify?: boolean }): Promise<void> {
-    await this.memento.update(ANNOTATION_KEY, compactAnnotations(values));
+    const compacted = compactAnnotations(values);
+    await this.cache.write(compacted);
     if (options?.notify !== false) this.onDidChangeEmitter.fire();
   }
 
   private runMutation<T>(operation: () => Promise<T>): Promise<T> {
-    return this.coordinator ? this.coordinator.runExclusive(operation) : operation();
+    if (this.coordinator) return this.coordinator.runExclusive(operation);
+    const next = this.mutationQueue.then(operation, operation);
+    this.mutationQueue = next.then(() => undefined, () => undefined);
+    return next;
   }
+}
+
+function cloneAnnotation(value: SessionAnnotation): SessionAnnotation {
+  return { ...value, tags: [...value.tags] };
 }
 
 function sanitizeAnnotation(value: unknown): SessionAnnotation | null {
@@ -303,8 +320,13 @@ function isSameAnnotation(
 }
 
 function compactAnnotations(values: readonly SessionAnnotation[]): SessionAnnotation[] {
-  return values
-    .map((x) => sanitizeAnnotation(x))
-    .filter((x): x is SessionAnnotation => x !== null)
+  return sanitizeAnnotations(values);
+}
+
+function sanitizeAnnotations(value: unknown): SessionAnnotation[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => sanitizeAnnotation(entry))
+    .filter((entry): entry is SessionAnnotation => entry !== null)
     .sort((a, b) => b.updatedAt - a.updatedAt);
 }
