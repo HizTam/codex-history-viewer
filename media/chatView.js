@@ -24,6 +24,11 @@
   const btnBranchMap = document.getElementById("btnBranchMap");
   const btnAgentRuns = document.getElementById("btnAgentRuns");
   const btnReload = document.getElementById("btnReload");
+  const rolloutNoticeEl = document.getElementById("rolloutNotice");
+  const rolloutNoticeTextEl = document.getElementById("rolloutNoticeText");
+  const btnSwitchRollout = document.getElementById("btnSwitchRollout");
+  let rolloutNoticeToken = "";
+  let rolloutSwitchPending = false;
   const pageSearchBarEl = document.getElementById("pageSearchBar");
   const pageSearchResizeHandleEl = document.getElementById("pageSearchResizeHandle");
   const pageSearchTitleEl = document.getElementById("pageSearchTitle");
@@ -762,6 +767,21 @@
     requestReload();
   });
 
+  btnSwitchRollout?.addEventListener("click", requestSwitchCodexRollout);
+
+  function requestSwitchCodexRollout() {
+    if (!rolloutNoticeToken || rolloutSwitchPending || !sessionInfoSnapshot) return;
+    rolloutSwitchPending = true;
+    if (btnSwitchRollout) btnSwitchRollout.disabled = true;
+    updateResumeToolbarSafely();
+    vscode.postMessage({
+      type: "switchCodexRollout",
+      token: rolloutNoticeToken,
+      sessionInfoRevision: sessionInfoSnapshot.revision,
+      scrollY: scrollRootEl?.scrollTop || 0,
+    });
+  }
+
   btnToggleDetails.addEventListener("click", () => {
     const nextShowDetails = !showDetails;
     const anchor = captureTimelineScrollAnchor();
@@ -1166,6 +1186,18 @@
       );
       return;
     }
+    if (msg.type === "codexRolloutNotice" || msg.type === "codexRolloutSwitchFailed") {
+      if (!sessionInfoSnapshot || msg.sessionInfoRevision !== sessionInfoSnapshot.revision) return;
+      if (msg.type === "codexRolloutNotice") {
+        applyRolloutNotice(msg.notice);
+      } else {
+        rolloutSwitchPending = false;
+        if (btnSwitchRollout) btnSwitchRollout.disabled = false;
+        updateResumeToolbarSafely();
+        showToast(i18n.rolloutSwitchFailed || "");
+      }
+      return;
+    }
     if (msg.type === "branchSwitchPending") {
       if (Number(msg.requestId) !== branchSwitchPendingRequestId) return;
       branchSwitchPending = true;
@@ -1260,6 +1292,10 @@
         (previousModelPath && nextModelPath && previousModelPath !== nextModelPath) ||
         (previousModelIdentity && nextModelIdentity && previousModelIdentity !== nextModelIdentity)
       );
+      const restoresReplacedRollout = Boolean(
+        msg.rolloutReplaced === true && sessionChanged &&
+        previousModelIdentity.startsWith("id:codex:") && previousModelIdentity === nextModelIdentity
+      );
       if (sessionChanged) {
         if (agentRunsOverlayOpen) closeAgentRunsOverlay({ restoreFocus: false });
         if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
@@ -1299,6 +1335,8 @@
       currentModelRenderFingerprint = incomingModelFingerprint;
       i18n = msg.i18n || {};
       sessionInfoSnapshot = normalizeSessionInfoSnapshot(msg.sessionInfo);
+      rolloutSwitchPending = false;
+      applyRolloutNotice(msg.rolloutNotice);
       applyResumeSnapshotSafely(msg.cliResume, { fromSessionData: true, update: false });
       dateTime = msg.dateTime || {};
       panelKind = normalizePanelKind(msg.panelKind, msg.isPreview);
@@ -1467,6 +1505,10 @@
         } else if (!restoredDetailAnchor) {
           if (typeof restoreScrollY === "number") restoreScroll(restoreScrollY, createRestoreCompletion().callback);
         }
+      } else if (restoresReplacedRollout && (autoScrollToBottom || typeof restoreScrollY === "number")) {
+        // Restore the viewport without reusing selections for edited message numbers.
+        if (autoScrollToBottom) restoreScrollToBottom(createRestoreCompletion().callback);
+        else restoreScroll(restoreScrollY, createRestoreCompletion().callback);
       } else if (revealTarget) {
         revealPatchTarget(revealTarget, createRestoreCompletion().callback);
       } else if (typeof msg.revealMessageIndex === "number") {
@@ -1912,6 +1954,7 @@
         version: 1,
         source: getCurrentResumeSource(),
         archived: isArchivedCodexSession(),
+        mainline: Boolean(rolloutNoticeToken),
         presentationPending: resumePresentationPending,
         hiddenPendingSessionData: resumeSessionDataPending && !resumeSnapshot,
         snapshot: resumeSnapshot
@@ -2010,6 +2053,29 @@
   function updateResumeToolbar() {
     const source = getCurrentResumeSource();
     const archivedCodexSession = isArchivedCodexSession();
+    if (source === "codex" && rolloutNoticeToken) {
+      const available = !rolloutSwitchPending && Boolean(sessionInfoSnapshot) && !resumeSessionDataPending;
+      setResumeActionHidden(false);
+      if (resumeActionEl instanceof HTMLElement) {
+        resumeActionEl.dataset.split = "false";
+        resumeActionEl.setAttribute("aria-label", getRequiredResumeUiText(i18n.rolloutSwitch));
+      }
+      if (btnResumeInCodex instanceof HTMLButtonElement) {
+        btnResumeInCodex.hidden = false;
+        btnResumeInCodex.disabled = !available;
+        btnResumeInCodex.setAttribute("aria-disabled", available ? "false" : "true");
+        btnResumeInCodex.dataset.resumeMethod = "mainline";
+        setToolbarButtonWithIcon(btnResumeInCodex, getRequiredResumeUiText(i18n.rolloutSwitch), RESUME_ICON_SVG);
+        btnResumeInCodex.title = getRequiredResumeUiText(i18n.rolloutSwitchTooltip);
+        btnResumeInCodex.setAttribute("aria-label", btnResumeInCodex.title);
+      }
+      if (btnResumeMenu instanceof HTMLButtonElement) {
+        btnResumeMenu.hidden = true;
+        btnResumeMenu.setAttribute("aria-expanded", "false");
+      }
+      closeResumeMethodMenu();
+      return;
+    }
     if (!source || (resumeSessionDataPending && !resumeSnapshot)) {
       setResumeActionHidden(true);
       return;
@@ -2113,6 +2179,10 @@
   }
 
   function handleResumePrimaryClick() {
+    if (getCurrentResumeSource() === "codex" && rolloutNoticeToken) {
+      requestSwitchCodexRollout();
+      return;
+    }
     if (resumePresentationPending) return;
     if (isArchivedCodexSession()) {
       persistCurrentChatOpenPosition({ immediate: true });
@@ -2135,6 +2205,7 @@
       (source !== "codex" && source !== "claude") ||
       !target ||
       (method !== "extension" && method !== "cli") ||
+      (source === "codex" && Boolean(rolloutNoticeToken)) ||
       resumePresentationPending ||
       resumeSnapshot?.revision !== resumeRevision ||
       resumeSnapshot?.[source] !== target ||
@@ -2161,6 +2232,7 @@
 
   function showResumeMethodMenu() {
     const source = getCurrentResumeSource();
+    if (source === "codex" && rolloutNoticeToken) return;
     const target = source ? resumeSnapshot?.[source] : null;
     if (
       !source ||
@@ -2237,6 +2309,7 @@
   }
 
   function updateToolbar() {
+    applyRolloutNotice({ token: rolloutNoticeToken });
     const isClaudeSession = !!(model && model.meta && model.meta.historySource === "claude");
     const isCodexSession = !!(model && model.meta && model.meta.historySource === "codex");
     updateResumeToolbarSafely();
@@ -2796,6 +2869,15 @@
       );
       heading.appendChild(ordinal);
       accessibleLabels.push(ordinal.textContent);
+    }
+    const historyKindLabel = occurrence.historyKind === "beforeEdit" ? i18n.branchBeforeEdit
+      : occurrence.historyKind === "afterEdit" ? i18n.branchAfterEdit
+        : occurrence.historyKind === "fork" ? i18n.branchFork : "";
+    if (typeof historyKindLabel === "string" && historyKindLabel) {
+      const kindLabel = el("span", { className: "branchChoiceOrdinal" });
+      kindLabel.textContent = historyKindLabel;
+      heading.appendChild(kindLabel);
+      accessibleLabels.push(historyKindLabel);
     }
     if (heading.childElementCount > 0) content.appendChild(heading);
     const historyEnd = occurrence.historyEnd;
@@ -5687,6 +5769,7 @@
     return [{
       id,
       sessionLabel: String(raw.sessionLabel || "").slice(0, 512),
+      historyKind: ["beforeEdit", "afterEdit", "fork"].includes(raw.historyKind) ? raw.historyKind : undefined,
       isCurrent: raw.isCurrent === true,
       historyFirst: normalizeBranchAnchor(raw.historyFirst),
       preBranch: normalizeBranchAnchor(raw.preBranch),
@@ -5708,6 +5791,23 @@
       timestampIso: typeof raw.timestampIso === "string" ? raw.timestampIso.slice(0, 128) : "",
       preview: typeof raw.preview === "string" ? raw.preview.slice(0, 6000) : "",
     };
+  }
+
+  // A notice never changes the displayed model or accepts a path from the page.
+  function applyRolloutNotice(notice) {
+    const token = notice && typeof notice.token === "string" && /^[a-f0-9]{64}$/.test(notice.token) ? notice.token : "";
+    const resumeTargetChanged = Boolean(token) !== Boolean(rolloutNoticeToken);
+    if (token !== rolloutNoticeToken) rolloutSwitchPending = false;
+    rolloutNoticeToken = token;
+    if (resumeTargetChanged) {
+      closeResumeMethodMenu();
+      updateResumeToolbarSafely();
+    }
+    if (!rolloutNoticeEl || !rolloutNoticeTextEl || !btnSwitchRollout) return;
+    rolloutNoticeEl.hidden = !token;
+    rolloutNoticeTextEl.textContent = i18n.rolloutChanged || "";
+    btnSwitchRollout.textContent = i18n.rolloutSwitch || "";
+    btnSwitchRollout.disabled = rolloutSwitchPending;
   }
 
   function sanitizeBranchCursor(value) {
@@ -7805,6 +7905,9 @@
     const role = resolvePageSearchTextRole(element);
     if (options.roleFilterActive === true && (!role || !pageSearchSelectedRoles.has(role))) return false;
 
+    // Terminal output remains searchable while its disclosure is closed.
+    if (element.closest(".terminalOutputCard .systemEventOutput")) return true;
+
     const closedDetails = element.closest("details:not([open])");
     if (closedDetails) {
       const summary = element.closest("summary");
@@ -7897,7 +8000,7 @@
       if (bubble.classList.contains("tool")) return "tool";
       return "";
     }
-    if (element.closest(".toolCard, .patchGroupCard, .patchEntry, .patchDiffBlock")) return "tool";
+    if (element.closest(".toolCard, .patchGroupCard, .patchEntry, .patchDiffBlock, .terminalOutputCard")) return "tool";
     return "";
   }
 
@@ -8024,6 +8127,8 @@
       }
       if (reveal) {
         if (requestPageSearchRevealRender(activeResult, safeIndex, options)) return;
+        const terminalCard = activeTarget.closest("details.terminalOutputCard");
+        if (terminalCard instanceof HTMLDetailsElement) terminalCard.open = true;
         activeTarget.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
       }
     }
@@ -8304,6 +8409,10 @@
     }
 
     const crossSessionCard = mark instanceof HTMLElement ? mark.closest(".crossSessionMessageCard") : null;
+    const terminalCard = mark instanceof HTMLElement ? mark.closest(".terminalOutputCard") : null;
+    if (terminalCard instanceof HTMLElement) {
+      return { title: getSafeUiText(i18n.terminalOutputTitle, ""), meta: `#${terminalCard.dataset.messageIndex || ""}`, lineNumber: "" };
+    }
     if (crossSessionCard instanceof HTMLElement) {
       const rawMessageIndex = crossSessionCard.dataset.messageIndex
         ? Number(crossSessionCard.dataset.messageIndex)
@@ -10839,6 +10948,7 @@
   }
 
   function renderSystemEvent(item, cardKey) {
+    if (item && item.kind === "terminalOutput") return renderTerminalOutputEvent(item, cardKey);
     if (item && item.kind === "localCommandOutput") {
       return renderLocalCommandOutputEvent(item, cardKey);
     }
@@ -10916,12 +11026,71 @@
     return row;
   }
 
+  function renderTerminalOutputEvent(item, cardKey) {
+    if (!item || item.source !== "claude" || !Number.isSafeInteger(item.messageIndex) || item.messageIndex <= 0) return null;
+    const fields = [
+      ["stdout", i18n.terminalOutputStdout],
+      ["stderr", i18n.terminalOutputStderr],
+      ["exitCode", i18n.terminalOutputExitCode],
+    ].filter(([key]) => typeof item[key] === "string");
+    if (fields.length === 0) return null;
+    const messageIndex = item.messageIndex;
+    const title = getSafeUiText(i18n.terminalOutputTitle, "");
+    const row = el("div", { className: "row systemEvent terminalOutput" });
+    const card = el("details", { className: "systemEventCard systemEventCard-terminalOutput terminalOutputCard" });
+    card.id = `msg-${messageIndex}`;
+    card.dataset.messageIndex = String(messageIndex);
+    card.open = expandedMessageIndexes.has(messageIndex);
+    card.addEventListener("toggle", () => {
+      if (card.open) expandedMessageIndexes.add(messageIndex);
+      else expandedMessageIndexes.delete(messageIndex);
+    });
+    applyTimelineCardWidthState(card, cardKey);
+    const summary = el("summary", { className: "systemEventSummary systemEventSummary-expandable" });
+    const disclosure = el("span", { className: "systemEventDisclosure", textContent: "›" });
+    disclosure.setAttribute("aria-hidden", "true");
+    summary.appendChild(disclosure);
+    summary.appendChild(el("span", { className: "systemEventBadge", textContent: title }));
+    summary.appendChild(el("span", { className: "systemEventMeta", textContent: `#${messageIndex}` }));
+    if (typeof item.timestampIso === "string" && item.timestampIso.trim()) {
+      const stamp = el("span", { className: "systemEventMeta", textContent: formatIsoYmdHms(item.timestampIso) });
+      stamp.title = item.timestampIso;
+      summary.appendChild(stamp);
+    }
+    const copy = el("button", { type: "button", className: "iconBtn" });
+    copy.title = i18n.copyMessageTooltip || i18n.copy || "Copy";
+    copy.setAttribute("aria-label", copy.title);
+    copy.innerHTML = COPY_ICON_SVG;
+    const values = fields.map(([key]) => item[key].slice(0, key === "exitCode" ? 64 : 64000));
+    copy.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      vscode.postMessage({ type: "copy", text: values.filter(value => value.length > 0).join("\n") });
+    });
+    const actions = el("div", { className: "cardHeaderActions" });
+    actions.appendChild(copy);
+    actions.appendChild(createTimelineCardWidthButton(cardKey, card));
+    summary.appendChild(actions);
+    card.appendChild(summary);
+    fields.forEach(([, label], index) => {
+      card.appendChild(el("div", { className: "terminalOutputLabel", textContent: getSafeUiText(label, "") }));
+      card.appendChild(el("pre", { className: "systemEventOutput", textContent: values[index] }));
+    });
+    if (item.truncated === true || fields.some(([key], index) => item[key].length > values[index].length)) {
+      card.appendChild(el("div", { className: "systemEventDescription", textContent: getSafeUiText(i18n.terminalOutputTruncated, "") }));
+    }
+    row.appendChild(card);
+    return row;
+  }
+
   function normalizeSystemEventKind(item) {
+    if (item && item.kind === "terminalOutput") return "terminalOutput";
     if (item && item.kind === "localCommandOutput") return "localCommandOutput";
     return item && item.kind === "requestInterrupted" ? "interrupted" : "generic";
   }
 
   function getSystemEventBadgeText(item) {
+    if (item && item.kind === "terminalOutput") return getSafeUiText(i18n.terminalOutputTitle, "");
     if (item && item.kind === "localCommandOutput") {
       return getSafeUiText(i18n.systemEventLocalCommandBadge, "Local command");
     }
@@ -11044,6 +11213,14 @@
     const roleTag = el("span", { className: "tag" });
     roleTag.textContent = role;
     metaTags.appendChild(roleTag);
+    if (role === "user" && item.isTerminalInput === true) {
+      const terminalInputTag = el("span", {
+        className: "tag terminalInputTag",
+        textContent: getSafeUiText(i18n.terminalInputBadge, ""),
+      });
+      terminalInputTag.dataset.pageSearchIgnore = "true";
+      metaTags.appendChild(terminalInputTag);
+    }
     if (typeof item.messageIndex === "number") {
       const indexTag = el("span", { className: "tag" });
       indexTag.textContent = `#${item.messageIndex}`;
@@ -14472,7 +14649,9 @@
       const scope = normalizePatchGroupKeyPart(item && item.scope) || "scope";
       const timestampIso = normalizePatchGroupKeyPart(item && item.timestampIso);
       const outputSignature =
-        kind === "localCommandOutput" && item && typeof item.output === "string"
+        kind === "terminalOutput" && item
+          ? `:${item.messageIndex}:${stableStringHash(JSON.stringify([item.stdout, item.stderr, item.exitCode, item.truncated]))}`
+          : kind === "localCommandOutput" && item && typeof item.output === "string"
           ? `:${stableStringHash(item.output)}`
           : "";
       if (timestampIso) return `systemEvent:${kind}:${source}:${scope}:${stableStringHash(timestampIso)}${outputSignature}`;

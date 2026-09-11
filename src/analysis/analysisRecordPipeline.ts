@@ -36,6 +36,7 @@ export type AnalysisRecordEnvelope =
     });
 
 export interface AnalysisRecordPipelineOptions {
+  readonly applyCodexRollbacks?: boolean;
   readonly sessionInventory?: readonly SessionSummary[];
   readonly plan?: CodexLogicalHistoryPlan;
   readonly token?: SessionJsonlReadOptions["token"];

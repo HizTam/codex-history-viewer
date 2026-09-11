@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { normalizeCacheKey } from "../utils/fsUtils";
+import type { SessionMetadataMutationCoordinator } from "./sessionMetadataMutationCoordinator";
 
 export interface ChatOpenPositionEntry {
   fsPath: string;
@@ -17,7 +18,7 @@ export class ChatOpenPositionStore {
   private readonly entriesByKey = new Map<string, ChatOpenPositionEntry>();
   private writeQueue: Promise<void> = Promise.resolve();
 
-  constructor(memento: vscode.Memento) {
+  constructor(memento: vscode.Memento, private readonly coordinator?: SessionMetadataMutationCoordinator) {
     this.memento = memento;
     for (const entry of compactEntries(readEntries(memento))) {
       this.entriesByKey.set(entry.cacheKey, entry);
@@ -33,23 +34,20 @@ export class ChatOpenPositionStore {
   public async set(fsPath: string, messageIndex: number): Promise<void> {
     const entry = buildEntry(fsPath, messageIndex);
     if (!entry) return;
-
-    this.entriesByKey.set(entry.cacheKey, entry);
-    this.prune();
-    await this.persist();
+    await this.runMutation(() => this.persist([
+      ...this.getAll().filter((item) => item.cacheKey !== entry.cacheKey), entry,
+    ]));
   }
 
   public async deleteMany(fsPaths: readonly string[]): Promise<void> {
     const keys = new Set(fsPaths.map((fsPath) => normalizeFsPathKey(fsPath)).filter((key): key is string => !!key));
     if (keys.size === 0) return;
 
-    let changed = false;
-    for (const key of keys) {
-      if (this.entriesByKey.delete(key)) changed = true;
-    }
-    if (!changed) return;
-
-    await this.persist();
+    await this.runMutation(async () => {
+      const current = this.getAll();
+      const next = current.filter((entry) => !keys.has(entry.cacheKey));
+      if (next.length !== current.length) await this.persist(next);
+    });
   }
 
   public async relocate(oldFsPath: string, newFsPath: string): Promise<boolean> {
@@ -57,41 +55,39 @@ export class ChatOpenPositionStore {
     const newKey = normalizeFsPathKey(newFsPath);
     if (!oldKey || !newKey || oldKey === newKey) return false;
 
-    const oldEntry = this.entriesByKey.get(oldKey);
-    if (!oldEntry) return false;
-
-    const newEntry = this.entriesByKey.get(newKey);
-    if (!newEntry) {
-      this.entriesByKey.set(newKey, {
-        fsPath: newFsPath,
-        cacheKey: newKey,
-        messageIndex: oldEntry.messageIndex,
-        updatedAt: Date.now(),
-      });
-    }
-    this.entriesByKey.delete(oldKey);
-    await this.persist();
-    return true;
+    return this.runMutation(async () => {
+      const oldEntry = this.entriesByKey.get(oldKey);
+      if (!oldEntry) return false;
+      const next = this.getAll().filter((entry) => entry.cacheKey !== oldKey);
+      if (!this.entriesByKey.has(newKey)) {
+        next.push({ fsPath: newFsPath, cacheKey: newKey, messageIndex: oldEntry.messageIndex, updatedAt: Date.now() });
+      }
+      await this.persist(next);
+      return true;
+    });
   }
 
-  private prune(): void {
-    const entries = this.getAll();
-    if (entries.length <= MAX_CHAT_OPEN_POSITIONS) return;
+  public getAll(): ChatOpenPositionEntry[] {
+    return Array.from(this.entriesByKey.values(), (entry) => ({ ...entry })).sort((a, b) => b.updatedAt - a.updatedAt);
+  }
 
+  public async replaceAll(entries: readonly ChatOpenPositionEntry[]): Promise<void> {
+    await this.runMutation(() => this.persist(entries.map(sanitizeEntry).filter((entry): entry is ChatOpenPositionEntry => entry !== null)));
+  }
+
+  private async persist(entries: readonly ChatOpenPositionEntry[]): Promise<void> {
+    const next = compactEntries(entries);
+    // Publish only committed data, including when an inheritance transaction is rolled back.
+    await this.memento.update(CHAT_OPEN_POSITION_KEY, next);
     this.entriesByKey.clear();
-    for (const entry of entries.slice(0, MAX_CHAT_OPEN_POSITIONS)) {
-      this.entriesByKey.set(entry.cacheKey, entry);
-    }
+    for (const entry of next) this.entriesByKey.set(entry.cacheKey, entry);
   }
 
-  private getAll(): ChatOpenPositionEntry[] {
-    return Array.from(this.entriesByKey.values()).sort((a, b) => b.updatedAt - a.updatedAt);
-  }
-
-  private async persist(): Promise<void> {
-    const run = this.writeQueue.then(() => this.memento.update(CHAT_OPEN_POSITION_KEY, this.getAll()));
-    this.writeQueue = run.catch(() => undefined);
-    await run;
+  private runMutation<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.coordinator) return this.coordinator.runExclusive(operation);
+    const next = this.writeQueue.then(operation, operation);
+    this.writeQueue = next.then(() => undefined, () => undefined);
+    return next;
   }
 }
 

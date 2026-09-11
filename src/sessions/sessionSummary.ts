@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import * as readline from "node:readline";
 import { formatTimeHmInTimeZone, toYmdInTimeZone, ymdToString } from "../utils/dateUtils";
 import { normalizeCacheKey, statSafe } from "../utils/fsUtils";
@@ -37,12 +38,14 @@ import { extractCodexAgentMetadata } from "../agents/codexAgentMetadata";
 import { extractCodexForkMetadata } from "../branchMap/codexForkMetadata";
 import { boundSessionIdentityKey } from "./sessionIdentity";
 import {
+  cachePhysicalCodexRollbackProjection,
   extractCodexHistoryBaseMetadata,
   readSessionJsonlRecords,
   type CodexLogicalHistoryPlan,
   type SessionJsonlReadOptions,
 } from "./codexHistoryBase";
 import type { PerformanceProbe } from "../performance/performanceCounters";
+import { CodexRollbackTracker, type CodexRollbackProjection } from "./codexRollbackHistory";
 
 const META_SCAN_LINE_LIMIT = 400;
 
@@ -113,6 +116,8 @@ function extractCodexSessionMeta(obj: any, isFirstParsedRecord: boolean): Sessio
     ...(codexAgent ? { codexAgent } : {}),
     ...(codexFork ? { codexFork } : {}),
     ...(codexHistoryBase ? { codexHistoryBase } : {}),
+    ...(isFirstParsedRecord && payload.history_mode === "paginated" && obj.ordinal === 0 &&
+      payload.history_base === undefined ? { codexStandaloneHistory: true as const } : {}),
   };
 }
 
@@ -263,6 +268,7 @@ export async function readPreviewMessages(
 
   const result: PreviewMessage[] = [];
   for await (const record of readSessionJsonlRecords(fsPath, source, {
+    applyCodexRollbacks: true,
     sessionInventory: options.sessionInventory,
     plan: options.plan,
     token: options.token,
@@ -310,7 +316,8 @@ async function appendPreviewMessage(
   const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
   const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
   if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) return;
-  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
+  if (extractClaudeTerminalOutput(obj, controlContent)) return;
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt, record: obj });
   const attachmentSummary = buildPreviewAttachmentText(extracted.attachments);
   const textRaw = [buildClaudePreviewText(extracted.text), attachmentSummary].filter(Boolean).join("\n");
   const textNormalized = normalizeWhitespace(textRaw);
@@ -324,6 +331,7 @@ async function appendPreviewMessage(
 }
 
 interface PhysicalSessionSummaryScan {
+  readonly rollbackProjection: CodexRollbackProjection;
   readonly meta: SessionMetaInfo | null;
   readonly codexLastActivityTimestampIso?: string;
   readonly claudeLastActivityTimestampIso?: string;
@@ -342,6 +350,10 @@ async function scanPhysicalSessionSummary(
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
   const claudeMeta: SessionMetaInfo = { historySource: "claude" };
   const previewMessages: PreviewMessage[] = [];
+  const previewLineIndices: number[] = [];
+  const rollbackTracker = new CodexRollbackTracker();
+  const isCodexPath = path.basename(fsPath).toLowerCase().startsWith("rollout-");
+  let physicalLineIndex = 0;
   let codexMeta: SessionMetaInfo | undefined;
   let metaScanComplete = false;
   let metaScannedLineCount = 0;
@@ -360,6 +372,7 @@ async function scanPhysicalSessionSummary(
   try {
     for await (const line of rl) {
       throwIfSummaryScanCancelled(token, cancellationErrorFactory);
+      physicalLineIndex += 1;
       if (performanceProbe) {
         observeEstimatedJsonlLine(performanceProbe, line);
         performanceProbe.add("logicalLineCount");
@@ -392,6 +405,14 @@ async function scanPhysicalSessionSummary(
         }
       }
 
+      const rollbackStart = codexMeta || isCodexPath ? rollbackTracker.accept(obj, physicalLineIndex) : undefined;
+      if (rollbackStart !== undefined) {
+        const previewStart = previewLineIndices.findIndex(index => index >= rollbackStart);
+        if (previewStart >= 0) {
+          previewMessages.length = previewStart;
+          previewLineIndices.length = previewStart;
+        }
+      }
       const codexTimestampIso = extractCodexActivityTimestampIso(obj);
       if (codexTimestampIso) codexLastActivityTimestampIso = codexTimestampIso;
       const claudeTimestampIso = extractClaudeActivityTimestampIso(obj);
@@ -408,6 +429,7 @@ async function scanPhysicalSessionSummary(
 
       if (!(previewMessages.length >= maxMessages)) {
         await appendPreviewMessage(obj, pastedPromptResolver, previewMessages);
+        while (previewLineIndices.length < previewMessages.length) previewLineIndices.push(physicalLineIndex);
       }
     }
   } finally {
@@ -417,6 +439,7 @@ async function scanPhysicalSessionSummary(
 
   const claudeNativeTitle = claudeCustomTitle ?? claudeAiTitle ?? claudeRenameTitle ?? claudeSummaryTitle;
   return {
+    rollbackProjection: rollbackTracker.finalize(),
     meta: codexMeta ?? (hasClaudeSessionMeta(claudeMeta) ? claudeMeta : null),
     ...(codexLastActivityTimestampIso ? { codexLastActivityTimestampIso } : {}),
     ...(claudeLastActivityTimestampIso ? { claudeLastActivityTimestampIso } : {}),
@@ -525,6 +548,14 @@ export async function buildSessionSummary(params: {
   );
   const readMeta = scan.meta ?? {};
   const source = detectSessionSource(readMeta, fsPath);
+  if (source === "codex") {
+    params.performanceProbe?.add("statCount");
+    const after = await statSafe(fsPath);
+    throwIfSummaryScanCancelled(params.token, params.cancellationErrorFactory);
+    if (after && after.size === stat.size && after.mtimeMs === stat.mtimeMs) {
+      cachePhysicalCodexRollbackProjection(fsPath, stat, scan.rollbackProjection);
+    }
+  }
   const storage: SessionStorageLocation =
     params.storage ??
     (source === "claude"
@@ -575,6 +606,8 @@ export async function buildSessionSummary(params: {
 
   return {
     fsPath,
+    ...(source === "codex" && scan.rollbackProjection.revision !== undefined
+      ? { codexRollbackRevision: scan.rollbackProjection.revision } : {}),
     cacheKey,
     identityKey,
     source,

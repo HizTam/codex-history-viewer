@@ -80,6 +80,38 @@
   --chv-sticky-user-right-reserve: 0px;
 }
 
+#rolloutNotice:not([hidden]) {
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 12px 16px;
+  padding: 10px 12px;
+  border: 1px solid var(--vscode-inputValidation-infoBorder, var(--chv-border));
+  border-radius: 4px;
+  background: var(--vscode-inputValidation-infoBackground, var(--chv-user-bg));
+}
+
+#btnSwitchRollout {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border: 1px solid transparent;
+  padding: 5px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+#btnSwitchRollout:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+#btnSwitchRollout:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
 html,
 body {
   height: 100%;
@@ -4469,6 +4501,13 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
   opacity: 0.8;
 }
 
+.tag.terminalInputTag {
+  color: var(--chv-fg);
+  border-color: color-mix(in srgb, var(--vscode-textLink-foreground) 48%, var(--chv-border) 52%);
+  background: color-mix(in srgb, var(--vscode-textLink-foreground) 10%, transparent);
+  white-space: nowrap;
+}
+
 /* Arrow buttons used for message-to-message navigation. */
 .messageNav {
   display: flex;
@@ -5455,15 +5494,18 @@ body.vscode-high-contrast-light .imagePreviewOverlay {
   transition: transform 120ms ease;
 }
 
-.systemEventCard-localCommandOutput[open] .systemEventDisclosure {
+.systemEventCard-localCommandOutput[open] .systemEventDisclosure,
+.systemEventCard-terminalOutput[open] .systemEventDisclosure {
   transform: rotate(90deg);
 }
 
-.systemEventCard-localCommandOutput {
+.systemEventCard-localCommandOutput,
+.systemEventCard-terminalOutput {
   border-left-color: color-mix(in srgb, var(--vscode-textLink-foreground) 62%, var(--chv-border) 38%);
 }
 
-.systemEventCard-localCommandOutput .systemEventBadge {
+.systemEventCard-localCommandOutput .systemEventBadge,
+.systemEventCard-terminalOutput .systemEventBadge {
   border-color: color-mix(in srgb, var(--vscode-textLink-foreground) 48%, var(--chv-border) 52%);
   background: color-mix(in srgb, var(--vscode-textLink-foreground) 10%, transparent);
 }
@@ -5480,6 +5522,16 @@ body.vscode-high-contrast-light .imagePreviewOverlay {
   line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.terminalOutputLabel {
+  margin-top: 10px;
+  color: var(--chv-muted);
+  font-size: 11px;
+}
+
+.terminalOutputCard .cardHeaderActions {
+  margin-left: auto;
 }
 
 .systemEventBadge {

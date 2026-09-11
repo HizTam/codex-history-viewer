@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.14.2] - 2026-09-11
+
+### Added
+
+- Added a notice and a **Go to main history** button when editing a Codex prompt changes the session file. In the previous history, this action also replaces the resume button. After switching to the main history in the viewer, the usual resume actions become available. Auto-refresh and manual reload keep the currently displayed history.
+- Added a **Terminal input** badge next to `user` in the Session Viewer for commands entered in Claude Code's shell mode.
+
+### Changed
+
+- Optimized session history reading to reduce processing overhead when loading and refreshing large histories.
+- Improved syntax-highlighting performance when the same code appears repeatedly in code blocks or diffs.
+- Codex prompt edits are now treated as updates to the main history of the same conversation.
+- Branch Navigation now also shows histories before and after Codex prompt edits. Cards in the Session Viewer's history selector and previews show **Before edit** and **After edit** labels.
+
+### Fixed
+
+- Fixed Fork and agent icons disappearing after a Codex prompt edit.
+- Fixed internal markup and `prompt` attributes appearing when viewing, copying, or searching suggestions for additional requests in Codex responses.
+- Fixed metadata inheritance stopping after a previously processed Codex history was deleted.
+- Fixed internal tags from Claude Code terminal input and output appearing in history titles, message text, and search results.
+- Fixed Claude Code terminal output being treated as user messages and counted as user requests in History Insights.
+- Replaced Mermaid's embedded js-yaml dependency with the patched 4.3.2 release to include upstream security fixes.
+
 ## [2.14.1] - 2026-09-07
 
 ### Changed

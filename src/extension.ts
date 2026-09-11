@@ -128,6 +128,7 @@ import { FileChangeHistoryPanelManager } from "./fileHistory/fileChangeHistoryPa
 import { FileChangeHistoryService } from "./fileHistory/fileChangeHistoryService";
 import { SessionAnalysisCancelledError, SessionAnalysisIndexService } from "./analysis/sessionAnalysisIndexService";
 import { HistoryInsightsPanelManager } from "./insights/historyInsightsPanelManager";
+import { CodexRolloutMetadataInheritance } from "./services/codexRolloutMetadataInheritance";
 import type { HistoryInsightsSnapshot } from "./insights/historyInsightsTypes";
 import { SettingsPanelManager } from "./settingsPanel/settingsPanelManager";
 import { ClaudeBranchNavigationService } from "./branchMap/claudeBranchNavigationService";
@@ -173,6 +174,7 @@ import {
 import { safeDisplayPath } from "./utils/textUtils";
 import { formatBytesForUi } from "./utils/formatBytes";
 import { normalizeCacheKey, normalizeProjectKey, pathExists } from "./utils/fsUtils";
+import { findSessionHistorySource } from "./sessions/codexRolloutRevisions";
 import { MementoTransactionError, updateMementoTransaction } from "./storage/mementoTransaction";
 import { CodexAgentRunsService } from "./agents/codexAgentRunsService";
 import { SessionIconResolver } from "./ui/sessionIconResolver";
@@ -430,7 +432,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void searchHistoryStore.discardLegacyHistory().catch((error) => {
     logger.debug(`searchHistory legacy discard failed error=${sanitizeDebugError(error)}`);
   });
-  const chatOpenPositionStore = new ChatOpenPositionStore(context.globalState);
+  const chatOpenPositionStore = new ChatOpenPositionStore(context.globalState, metadataMutationCoordinator);
+  const rolloutMetadataInheritance = new CodexRolloutMetadataInheritance(
+    context.globalState, annotationStore, bookmarkStore, chatOpenPositionStore, metadataMutationCoordinator, logger,
+  );
+  let rolloutInheritanceFailureShown = false;
   const resumeMethodStore = new ResumeMethodStore(context.globalState);
   const mermaidPreferenceStore = new MermaidPreferenceStore(context.globalState);
   const sessionReferenceRelocator = new SessionReferenceRelocator(
@@ -3492,7 +3498,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       discardStaleAgentRunsRefresh(config, activationGeneration);
     }
     if (!historyService.isCurrentIndexForConfig(config)) return activationGeneration;
+    historyInsightsPanels.refreshCodexRolloutMainlines();
+    fileChangeHistoryPanels.refreshCodexRolloutMainlines();
+    const inheritanceIndex = historyService.getIndex();
+    const inheritedMetadata = await rolloutMetadataInheritance.reconcile(inheritanceIndex, () =>
+      historyService.getIndex() === inheritanceIndex && historyService.isCurrentIndexForConfig(config));
+    if (inheritedMetadata.failed && !rolloutInheritanceFailureShown) {
+      rolloutInheritanceFailureShown = true;
+      void vscode.window.showErrorMessage(t("app.codexRolloutInheritanceFailed"));
+    } else if (!inheritedMetadata.pending) {
+      rolloutInheritanceFailureShown = false;
+    }
+    if (!historyService.isCurrentIndexForConfig(config)) return activationGeneration;
     const sessionStateChanged = !options.refreshResult ||
+      inheritedMetadata.changed ||
       options.refreshResult.presentationChanged ||
       options.refreshResult.inventoryChanged ||
       historyService.getIndexGeneration() !== indexGenerationBeforeAgentFinalization;
@@ -3508,6 +3527,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (!historyService.isCurrentIndexForConfig(config)) return activationGeneration;
     await chatPanels.closeMissingPanels();
     if (!historyService.isCurrentIndexForConfig(config)) return activationGeneration;
+    chatPanels.refreshCodexRolloutNotices();
     if (getConfig().branchNavigationEnabled) {
       chatPanels.refreshBranchNavigation();
     }
@@ -3974,10 +3994,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       element &&
       typeof element === "object" &&
       !isSessionNode(element) &&
-      typeof (element as { fsPath?: unknown }).fsPath === "string"
+      "fsPath" in element
     ) {
-      const fsPath = ((element as { fsPath: string }).fsPath ?? "").trim();
-      const direct = fsPath ? historyService.findByFsPath(fsPath) : undefined;
+      const fsPath = validateSessionCommandFsPath(element.fsPath);
+      // Annotations belong to the displayed physical history, including retained revisions.
+      const direct = fsPath ? findSessionHistorySource(historyService.getIndex(), normalizeCacheKey(fsPath)) : undefined;
       return direct ? [direct] : [];
     }
     return collectSessionsFromTargets(resolveTargets(element));
@@ -5179,7 +5200,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.resumeSessionInCodex", async (elementOrArgs?: unknown) => {
       const session = resolveSingleSessionTarget(elementOrArgs);
-      if (!session) return false;
+      if (!session) {
+        void vscode.window.showErrorMessage(t("app.resumeSessionInCodexFailed"));
+        return false;
+      }
       if (session.storage.archiveState === "archived") {
         void vscode.window.showInformationMessage(t("app.resumeArchivedUseRestore"));
         return false;
@@ -5332,7 +5356,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      const tagStats = annotationStore.listTagStats();
+      const tagStats = annotationStore.listTagStats(historyService.getIndex());
       if (tagStats.length === 0) {
         void vscode.window.showInformationMessage(t("tag.noTagsAvailable"));
         return;
@@ -5418,7 +5442,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      const tagStats = annotationStore.listTagStats();
+      const tagStats = annotationStore.listTagStats(historyService.getIndex());
       if (tagStats.length === 0) {
         void vscode.window.showInformationMessage(t("tag.noTagsAvailable"));
         return;
@@ -5928,9 +5952,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  const resolveCustomTitleSession = (element?: unknown): SessionSummary | undefined =>
-    resolveSessionFromElementOrFsPath(historyService, element) ??
-    resolveSessionFromElementOrActive(historyService, transcriptProvider.scheme, element);
+  const resolveCustomTitleSession = (element?: unknown): SessionSummary | undefined => {
+    // Only commands without an explicit target may use the active transcript.
+    if (element === undefined) {
+      const doc = vscode.window.activeTextEditor?.document;
+      if (doc?.uri.scheme !== transcriptProvider.scheme) return undefined;
+      element = { fsPath: new URLSearchParams(doc.uri.query).get("fsPath") };
+    }
+    if (isSessionNode(element)) element = { fsPath: element.session.fsPath };
+    if (!element || typeof element !== "object") return undefined;
+    if (!("fsPath" in element)) return resolveSessionFromElementOrFsPath(historyService, element);
+
+    const fsPath = validateSessionCommandFsPath(element.fsPath);
+    if (!fsPath) return undefined;
+    const index = historyService.getIndex();
+    const source = findSessionHistorySource(index, normalizeCacheKey(fsPath));
+    const identityKey = resolveSessionIdentityKeyArgument(element);
+    if (!source || ("identityKey" in element && identityKey !== source.identityKey)) return undefined;
+    // Titles are shared by conversation, while the explicit physical path remains authoritative.
+    return index.byIdentityKey.get(source.identityKey) ?? source;
+  };
 
   const clearCustomTitleForSession = async (session: SessionSummary): Promise<boolean> => {
     const previousTitle = normalizeCustomTitle(titleOverrideStore.getTitle(session) ?? session.customTitle ?? "");
@@ -7223,7 +7264,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      const tagStats = annotationStore.listTagStats();
+      const tagStats = annotationStore.listTagStats(historyService.getIndex());
       if (tagStats.length === 0) {
         void vscode.window.showInformationMessage(t("tag.noTagsAvailable"));
         return;
@@ -7804,6 +7845,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         config: getConfig(),
         pinStore,
         globalStorageUri: context.globalStorageUri,
+        refreshHistoryIndex: async () => {
+          await historyService.refresh({ forceRebuildCache: false });
+          return historyService.getIndex();
+        },
       });
       if (!result) return;
 
@@ -7843,7 +7888,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       if (result.undoItems.length > 0) {
         pushUndoAction(
-          t("undo.label.delete", result.deleted),
+          t("undo.label.delete", result.affected ?? result.deleted),
           async () => {
             const restoredPathKeys = new Set<string>();
             let restoreFailed = 0;

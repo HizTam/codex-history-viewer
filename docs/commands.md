@@ -130,6 +130,18 @@ Archived display targets are unavailable when Codex archived sessions are disabl
 
 ## Session Actions
 
+When editing the last prompt in Codex changes the session file for the same conversation, the open Session Viewer keeps displaying its current JSONL file. Auto-refresh and manual reload continue to use that file. When a newer main history is detected, a notice below the header offers **Go to main history**, and the resume button is replaced by the same action. This also covers a first-prompt edit that creates a standalone JSONL without an inherited history reference. This switches the history displayed inside the viewer. Use the usual resume button after switching to resume through the Codex extension or CLI. The notice is available even when Branch Navigation is disabled; switching to the main history has no Command Palette command.
+
+Custom titles, pins, and hidden state continue to follow the conversation. Notes and tags are copied once to each new main history, while bookmarks and saved positions are inherited only where they still refer to the shared history before the edited prompt. If the main history already has an annotation, its note is kept, including an empty note, and tags are merged. The previous history retains its information; later changes to it are not synchronized to the main history. Existing values and later edits or deletions on the main history take precedence. If the history used as the last inheritance checkpoint has been deleted, the current main history becomes the new starting point without copying older information. Subsequent prompt edits inherit from that point onward. Search, History Insights, and File AI Change History use the conversation's main history. Regular Forks remain separate conversations.
+
+In a Session Viewer displaying a previous history, editing notes or tags updates that history, while custom-title actions update the shared conversation title. An unavailable explicit target does not redirect the action to another open conversation. File AI Change History rechecks the conversation when its main history changes, including when it previously had no matching changes.
+
+When `codexHistoryViewer.branchNavigation.enabled` is enabled, Branch Navigation lets you move between the histories before and after an edit. On cards in the Session Viewer's history selector and previews on the previous/next buttons, **Before edit** and **After edit** identify revisions of the same conversation, while **Fork** identifies a separate conversation. Navigation does not modify the stored session files.
+
+Commands entered in Claude Code's shell mode appear as user messages with a **Terminal input** badge. Their results appear in collapsed **Terminal output** cards.
+
+For history search, commands use the User role. Terminal output uses the Tool role and is included only when `codexHistoryViewer.search.indexToolContent` is set to **Messages + Tool Calls + Results** (`toolCallsAndOutputs`). History Insights counts commands as user requests, excluding their output. **Open Session as Markdown** includes the displayed output, while generated resume excerpts and handoff files omit terminal output. These display and extraction rules leave the original session files unchanged.
+
 Tree context-menu targets follow these rules:
 
 | Scope | Commands | Behavior |
@@ -158,7 +170,7 @@ Opening multiple sessions requires confirmation and opens at most the first 10 u
 | Unpin | `codexHistoryViewer.unpinSession` | Removes selected sessions from Pinned. |
 | Hide Sessions | `codexHistoryViewer.hideSessions` | Hides selected sessions from visible-only History, Pinned, and Search results without moving or deleting their source files. |
 | Show Sessions | `codexHistoryViewer.unhideSessions` | Makes selected hidden sessions visible again. Use the Hidden Only or All display target to select them. |
-| Delete | `codexHistoryViewer.deleteSessions` | Deletes the right-clicked session, or a same-view multi-selection that includes it (trash-first behavior by default). |
+| Delete | `codexHistoryViewer.deleteSessions` | Deletes the right-clicked session, or a same-view multi-selection that includes it (trash-first behavior by default). If Codex edit revisions exist, choose **This history only** (**Selected histories only** for multi-selection) or **Before and after edits**. Deleting only the selected JSONL may leave an older revision in the list. Separate Fork conversations remain unless also selected. Referenced history files are protected for either choice. |
 | Custom Title... | `codexHistoryViewer.manageCustomTitle` | Opens the shared custom-title picker for setting or clearing a session title. |
 | Set Custom Title... | `codexHistoryViewer.setCustomTitle` | Sets an extension-local display title for the selected session. |
 | Clear Custom Title | `codexHistoryViewer.clearCustomTitle` | Removes the extension-local custom title from the selected session. |

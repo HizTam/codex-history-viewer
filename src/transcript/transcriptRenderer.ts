@@ -1,4 +1,6 @@
 import * as path from "node:path";
+import { t } from "../i18n";
+import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import { normalizeWhitespace } from "../utils/textUtils";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
@@ -9,6 +11,7 @@ import {
   detectClaudeMaterializedMessageRole,
   extractClaudeMessageContent,
   extractCodexMessageContent,
+  selectClaudeControlContent,
 } from "../chat/chatAttachments";
 import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
 import {
@@ -82,6 +85,7 @@ export async function renderTranscript(
   };
 
   for await (const record of readSessionJsonlRecords(fsPath, historySource, {
+    applyCodexRollbacks: true,
     sessionInventory: options.sessionInventory,
   })) {
     const obj = record.value;
@@ -329,7 +333,23 @@ async function renderClaudeRecord(
   const rawContent = getClaudeMessageContent(obj);
   const parsed = parseClaudeMessageContent(rawContent);
   const pastedPrompt = role === "user" ? await params.pastedPromptResolver?.resolve(obj, rawContent) : undefined;
-  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
+  const terminalOutput = extractClaudeTerminalOutput(obj, selectClaudeControlContent(rawContent, pastedPrompt));
+  if (terminalOutput) {
+    msgIndex += 1;
+    messageLineMap.set(msgIndex, lines.length + 1);
+    lines.push(`## [#${msgIndex}] ${t("chat.terminalOutput.title")}`);
+    const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``);
+    for (const key of ["stdout", "stderr", "exitCode"] as const) {
+      const value = terminalOutput[key];
+      if (value === undefined) continue;
+      lines.push("", `### ${t(`chat.terminalOutput.${key}`)}`, "");
+      appendPlainTextCodeBlock(lines, value);
+    }
+    if (terminalOutput.truncated) lines.push(t("chat.terminalOutput.truncated"), "");
+    return { handled: true, msgIndex, lastToolCallId: undefined };
+  }
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt, record: obj });
   const text = normalizeWhitespace(extracted.text);
   const attachmentLines = buildAttachmentSummaryLines(extracted.attachments);
   const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;

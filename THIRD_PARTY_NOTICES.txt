@@ -29,7 +29,7 @@ Packages:
   hachure-fill
   iconv-lite
   import-meta-resolve
-  js-yaml (embedded in the Mermaid distribution)
+  js-yaml (patched package bundled in place of Mermaid's embedded copy)
   khroma
   langium (embedded in @mermaid-js/parser)
   layout-base

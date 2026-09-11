@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.14.1** (2026-09-07).
+Latest release: **2.14.2** (2026-09-11).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -24,8 +24,9 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Manage the extension's primary settings from a categorized settings page, with supported User, Workspace, and Workspace Folder targets, scope-specific JSON backups, maintenance actions, and project resource links.
 - Enable an opt-in turn timeline for Codex and Claude Code sessions to see turn boundaries, turn summaries, completed-turn folding, and running state in live mode.
 - Use Agent Runs to distinguish Codex sub-agent sessions and inspect parent, sibling, and descendant relationships in a right-side tree. (Experimental; disabled by default.)
-- Use Branch Navigation to inspect and switch between locally forked Codex histories and Claude Code **Fork conversation** histories in their respective session views. (Experimental; disabled by default.)
+- Use Branch Navigation to inspect and switch between locally forked Codex histories, histories before and after Codex prompt edits, and Claude Code **Fork conversation** histories in their respective session views. (Experimental; disabled by default.)
 - Show Codex / Claude Code request interruptions as dedicated timeline cards.
+- Identify commands entered in Claude Code's shell mode with a **Terminal input** badge and view their results in **Terminal output** cards.
 - Open File AI Change History for a workspace file to review Codex / Claude Code diffs that touched that file.
 - Bookmark important history cards and use date-guide markers to revisit them quickly.
 - Keep open session tabs up to date with header-controlled auto-refresh modes.
@@ -51,7 +52,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 9. Enable **File Change History > Explorer Context Menu: Enabled** when you want file-level AI diff history from file right-click menus.
 10. Keep Codex enabled in **Sources: Enabled**, then turn on Codex archived sessions if you want archived Codex history included.
 11. Enable `codexHistoryViewer.agentRuns.enabled` when you want to inspect parent and sub-agent relationships with Agent Runs.
-12. Enable `codexHistoryViewer.branchNavigation.enabled` when you want to navigate locally forked Codex histories and Claude Code **Fork conversation** histories.
+12. Enable `codexHistoryViewer.branchNavigation.enabled` when you want to navigate locally forked Codex histories, histories before and after Codex prompt edits, and Claude Code **Fork conversation** histories.
 13. Choose Extension, CLI, or Extension and CLI as the resume method for each source. CLI actions enter a command in a new VS Code integrated terminal without running it; press Enter to execute it. Use **Handoff to Other AI** when moving work between agents, including when you need to copy the handoff file path.
 14. Use the session information actions in the Session Viewer or **Session Information** in the History, Pinned, and Search context menus to copy a session ID or session file path, or reveal the session file in its containing folder.
 
@@ -78,6 +79,8 @@ Markdown tables use clearer cell spacing and separators, wrap long content, and 
 Fenced `mermaid` blocks render as inline diagrams. Each diagram can switch between Light and Dark display modes, open in a non-modal right-side pane for fit-to-view, zoom, scroll, drag-to-pan, and keyboard navigation, and be saved as SVG, PNG, or Mermaid source (`.mmd`).
 
 The resume button follows the resume method selected separately for Codex and Claude Code. Extension and CLI uses a split button: the last used method becomes the main action, while the dropdown always lists both methods. CLI actions enter the resume command in a new VS Code integrated terminal without pressing Enter. The History, Pinned, and Search context menus follow the same source-specific settings.
+
+When you edit the last prompt in Codex, the edited continuation becomes that conversation's main history. If Codex writes it to a new session file, an open Session Viewer keeps displaying its current file, including during auto-refresh and manual reload. A notice and **Go to main history** let you switch explicitly. While viewing the previous history, this action replaces the resume button; normal resume actions return after switching. The notice is available even when Branch Navigation is disabled.
 
 The Session Viewer shows the validated session ID and session file name with actions to copy the ID, copy the full file path, or reveal the file in its containing folder. The same actions are available under **Session Information** in the History, Pinned, and Search context menus.
 
@@ -203,11 +206,13 @@ Enable `codexHistoryViewer.agentRuns.enabled` to use this feature. Relationships
 
 Branch Navigation recognizes locally forked Codex session histories, including histories created with **Fork locally** in the Codex app or **Continue in new task** in the Codex extension, and Claude Code histories created with **Fork conversation**. It lets you move between Fork destinations without leaving their respective session views.
 
+Branch Navigation also includes histories before and after Codex prompt edits within the same conversation. Cards in the Session Viewer's history selector and previews on the previous/next buttons show **Before edit** and **After edit** labels for these routes. The original session files remain available for viewing.
+
 ![Branch Navigation screenshot](media/screenshot_3.png)
 
-Inline controls at a Fork point switch to the previous or next route. The shared route-tree action shows the shared history, Fork points, and the start and end of each route. Selecting a route node switches the same session view to the corresponding stored session and message position.
+Inline controls at a branch point switch to the previous or next route. The shared route-tree action shows the shared history, branch points, and the start and end of each route. Selecting a route node switches the same session view to the corresponding stored session and message position.
 
-Enable `codexHistoryViewer.branchNavigation.enabled` to use this feature. For Codex, Branch Navigation applies to local Forks whose parent and child remain in the same working directory. For Claude Code, Branch Navigation only navigates stored session history and does not invoke **Rewind code** or rewind workspace files. The extension never creates, modifies, merges, or deletes Forks or modifies stored session files. (Experimental; disabled by default.)
+Enable `codexHistoryViewer.branchNavigation.enabled` to use this feature. For Codex, local Forks require the parent and child to remain in the same working directory; histories before and after prompt edits are linked only when their stored history relationship can be verified. For Claude Code, Branch Navigation only navigates stored session history and does not invoke **Rewind code** or rewind workspace files. Navigation never creates, modifies, merges, or deletes Forks or changes stored session files. (Experimental; disabled by default.)
 
 ## Configuration
 
@@ -250,7 +255,7 @@ The defaults are designed for regular use. These settings are useful starting po
 | Turn boundaries without live effects                 | Set `codexHistoryViewer.chat.turnTimeline.mode` to `basic`.                                                                                               |
 | Live turn tracking                                   | Set `codexHistoryViewer.chat.turnTimeline.mode` to `live`.                                                                                                |
 | Agent Runs                                          | Enable `codexHistoryViewer.agentRuns.enabled` to navigate stored parent and sub-agent sessions in the session view.                                       |
-| Branch Navigation                                   | Enable `codexHistoryViewer.branchNavigation.enabled` to navigate locally forked Codex histories and Claude Code Fork conversation histories. |
+| Branch Navigation                                   | Enable `codexHistoryViewer.branchNavigation.enabled` to navigate Codex Forks and prompt-edit histories, and Claude Code Fork conversation histories. |
 | Faster, narrower search                              | Use `codexHistoryViewer.search.indexToolContent: toolCalls` instead of `toolCallsAndOutputs`, and lower `codexHistoryViewer.search.maxResults` if needed. |
 | More compact session rows                            | Turn off `codexHistoryViewer.sessionRow.showTimestamp`, `codexHistoryViewer.sessionRow.showProject`, or both. Hidden details remain available in tooltips. |
 | Long sessions, bookmarks, or frequent timeline jumps | Enable `codexHistoryViewer.ui.timeGuide.enabled`.                                                                                                         |
@@ -274,15 +279,17 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.14.1
+## What's New in 2.14.2
 
-- Improved History, Pinned, and Search tree construction performance for large histories.
-- Made the dedicated settings page header more compact.
-- Changed the dedicated settings page to show the results of settings export, import, and reset operations as standard notifications.
-- Added support for displaying Codex questions and user answers.
-- Improved auto-refresh and resume control visibility when restoring Session Viewer tabs.
+- Added **Go to main history** for Codex prompt edits while keeping the previous history available in its open view.
+- Claude Code command input now shows a **Terminal input** badge, and execution results appear in **Terminal output** cards.
+- Optimized history reading to reduce processing overhead when loading and refreshing large sessions.
+- Improved syntax-highlighting performance for repeated code in code blocks and diffs.
+- Branch Navigation now also shows histories before and after Codex prompt edits.
+- Fixed Fork and agent icons disappearing after Codex prompt edits.
+- Suggestions for additional requests in Codex responses now display as readable text and can be copied and searched without internal markup.
 
-Related history, search, and analysis caches are rebuilt for question-and-answer support. With large histories, the first history load, search, or analysis after updating may take longer.
+Existing history, search, and analysis caches are rebuilt after updating. The first history refresh, search, or analysis may take longer for large histories.
 
 ## Changelog
 
@@ -290,7 +297,7 @@ See [CHANGELOG](CHANGELOG.md).
 
 ## Security
 
-See [SECURITY](SECURITY.md) for details. Use Codex History Viewer v2.13.0 or later. Do not install or redistribute v1.2.1 or earlier VSIX files.
+See [SECURITY](SECURITY.md) for details. Use Codex History Viewer v2.14.2 or later. Do not install or redistribute v1.2.1 or earlier VSIX files.
 
 ## Privacy
 

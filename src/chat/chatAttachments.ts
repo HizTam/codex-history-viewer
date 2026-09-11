@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { projectCodexFollowupContent } from "../sessions/codexFollowup";
 import type {
   ChatAttachment,
   ChatDocumentAttachment,
@@ -71,6 +72,7 @@ type CodexFileBlockKind = "mentioned" | "pasted";
 export interface ExtractedMessageContent {
   text: string;
   attachments: ChatAttachment[];
+  isTerminalInput?: true;
   questionReplies?: readonly CodexQuestionReply[];
 }
 
@@ -90,6 +92,7 @@ export interface ClaudeLocalCommandOutputContent {
 export interface ClaudeMessageExtractionOptions {
   role?: Extract<ChatRole, "user" | "assistant">;
   pastedPrompt?: ClaudePastedPromptResolution;
+  record?: unknown;
 }
 
 export function selectClaudeControlContent(
@@ -97,6 +100,29 @@ export function selectClaudeControlContent(
   pastedPrompt?: ClaudePastedPromptResolution,
 ): unknown {
   return pastedPrompt?.preserveSessionText ? undefined : pastedPrompt?.display ?? content;
+}
+
+// Native shell input is stored verbatim inside one reserved wrapper, without an origin.
+export function extractClaudeTerminalInput(record: unknown, content: unknown): string | null {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return null;
+  const obj = record as Record<string, unknown>;
+  if (obj.type !== "user" || obj.origin !== undefined || detectClaudeMaterializedMessageRole(obj) !== "user") return null;
+  let text: string;
+  if (typeof content === "string") text = content;
+  else if (Array.isArray(content) && content.length > 0) {
+    const texts: string[] = [];
+    for (const item of content) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+      if (item.type !== "text" || typeof item.text !== "string" || isPotentialImageAttachmentItem(item)) return null;
+      texts.push(item.text);
+    }
+    text = texts.join("");
+  } else return null;
+  const open = "<bash-input>", close = "</bash-input>";
+  if (!text.startsWith(open) || !text.endsWith(close)) return null;
+  const body = text.slice(open.length, -close.length);
+  if (!body.trim() || /<\/?bash-input\b/u.test(body)) return null;
+  return body;
 }
 
 export type AttachmentOutputChannel = "webview" | "markdown" | "search" | "resume" | "handoff";
@@ -368,6 +394,7 @@ export async function extractCodexMessageContent(
   if (questionReplies) {
     return { text: formatCodexQuestionRepliesText(questionReplies), attachments: [], questionReplies };
   }
+  if (messageOptions?.role === "assistant") content = projectCodexFollowupContent(content);
   const imageOptions = normalizeImageOptions(options);
   const items = normalizeContentItems(content);
   const texts: string[] = [];
@@ -1072,6 +1099,11 @@ export async function extractClaudeMessageContent(
   const imageOptions = normalizeImageOptions(options);
   const items = normalizeContentItems(content);
   const pastedPrompt = claudeOptions?.role === "user" ? claudeOptions.pastedPrompt : undefined;
+  const terminalInput = claudeOptions?.role === "user" && !pastedPrompt
+    ? extractClaudeTerminalInput(claudeOptions.record, content)
+    : null;
+  // A command can contain attachment-looking text; keep it as user-authored text.
+  if (terminalInput !== null) return { text: terminalInput, attachments: [], isTerminalInput: true };
   const preserveSessionText = pastedPrompt?.preserveSessionText === true;
   const hasDirectDocument = items.some((item) => {
     if (!item || typeof item !== "object") return false;

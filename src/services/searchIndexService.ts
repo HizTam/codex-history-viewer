@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { extractClaudeTerminalOutput, getClaudeTerminalOutputText } from "../chat/claudeTerminalOutput";
 import type { SearchIndexToolContent } from "../settings";
 import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
 import { SEARCH_INDEX_FILE_NAME } from "../storage/cacheFiles";
@@ -53,7 +54,7 @@ import {
   readCodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
 
-const SEARCH_INDEX_FILE_VERSION = 22;
+const SEARCH_INDEX_FILE_VERSION = 26;
 const SEARCH_STAT_CONCURRENCY = 8;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
@@ -859,6 +860,7 @@ async function buildIndexedSession(
 
   const source = options.source ?? (path.basename(fsPath).toLowerCase().startsWith("rollout-") ? "codex" : "claude");
   for await (const record of readSessionJsonlRecords(fsPath, source, {
+    applyCodexRollbacks: true,
     sessionInventory: options.sessionInventory,
     plan: options.historyPlan,
     token: options.token,
@@ -1127,9 +1129,18 @@ async function indexClaudeRecord(obj: any, state: BuildState): Promise<boolean> 
   const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
   if (role === "user" && extractClaudeRequestInterruptionContent(controlContent)) return true;
   if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) return true;
+  const terminalOutput = extractClaudeTerminalOutput(obj, controlContent);
+  if (terminalOutput) {
+    state.messageIndex += 1;
+    const text = normalizeWhitespace(getClaudeTerminalOutputText(terminalOutput));
+    if (text && shouldIndexToolOutputs(state.indexToolContent)) {
+      state.messages.push({ messageIndex: state.messageIndex, role: "tool", source: "toolOutput", text });
+    }
+    return true;
+  }
 
   const parsed = parseClaudeMessageContent(rawContent);
-  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt, record: obj });
   const messageText = normalizeWhitespace([extracted.text, buildAttachmentSearchText(extracted.attachments)].filter(Boolean).join("\n"));
   if (messageText || extracted.attachments.length > 0) {
     state.messageIndex += 1;

@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import type { SessionMetadataMutationCoordinator } from "./sessionMetadataMutationCoordinator";
 import { MementoSnapshotCache } from "./mementoSnapshotCache";
+import type { HistoryIndex } from "../sessions/sessionTypes";
+import { resolveCodexRolloutMainline } from "../sessions/codexRolloutRevisions";
 
 export interface SessionAnnotation {
   fsPath: string;
@@ -54,9 +56,11 @@ export class SessionAnnotationStore implements vscode.Disposable {
     return this.cache.read().entries.map((entry) => cloneAnnotation(entry));
   }
 
-  public listTagStats(): AnnotationTagStat[] {
+  public listTagStats(index?: HistoryIndex): AnnotationTagStat[] {
     const byKey = new Map<string, AnnotationTagStat>();
     for (const ann of this.getAll()) {
+      const mainline = index ? resolveCodexRolloutMainline(index, ann.cacheKey) : undefined;
+      if (mainline && mainline.cacheKey !== ann.cacheKey) continue;
       const seenInSession = new Set<string>();
       for (const tag of ann.tags) {
         const key = normalizeTagKey(tag);
@@ -85,10 +89,10 @@ export class SessionAnnotationStore implements vscode.Disposable {
   private async setUncoordinated(fsPath: string, params: { tags: readonly string[]; note: string }): Promise<void> {
     const key = normalizeCacheKey(fsPath);
     const current = this.getAll();
-    const tags = normalizeTags(params.tags);
+    const tags = normalizeSessionAnnotationTags(params.tags);
     const note = normalizeNote(params.note);
     const existing = current.find((x) => x.cacheKey === key);
-    if (isSameAnnotation(existing, tags, note)) return;
+    if (isSameSessionAnnotationContent(existing, tags, note)) return;
     const list = current.filter((x) => x.cacheKey !== key);
     if (tags.length === 0 && note.length === 0) {
       await this.persist(list);
@@ -159,7 +163,7 @@ export class SessionAnnotationStore implements vscode.Disposable {
     if (!oldAnnotation) return false;
 
     const newAnnotation = list.find((x) => x.cacheKey === newKey);
-    const mergedTags = normalizeTags([...(newAnnotation?.tags ?? []), ...oldAnnotation.tags]);
+    const mergedTags = normalizeSessionAnnotationTags([...(newAnnotation?.tags ?? []), ...oldAnnotation.tags]);
     const mergedNote = normalizeNote(newAnnotation ? newAnnotation.note : oldAnnotation.note);
     const next = list.filter((x) => x.cacheKey !== oldKey && x.cacheKey !== newKey);
     if (mergedTags.length > 0 || mergedNote.length > 0) {
@@ -181,7 +185,7 @@ export class SessionAnnotationStore implements vscode.Disposable {
   }
 
   private async addTagsManyUncoordinated(fsPaths: readonly string[], tags: readonly string[]): Promise<number> {
-    const addTags = normalizeTags(tags);
+    const addTags = normalizeSessionAnnotationTags(tags);
     if (addTags.length === 0) return 0;
     const keys = new Set(fsPaths.map((p) => normalizeCacheKey(p)));
     if (keys.size === 0) return 0;
@@ -193,9 +197,9 @@ export class SessionAnnotationStore implements vscode.Disposable {
       const current = byKey.get(key);
       const fsPath = current?.fsPath ?? Array.from(fsPaths).find((p) => normalizeCacheKey(p) === key) ?? "";
       if (!fsPath) continue;
-      const merged = normalizeTags([...(current?.tags ?? []), ...addTags]);
+      const merged = normalizeSessionAnnotationTags([...(current?.tags ?? []), ...addTags]);
       const nextNote = current?.note ?? "";
-      if (isSameAnnotation(current, merged, nextNote)) continue;
+      if (isSameSessionAnnotationContent(current, merged, nextNote)) continue;
       byKey.set(key, {
         fsPath,
         cacheKey: key,
@@ -216,7 +220,7 @@ export class SessionAnnotationStore implements vscode.Disposable {
   }
 
   private async removeTagsManyUncoordinated(fsPaths: readonly string[], tags: readonly string[]): Promise<number> {
-    const removeKeys = new Set(normalizeTags(tags).map((x) => normalizeTagKey(x)));
+    const removeKeys = new Set(normalizeSessionAnnotationTags(tags).map((x) => normalizeTagKey(x)));
     if (removeKeys.size === 0) return 0;
     const targetKeys = new Set(fsPaths.map((p) => normalizeCacheKey(p)));
     if (targetKeys.size === 0) return 0;
@@ -228,7 +232,7 @@ export class SessionAnnotationStore implements vscode.Disposable {
       const current = byKey.get(key);
       if (!current) continue;
       const nextTags = current.tags.filter((tag) => !removeKeys.has(normalizeTagKey(tag)));
-      if (isSameAnnotation(current, nextTags, current.note)) continue;
+      if (isSameSessionAnnotationContent(current, nextTags, current.note)) continue;
       if (nextTags.length === 0 && current.note.length === 0) {
         byKey.delete(key);
       } else {
@@ -269,7 +273,7 @@ function sanitizeAnnotation(value: unknown): SessionAnnotation | null {
   const v = value as any;
   if (typeof v.fsPath !== "string" || v.fsPath.trim().length === 0) return null;
   if (typeof v.updatedAt !== "number" || !Number.isFinite(v.updatedAt)) return null;
-  const tags = normalizeTags(Array.isArray(v.tags) ? v.tags : []);
+  const tags = normalizeSessionAnnotationTags(Array.isArray(v.tags) ? v.tags : []);
   const note = normalizeNote(typeof v.note === "string" ? v.note : "");
   return {
     fsPath: v.fsPath.trim(),
@@ -280,7 +284,8 @@ function sanitizeAnnotation(value: unknown): SessionAnnotation | null {
   };
 }
 
-function normalizeTags(values: readonly unknown[]): string[] {
+// Keep automatic inheritance and user edits subject to the same tag rules.
+export function normalizeSessionAnnotationTags(values: readonly unknown[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   for (const raw of values) {
@@ -305,8 +310,9 @@ function normalizeNote(value: unknown): string {
   return s.length > 500 ? s.slice(0, 500) : s;
 }
 
-function isSameAnnotation(
-  current: SessionAnnotation | undefined,
+// Compare normalized content without treating timestamps or paths as edits.
+export function isSameSessionAnnotationContent(
+  current: SessionAnnotation | null | undefined,
   nextTags: readonly string[],
   nextNote: string,
 ): boolean {

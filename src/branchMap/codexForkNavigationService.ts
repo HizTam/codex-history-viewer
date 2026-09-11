@@ -6,6 +6,7 @@ import type { ChatSessionModel } from "../chat/chatTypes";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { stableTextSha256 } from "../utils/stableTextHash";
 import { resolveCodexLogicalHistoryPlan } from "../sessions/codexHistoryBase";
+import { buildCodexRolloutNavigationInventory, findSessionHistorySource } from "../sessions/codexRolloutRevisions";
 import { getInitialBranchOverlayGroupPageSize } from "./branchOverlayPaging";
 import type {
   ClaudeBranchCommonRange,
@@ -51,7 +52,7 @@ const MAX_CONTROL_CHOICES = 20;
 const GROUP_PAGE_SIZE = 2;
 const INITIAL_CHOICE_PAGE_SIZE = 20;
 const CHOICE_PAGE_SIZE = 20;
-const CODEX_FORK_NAVIGATION_ALGORITHM_VERSION = 2;
+const CODEX_FORK_NAVIGATION_ALGORITHM_VERSION = 6;
 
 interface EvidenceCacheEntry {
   cacheKey: string;
@@ -71,6 +72,7 @@ interface EvidenceLoadResult {
 interface CodexForkSessionFileState {
   signature: string;
   logicalSize: number;
+  complete?: boolean;
 }
 
 interface PresentationBuildResult {
@@ -152,28 +154,34 @@ export class CodexForkNavigationService {
 
     const index = this.historyService.getIndex();
     const indexGeneration = this.historyService.getIndexGeneration();
-    const indexedBase = index.byCacheKey.get(baseSession.cacheKey);
+    const sourceBase = findSessionHistorySource(index, baseSession.cacheKey);
     if (
-      !indexedBase ||
-      indexedBase.source !== "codex" ||
-      indexedBase.identityKey !== baseSession.identityKey
+      !sourceBase ||
+      sourceBase.source !== "codex" ||
+      sourceBase.identityKey !== baseSession.identityKey
     ) {
       return buildEmptySnapshot(baseSession, indexGeneration);
     }
     this.assertCurrent(index, indexGeneration, options);
 
-    const relationSessions = index.sessions.filter(
+    const routes = buildCodexRolloutNavigationInventory(index);
+    const indexedBase = routes.sessions.find((session) => session.cacheKey === baseSession.cacheKey);
+    if (!indexedBase) return buildEmptySnapshot(baseSession, indexGeneration);
+    const relationSessions = routes.sessions.filter(
       (session) =>
         session.source !== "codex" ||
         this.historyService.isCodexAgentMetadataVerified(session),
     );
-    const metadataPartial = relationSessions.length !== index.sessions.length;
+    const metadataPartial = relationSessions.length !== routes.sessions.length;
     if (!this.historyService.isCodexAgentMetadataVerified(indexedBase)) {
       return buildMetadataIncompleteSnapshot(indexedBase, indexGeneration);
     }
 
     const metadataComponent = this.relationService.build({
       sessions: relationSessions,
+      revisionParentByCacheKey: routes.revisionParentByCacheKey,
+      forkHistoryParentByCacheKey: routes.forkHistoryParentByCacheKey,
+      forkParentCandidateCacheKeys: routes.representativeCacheKeys,
       currentSessionCacheKey: indexedBase.cacheKey,
     });
     const componentSessions = orderComponentSessionsForEvidence(
@@ -184,6 +192,7 @@ export class CodexForkNavigationService {
     if (!metadataComponent.hasSupportedRelation || componentSessions.length < 2) {
       return buildSnapshot({
         baseSession: indexedBase,
+        sourceIdentityByCacheKey: routes.sourceIdentityByCacheKey,
         indexGeneration,
         sessions: componentSessions.length > 0 ? componentSessions : [indexedBase],
         component: metadataComponent,
@@ -249,19 +258,25 @@ export class CodexForkNavigationService {
 
     const component = this.relationService.build({
       sessions: relationSessions,
+      revisionParentByCacheKey: routes.revisionParentByCacheKey,
+      forkHistoryParentByCacheKey: routes.forkHistoryParentByCacheKey,
+      forkParentCandidateCacheKeys: routes.representativeCacheKeys,
       currentSessionCacheKey: indexedBase.cacheKey,
       evidenceByIdentityKey,
     });
     this.assertCurrent(index, indexGeneration, options);
     return buildSnapshot({
       baseSession: indexedBase,
+      sourceIdentityByCacheKey: routes.sourceIdentityByCacheKey,
       indexGeneration,
       sessions: component.nodes.flatMap((node) => node.session ? [node.session] : []),
       component,
       inventoryByCacheKey,
       evidenceByIdentityKey,
       loadPartial: metadataPartial || loadPartial,
-      getPresentationState: this.getPresentationState,
+      getPresentationState: (session, anchor) => this.getPresentationState(
+        findSessionHistorySource(index, session.cacheKey) ?? session, anchor,
+      ),
     });
   }
 
@@ -280,11 +295,12 @@ export class CodexForkNavigationService {
       return undefined;
     }
     const index = this.historyService.getIndex();
-    const activeSession = index.byCacheKey.get(activeSessionCacheKey);
+    const activeSession = findSessionHistorySource(index, activeSessionCacheKey);
     if (
       !activeSession ||
       activeSession.source !== "codex" ||
-      !snapshot.sessions.some((session) => session.identityKey === activeSession.identityKey)
+      !snapshot.sessions.some((session) => session.cacheKey === activeSession.cacheKey &&
+        (snapshot.sourceIdentityByCacheKey?.get(session.cacheKey) ?? session.identityKey) === activeSession.identityKey)
     ) {
       return undefined;
     }
@@ -297,8 +313,9 @@ export class CodexForkNavigationService {
       activeChatMessageIndex,
     );
     if (!target) return undefined;
-    const session = index.byCacheKey.get(target.sessionCacheKey);
-    if (!session || session.identityKey !== target.sessionIdentityKey || session.source !== "codex") {
+    const session = findSessionHistorySource(index, target.sessionCacheKey);
+    const sourceIdentity = snapshot.sourceIdentityByCacheKey?.get(target.sessionCacheKey) ?? target.sessionIdentityKey;
+    if (!session || session.identityKey !== sourceIdentity || session.source !== "codex") {
       return undefined;
     }
     return { target, session };
@@ -344,12 +361,12 @@ export class CodexForkNavigationService {
     const entries = Array.from(snapshot.inventoryByCacheKey.values());
     const valid = await mapWithConcurrency(entries, LOAD_CONCURRENCY, async (expected) => {
       const captured = sessionByCacheKey.get(expected.cacheKey);
-      const currentSession = index.byCacheKey.get(expected.cacheKey);
+      const currentSession = findSessionHistorySource(index, expected.cacheKey);
       if (
         !captured ||
         !currentSession ||
         currentSession.source !== "codex" ||
-        currentSession.identityKey !== captured.identityKey ||
+        currentSession.identityKey !== (snapshot.sourceIdentityByCacheKey?.get(expected.cacheKey) ?? captured.identityKey) ||
         currentSession.fsPath !== captured.fsPath
       ) {
         return false;
@@ -387,7 +404,7 @@ export class CodexForkNavigationService {
       }
       const beforeState = await this.captureSessionFileState(session, before);
       const signature = beforeState.signature;
-      if (beforeState.logicalSize > MAX_SESSION_FILE_SIZE) {
+      if (beforeState.complete === false || beforeState.logicalSize > MAX_SESSION_FILE_SIZE) {
         return {
           session,
           inventory: {
@@ -455,7 +472,7 @@ export class CodexForkNavigationService {
           failed: true,
         };
       }
-      const evidence = buildCodexForkSessionEvidence(model.items);
+      const evidence = buildCodexForkSessionEvidence(model.items, model.codexHasRollback);
       this.storeCachedEvidence(session.cacheKey, signature, evidence);
       return {
         session,
@@ -514,6 +531,7 @@ export class CodexForkNavigationService {
       return {
         signature: stableTextSha256(`${leafSignature}\u0000${plan.signature}`).slice(0, 32),
         logicalSize: getLogicalHistorySize(plan.segments),
+        complete: plan.complete,
       };
     } catch {
       return {
@@ -789,6 +807,7 @@ export function resolveCodexForkNavigationTarget(
 
 function buildSnapshot(input: {
   baseSession: SessionSummary;
+  sourceIdentityByCacheKey?: ReadonlyMap<string, string>;
   indexGeneration: number;
   sessions: readonly SessionSummary[];
   component: CodexForkNavigationSnapshot["component"];
@@ -823,6 +842,9 @@ function buildSnapshot(input: {
   ).slice(0, 32)}`;
   return {
     source: "codex",
+    ...(input.sourceIdentityByCacheKey ? { sourceIdentityByCacheKey: new Map(input.sessions.map((session) => [
+      session.cacheKey, input.sourceIdentityByCacheKey!.get(session.cacheKey) ?? session.identityKey,
+    ])) } : {}),
     baseSessionCacheKey: input.baseSession.cacheKey,
     baseSessionIdentityKey: input.baseSession.identityKey,
     indexGeneration: input.indexGeneration,
@@ -940,8 +962,9 @@ function buildPresentation(
     const parentChoice = buildPresentationChoice({
       groupId: group.id,
       kind: "parentContinuation",
+      ...(group.childEdges.some((edge) => edge.kind === "edit") ? { historyKind: "beforeEdit" as const } : {}),
       session: parent,
-      preBranch: firstEdge.anchor.parent,
+      preBranch: firstEdge.anchor.commonMessageCount > 0 ? firstEdge.anchor.parent : undefined,
       branchStart: parentStart,
       inventory: inventoryByCacheKey.get(parent.cacheKey),
       evidence: evidenceByIdentityKey.get(parent.identityKey),
@@ -962,8 +985,9 @@ function buildPresentation(
       const choice = buildPresentationChoice({
         groupId: group.id,
         kind: "child",
+        historyKind: edge.kind === "edit" ? "afterEdit" : "fork",
         session: child,
-        preBranch: edge.anchor.child,
+        preBranch: edge.anchor.commonMessageCount > 0 ? edge.anchor.child : undefined,
         branchStart: childStart,
         inventory: inventoryByCacheKey.get(child.cacheKey),
         evidence: evidenceByIdentityKey.get(child.identityKey),
@@ -1065,7 +1089,7 @@ function buildPresentation(
     })),
     targetById,
     partial:
-      anchoredEdges.length !== component.forkCount ||
+      anchoredEdges.length !== component.forkCount + (component.editCount ?? 0) ||
       hasIncompleteChoices ||
       hasDetachedRebasedGroup ||
       usableGroups.length !== mutableGroups.length ||
@@ -1129,8 +1153,9 @@ function coalesceRebasedSameAnchorGroups(
 function buildPresentationChoice(input: {
   groupId: string;
   kind: CodexForkPresentationChoice["kind"];
+  historyKind?: CodexForkPresentationChoice["historyKind"];
   session: SessionSummary;
-  preBranch: ClaudeBranchMessageAnchor;
+  preBranch?: ClaudeBranchMessageAnchor;
   branchStart: ClaudeBranchMessageAnchor;
   inventory?: CodexForkFileInventoryEntry;
   evidence?: CodexForkSessionEvidence;
@@ -1164,7 +1189,7 @@ function buildPresentationChoice(input: {
     sessionIdentityKey: input.session.identityKey,
     sessionCacheKey: input.session.cacheKey,
     ...(first ? { historyFirst: toDisplayAnchor(first) } : {}),
-    preBranch: toDisplayAnchor(input.preBranch),
+    ...(input.preBranch ? { preBranch: toDisplayAnchor(input.preBranch) } : {}),
     branchStart: toDisplayAnchor(input.branchStart),
     ...(last ? { historyEnd: toDisplayAnchor(last) } : {}),
     ...presentationState,
@@ -1180,6 +1205,7 @@ function buildPresentationChoice(input: {
   return {
     id: choiceId,
     kind: input.kind,
+    ...(input.historyKind ? { historyKind: input.historyKind } : {}),
     sessionIdentityKey: input.session.identityKey,
     preview:
       occurrence.branchStart.preview?.trim() ||
@@ -1294,6 +1320,7 @@ function buildChoiceView(
   const source = choice.occurrence;
   const occurrence: ClaudeBranchOccurrenceOption = {
     id: source.id,
+    ...(choice.historyKind ? { historyKind: choice.historyKind } : {}),
     sessionLabel: session?.displayTitle.trim() ?? "",
     isCurrent: choiceIndex === currentChoiceIndex,
     ...(source.historyFirst ? { historyFirst: source.historyFirst } : {}),

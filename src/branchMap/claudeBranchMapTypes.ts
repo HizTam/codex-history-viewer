@@ -81,6 +81,7 @@ export interface ClaudeBranchMessageAnchor {
 
 export interface ClaudeBranchOccurrenceOption {
   id: string;
+  historyKind?: "beforeEdit" | "afterEdit" | "fork";
   sessionLabel: string;
   isCurrent: boolean;
   historyFirst?: ClaudeBranchMessageAnchor;

@@ -35,6 +35,7 @@ export interface CodexForkPresentationOccurrence {
 export interface CodexForkPresentationChoice {
   id: string;
   kind: "parentContinuation" | "child";
+  historyKind?: "beforeEdit" | "afterEdit" | "fork";
   sessionIdentityKey: string;
   preview: string;
   occurrence: CodexForkPresentationOccurrence;
@@ -52,6 +53,7 @@ export interface CodexForkPresentationGroup {
 
 export interface CodexForkNavigationSnapshot {
   source: "codex";
+  sourceIdentityByCacheKey?: ReadonlyMap<string, string>;
   baseSessionCacheKey: string;
   baseSessionIdentityKey: string;
   indexGeneration: number;

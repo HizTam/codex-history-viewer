@@ -214,6 +214,8 @@ export interface ChatMessageItem {
   effort?: string;
   text: string;
   requestText?: string;
+  // Verified native terminal input remains a user message.
+  isTerminalInput?: true;
   questionReplies?: readonly ChatQuestionReply[];
   attachments?: ChatAttachment[];
   memoryCitation?: ChatMemoryCitation;
@@ -267,7 +269,7 @@ export interface ChatToolExecution {
   error?: string;
 }
 
-export type ChatSystemEventKind = "requestInterrupted" | "localCommandOutput";
+export type ChatSystemEventKind = "requestInterrupted" | "localCommandOutput" | "terminalOutput";
 export type ChatSystemEventScope = "request" | "toolUse";
 
 export interface ChatSystemEventItem {
@@ -282,6 +284,12 @@ export interface ChatSystemEventItem {
   rolledBack?: boolean;
   rolledBackTurns?: number;
   output?: string;
+  // Terminal output retains its physical message anchor without becoming a user request.
+  messageIndex?: number;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: string;
+  truncated?: boolean;
 }
 
 export type ChatTokenUsageField =
@@ -416,6 +424,7 @@ export interface ChatNoteItem {
 }
 
 export interface ChatSessionModel {
+  codexHasRollback?: boolean;
   fsPath: string;
   meta: ChatSessionMeta;
   sessionLocation?: ChatSessionLocation;

@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import {
   createChatTimelineRecordAccumulator,
 } from "../chat/chatModelBuilder";
@@ -280,6 +281,7 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
     if (completeness === "partial") input.performanceProbe?.setOutcome("partial");
     return {
       cacheKey: session.cacheKey,
+      ...(session.codexRollbackRevision !== undefined ? { codexRollbackRevision: session.codexRollbackRevision } : {}),
       identityKey: session.identityKey,
       fsPath: session.fsPath,
       source: session.source,
@@ -819,6 +821,7 @@ async function runAnalysisRecordPipeline(
   throwIfAnalysisCancelled(input);
 
   for await (const envelope of readAnalysisRecordEnvelopes(session.fsPath, session.source, {
+    applyCodexRollbacks: true,
     sessionInventory: input.sessionInventory,
     plan: input.historyPlan,
     token: input.token,
@@ -1006,13 +1009,14 @@ async function buildRawClaudeRecord(
     !isCrossSessionInbound &&
     obj?.isMeta !== true &&
     !extractClaudeRequestInterruptionContent(controlContent) &&
-    !extractClaudeLocalCommandOutputContent(controlContent)
+    !extractClaudeLocalCommandOutputContent(controlContent) &&
+    !extractClaudeTerminalOutput(obj, controlContent)
   ) {
     const extracted = await extractClaudeMessageContent(
       rawContent,
       sessionCwd,
       { enabled: false, maxBytes: 1024 * 1024 },
-      { role: "user", pastedPrompt },
+      { role: "user", pastedPrompt, record: obj },
     );
     const compact = extractCompactUserText(extracted.text);
     if (compact || extracted.attachments.length > 0) {
@@ -1322,6 +1326,7 @@ function buildUnavailableEntry(
   };
   return {
     cacheKey: input.session.cacheKey,
+    ...(input.session.codexRollbackRevision !== undefined ? { codexRollbackRevision: input.session.codexRollbackRevision } : {}),
     identityKey: input.session.identityKey,
     fsPath: input.session.fsPath,
     source: input.session.source,

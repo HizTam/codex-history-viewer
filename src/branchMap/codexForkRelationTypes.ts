@@ -17,6 +17,7 @@ export interface CodexForkMessageEvidence {
 }
 
 export interface CodexForkSessionEvidence {
+  hasRollback?: boolean;
   messages: CodexForkMessageEvidence[];
   truncated: boolean;
 }
@@ -37,6 +38,7 @@ export interface CodexForkBranchAnchor {
 }
 
 export interface CodexForkRelationEdge {
+  kind?: "edit";
   childIdentityKey: string;
   parentThreadId: string;
   status: CodexForkEdgeStatus;
@@ -58,6 +60,7 @@ export interface CodexForkRelationNode {
 export interface CodexForkComponent {
   sessionCount: number;
   forkCount: number;
+  editCount?: number;
   hasSupportedRelation: boolean;
   relationPartial: boolean;
   omittedCount: number;
@@ -72,6 +75,9 @@ export interface CodexForkComponent {
 
 export interface CodexForkRelationBuildInput {
   sessions: readonly SessionSummary[];
+  revisionParentByCacheKey?: ReadonlyMap<string, string>;
+  forkHistoryParentByCacheKey?: ReadonlyMap<string, string>;
+  forkParentCandidateCacheKeys?: ReadonlySet<string>;
   currentSessionCacheKey: string;
   evidenceByIdentityKey?: ReadonlyMap<string, CodexForkSessionEvidence>;
 }

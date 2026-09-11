@@ -10,6 +10,7 @@ import type { DebugLogger } from "../services/logger";
 import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
 import type { SessionSummary } from "../sessions/sessionTypes";
+import { resolveCodexRolloutMainline } from "../sessions/codexRolloutRevisions";
 import { mapAssociatedProjectPath } from "../services/projectPathMapper";
 import { getConfig, type CodexHistoryViewerConfig } from "../settings";
 import { getDateTimeSettingsKey, resolveDateTimeSettings } from "../utils/dateTimeSettings";
@@ -53,6 +54,7 @@ const SNAPSHOT_STATE_KEY = "codexHistoryViewer.historyInsights.snapshot.v1";
 const LONG_RUNNING_PROGRESS_DELAY_MS = 2_000;
 
 interface HistoryInsightsPanelState {
+  codexRollbackRevisions?: ReadonlyMap<string, number>;
   snapshot: HistoryInsightsSnapshot;
   generation: number;
   loading: boolean;
@@ -194,6 +196,29 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
     this.startLoad("refresh", true);
   }
 
+  public refreshCodexRolloutMainlines(): void {
+    const panel = this.panel;
+    if (!panel || !this.state || !this.historyService.isCurrentIndexForConfig(getConfig())) return;
+    this.runObservedAsync("rolloutMainline", () => this.enqueuePanelTransition(async () => {
+      const state = this.state;
+      if (!state || this.panel !== panel || !this.historyService.isCurrentIndexForConfig(getConfig())) return;
+      const index = this.historyService.getIndex();
+      const changed = state.snapshot.references.some((reference) => {
+        const mainline = resolveCodexRolloutMainline(index, reference.cacheKey);
+        return mainline?.source === "codex" && mainline.identityKey === reference.identityKey && (
+          mainline.cacheKey !== reference.cacheKey ||
+          (mainline.codexRollbackRevision ?? 0) !== (state.codexRollbackRevisions?.get(reference.cacheKey) ?? 0)
+        );
+      });
+      if (!changed) return;
+      const resolved = resolveHistoryInsightsSnapshot(state.snapshot, index.sessions);
+      this.resetState(resolved.snapshot, state.loadCancelledByUser);
+      if (!this.ready || !(await this.sendBootstrapForCurrentState("rolloutMainline.bootstrap", panel))) return;
+      if (state.loadCancelledByUser) await this.sendCancelledObserved(panel, this.state);
+      else this.startLoad("initial");
+    }), panel);
+  }
+
   public open(snapshot: HistoryInsightsSnapshot): Promise<void> {
     const activeFilterApplication = this.filterApplication;
     return this.enqueuePanelTransition(async () => {
@@ -295,6 +320,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
     this.cancelCurrent();
     this.state = {
       snapshot,
+      codexRollbackRevisions: this.captureCodexRollbackRevisions(snapshot),
       generation: ++this.generationCounter,
       loading: false,
       transitioning: false,
@@ -305,6 +331,18 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       sessionById: new Map(),
       filterSelectionByOptionId: new Map(),
     };
+  }
+
+  private captureCodexRollbackRevisions(snapshot: HistoryInsightsSnapshot): ReadonlyMap<string, number> {
+    const index = this.historyService.getIndex();
+    const revisions = new Map<string, number>();
+    for (const reference of snapshot.references) {
+      const session = index.byCacheKey.get(reference.cacheKey);
+      if (session?.identityKey === reference.identityKey && session.codexRollbackRevision !== undefined) {
+        revisions.set(reference.cacheKey, session.codexRollbackRevision);
+      }
+    }
+    return revisions;
   }
 
   private async handleMessage(panel: vscode.WebviewPanel, message: unknown): Promise<void> {
@@ -587,6 +625,9 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       const resolved = resolveHistoryInsightsSnapshot(state.snapshot, activeSessions);
       state.snapshot = resolved.snapshot;
       const sessions = resolved.sessions;
+      state.codexRollbackRevisions = new Map(sessions
+        .filter(session => session.codexRollbackRevision !== undefined)
+        .map(session => [session.cacheKey, session.codexRollbackRevision!]));
       const projectContextBySessionKey = this.buildProjectContextMap(sessions);
       const sessionPresentationByIdentityKey = new Map(sessions.map((session) => [
         session.identityKey,
@@ -1341,7 +1382,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
     const selectedTagKeys = new Set(snapshot.descriptor.tags.map((tag) => tag.trim().toLocaleLowerCase()).filter(Boolean));
     const tagCandidates = [
       ...snapshot.descriptor.tags,
-      ...this.annotationStore.listTagStats().map((entry) => entry.tag),
+      ...this.annotationStore.listTagStats(this.historyService.getIndex()).map((entry) => entry.tag),
     ];
     const seenTagKeys = new Set<string>();
     const tagOptions: HistoryInsightsFilterOption[] = [];

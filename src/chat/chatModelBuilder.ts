@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { extractClaudeTerminalOutput } from "./claudeTerminalOutput";
 import type {
   ChatAttachment,
   ChatEnvironmentItem,
@@ -121,6 +122,7 @@ export interface ChatSessionModelWithActivityEvidence {
 }
 
 export interface ChatTimelineBuildResult {
+  codexHasRollback?: boolean;
   items: ChatTimelineItem[];
   turns?: ChatTurnSummary[];
   activeTurnId?: string;
@@ -173,6 +175,7 @@ async function buildChatSessionModelInternal(
     fsPath,
     meta,
     items: timeline.items,
+    ...(timeline.codexHasRollback ? { codexHasRollback: true } : {}),
     ...(timeline.turns && timeline.turns.length > 0 ? { turns: timeline.turns } : {}),
     ...(timeline.activeTurnId ? { activeTurnId: timeline.activeTurnId } : {}),
     ...(timeline.latestTurnId ? { latestTurnId: timeline.latestTurnId } : {}),
@@ -235,7 +238,10 @@ async function readTimelineItems(
     options,
     collectActivityEvidence,
   );
+  let codexHasRollback = false;
   for await (const record of readSessionJsonlRecords(fsPath, source, {
+    applyCodexRollbacks: true,
+    onCodexRollback: () => { codexHasRollback = true; },
     sessionInventory: options.sessionInventory,
     plan: options.historyPlan,
     performanceProbe: options.performanceProbe,
@@ -243,7 +249,7 @@ async function readTimelineItems(
     const pending = accumulator.accept(record);
     if (pending) await pending;
   }
-  return accumulator.finalize();
+  return { ...accumulator.finalize(), ...(codexHasRollback ? { codexHasRollback: true } : {}) };
 }
 
 export async function createChatTimelineRecordAccumulator(
@@ -454,7 +460,7 @@ async function readPatchEntryDetails(
     else entriesByGroup.set(groupKey, [...entries]);
   };
 
-  for await (const record of readSessionJsonlRecords(fsPath, source, { sessionInventory })) {
+  for await (const record of readSessionJsonlRecords(fsPath, source, { sessionInventory, applyCodexRollbacks: true })) {
     const obj = record.value;
     const lineIndex = record.lineIndex;
 
@@ -520,8 +526,12 @@ async function readPatchEntryDetails(
       continue;
     }
     if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
+    if (extractClaudeTerminalOutput(obj, controlContent)) {
+      messageIndex += 1;
+      continue;
+    }
     const parsed = parseClaudeMessageContent(rawContent);
-    const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, { enabled: false }, { role, pastedPrompt });
+    const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, { enabled: false }, { role, pastedPrompt, record: obj });
     const compactUserText = role === "user" ? extractCompactUserText(normalizeText(extracted.text)) : null;
     const turnResolution = resolveClaudeRecordTurnId(
       obj,
@@ -1065,10 +1075,27 @@ async function indexClaudeTimelineRecord(
     return true;
   }
 
+  const terminalOutput = extractClaudeTerminalOutput(obj, controlContent);
+  if (terminalOutput) {
+    const turnId = claudeTurnState?.turnState.activeTurnId;
+    items.push({
+      type: "systemEvent",
+      kind: "terminalOutput",
+      source: "claude",
+      messageIndex: nextMessageIndex(),
+      ...terminalOutput,
+      ...(ts ? { timestampIso: ts } : {}),
+      ...(turnId ? { turnId } : {}),
+    });
+    observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
+    return true;
+  }
+
   const parsed = parseClaudeMessageContent(rawContent);
   const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, toImageExtractionOptions(options.images), {
     role,
     pastedPrompt,
+    record: obj,
   });
   const attachments = extracted.attachments;
   const text = normalizeText(extracted.text);
@@ -1108,6 +1135,7 @@ async function indexClaudeTimelineRecord(
       ...modelMeta,
       text,
       requestText,
+      ...(extracted.isTerminalInput === true ? { isTerminalInput: true as const } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       isContext,
     });
@@ -3743,7 +3771,8 @@ function normalizePatchSignaturePath(value: string | undefined): string {
   const tabIndex = text.indexOf("\t");
   if (tabIndex >= 0) text = text.slice(0, tabIndex).trim();
   if (text.startsWith("a/") || text.startsWith("b/")) text = text.slice(2);
-  if (text === "/dev/null") return "";
+  // An absent path must not become "." and match every other absent path.
+  if (!text || text === "/dev/null") return "";
   return path.normalize(text).replace(/\\/g, "/");
 }
 

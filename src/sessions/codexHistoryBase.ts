@@ -10,6 +10,7 @@ import type {
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { stableTextSha256 } from "../utils/stableTextHash";
 import type { PerformanceProbe } from "../performance/performanceCounters";
+import { CodexRollbackTracker, type CodexRollbackProjection } from "./codexRollbackHistory";
 
 const MAX_HISTORY_ID_LENGTH = 256;
 const MAX_HISTORY_DEPTH = 32;
@@ -63,6 +64,8 @@ export interface SessionJsonlLine {
 }
 
 export interface SessionJsonlReadOptions {
+  readonly applyCodexRollbacks?: boolean;
+  readonly onCodexRollback?: () => void;
   readonly sessionInventory?: readonly SessionSummary[];
   readonly plan?: CodexLogicalHistoryPlan;
   readonly token?: { readonly isCancellationRequested: boolean };
@@ -82,6 +85,9 @@ interface Catalog {
 }
 
 const catalogByInventory = new WeakMap<readonly SessionSummary[], Catalog>();
+const rollbackProjectionCache = new Map<string, CodexRollbackProjection>();
+const MAX_ROLLBACK_CACHE_ENTRIES = 128;
+const MAX_CACHED_ROLLBACK_RANGES = 2_048;
 
 class CodexHistoryResolutionError extends Error {
   constructor(readonly issue: CodexHistoryPlanIssue) {
@@ -165,6 +171,17 @@ export function extractCodexRolloutIdFromPath(fsPath: string): string {
   return normalizeCodexHistoryId(match?.[1]);
 }
 
+// Reuse the reader's exact candidate rules when presenting physical history revisions.
+export function findCodexHistoryParent(
+  session: SessionSummary,
+  sessionInventory: readonly SessionSummary[],
+): SessionSummary | undefined {
+  const base = sanitizeCachedCodexHistoryBaseMetadata(session.meta.codexHistoryBase).value;
+  if (session.source !== "codex" || !base) return undefined;
+  const candidates = resolveCatalogCandidates(getOrBuildCatalog(sessionInventory), base.sourceRolloutId);
+  return candidates.length === 1 && candidates[0]?.cacheKey !== session.cacheKey ? candidates[0] : undefined;
+}
+
 export async function resolveCodexLogicalHistoryPlan(
   leafFsPath: string,
   sessionInventory: readonly SessionSummary[] | undefined,
@@ -188,55 +205,67 @@ export async function resolveCodexLogicalHistoryPlan(
   }
 }
 
-export async function* readSessionJsonlRecords(
+export function readSessionJsonlRecords(
   fsPath: string,
   source: SessionSource,
   options: SessionJsonlReadOptions = {},
 ): AsyncGenerator<SessionJsonlRecord> {
-  const performanceProbe = options.performanceProbe;
-  for await (const record of readSessionJsonlLines(fsPath, source, options)) {
-    if (!record.line) continue;
-    let value: any;
-    try {
-      value = JSON.parse(record.line);
-      performanceProbe?.add("parseSuccessCount");
-    } catch {
-      performanceProbe?.add("malformedLineCount");
-      continue;
-    }
-    yield {
-      value,
-      lineIndex: record.lineIndex,
-      physicalLineIndex: record.physicalLineIndex,
-      sourceFsPath: record.sourceFsPath,
-      isLeaf: record.isLeaf,
-    };
-  }
+  return readSessionJsonlEntries(fsPath, source, options, true);
 }
 
-export async function* readSessionJsonlLines(
+export function readSessionJsonlLines(
   fsPath: string,
   source: SessionSource,
   options: SessionJsonlReadOptions = {},
 ): AsyncGenerator<SessionJsonlLine> {
+  return readSessionJsonlEntries(fsPath, source, options, false);
+}
+
+function readSessionJsonlEntries(
+  fsPath: string,
+  source: SessionSource,
+  options: SessionJsonlReadOptions,
+  parseRecords: true,
+): AsyncGenerator<SessionJsonlRecord>;
+function readSessionJsonlEntries(
+  fsPath: string,
+  source: SessionSource,
+  options: SessionJsonlReadOptions,
+  parseRecords: false,
+): AsyncGenerator<SessionJsonlLine>;
+// Share stream ownership without forwarding every parsed record through a second async iterator.
+async function* readSessionJsonlEntries(
+  fsPath: string,
+  source: SessionSource,
+  options: SessionJsonlReadOptions,
+  parseRecords: boolean,
+): AsyncGenerator<SessionJsonlLine | SessionJsonlRecord> {
   const performanceProbe = options.performanceProbe;
   throwIfCancelled(options.token, options.cancellationErrorFactory);
   const providedPlan = options.plan &&
     normalizeCacheKey(options.plan.leafFsPath) === normalizeCacheKey(fsPath)
       ? options.plan
       : undefined;
-  const plan = providedPlan ?? (
+  let plan = providedPlan ?? (
     source === "codex" && options.sessionInventory
       ? await resolveCodexLogicalHistoryPlan(fsPath, options.sessionInventory)
       : uncheckedPhysicalPlan(fsPath)
   );
+  let projection: CodexRollbackProjection | undefined;
+  if (source === "codex" && options.applyCodexRollbacks) {
+    const resolved = await resolveRollbackProjection(plan, Boolean(providedPlan), options);
+    plan = resolved.plan;
+    projection = resolved.projection;
+    if (projection.hasRollback) options.onCodexRollback?.();
+  }
+  let rangeIndex = 0;
   let lineIndex = 0;
   for (const segment of plan.segments) {
     throwIfCancelled(options.token, options.cancellationErrorFactory);
     performanceProbe?.add("segmentCount");
     // A resolved plan is a point-in-time snapshot; do not consume bytes appended after it was fixed.
     const readEndByteOffset = segment.endByteOffset ?? (
-      providedPlan && Number.isSafeInteger(segment.size) && segment.size >= 0
+      (providedPlan || projection) && Number.isSafeInteger(segment.size) && segment.size >= 0
         ? segment.size
         : undefined
     );
@@ -260,18 +289,124 @@ export async function* readSessionJsonlLines(
           performanceProbe.add("logicalLineCount");
           performanceProbe.add("readByteEstimatedCount", Buffer.byteLength(line, "utf8") + 1);
         }
-        yield {
-          line,
-          lineIndex,
-          physicalLineIndex,
-          sourceFsPath: segment.fsPath,
-          isLeaf: segment.isLeaf,
-        };
+        while (projection?.ranges[rangeIndex] && projection.ranges[rangeIndex]!.endLineIndex < lineIndex) {
+          rangeIndex += 1;
+        }
+        if (projection?.ranges[rangeIndex] && projection.ranges[rangeIndex]!.startLineIndex <= lineIndex) continue;
+        if (parseRecords) {
+          // Count every physical line before skipping empty or malformed records.
+          if (!line) continue;
+          let value: any;
+          try {
+            value = JSON.parse(line);
+            performanceProbe?.add("parseSuccessCount");
+          } catch {
+            performanceProbe?.add("malformedLineCount");
+            continue;
+          }
+          yield {
+            value,
+            lineIndex,
+            physicalLineIndex,
+            sourceFsPath: segment.fsPath,
+            isLeaf: segment.isLeaf,
+          };
+        } else {
+          yield {
+            line,
+            lineIndex,
+            physicalLineIndex,
+            sourceFsPath: segment.fsPath,
+            isLeaf: segment.isLeaf,
+          };
+        }
       }
     } finally {
       rl.close();
       stream.close();
     }
+  }
+}
+
+// Summary scanning already visits every record, so it can warm the same bounded projection cache.
+export function cachePhysicalCodexRollbackProjection(
+  fsPath: string,
+  fileState: { readonly size: number; readonly mtimeMs: number },
+  projection: CodexRollbackProjection,
+): void {
+  cacheRollbackProjection(rollbackProjectionKey([{
+    fsPath, cacheKey: normalizeCacheKey(fsPath), ...fileState, isLeaf: true,
+  }]), projection);
+}
+
+async function resolveRollbackProjection(
+  plan: CodexLogicalHistoryPlan,
+  hasProvidedPlan: boolean,
+  options: SessionJsonlReadOptions,
+): Promise<{ plan: CodexLogicalHistoryPlan; projection: CodexRollbackProjection }> {
+  const segments: CodexLogicalHistorySegment[] = [];
+  for (const segment of plan.segments) {
+    throwIfCancelled(options.token, options.cancellationErrorFactory);
+    if (segment.endByteOffset === 0 || (hasProvidedPlan && segment.size === 0)) continue;
+    options.performanceProbe?.add("statCount");
+    const state = await stat(segment.fsPath);
+    segments.push({
+      ...segment,
+      size: state.size,
+      mtimeMs: state.mtimeMs,
+      endByteOffset: segment.endByteOffset ?? (hasProvidedPlan ? segment.size : state.size),
+    });
+  }
+  const snapshot = { ...plan, segments };
+  const key = rollbackProjectionKey(segments);
+  const cached = rollbackProjectionCache.get(key);
+  if (cached) {
+    rollbackProjectionCache.delete(key);
+    rollbackProjectionCache.set(key, cached);
+    return { plan: snapshot, projection: cached };
+  }
+  const tracker = new CodexRollbackTracker();
+  // Do not yield records before later rollback markers have been observed.
+  for await (const record of readSessionJsonlLines(plan.leafFsPath, "codex", {
+    ...options, plan: snapshot, applyCodexRollbacks: false, onCodexRollback: undefined,
+  })) {
+    // Explicit turn bodies cannot change the boundary stack. Escaped JSON names take the full parser path.
+    if (tracker.isWithinExplicitTurn && !/task_started|task_complete|thread_rolled_back|\\u[0-9a-f]{4}/iu.test(record.line)) continue;
+    if (!record.line) continue;
+    let value: unknown;
+    try {
+      value = JSON.parse(record.line);
+      options.performanceProbe?.add("parseSuccessCount");
+    } catch {
+      options.performanceProbe?.add("malformedLineCount");
+      continue;
+    }
+    tracker.accept(value, record.lineIndex);
+  }
+  const projection = tracker.finalize();
+  let unchanged = true;
+  for (const segment of segments) {
+    throwIfCancelled(options.token, options.cancellationErrorFactory);
+    options.performanceProbe?.add("statCount");
+    const state = await stat(segment.fsPath);
+    if (state.size !== segment.size || state.mtimeMs !== segment.mtimeMs) unchanged = false;
+  }
+  if (unchanged) cacheRollbackProjection(key, projection);
+  return { plan: snapshot, projection };
+}
+
+function rollbackProjectionKey(segments: readonly CodexLogicalHistorySegment[]): string {
+  return JSON.stringify(segments.map(segment => [
+    normalizeCacheKey(segment.fsPath), segment.size, segment.mtimeMs, segment.endByteOffset ?? segment.size,
+  ]));
+}
+
+function cacheRollbackProjection(key: string, projection: CodexRollbackProjection): void {
+  if (projection.ranges.length > MAX_CACHED_ROLLBACK_RANGES) return;
+  rollbackProjectionCache.delete(key);
+  rollbackProjectionCache.set(key, projection);
+  while (rollbackProjectionCache.size > MAX_ROLLBACK_CACHE_ENTRIES) {
+    rollbackProjectionCache.delete(rollbackProjectionCache.keys().next().value!);
   }
 }
 

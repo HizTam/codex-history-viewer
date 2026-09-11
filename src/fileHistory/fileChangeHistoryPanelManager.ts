@@ -33,6 +33,8 @@ import {
   type FileChangeHistoryWebviewModel,
 } from "./fileChangeHistoryTypes";
 import { FileChangeHistoryService } from "./fileChangeHistoryService";
+import { resolveCodexRolloutMainline } from "../sessions/codexRolloutRevisions";
+import type { SessionSummary } from "../sessions/sessionTypes";
 
 type StaleReason = "association" | "indexToolContent" | "sources";
 
@@ -42,6 +44,7 @@ interface FileChangeHistoryPanelState {
   restoreScrollAnchor?: FileChangeHistoryScrollAnchor;
   generation: number;
   candidates: FileChangeHistoryCandidate[];
+  sessionSnapshot?: readonly SessionSummary[];
   cards: FileChangeHistoryCard[];
   pendingCards: FileChangeHistoryCard[];
   nextCandidateIndex: number;
@@ -162,6 +165,33 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       const candidates = this.getSearchHistoryCandidates(this.resolvePanelSearchHistoryProjectKey(panel));
       void panel.webview.postMessage({ type: "searchHistoryCandidates", candidates });
     }
+  }
+
+  public refreshCodexRolloutMainlines(): void {
+    if (!this.historyService.isCurrentIndexForConfig(getConfig())) return;
+    for (const panel of this.panelsByKey.values()) {
+      const state = this.stateByPanel.get(panel);
+      if (!state || !this.hasReplacedCodexMainline(state.sessionSnapshot ?? state.candidates.map((candidate) => candidate.session))) continue;
+      const count = Math.max(FILE_CHANGE_HISTORY_PAGE_SIZE, state.cards.length);
+      this.resetPanelState(panel, state.target);
+      this.bookmarkTargetsByPanel.delete(panel);
+      if (!this.readyByPanel.get(panel)) continue;
+      const generation = this.stateByPanel.get(panel)!.generation;
+      // Clear old cards and capabilities before any new analysis or pagination can publish.
+      void this.sendModel(panel, { reason: "reload" }).then(async () => {
+        if (this.stateByPanel.get(panel)?.generation === generation) await this.loadInitial(panel, count, "reload");
+      }).catch(() => this.logger?.debug("file change history mainline refresh failed"));
+    }
+  }
+
+  private hasReplacedCodexMainline(sessions: readonly SessionSummary[]): boolean {
+    const index = this.historyService.getIndex();
+    return sessions.some((session) => {
+      const mainline = resolveCodexRolloutMainline(index, session.cacheKey);
+      return mainline?.source === "codex" && mainline.identityKey === session.identityKey && (
+        mainline.cacheKey !== session.cacheKey || mainline.codexRollbackRevision !== session.codexRollbackRevision
+      );
+    });
   }
 
   private refreshBookmarkState(): void {
@@ -379,7 +409,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       }),
     );
 
-    this.stateByPanel.set(panel, { ...state, loading: true, staleReason: undefined });
+    this.stateByPanel.set(panel, { ...state, loading: true, staleReason: undefined, sessionSnapshot: sessionInventory });
     try {
       await vscode.window.withProgress(
         {
@@ -407,6 +437,10 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
 
           const current = this.stateByPanel.get(panel);
           if (!current || current.generation !== generation) return;
+          if (this.hasReplacedCodexMainline(sessionInventory)) {
+            this.refreshCodexRolloutMainlines();
+            return;
+          }
           await this.sendLoading(panel, "collectCandidates");
           const candidateStartedAt = nowMs();
           const candidates = this.fileChangeHistoryService.buildCandidates({
@@ -433,10 +467,16 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
           await this.sendLoading(panel, "render");
           const latest = this.stateByPanel.get(panel);
           if (!latest || latest.generation !== generation) return;
+          if (this.hasReplacedCodexMainline(sessionInventory)) {
+            this.refreshCodexRolloutMainlines();
+            return;
+          }
           const sortedCards = sortFileChangeHistoryCards(loaded.cards);
           this.stateByPanel.set(panel, {
             ...latest,
             candidates,
+            // An edited mainline can introduce the first matching change for this file.
+            sessionSnapshot: sessionInventory,
             cards: sortedCards,
             pendingCards: loaded.pendingCards,
             nextCandidateIndex: loaded.nextCandidateIndex,
@@ -503,6 +543,10 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
   private async loadMore(panel: vscode.WebviewPanel): Promise<void> {
     const state = this.stateByPanel.get(panel);
     if (!state || state.loading || !state.hasMore) return;
+    if (this.hasReplacedCodexMainline(state.candidates.map((candidate) => candidate.session))) {
+      this.refreshCodexRolloutMainlines();
+      return;
+    }
     const generation = state.generation;
     const cancellation = new vscode.CancellationTokenSource();
     const startedAt = nowMs();
@@ -529,6 +573,10 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       const nextCards = sortFileChangeHistoryCards(state.cards.concat(loaded.cards));
       const latest = this.stateByPanel.get(panel);
       if (!latest || latest.generation !== generation) return;
+      if (this.hasReplacedCodexMainline(state.candidates.map((candidate) => candidate.session))) {
+        this.refreshCodexRolloutMainlines();
+        return;
+      }
       this.stateByPanel.set(panel, {
         ...latest,
         cards: nextCards,

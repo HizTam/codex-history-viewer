@@ -7,6 +7,11 @@ import { normalizeCacheKey } from "../utils/fsUtils";
 import { DayNode, MonthNode, SearchHitNode, SearchSessionNode, SessionNode, YearNode } from "../tree/treeNodes";
 import type { PinStore } from "./pinStore";
 import {
+  areCodexRolloutRevisionsRelated,
+  collectCodexRolloutDeletionTargets,
+  findSessionHistorySource,
+} from "../sessions/codexRolloutRevisions";
+import {
   findCodexHistoryDeletionBlockers,
   planCodexHistoryDeletionTargets,
 } from "../sessions/codexHistoryBase";
@@ -19,6 +24,7 @@ export interface DeletedSessionUndoItem {
 
 export interface DeleteSessionsResult {
   deleted: number;
+  affected?: number;
   undoItems: DeletedSessionUndoItem[];
 }
 
@@ -53,33 +59,56 @@ export async function deleteSessionsWithConfirmation(params: {
   config: CodexHistoryViewerConfig;
   pinStore: PinStore;
   globalStorageUri: vscode.Uri;
+  refreshHistoryIndex?: () => Promise<HistoryIndex>;
 }): Promise<DeleteSessionsResult | null> {
   const { element, selection, historyIndex, config, globalStorageUri } = params;
 
   const targets = selection && selection.length >= 1 ? selection : element ? [element] : [];
-  const sessions = collectSessionsFromTargets(historyIndex, targets);
-  if (sessions.length === 0) return null;
-  const historyInventory = historyIndex.historySources ?? historyIndex.sessions;
-  const historyBaseBlockers = findCodexHistoryDeletionBlockers(
-    sessions,
-    historyInventory,
-  );
-  if (historyBaseBlockers.length > 0) {
-    void vscode.window.showErrorMessage(
-      t("app.deleteHistoryBaseReferenced", historyBaseBlockers.length),
-    );
-    return null;
-  }
-  const deletionPlan = planCodexHistoryDeletionTargets(sessions, historyInventory);
-  if (!deletionPlan) {
-    void vscode.window.showErrorMessage(t("app.deleteHistoryBaseDependencyCycle"));
-    return null;
-  }
+  const selected = collectSessionsFromTargets(historyIndex, targets).flatMap((session) => {
+    const current = findSessionHistorySource(historyIndex, session.cacheKey);
+    return current?.identityKey === session.identityKey ? [current] : [];
+  });
+  if (selected.length === 0) return null;
+  let historyInventory = historyIndex.historySources ?? historyIndex.sessions;
+  let sessions = collectCodexRolloutDeletionTargets(selected, historyInventory);
+  const count = selected.length;
+  const includesRevisions = sessions.length > count;
+  let deletionPlan = includesRevisions ? undefined : createDeletionPlan(sessions, historyInventory);
+  if (!includesRevisions && !deletionPlan) return null;
+  const scope = await confirmDeletionScope(count, includesRevisions);
+  if (!scope) return null;
+  if (scope === "selected") sessions = selected;
+  deletionPlan ??= createDeletionPlan(sessions, historyInventory);
+  if (!deletionPlan) return null;
 
-  const count = sessions.length;
-  const confirmMsg = count === 1 ? t("app.deleteConfirmSingle") : t("app.deleteConfirmMulti", count);
-  const choice = await vscode.window.showWarningMessage(confirmMsg, { modal: true }, "OK");
-  if (choice !== "OK") return null;
+  if (params.refreshHistoryIndex) {
+    try {
+      const refreshed = await params.refreshHistoryIndex();
+      const nextSelected = selected.flatMap((session) => {
+        const current = findSessionHistorySource(refreshed, session.cacheKey);
+        return current?.identityKey === session.identityKey ? [current] : [];
+      });
+      if (nextSelected.length !== selected.length) {
+        throw new Error("The selected history changed.");
+      }
+      const nextInventory = refreshed.historySources ?? refreshed.sessions;
+      const nextSessions = scope === "conversation"
+        ? collectCodexRolloutDeletionTargets(nextSelected, nextInventory) : nextSelected;
+      // A newly created revision or changed dependency was not part of the user's confirmation.
+      if (deletionTargetSignature(nextSessions) !== deletionTargetSignature(sessions) ||
+        findCodexHistoryDeletionBlockers(nextSessions, nextInventory).length > 0) {
+        throw new Error("The confirmed history changed.");
+      }
+      const nextPlan = planCodexHistoryDeletionTargets(nextSessions, nextInventory);
+      if (!nextPlan) throw new Error("The confirmed dependencies changed.");
+      sessions = nextSessions;
+      historyInventory = nextInventory;
+      deletionPlan = nextPlan;
+    } catch {
+      void vscode.window.showErrorMessage(t("app.deleteHistoryChanged"));
+      return null;
+    }
+  }
 
   const useTrash = config.deleteUseTrash;
   const quarantineDir = vscode.Uri.joinPath(globalStorageUri, "deleted");
@@ -87,7 +116,6 @@ export async function deleteSessionsWithConfirmation(params: {
   await vscode.workspace.fs.createDirectory(quarantineDir);
   await vscode.workspace.fs.createDirectory(undoDir);
 
-  let deleted = 0;
   let dependencyBlocked = 0;
   const failedOrSkippedKeys = new Set<string>();
   const targetPathByKey = new Map(
@@ -136,7 +164,6 @@ export async function deleteSessionsWithConfirmation(params: {
     }
 
     if (removed) {
-      deleted += 1;
       const restorePrerequisiteFsPaths = Array.from(
         deletionPlan.restorePrerequisiteKeysByTarget.get(s.cacheKey) ?? [],
       ).flatMap((cacheKey) => {
@@ -158,8 +185,62 @@ export async function deleteSessionsWithConfirmation(params: {
       t("app.deleteHistoryBaseDeleteBlocked", dependencyBlocked),
     );
   }
-  void vscode.window.showInformationMessage(t("app.deleteDone", deleted));
-  return { deleted, undoItems };
+  const removedKeys = new Set(undoItems.map((item) => normalizeCacheKey(item.originalFsPath)));
+  const selectedByIdentity = new Map<string, SessionSummary[]>();
+  for (const session of selected) {
+    const family = selectedByIdentity.get(session.identityKey) ?? [];
+    family.push(session);
+    selectedByIdentity.set(session.identityKey, family);
+  }
+  const failedSelections = new Set<string>();
+  const affectedSelections = new Set<string>();
+  for (const target of sessions) {
+    for (const session of selectedByIdentity.get(target.identityKey) ?? []) {
+      if (target.cacheKey !== session.cacheKey &&
+        !areCodexRolloutRevisionsRelated(session, target, historyInventory)) continue;
+      if (removedKeys.has(target.cacheKey)) affectedSelections.add(session.cacheKey);
+      else failedSelections.add(session.cacheKey);
+    }
+  }
+  const deleted = selected.filter((session) => !failedSelections.has(session.cacheKey)).length;
+  const affected = affectedSelections.size;
+  if (deleted < count) void vscode.window.showErrorMessage(t("app.deleteIncomplete", count - deleted));
+  else void vscode.window.showInformationMessage(t("app.deleteDone", deleted));
+  return { deleted, affected, undoItems };
+}
+
+async function confirmDeletionScope(count: number, includesRevisions: boolean): Promise<"selected" | "conversation" | null> {
+  if (!includesRevisions) {
+    const message = count === 1 ? t("app.deleteConfirmSingle") : t("app.deleteConfirmMulti", count);
+    return await vscode.window.showWarningMessage(message, { modal: true }, "OK") === "OK" ? "selected" : null;
+  }
+  const selectedLabel = count === 1 ? t("app.deleteThisHistoryOnly") : t("app.deleteSelectedHistoriesOnly");
+  const allLabel = t("app.deleteAllRevisions");
+  const message = count === 1 ? t("app.deleteConfirmSingleWithRevisions") : t("app.deleteConfirmMultiWithRevisions", count);
+  const choice = await vscode.window.showWarningMessage(message, {
+    modal: true,
+    detail: t("app.deleteRevisionScopeDetail"),
+  }, selectedLabel, allLabel);
+  return choice === selectedLabel ? "selected" : choice === allLabel ? "conversation" : null;
+}
+
+function createDeletionPlan(sessions: readonly SessionSummary[], inventory: readonly SessionSummary[]) {
+  const blockers = findCodexHistoryDeletionBlockers(sessions, inventory);
+  if (blockers.length > 0) {
+    void vscode.window.showErrorMessage(t("app.deleteHistoryBaseReferenced", blockers.length));
+    return undefined;
+  }
+  const plan = planCodexHistoryDeletionTargets(sessions, inventory);
+  if (!plan) void vscode.window.showErrorMessage(t("app.deleteHistoryBaseDependencyCycle"));
+  return plan;
+}
+
+function deletionTargetSignature(sessions: readonly SessionSummary[]): string {
+  return JSON.stringify(sessions.map((session) => [session.cacheKey, session.identityKey,
+    session.storage.rootKind, session.storage.archiveState, normalizeCacheKey(session.storage.rootPath),
+    session.meta.codexHistoryBase, session.meta.codexStandaloneHistory]).sort((left, right) =>
+    String(left[0]).localeCompare(String(right[0])),
+  ));
 }
 
 async function backupForUndo(undoDir: vscode.Uri, originalFsPath: string): Promise<string | null> {

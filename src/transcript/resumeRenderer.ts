@@ -1,4 +1,5 @@
 import * as path from "path";
+import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { readSessionJsonlRecords } from "../sessions/codexHistoryBase";
@@ -57,6 +58,7 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
   };
 
   for await (const record of readSessionJsonlRecords(fsPath, historySource, {
+    applyCodexRollbacks: true,
     sessionInventory: options.sessionInventory,
   })) {
     const obj = record.value;
@@ -237,7 +239,8 @@ async function collectClaudeResumeMessage(
   const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
   const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
   if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) return true;
-  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
+  if (extractClaudeTerminalOutput(obj, controlContent)) return true;
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt, record: obj });
   const textNormalized = normalizeWhitespace(extracted.text);
   const attachmentSummary = buildResumeAttachmentSummary(extracted.attachments);
   const combinedText = combineResumeText(attachmentSummary, textNormalized);

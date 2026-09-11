@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.14.1",
+  "version": "2.14.2",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -6105,6 +6105,7 @@
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.2",
+    "js-yaml": "4.3.2",
     "katex": "0.18.5",
     "shiki": "^4.4.3",
     "typescript": "^5.5.4"

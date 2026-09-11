@@ -25,6 +25,7 @@ const MAX_PREVIEW_LENGTH = 180;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 
 interface MutableForkEdge {
+  kind?: "edit";
   child: SessionSummary;
   parentThreadId: string;
   status: CodexForkEdgeStatus;
@@ -54,7 +55,7 @@ interface BranchAnchorResult {
 
 export class CodexForkRelationService {
   public build(input: CodexForkRelationBuildInput): CodexForkComponent {
-    const graph = buildForkGraph(input.sessions);
+    const graph = buildForkGraph(input);
     const current = graph.sessionByCacheKey.get(input.currentSessionCacheKey);
     if (!current || current.source !== "codex") return emptyComponent();
 
@@ -99,6 +100,10 @@ export class CodexForkRelationService {
       const parent = graph.parentByChildIdentity.get(identityKey);
       return count + (parent && component.sessionIds.has(parent.identityKey) ? 1 : 0);
     }, 0);
+    const editCount = Array.from(component.sessionIds).filter((identityKey) => {
+      const edge = graph.edgeByChildIdentity.get(identityKey);
+      return edge?.kind === "edit" && edge.status === "resolved";
+    }).length;
     const unavailableParentCount = countEdgeStatus(graph, component.sessionIds, "parentUnavailable");
     const ambiguousParentCount = countEdgeStatus(graph, component.sessionIds, "ambiguousParent");
     const scopeMismatchCount = countEdgeStatus(graph, component.sessionIds, "scopeMismatch");
@@ -116,7 +121,8 @@ export class CodexForkRelationService {
 
     return {
       sessionCount: component.sessionIds.size,
-      forkCount: resolvedForkCount,
+      forkCount: resolvedForkCount - editCount,
+      ...(editCount ? { editCount } : {}),
       hasSupportedRelation: resolvedForkCount > 0,
       relationPartial,
       omittedCount,
@@ -133,6 +139,7 @@ export class CodexForkRelationService {
 
 export function buildCodexForkSessionEvidence(
   items: readonly ChatTimelineItem[],
+  hasRollback = false,
 ): CodexForkSessionEvidence {
   const messages: CodexForkMessageEvidence[] = [];
   let eligibleCount = 0;
@@ -155,12 +162,14 @@ export function buildCodexForkSessionEvidence(
   return {
     messages,
     truncated: eligibleCount > messages.length,
+    ...(hasRollback ? { hasRollback: true } : {}),
   };
 }
 
 export function buildCodexForkBranchAnchor(
   parentEvidence: CodexForkSessionEvidence | undefined,
   childEvidence: CodexForkSessionEvidence | undefined,
+  allowEmptyPrefix = false,
 ): BranchAnchorResult {
   if (!parentEvidence || !childEvidence) return { incomplete: true };
   const parentMessages = parentEvidence.messages;
@@ -173,7 +182,21 @@ export function buildCodexForkBranchAnchor(
   ) {
     commonMessageCount += 1;
   }
-  if (commonMessageCount === 0) return { incomplete: true };
+  if (commonMessageCount === 0) {
+    const parent = parentMessages[0];
+    const child = childMessages[0];
+    if (!allowEmptyPrefix || !parent || !child) return { incomplete: true };
+    return {
+      incomplete: false,
+      anchor: {
+        commonMessageCount: 0,
+        parent: toAnchor(parent),
+        child: toAnchor(child),
+        parentContinuation: toAnchor(parent),
+        childBranchStart: toAnchor(child),
+      },
+    };
+  }
 
   const divergedBeforeBoundary = commonMessageCount < comparableLength;
   if (!divergedBeforeBoundary && (parentEvidence.truncated || childEvidence.truncated)) {
@@ -198,8 +221,8 @@ export function buildCodexForkBranchAnchor(
   };
 }
 
-function buildForkGraph(sessions: readonly SessionSummary[]): ForkGraph {
-  const codexSessions = sessions
+function buildForkGraph(input: CodexForkRelationBuildInput): ForkGraph {
+  const codexSessions = input.sessions
     .filter((session) => {
       if (session.source !== "codex") return false;
       const agentMetadata = sanitizeCachedCodexAgentMetadata(session.meta.codexAgent);
@@ -211,6 +234,7 @@ function buildForkGraph(sessions: readonly SessionSummary[]): ForkGraph {
   const sessionByCacheKey = new Map(codexSessions.map((session) => [session.cacheKey, session]));
   const sessionsByThreadId = new Map<string, SessionSummary[]>();
   for (const session of codexSessions) {
+    if (input.forkParentCandidateCacheKeys && !input.forkParentCandidateCacheKeys.has(session.cacheKey)) continue;
     const threadId = normalizeCodexForkThreadId(session.meta.id);
     if (!threadId) continue;
     appendMapArray(sessionsByThreadId, threadId, session);
@@ -220,10 +244,27 @@ function buildForkGraph(sessions: readonly SessionSummary[]): ForkGraph {
   const candidateParentByChildIdentity = new Map<string, SessionSummary>();
   const candidateChildrenByParentIdentity = new Map<string, SessionSummary[]>();
   for (const child of codexSessions) {
+    const revisionParentKey = input.revisionParentByCacheKey?.get(child.cacheKey);
+    if (revisionParentKey) {
+      const parent = sessionByCacheKey.get(revisionParentKey);
+      if (parent && parent.identityKey !== child.identityKey) {
+        edgeByChildIdentity.set(child.identityKey, {
+          kind: "edit", child, parent, parentThreadId: normalizeCodexForkThreadId(parent.meta.id)!, status: "resolved",
+        });
+        candidateParentByChildIdentity.set(child.identityKey, parent);
+        appendMapArray(candidateChildrenByParentIdentity, parent.identityKey, child);
+      }
+      continue;
+    }
     const metadata = sanitizeCachedCodexForkMetadata(child.meta.codexFork).value;
     if (!metadata) continue;
     const parentThreadId = metadata.parentThreadId;
-    const parents = sessionsByThreadId.get(parentThreadId) ?? [];
+    const historyParentKey = input.forkHistoryParentByCacheKey?.get(child.cacheKey);
+    const historyParent = historyParentKey ? sessionByCacheKey.get(historyParentKey) : undefined;
+    // Keep the declared parent ID authoritative and apply all normal scope/agent/cycle checks below.
+    const parents = historyParentKey
+      ? historyParent && normalizeCodexForkThreadId(historyParent.meta.id) === parentThreadId ? [historyParent] : []
+      : sessionsByThreadId.get(parentThreadId) ?? [];
     if (parents.length === 0) {
       edgeByChildIdentity.set(child.identityKey, {
         child,
@@ -557,8 +598,12 @@ function buildComponentEdges(
       const anchor = buildCodexForkBranchAnchor(
         evidenceByIdentityKey?.get(parent.identityKey),
         evidenceByIdentityKey?.get(child.identityKey),
+        edge.kind === "edit" || evidenceByIdentityKey?.get(parent.identityKey)?.hasRollback === true ||
+          evidenceByIdentityKey?.get(child.identityKey)?.hasRollback === true ||
+          parent.meta.codexStandaloneHistory === true || child.meta.codexStandaloneHistory === true,
       );
       result.push({
+        ...(edge.kind ? { kind: edge.kind } : {}),
         childIdentityKey: child.identityKey,
         parentThreadId: edge.parentThreadId,
         status: "resolved",

@@ -16,6 +16,9 @@ import { buildTimelineBookmarkTarget } from "../services/bookmarkTargetResolver"
 import type { ChatOpenPositionStore } from "../services/chatOpenPositionStore";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { buildSessionSummary } from "../sessions/sessionSummary";
+import { resolveCodexLogicalHistoryPlan } from "../sessions/codexHistoryBase";
+import { areCodexRolloutRevisionsRelated, findSessionHistorySource } from "../sessions/codexRolloutRevisions";
+import { stableTextSha256 } from "../utils/stableTextHash";
 import { isSessionProtocolContextTitle } from "../sessions/sessionTitleResolver";
 import { elapsedMs, formatDebugFields, nowMs, safeDebugBasename, sanitizeDebugError } from "../services/debugLogUtils";
 import { normalizeCacheKey, normalizeProjectKey } from "../utils/fsUtils";
@@ -239,6 +242,7 @@ type ChatSessionDataOptions = {
   preserveUiState?: boolean;
   autoScrollToBottom?: boolean;
   allowUnchangedRenderReuse?: boolean;
+  rolloutReplaced?: boolean;
   detailMode?: ChatSessionDetailMode;
   stateOverride?: ChatPanelState;
   branchGeneration?: number;
@@ -299,6 +303,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
   private reusablePanel: vscode.WebviewPanel | null = null;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
+  private readonly allSessionPanels = new Set<vscode.WebviewPanel>();
   private readonly branchPanels = new Set<vscode.WebviewPanel>();
   private readonly branchPanelRegistration = new WeakSet<vscode.WebviewPanel>();
   private readonly stateByPanel = new WeakMap<vscode.WebviewPanel, ChatPanelState>();
@@ -711,7 +716,7 @@ export class ChatPanelManager implements vscode.Disposable {
     ) {
       return false;
     }
-    const session = this.historyService.findByFsPath(state.fsPath);
+    const session = this.findPanelSessionByFsPath(state.fsPath);
     return Boolean(
       session &&
       session.source === checkpoint.source &&
@@ -735,7 +740,7 @@ export class ChatPanelManager implements vscode.Disposable {
       this.nextTitleRefreshSequence(panel);
       const state = this.stateByPanel.get(panel);
       if (!state) return;
-      const session = this.historyService.findByFsPath(state.fsPath);
+      const session = this.findPanelSessionByFsPath(state.fsPath);
       if (!session) return;
       this.applyPanelPresentation(panel, session, state.kind);
     };
@@ -987,6 +992,12 @@ export class ChatPanelManager implements vscode.Disposable {
     const key = normalizeCacheKey(fsPath);
     const sessionPanel = this.panelsByKey.get(key);
     if (sessionPanel) return { panel: sessionPanel, kind: "session" };
+    for (const panel of this.allSessionPanels) {
+      const state = this.stateByPanel.get(panel);
+      if (state?.kind === "session" && normalizeCacheKey(state.fsPath) === key) {
+        return { panel, kind: "session" };
+      }
+    }
 
     if (this.reusablePanel) {
       const state = this.stateByPanel.get(this.reusablePanel);
@@ -1053,6 +1064,7 @@ export class ChatPanelManager implements vscode.Disposable {
       const key = normalizeCacheKey(previousFsPath);
       if (this.panelsByKey.get(key) === panel) this.panelsByKey.delete(key);
     }
+    this.allSessionPanels.delete(panel);
     this.registerBranchPanel(panel);
   }
 
@@ -1082,10 +1094,9 @@ export class ChatPanelManager implements vscode.Disposable {
     }
     const key = normalizeCacheKey(fsPath);
     this.panelsByKey.set(key, panel);
+    this.allSessionPanels.add(panel);
     panel.onDidDispose(() => {
-      if (this.panelsByKey.get(key) === panel) {
-        this.panelsByKey.delete(key);
-      }
+      this.removeSessionPanelRegistrations(panel);
       this.imageDataByPanel.delete(panel);
       this.documentDataByPanel.delete(panel);
     });
@@ -1185,14 +1196,20 @@ export class ChatPanelManager implements vscode.Disposable {
 
   private registerSessionPanel(key: string, panel: vscode.WebviewPanel): void {
     this.panelsByKey.set(key, panel);
+    this.allSessionPanels.add(panel);
     panel.onDidDispose(() => {
-      if (this.panelsByKey.get(key) === panel) {
-        this.panelsByKey.delete(key);
-      }
+      this.removeSessionPanelRegistrations(panel);
       this.imageDataByPanel.delete(panel);
       this.documentDataByPanel.delete(panel);
       this.patchEntryDetailRequestsByPanel.delete(panel);
     });
+  }
+
+  private removeSessionPanelRegistrations(panel: vscode.WebviewPanel): void {
+    for (const [key, registered] of this.panelsByKey) {
+      if (registered === panel) this.panelsByKey.delete(key);
+    }
+    this.allSessionPanels.delete(panel);
   }
 
   private async restoreSerializedPanel(panel: vscode.WebviewPanel, rawState: unknown): Promise<void> {
@@ -1338,6 +1355,7 @@ export class ChatPanelManager implements vscode.Disposable {
     </div>
     <div id="pageSearchResults" role="listbox" aria-live="polite"></div>
   </div>
+  <div id="rolloutNotice" hidden><span id="rolloutNoticeText" role="status"></span><button id="btnSwitchRollout" type="button"></button></div>
   <div id="scrollRoot">
     <div id="annotation"></div>
     <div id="meta"></div>
@@ -1638,7 +1656,7 @@ export class ChatPanelManager implements vscode.Disposable {
         return;
       }
       case "resumeInCodex": {
-        const session = this.historyService.findByFsPath(state.fsPath);
+        const session = this.findPanelSessionByFsPath(state.fsPath);
         const commandId =
           session?.source === "claude"
             ? "codexHistoryViewer.resumeSessionInClaude"
@@ -1689,7 +1707,7 @@ export class ChatPanelManager implements vscode.Disposable {
         return;
       }
       case "togglePin": {
-        const session = this.historyService.findByFsPath(state.fsPath);
+        const session = this.findPanelSessionByFsPath(state.fsPath);
         const commandId = session && isSessionPinned(this.pinStore, session)
           ? "codexHistoryViewer.unpinSession"
           : "codexHistoryViewer.pinSession";
@@ -1762,6 +1780,28 @@ export class ChatPanelManager implements vscode.Disposable {
         });
         if (!sent) return;
         await this.refreshPanelTitleFromFile(panel);
+        return;
+      }
+      case "switchCodexRollout": {
+        const notice = this.buildCodexRolloutNotice(state);
+        if (
+          this.stateByPanel.get(panel) !== state || !notice ||
+          typeof msg?.token !== "string" || msg.token !== notice.token ||
+          msg?.sessionInfoRevision !== state.sessionInfoRevision
+        ) {
+          await this.publishCodexRolloutNotice(panel);
+          await panel.webview.postMessage({ type: "codexRolloutSwitchFailed", sessionInfoRevision: state.sessionInfoRevision });
+          return;
+        }
+        const sent = await this.switchToCurrentCodexRollout(panel, state, {
+          restoreScrollY: typeof msg?.scrollY === "number" && Number.isFinite(msg.scrollY) ? Math.max(0, msg.scrollY) : undefined,
+          autoScrollToBottom: state.autoRefreshMode === "follow",
+          detailMode: state.detailMode,
+        });
+        if (!sent && this.stateByPanel.get(panel) === state) {
+          await this.publishCodexRolloutNotice(panel);
+          await panel.webview.postMessage({ type: "codexRolloutSwitchFailed", sessionInfoRevision: state.sessionInfoRevision });
+        }
         return;
       }
       case "setAutoRefreshMode": {
@@ -1908,7 +1948,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const origin = message.origin === undefined ? undefined : message.origin === "split" ? "split" : null;
     if (origin === null) return null;
 
-    const session = this.historyService.findByFsPath(receivedState.fsPath);
+    const session = this.findPanelSessionByFsPath(receivedState.fsPath);
     if (!session || (session.source !== "codex" && session.source !== "claude")) return null;
     const source: ResumeSource = session.source;
     const config = getConfig();
@@ -1973,7 +2013,7 @@ export class ChatPanelManager implements vscode.Disposable {
     if (!getConfig().agentRunsEnabled) this.codexAgentRuns.invalidate();
     for (const panel of this.getOpenPanels()) {
       const state = this.stateByPanel.get(panel);
-      const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+      const session = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
       if (session && state) {
         this.applyPanelIconPath(panel, this.resolveSessionIconPath(session, state.kind));
       }
@@ -1984,7 +2024,7 @@ export class ChatPanelManager implements vscode.Disposable {
   public handleCodexAgentRunsLoadFailure(): void {
     for (const panel of this.getOpenPanels()) {
       const state = this.stateByPanel.get(panel);
-      const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+      const session = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
       if (session && state) {
         this.applyPanelIconPath(panel, this.resolveSessionIconPath(session, state.kind));
       }
@@ -2012,7 +2052,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private publishCurrentSessionPinState(panel: vscode.WebviewPanel): void {
     const state = this.stateByPanel.get(panel);
     if (!state || !this.readyByPanel.get(panel)) return;
-    const session = this.historyService.findByFsPath(state.fsPath);
+    const session = this.findPanelSessionByFsPath(state.fsPath);
     void panel.webview.postMessage({
       type: "pinState",
       isPinned: session ? isSessionPinned(this.pinStore, session) : this.pinStore.isPinned(state.fsPath),
@@ -2056,7 +2096,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
   private publishCodexAgentRuns(panel: vscode.WebviewPanel): void {
     const state = this.stateByPanel.get(panel);
-    const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+    const session = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
     const config = getConfig();
     if (!config.agentRunsEnabled || !session || session.source !== "codex") {
       const generation = this.nextCodexAgentRunsGeneration(panel);
@@ -2251,7 +2291,7 @@ export class ChatPanelManager implements vscode.Disposable {
       void vscode.window.showErrorMessage(t("codexAgentRuns.navigationUnavailable"));
       return;
     }
-    const currentSession = this.historyService.findByFsPath(state.fsPath);
+    const currentSession = this.findPanelSessionByFsPath(state.fsPath);
     if (!currentSession || currentSession.identityKey !== snapshot.currentIdentityKey) {
       void vscode.window.showErrorMessage(t("codexAgentRuns.navigationUnavailable"));
       return;
@@ -2445,7 +2485,7 @@ export class ChatPanelManager implements vscode.Disposable {
   ): boolean {
     const snapshot = this.codexAgentRunsSnapshotByPanel.get(panel);
     const state = this.stateByPanel.get(panel);
-    const currentSession = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+    const currentSession = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
     return Boolean(
       this.codexAgentRuns.isPresentationEnabled() &&
       snapshot === requestSnapshot &&
@@ -2488,7 +2528,7 @@ export class ChatPanelManager implements vscode.Disposable {
   ): boolean {
     const snapshot = this.codexAgentRunsSnapshotByPanel.get(panel);
     const state = this.stateByPanel.get(panel);
-    const currentSession = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+    const currentSession = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
     return Boolean(
       this.codexAgentRuns.isPresentationEnabled() &&
       snapshot === requestSnapshot &&
@@ -2506,7 +2546,7 @@ export class ChatPanelManager implements vscode.Disposable {
     codexSupersededRetryCount = 0,
   ): void {
     const state = this.stateByPanel.get(panel);
-    const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+    const session = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
     const presentationSessionKey = state && session
       ? buildBranchPresentationSessionKey(state, session)
       : "";
@@ -2684,7 +2724,7 @@ export class ChatPanelManager implements vscode.Disposable {
   ): void {
     const state = this.stateByPanel.get(panel);
     if (!state) return;
-    const activeSession = this.historyService.findByFsPath(state.fsPath);
+    const activeSession = this.findPanelSessionByFsPath(state.fsPath);
     if (
       !getConfig().branchNavigationEnabled ||
       this.branchGenerationByPanel.get(panel) !== generation ||
@@ -2746,7 +2786,7 @@ export class ChatPanelManager implements vscode.Disposable {
     ) {
       return;
     }
-    const session = this.historyService.findByFsPath(state.fsPath);
+    const session = this.findPanelSessionByFsPath(state.fsPath);
     if (
       !session ||
       (isCodexForkNavigationSnapshot(snapshot)
@@ -2785,7 +2825,7 @@ export class ChatPanelManager implements vscode.Disposable {
     ) {
       return;
     }
-    const session = this.historyService.findByFsPath(state.fsPath);
+    const session = this.findPanelSessionByFsPath(state.fsPath);
     if (
       !session ||
       (isCodexForkNavigationSnapshot(snapshot)
@@ -2842,7 +2882,7 @@ export class ChatPanelManager implements vscode.Disposable {
     cancellation: vscode.CancellationTokenSource,
   ): boolean {
     const state = this.stateByPanel.get(panel);
-    const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+    const session = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
     return Boolean(
       state &&
       session &&
@@ -2868,7 +2908,7 @@ export class ChatPanelManager implements vscode.Disposable {
   ): Promise<void> {
     const snapshot = this.branchSnapshotByPanel.get(panel);
     const state = this.stateByPanel.get(panel);
-    const activeSource = state ? this.historyService.findByFsPath(state.fsPath)?.source : undefined;
+    const activeSource = state ? this.findPanelSessionByFsPath(state.fsPath)?.source : undefined;
     const fail = (
       message = t(activeSource === "codex" ? "codexForks.switchFailed" : "claudeBranches.switchFailed"),
     ): void => {
@@ -2922,7 +2962,7 @@ export class ChatPanelManager implements vscode.Disposable {
       return;
     }
     const targetOccurrenceId = occurrenceId || (choice.occurrenceIds.length === 1 ? choice.occurrenceIds[0]! : "");
-    const activeSession = this.historyService.findByFsPath(state.fsPath);
+    const activeSession = this.findPanelSessionByFsPath(state.fsPath);
     if (
       !targetOccurrenceId ||
       !choice.occurrenceIds.includes(targetOccurrenceId) ||
@@ -3053,7 +3093,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const group = snapshot.groups.find((candidate) => candidate.id === groupId);
     const choice = group?.choices.find((candidate) => candidate.id === choiceId);
     const targetOccurrenceId = occurrenceId || choice?.occurrence.id || "";
-    const activeSession = this.historyService.findByFsPath(state.fsPath);
+    const activeSession = this.findPanelSessionByFsPath(state.fsPath);
     if (
       !group ||
       !choice ||
@@ -3291,6 +3331,133 @@ export class ChatPanelManager implements vscode.Disposable {
     );
   }
 
+  private findPanelSessionByFsPath(fsPath: string): SessionSummary | undefined {
+    const current = this.historyService.findByFsPath(fsPath);
+    if (current) return current;
+    if (!this.historyService.isCurrentIndexForConfig(getConfig())) return undefined;
+    const source = findSessionHistorySource(this.historyService.getIndex(), normalizeCacheKey(fsPath));
+    return source?.source === "codex" ? source : undefined;
+  }
+
+  public refreshCodexRolloutNotices(): void {
+    for (const panel of this.getOpenPanels()) void this.publishCodexRolloutNotice(panel);
+  }
+
+  private async publishCodexRolloutNotice(panel: vscode.WebviewPanel): Promise<void> {
+    const state = this.stateByPanel.get(panel);
+    if (!state || !this.readyByPanel.get(panel)) return;
+    try {
+      await panel.webview.postMessage({
+        type: "codexRolloutNotice",
+        sessionInfoRevision: state.sessionInfoRevision,
+        notice: this.buildCodexRolloutNotice(state),
+      });
+    } catch {
+      // A disposed Webview must not interrupt other panels or expose session data.
+      this.logger?.debug("chat rollout notice delivery failed");
+    }
+  }
+
+  private buildCodexRolloutNotice(state: ChatPanelState): { token: string } | null {
+    const replacement = this.resolveCurrentCodexRollout(state);
+    if (!replacement) return null;
+    return { token: stableTextSha256(JSON.stringify([
+      normalizeCacheKey(state.fsPath), replacement.cacheKey, replacement.meta.codexHistoryBase,
+      replacement.meta.codexStandaloneHistory,
+      this.historyService.getIndexGeneration(),
+    ])) };
+  }
+
+  private resolveCurrentCodexRollout(state: ChatPanelState): SessionSummary | undefined {
+    if (state.historySource !== "codex" || this.historyService.findByFsPath(state.fsPath)) return undefined;
+    if (!this.historyService.isCurrentIndexForConfig(getConfig())) return undefined;
+    const index = this.historyService.getIndex();
+    const sourceKey = normalizeCacheKey(state.fsPath);
+    const source = findSessionHistorySource(index, sourceKey);
+    if (!source || source.source !== "codex" || source.storage.archiveState !== "active") return undefined;
+    const replacement = index.byIdentityKey.get(source.identityKey);
+    const sessionId = validateCliResumeSessionId(source.meta.id, "codex");
+    if (
+      !sessionId ||
+      !replacement ||
+      replacement.source !== "codex" ||
+      replacement.cacheKey === sourceKey ||
+      !areCodexRolloutRevisionsRelated(source, replacement, index.historySources ?? index.sessions) ||
+      validateCliResumeSessionId(replacement.meta.id, "codex") !== sessionId ||
+      replacement.storage.archiveState !== source.storage.archiveState ||
+      replacement.storage.rootKind !== source.storage.rootKind ||
+      normalizeCacheKey(replacement.storage.rootPath) !== normalizeCacheKey(source.storage.rootPath)
+    ) {
+      return undefined;
+    }
+    return replacement;
+  }
+
+  private async switchToCurrentCodexRollout(
+    panel: vscode.WebviewPanel,
+    state: ChatPanelState,
+    options: ChatSessionDataOptions,
+  ): Promise<boolean> {
+    const replacement = this.resolveCurrentCodexRollout(state);
+    if (!replacement) return false;
+    const isReplacementCurrent = (): boolean => {
+      if (this.stateByPanel.get(panel) !== state) return false;
+      const current = this.resolveCurrentCodexRollout(state);
+      const expectedBase = replacement.meta.codexHistoryBase;
+      const currentBase = current?.meta.codexHistoryBase;
+      return Boolean(
+        current && current.cacheKey === replacement.cacheKey &&
+        current.identityKey === replacement.identityKey &&
+        current.meta.codexStandaloneHistory === replacement.meta.codexStandaloneHistory &&
+        (expectedBase && currentBase
+          ? currentBase.sourceRolloutId === expectedBase.sourceRolloutId &&
+            currentBase.endByteOffset === expectedBase.endByteOffset &&
+            currentBase.endOrdinalExclusive === expectedBase.endOrdinalExclusive
+          : expectedBase === currentBase),
+      );
+    };
+    const sent = await this.sendSessionData(panel, {
+      ...options,
+      stateOverride: {
+        ...state,
+        fsPath: replacement.fsPath,
+        revealMessageIndex: undefined,
+        revealTarget: undefined,
+        pageSearchSeed: undefined,
+        pendingAutoRefresh: false,
+      },
+      rolloutReplaced: true,
+      restoreSelectedMessageIndex: undefined,
+      allowUnchangedRenderReuse: false,
+      validatePreparedState: async () => {
+        if (!isReplacementCurrent()) return false;
+        const index = this.historyService.getIndex();
+        const plan = await resolveCodexLogicalHistoryPlan(
+          replacement.fsPath,
+          index.historySources ?? index.sessions,
+        );
+        return plan.complete && isReplacementCurrent();
+      },
+      commitStateTransition: () => {
+        if (!isReplacementCurrent()) return false;
+        if (state.kind === "session") {
+          // Keep both live panels if the replacement was opened during this reload.
+          this.removeSessionPanelRegistrations(panel);
+          this.allSessionPanels.add(panel);
+          const key = normalizeCacheKey(replacement.fsPath);
+          if (!this.panelsByKey.has(key)) this.panelsByKey.set(key, panel);
+        }
+        this.cancelBranchNavigation(panel);
+        return true;
+      },
+    });
+    if (sent && this.stateByPanel.get(panel)?.fsPath === replacement.fsPath) {
+      this.applyPanelPresentation(panel, replacement, state.kind);
+      this.notifyAutoRefreshConsumerVisibilityChanged();
+    }
+    return sent;
+  }
+
   private async sendSessionData(
     panel: vscode.WebviewPanel,
     options?: ChatSessionDataOptions,
@@ -3440,7 +3607,7 @@ export class ChatPanelManager implements vscode.Disposable {
       restoreScrollY: undefined,
       restoreTopMessageIndex: undefined,
     };
-    const summary = this.historyService.findByFsPath(nextState.fsPath);
+    const summary = this.findPanelSessionByFsPath(nextState.fsPath);
     let preparedLiveActivity: PreparedLiveSessionActivity | undefined;
     if (
       config.chatTurnTimelineMode === "live" &&
@@ -3556,10 +3723,12 @@ export class ChatPanelManager implements vscode.Disposable {
       preserveUiState: options?.preserveUiState === true,
       autoScrollToBottom: options?.autoScrollToBottom === true,
       allowUnchangedRenderReuse: options?.allowUnchangedRenderReuse === true,
+      ...(options?.rolloutReplaced ? { rolloutReplaced: true } : {}),
+      rolloutNotice: this.buildCodexRolloutNotice(committedState),
       panelKind: nextState.kind,
       isPreview: nextState.kind === "reusable",
       isPinned: (() => {
-        const session = this.historyService.findByFsPath(nextState.fsPath);
+        const session = this.findPanelSessionByFsPath(nextState.fsPath);
         return session ? isSessionPinned(this.pinStore, session) : this.pinStore.isPinned(nextState.fsPath);
       })(),
       sessionInfo: {
@@ -4099,7 +4268,7 @@ export class ChatPanelManager implements vscode.Disposable {
   ): ChatCliResumeSnapshot {
     try {
       const state = this.stateByPanel.get(panel);
-      const session = state ? this.historyService.findByFsPath(state.fsPath) : undefined;
+      const session = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
       const config = getConfig();
       const buildTarget = (target: CliResumeTarget): ChatCliResumeTargetSnapshot => {
         const configuredMethod = target === "codex" ? config.resumeCodexMethod : config.resumeClaudeMethod;
@@ -4167,6 +4336,12 @@ export class ChatPanelManager implements vscode.Disposable {
       restoreArchived: t("chat.button.restoreArchived"),
       restoreArchivedTooltip: t("chat.tooltip.restoreArchived"),
       sessionLocationArchived: t("session.location.archived"),
+      rolloutChanged: t("chat.rollout.changed"),
+      rolloutSwitch: t("chat.rollout.switch"),
+      rolloutSwitchFailed: t("chat.rollout.switchFailed"),
+      branchBeforeEdit: t("chat.rollout.beforeEdit"),
+      branchAfterEdit: t("chat.rollout.afterEdit"),
+      branchFork: t("chat.rollout.fork"),
       originalCwd: t("chat.meta.originalCwd"),
       relocatedCwd: t("chat.meta.relocatedCwd"),
       sessionId: t("chat.meta.sessionId"),
@@ -4186,6 +4361,7 @@ export class ChatPanelManager implements vscode.Disposable {
       prepareClaudeCliResume: t("chat.button.prepareClaudeCliResume"),
       prepareClaudeCliResumeTooltip: t("chat.tooltip.prepareClaudeCliResume"),
       resumeActionsAriaLabel: t("chat.aria.resumeActions"),
+      rolloutSwitchTooltip: t("chat.rollout.switchTooltip"),
       resumeOtherMethodAriaLabel: t("chat.aria.otherResumeMethod"),
       resumeMethodMenuAriaLabel: t("chat.menu.resumeMethod"),
       resumeUnavailableForSessionTooltip: t("chat.tooltip.resumeUnavailableForSession"),
@@ -4334,6 +4510,12 @@ export class ChatPanelManager implements vscode.Disposable {
       systemEventInterruptedRolledBack: t("chat.systemEvent.interrupted.rolledBack"),
       systemEventLocalCommandBadge: t("chat.systemEvent.localCommandOutput.badge"),
       systemEventLocalCommandTitle: t("chat.systemEvent.localCommandOutput.title"),
+      terminalInputBadge: t("chat.terminalInput.badge"),
+      terminalOutputTitle: t("chat.terminalOutput.title"),
+      terminalOutputStdout: t("chat.terminalOutput.stdout"),
+      terminalOutputStderr: t("chat.terminalOutput.stderr"),
+      terminalOutputExitCode: t("chat.terminalOutput.exitCode"),
+      terminalOutputTruncated: t("chat.terminalOutput.truncated"),
       systemEventDetailReason: t("chat.systemEvent.detail.reason"),
       systemEventDetailDuration: t("chat.systemEvent.detail.duration"),
       systemEventDetailTurnId: t("chat.systemEvent.detail.turnId"),
@@ -4807,7 +4989,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
     const config = getConfig();
     const existingSummary = this.historyService.isCurrentIndexForConfig(config)
-      ? this.historyService.findByFsPath(state.fsPath)
+      ? this.findPanelSessionByFsPath(state.fsPath)
       : undefined;
     const summary =
       existingSummary ??
@@ -4921,6 +5103,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const panels = new Set<vscode.WebviewPanel>();
     if (this.reusablePanel) panels.add(this.reusablePanel);
     for (const panel of this.panelsByKey.values()) panels.add(panel);
+    for (const panel of this.allSessionPanels) panels.add(panel);
     for (const panel of this.branchPanels) panels.add(panel);
     return Array.from(panels);
   }
@@ -5559,6 +5742,10 @@ async function buildChatPerformanceStats(fsPath: string, model: ChatSessionModel
   }
 
   for (const item of Array.isArray(model.items) ? model.items : []) {
+    if (item.type === "systemEvent" && item.kind === "terminalOutput") {
+      stats.messageChars += (item.stdout?.length ?? 0) + (item.stderr?.length ?? 0);
+      continue;
+    }
     if (item.type === "crossSessionMessage") {
       stats.messageChars += typeof item.body === "string" ? item.body.length : 0;
       continue;

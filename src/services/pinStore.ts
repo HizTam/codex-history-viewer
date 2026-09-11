@@ -8,6 +8,7 @@ import type {
   SessionSummary,
 } from "../sessions/sessionTypes";
 import { normalizeCacheKey } from "../utils/fsUtils";
+import { findSessionHistorySource, isSameCodexRolloutConversation } from "../sessions/codexRolloutRevisions";
 import type { SessionMetadataMutationCoordinator } from "./sessionMetadataMutationCoordinator";
 import { MementoSnapshotCache } from "./mementoSnapshotCache";
 
@@ -191,7 +192,13 @@ export class PinStore implements vscode.Disposable {
           patched.rootKind !== pin.rootKind
         ) {
           updated += 1;
-          if (patched.fsPath !== pin.fsPath) moves.push({ oldFsPath: pin.fsPath, newFsPath: patched.fsPath });
+          if (patched.fsPath !== pin.fsPath) {
+            const previousSource = findSessionHistorySource(index, pin.cacheKey);
+            // A surviving edit revision is not a file move: keep its path-scoped metadata intact.
+            if (!previousSource || !isSameCodexRolloutConversation(previousSource, target)) {
+              moves.push({ oldFsPath: pin.fsPath, newFsPath: patched.fsPath });
+            }
+          }
         }
         next.push(patched);
       }

@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
 import * as path from "node:path";
+import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import * as vscode from "vscode";
 import { t } from "../i18n";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
@@ -327,6 +328,7 @@ async function parseSessionForHandoff(
   let totalLines = 0;
 
   for await (const record of readSessionJsonlLines(session.fsPath, session.source, {
+    applyCodexRollbacks: true,
     sessionInventory,
   })) {
     const { line } = record;
@@ -404,7 +406,8 @@ async function collectClaudeMessage(
   const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
   const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
   if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) return true;
-  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt });
+  if (extractClaudeTerminalOutput(obj, controlContent)) return true;
+  const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt, record: obj });
   const text = sanitizeMessageText(combineHandoffText(buildHandoffAttachmentSummary(extracted.attachments), extracted.text));
   if (!text) return true;
 

@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-09-07
-- 対象バージョン: 2.14.1
+- 最終更新: 2026-09-11
+- 対象バージョン: 2.14.2
 
 ## 1. 概要
 
@@ -35,13 +35,34 @@
 - `session_meta.payload.history_mode` が `paginated` で、有効な `history_base` を持つCodex rolloutは、参照元rolloutの`end_byte_offset`未満のprefixと現在rolloutの物理suffixを論理的な1セッションとして扱う
 - `history_base.thread_id`はパスへ変換せず、HistoryServiceが発見済みのCodex session inventory内で、session IDまたはファイル名末尾のrollout IDに一意一致するときだけ解決する
 - `end_ordinal_exclusive`、`end_byte_offset`、Fork先と参照元の先頭`session_meta`、物理開始ordinal、LF境界、境界直前レコードのordinalを検証する。境界直前のLFは64 KiB単位で後方探索し、総探索量を16 MiBに制限したうえで、LF確定後のJSON recordだけを実長で確保する。cache由来の`history_base`もplan作成時に物理先頭レコードと再照合し、参照欠落、候補重複、cycle、深度超過、不正境界では任意ファイルを探索せず、現在rolloutだけへフォールバックする
-- 多段参照は最大32段まで再帰解決する。通常JSONLは従来どおり単一ストリーム、paginated履歴もsegment単位でstream処理し、論理履歴全体を一括してメモリへ保持しない
+- 多段参照は最大32段まで再帰解決する。raw JSONLは単一ストリーム、paginated履歴もsegment単位でstream処理し、論理履歴全体を一括してメモリへ保持しない。有効履歴の取り消し範囲が未確認の場合は、次節の事前走査を行う
+- 共通JSONL readerの行APIとレコードAPIは、同じ内部iteratorを直接返す。レコードAPIはstreamの行ループ内でJSONを解析し、行ごとの非同期中継と中間の行object生成を省く。raw行APIは空行・空白・不正JSONを含む元行を維持し、レコードAPIは空行・不正JSONを省略しても論理／物理行番号を消費する。segment境界、snapshotの読取byte上限、行ごとのキャンセル確認、早期終了・失敗時のstream解放は共通のままとし、本文cacheや解析形式の変更は伴わない
 - 論理履歴はSession Viewer、patch詳細、一覧preview、検索、History Insights、File AI Change History、Markdown transcript、Quick Prompt、handoff、Codex Branch Navigation、sanitized exportで共有する
 - 実行中表示、auto-refresh、開始日時、最終activityは現在rolloutの物理ファイルだけを観測し、参照元のtimestampや追記を現在セッションのactivityへ混入させない
 - 検索・分析・Codex Branch Navigationのcache freshnessは、leaf statに加えて解決済みsegmentのpath、mtime、size、境界から作る履歴fingerprintを考慮する。一覧previewはinventory確定後にpaginated sessionだけ第2段階で再生成する
 - raw JSONL exportでは選択した子に必要な解決済み参照元を重複なく同梱する。raw importのしおり検証では移送元パスへ揃えたinventoryで論理履歴を再構成する。選択対象外のpaginated sessionから参照されている親だけの削除は拒否し、親子同時選択は子から親の順に処理する。子の削除失敗時は親を残す。Undoは親から子の順に復元し、親を復元できない場合は参照する子を復元しない。選択対象内の参照cycleは削除しない
 - `Promote to Today (Copy)`では完全に解決できた論理履歴を自己完結JSONLとして複製し、参照元のprefixを欠落させない
 - 詳細な検証条件と非目標は`.private-docs/codex-history-base-design.ja.md`を正本とする
+
+### 3.0.1 同じJSONL内のCodexプロンプト編集
+
+- `legacy`形式のプロンプト編集で追記される`thread_rolled_back.num_turns`を解釈し、取り消されたターンを有効履歴から除外する。元JSONLは保持する。通常Forkは別会話のままとし、存在しない編集前JSONLを作らない
+- 明示的な`task_started`をターン境界とし、その中の追加入力を別ターンに数えない。旧形式はユーザー境界を使い、文脈注入とevent/responseの重複を区別する。`num_turns`はu32として検証し、0は内容を変更せず、不正な値を削除の根拠にしない
+- セッションビュー、Markdown、Quick Prompt、Handoff、プレビュー、検索、履歴インサイト、AI編集履歴、遅延diff詳細は共通readerの有効履歴を使う。raw reader・raw export・履歴複製では記録された取り消しイベントを保持する
+- 除外範囲は出力前に確定し、元の論理/物理行番号と参照先のbyte境界を維持する。summaryの既存全走査でも範囲を作り、size/mtimeを再検証してメモリcacheへ登録する。cacheは128件、1件2,048範囲を上限とし、本文を保持しない。cache missは事前走査を1回追加する。明示ターン中の本文は境界確認用に再解析せず、制御イベントやエスケープされたJSON名を含む行は通常のJSON検証を通す
+- 最後の有効な取り消し行番号を`codexRollbackRevision`としてsummaryとanalysis entryに保持する。同じファイルの編集でも開いているInsights/AI編集履歴を世代更新し、古い結果、遅い要求、取り消し前の保存済み集計を再公開しない。通常の追記だけではこの自動再読込を起こさない
+- 検証済みの通常Fork関係で片方に取り消しが確認され、共通先頭がなくなった場合も、双方の最初の表示メッセージへ移動できる。通常Forkの親ID、cwd、agent除外、cycle検証は維持する。Fork navigation algorithmは6
+- diff詳細の照合では、欠けたpathを`.`へ正規化して一致扱いにしない。消えた編集の代わりに別ファイルの差分を返さない
+- 現行のcache・解析versionは3.4節の表を参照する。プロンプト編集対応後に加わった本文正規化とClaude端末入出力の分類も反映する
+- 仕様・受け入れ条件は`.private-docs/codex-legacy-rollback-design.ja.md`、新しいJSONLへの切替テスト手順は`.private-docs/v2.14.2-jsonl-switch-manual-test.ja.md`を参照する
+
+### 3.0.2 参照元を持たないCodex編集履歴
+
+- 最初の`session_meta`が`history_mode: paginated`、ordinal 0で、`history_base`を宣言しない場合は`codexStandaloneHistory: true`を保持する。不正な参照宣言や埋め込まれたmetadataを自己完結の証拠にしない。History summaryの永続cacheでも型と参照との排他を検証する
+- `history_base`がないプロンプト編集でも、metadataと正規のrolloutファイル名の会話UUIDが一致し、別のsuffix UUIDを持つ場合は、同じidentity・保存root・archive内の一意な直前の物理履歴へ編集関係を作る。明示参照がある履歴は従来の親解決を優先し、欠損参照を時刻から補完しない。重複rollout、同率の作成順、不正名、別保存領域を結び付けない
+- 自己完結する編集履歴へ旧本文を追加しない。版の関係は代表選択・ナビゲーション・案内・情報継承・削除対象の解決に使い、JSONL readerの依存関係にはしない。連続した自己完結編集はreaderの32段参照制限を消費しない
+- 現在の共通先頭がない通常Forkも、一方が検証済みの自己完結paginated履歴であれば双方の実在する先頭メッセージへ移動できる。共通メッセージや過去のFork地点を作らず、Forkの親ID・cwd・agent除外・cycle・実ファイル検証を維持する
+- 詳細は`.private-docs/v2.14.2-standalone-revision-design.ja.md`を参照する
 
 ### 3.1 ビュー
 
@@ -155,7 +176,7 @@
 - `Move to Codex History`: archived Codex セッションを通常の Codex history へ戻す
 - `Pin / Unpin`: ピン留めの追加 / 解除
 - `Promote to Today (Copy)`: セッションを「今日」の履歴として複製する
-- `Delete`: 削除確認後に削除する
+- `Delete`: 削除確認後に削除する。同じCodex会話の検証済み編集履歴が複数あれば「この履歴だけ」（複数選択時は「選択した履歴だけ」）と「編集前後すべて」を提示する。前者は選択したJSONLだけ、後者は同じ会話の編集履歴を含める。前者では残った旧版が一覧に戻ることを確認文で伝える。選択していない通常Forkは追加しない。選んだ範囲について参照保護を適用し、確認後にHistoryを再取得する。対象の追加・変更・新しい参照依存があれば削除せず再操作を案内する。「この履歴だけ」では後から作られた無参照の別JSONLを追加しない。削除件数は選択範囲を完全に削除できた会話数、Undo件数は実際に一部でも削除した会話数とする。部分失敗を通知し、削除した全パスをタブ閉鎖・metadata整理・Undoへ渡す
 - `Undo Last Action`: delete / pin / annotation / tag 操作などを 1 手戻す
 - `Edit Session Annotation`: タグ / ノート編集
 - `Export Sessions`: 生 JSONL または Markdown transcript を出力。生 JSONL のフォルダ出力には対象セッションの `session-metadata.json` を併記する
@@ -289,6 +310,16 @@
 
 ### 3.4 キャッシュ / インデックス / 保守
 
+2.14.2の現行値は次のとおり。各機能の導入時の更新番号と区別し、計算規則を更新した場合は実装の定数とこの表を合わせる。
+
+| 対象 | 実装の定数 | 現行値 |
+| --- | --- | ---: |
+| History summary | `SUMMARY_CACHE_ALGO_VERSION` | 24 |
+| Search index | `SEARCH_INDEX_FILE_VERSION` | 26 |
+| Codex Analysis | `SESSION_ANALYSIS_CODEX_PARSER_VERSION` | 16 |
+| Claude Code Analysis | `SESSION_ANALYSIS_CLAUDE_PARSER_VERSION` | 12 |
+| Codex Branch Navigation | `CODEX_FORK_NAVIGATION_ALGORITHM_VERSION` | 6 |
+
 - 履歴キャッシュ:
   - 保存先: `globalStorageUri/cache.v9.json`
   - 用途: 一覧表示用の要約キャッシュ
@@ -320,7 +351,7 @@
   - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
-  - 内部 file version: 22
+  - 内部 file version: 26
   - 用途: 繰り返し検索を高速化する増分インデックス
   - `search-index.v2.json` が破損して JSON parse error になった場合は、破損内容を退避せず削除し、次回検索時に再構築する
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
@@ -349,7 +380,7 @@
   - 用途: History Insights の統計と Claude Code Branch Navigation の構造化 occurrence を共用する差分解析キャッシュ。履歴キャッシュや検索インデックスの代替にはしない
   - History Insights、Claude Code Branch Navigation、または `Rebuild Cache` を要求したときだけ lazy load / lazy build し、拡張機能の起動や通常の History / Search 表示を待たせない
   - セッションごとの `cacheKey`、source、`mtime`、`size`、parser version と、sessions root / 有効ソースを含む cache context を検証し、変更された entry だけを再解析する
-  - 現行source parser versionはCodex `14` / Claude Code `10`とする。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析する
+  - 現行source parser versionはCodex `16` / Claude Code `12`とする。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析する
   - 既存 Chat model builder と同じ抽出結果を使って message index、turn、usage、file change、ツール名別呼び出し回数を集計し、解析側で独自の message index を採番しない
   - 同一セッションの重複解析を共有し、全体の更新、保存、clear は直列化する。進捗通知とキャンセルに対応する
   - 破損 JSON は削除して次回要求時に再生成し、権限エラーなどの read error では既存ファイルを削除しない
@@ -425,6 +456,15 @@
 - 同一sessionの自動更新中は検証済みの再開ボタンを非表示・無効化せず、Host側の押下時再検証を維持したまま操作可能にする。別sessionまたはidentity変更では旧ボタンを維持しない
 - Hostはannotation、bookmark、session location、live running状態を反映した最終表示モデルのSHA-256 fingerprintを`sessionData`へ付加する。Webviewがready handshakeでmodel再利用protocol version 1を明示し、同じfingerprintを正常配送済みの自動更新では、モデル本体を再転送せず現在のWebviewモデルを再利用する。Webviewはcurrent fingerprintを再検証し、不一致・欠損時は再利用flagなしのreloadを1回要求して完全配送へ回復する。モデルfingerprintとi18n、日時、表示mode等から作る描画keyが最後の正常描画と一致する場合、既存timeline DOMを維持してfull renderを省略する。capability未対応、fingerprint欠損・不正・計算失敗、手動再読み込み、初回表示、session切替、branch transition、描画条件変更では従来の完全モデル配送とfull renderへ縮退する
 - 無変更renderを省略した場合も、再開ボタン、ピン留め、session info、自動更新状態、検索候補、`preserve`の位置復元、`follow`の最新位置移動に必要な内部状態は更新する。表示内容が同じtoolbar、annotation header、metadataのDOMは維持し、session infoのcopy / reveal actionは押下時に最新revisionを参照する。Branch Navigation / Agent Runsの同値再通知を含め、toolbarのicon、label、件数badge、検索role filterは表示値が同じなら子DOMを置換しない。同じfingerprintを正常配送済みの自動更新では`sessionData`後のBranch Navigation / Agent Runs再通知を重複実行しない。表示値が変わった領域だけを更新し、page search revision、temporary expansion、既存card DOMは変更しない
+- Codexの指示編集によって同一会話の記録先JSONLが変わっても、自動更新・手動再読み込みは現在表示している物理ファイルを維持する。History確定後、同じ会話ID・保存root・archive状態で、`history_base`の祖先共有または3.0.2の自己完結編集として新代表を確認できた場合に、スクロール領域の外へ案内と「メイン履歴へ」ボタンを表示する。旧版の再開ボタンも「メイン履歴へ」に置き換え、再開方法メニューを非表示にする。押下は本拡張内の履歴切替だけを行い、Codex拡張・CLIを起動しない。メインを表示した後に通常の再開操作へ戻る。中断後と回答完了後の編集を同じ規則で扱う
+- 記録先の切替はボタンの明示操作で行う。Webviewからパスを受け取らず、候補トークン・session info revision・現在indexを再検証し、新モデルの準備完了後にstateと監視先を更新する。失敗・古い要求では元の表示を維持する。`preserve`は可能な範囲でスクロール位置を復元し、`follow`は末尾へ移動する。編集前の選択・一時展開を編集後の同じ番号へ持ち越さない
+- 旧JSONLがHistoryの代表索引から外れても、検証済み`historySources`から関係・操作用metadataを取得し、Branch Navigation / Agent Runsのアイコンを維持する。Pin・非表示・カスタムタイトルは既存の会話identity／IDを共有する。旧ファイルが残っている記録先変更はファイル移動として通知しない
+- 旧履歴の注釈・タグ操作は検証済みの表示中パスから物理履歴を解決し、カスタムタイトル操作はその履歴と同じ会話の代表を対象にする。明示パスが不正・不明、またはidentityが不一致なら別エディターやTree選択へ処理を移さない。引数なしのタイトル操作だけはアクティブなMarkdown履歴を参照できる。汎用の再開・削除用resolverへ旧履歴の解決を広げない
+- 同一IDの編集はメイン履歴の更新として扱い、別IDのForkとは区別する。Historyの代表選択は検証済みの編集子孫を祖先より優先し、同じ祖先からの再編集は物理rolloutの作成順（UUID v7の時刻、ファイル名の時刻、metadata時刻）を優先する。旧版への遅い追記でメインを戻さない。検索・履歴インサイト・AI編集履歴は代表のみを対象にし、`historySources`は共通prefixの読取に使用する。開いているInsights／AI編集履歴はメイン変更時に旧モデル・候補・ページ送り待ち・操作対象を破棄して再読込し、旧世代の遅い結果を公開しない。Insightsでユーザーが中止した解析は自動再開しない
+- AI編集履歴は候補を絞り込んだ後も検索開始時の代表セッション全体を`sessionSnapshot`に保持する。当初0件だった会話から編集後に初めて対象ファイルへの変更が生じた場合も、メイン変更時の再検索対象とする。通常の追記や無関係なindex更新だけではこの再検索を起こさない
+- `CodexRolloutMetadataInheritance`は完全なHistory indexの確定後、ピン留めや画面切替と独立して旧版の注釈・タグを新メインへコピーする。新側に注釈レコードがあれば空メモも含めてそのメモを優先し、レコードがない場合だけ旧側のメモを採用する。タグはstoreと共通の正規化・重複除去・件数上限で統合する。正規化後のメモ・タグが同じなら更新日時・store書き込み・変更通知・`changed`を更新せず、継承済みの記録だけ進める。しおりと保存位置は検証済みlogical history planの共通物理prefixに属し、旧・新のモデルでも同じ対象と確認できるものだけをコピーする。編集対象以降、曖昧な対象、欠落・不正な境界、別会話・保存root・archiveは除外する。元の情報は各storeの既存保持上限の範囲で残す。プロジェクト別名・関連付け・検索履歴は既存のプロジェクトキー、再開方法・Mermaid等は既存の全体設定を維持する。派生キャッシュやHandoff内容をコピーしない。自己完結編集の共通物理prefixは空のため、旧メッセージに属するしおり・保存位置をコピーしない。先頭位置0は維持できる
+- 継承済みのメインを会話・保存領域ごとにglobalStateの`codexHistoryViewer.codexRolloutInheritance.v1`へhashで記録する。更新・再起動で再継承せず、次回編集でも前回処理したメインより古い版から削除済み情報を復活させない。記録先の履歴が削除されて見つからない場合、その回は旧版から何もコピーせず、検証できた現在のメインを新しい継承基準として記録する。次回編集はそこから継承を再開し、それ以前の版は参照しない。残っている履歴が自己完結したメイン1件だけでも同じ規則とし、現在のlogical history planが不完全・古い場合や保存失敗時は基準を進めず再試行する。基準の更新にも通常の再検証・直列化・rollbackを適用する。旧版への後からの編集は継続同期しない。モデル構築は未処理の編集に継承候補のしおり／保存位置がある場合だけ実施し、通常更新や注釈だけのコピーでは追加構築しない。同じcwdの共通prefixモデルは再利用する
+- 継承前にindex・参照ファイル・元metadataを再検証し、変化した場合は再試行する。保存は既存metadata coordinatorで直列化し、失敗や保存途中のindex変更では補償rollbackを試み、rollback失敗も通知する。準備中に新側で編集・削除されたmetadataはユーザー操作を優先する。保存位置storeもcoordinatorに参加し、永続化の成功後にメモリ状態を公開する。History／Pinned／Searchのタグ絞り込み件数は旧版を重複計上せず、全体タグ管理は旧版の保存データも引き続き対象にする
 - 自動更新では Search 結果を消さない
 - 自動更新では検索インデックス再構築を行わない
 
@@ -502,7 +542,7 @@
 - Codexの`request_user_input_async`は、完了した`AgentMessage`だけを通常のassistant messageへ1回投影し、Session Viewer、検索、Markdown transcript、Resume、Handoffで共通の会話として扱う。開始eventと制御用function call / outputは表示せず、質問本文の重複、tool件数への混入、通常turnの早期完了を防ぐ
 - Codexの単独send_user_message_question_replyはuser messageとして質問・回答へ正規化する。回答カードには、先行する完了済み質問のIDと質問文が一致した場合だけ当時の全選択肢を表示し、回答と一意に完全一致する項目へ「選択済み」を付ける。自由入力、重複選択肢、質問欠落・衝突では選択を推測せず、質問と回答を維持する。複数問の回答も元のuser message 1件のままとし、番号、turn、bookmark、検索jumpを変更しない。
 - 質問返信の本文は共通抽出処理で言語非依存の質問・回答へ整形し、preview、Search、Markdown、Resume、Handoff、分析でも内部タグや質問IDを本文へ出さない。表示ラベルだけをWebviewで翻訳し、質問・選択肢・回答はtextContentで描画する。タグを引用した通常文、assistantのコード例、混合content、不正JSON、上限超過は通常本文として維持する。質問索引はsession単位で最大256問／1,048,576文字とし、復元不能時も質問・回答表示を維持する。
-- 質問返信の正規化前の本文を使ったcacheは、History summary algorithm 20、Search file version 22、Codex Fork navigation algorithm 2で無効化する。分析も共通チャットモデル経由で本文抽出を使用するが、Codexの分析エントリへ質問・回答本文を新規保存する変更ではない。Codex Analysis parser version 14は共通処理の更新に伴う予防的な再解析として維持し、通常の質問返信で集計値が変わることを前提としない。Claude parser versionと外側cache schemaは変更しない。
+- 質問返信の正規化前の本文を使った履歴・検索・Codex Branch Navigation cacheは、各algorithm / file versionの更新で無効化する。分析も共通チャットモデル経由で本文抽出を使用するが、Codexの分析エントリへ質問・回答本文を新規保存する変更ではない。共通処理の更新に伴うCodex Analysisの再解析は予防的なもので、通常の質問返信で集計値が変わることを前提としない。質問返信対応自体はClaude parser versionと外側cache schemaを変更しない。後続の対応を含む現行versionは3.4節を参照する。
 - Codexの`token_usage_record`は応答単位usageの正本として扱い、同じ`response_id`を重複加算しない。直後64 logical lines以内でturn IDとusage全fieldが完全一致する旧`token_count`は同一記録として抑止する。旧側のturn IDを明示またはturn stateから解決できない場合に限り、同じ範囲の未消費な新recordにusage完全一致候補がちょうど1件あれば、その新recordのturn IDをpair判定に利用する。候補が0件・複数件、または解決済みturn IDが競合する場合はfail-openし、旧recordだけの履歴との互換性を維持する。`compacted.latest_token_usage_record`は応答単位の確定値がない場合の累積fallbackにだけ使う
 - `cache_write_input_tokens`と`cache_creation_input_tokens`は同じcache作成指標へ1回だけ正規化する。両方が同値なら1値として扱い、不一致、負数、少数、非数値、unsafe integerは加算せず不正値として部分解析へ隔離する
 - Codexの`realtime_item`、`new_context`、`context_compacted`、`ContextCompaction`は既知recordとして型分類するが、現時点では会話本文、検索、メッセージ・tool統計へ投影しない。正しいJSONを破損行とは数えず、未知・巨大・不正な入れ子payloadもboundedに無視する
@@ -665,7 +705,9 @@
 ### 3.6.3 Codex Branch Navigation
 
 - 共通設定 `codexHistoryViewer.branchNavigation.enabled` が `true` のときだけ有効になる実験的機能で、既定は無効とする。公開前の旧 `claudeBranches.enabled` と開発途中の `codexForks.enabled` は残さず、aliasやmigrationも設けない
-- Codex のローカル Fork 操作が先頭 `session_meta.payload.forked_from_id` に保存した direct parent IDだけを関係の正本とする。Codex アプリの `ローカルにフォークする` と Codex 拡張機能の `新しいタスクで続ける` のどちらも対象とし、本文の類似、開始時刻、同じ `cwd` だけを根拠に Fork を推定しない
+- Codexの通常のForkは、ローカルFork操作が先頭`session_meta.payload.forked_from_id`に保存したdirect parent IDだけを関係の正本とする。Codex アプリの `ローカルにフォークする` と Codex 拡張機能の `新しいタスクで続ける` のどちらも対象とし、本文の類似、開始時刻、同じ `cwd` だけを根拠に Fork を推定しない
+- 同じ会話IDの指示編集による物理履歴の分岐は、同じ保存root・archive状態内で既存`history_base`規則が一意に解決した親、または3.0.2の検証済み自己完結編集の関係から構成する。選択肢に「編集前」「編集後」を表示し、通常の「Fork」と区別して前後の履歴へ移動できる。先頭質問の編集は存在しない共通メッセージを作らず、連続編集と通常Forkの混在も現在component内で扱う
+- 旧履歴の経路identityはナビゲーションsnapshot内だけで物理cacheKeyのhashから作り、会話identityや永続metadataを変更しない。通常Forkの親IDは、`history_base`が一意に参照する物理履歴の会話IDと一致し、その履歴が経路候補にある場合、その物理履歴へ解決する。それ以外は代表sessionへの従来の解決を維持し、nested Forkの祖先参照を直接の親と取り違えない。agent除外・同一absolute `cwd`・cycle・実ファイル境界の検証を適用する。Codex Branch Navigation algorithmは`6`とし、旧snapshotを再利用しない。legacyの取り消し・自己完結編集・追加入力候補・Claude端末出力の分類を反映した現行cacheはHistory summary `24`、Search index `26`、分析parser Codex `16` / Claude `12`を使う
 - Codex subagent も `forked_from_id` を持つため、検証済みの `session_meta.payload.source.subagent.thread_spawn` を Fork metadata より優先する。`codexAgent` と `codexFork` の両方を持つ session は Agent Runs の対象とし、Branch Navigation の node / edge に含めない
 - Agent Runs の設定に依存せず、Codex Branch Navigation の load 前に未確認 agent metadata を補完する。一部を確認できない場合は未確認 session を Fork と推測せず除外し、確認済みの関係だけを partial として扱う
 - parent / child の正規化済み absolute `cwd` が同一の場合だけ local Fork の resolved edge とする。`新しい Worktree にフォークする`、異なる `cwd`、relative path、比較不能な `cwd` は 2.8.0 の対象外とし、通常の Fork 経路へ混在させない
@@ -732,6 +774,7 @@
 ### 3.6.7 コードブロックのシンタックスハイライト
 
 - Session Webview のassistant / user / developer fenced code blockと差分カード、およびファイル履歴 Webviewのdiff cardは、Shiki 4.4.3と`scripts/chatViewShiki.entry.js`へ静的登録したローカル文法だけで色分けする。文法はネットワークから取得せず、未知言語、初期化失敗、ハイライト失敗時はコード本文を失わないプレーンテキスト表示へfallbackする
+- 各WebviewのShiki bridgeは、正規化後の言語と完全なコード本文をkeyに、固定4テーマを同時に含むハイライトHTMLをLRUで保持する。上限は128件、keyとHTMLのUTF-16 payload合計4 MiB、単体256 KiBとし、65,536文字を超えるコードは保持しない。DOMは毎回新しく作成する。未知言語・空結果・失敗結果は保持せず、巨大コードの着色・fallbackは従来のままとする。bridge破棄で全件破棄し、複数Webviewの上限は各Webviewの合計となる
 - 既存文法に加え、Apache Conf、Windows Batch、Bicep、dotenv、F#、HCL、Kusto、LaTeX、Perl、PL/SQL、ASP.NET Razor、Windows Registry、SSH Config、systemd、TeX、Visual Basicを登録する。`.NET`を単一言語として扱わず、既存C# / PowerShellと追加するF# / Razor / Visual Basicで個別に対応する
 - `apacheconf` / `httpd` / `htaccess` は `apache`、`batch` / `cmd` は `bat`、`cc` / `cxx` は `cpp`、`f#` / `fs` は `fsharp`、`cshtml` は `razor`、`jscript` は `javascript`、`vba` / `vbs` / `vbscript` は `vb` へ正規化する。Visual Basic文法が内包する`cmd` aliasよりWindows Batchを優先するため、`cmd`は必ず明示的に`bat`へ正規化する
 - SQL方言のうち、`tsql` / `t-sql` / `mssql` / `sqlserver` / `mysql` / `sqlite` / `postgresql` / `pgsql` / `plpgsql` は汎用`sql`へ正規化する。`plsql`は専用文法を使用する。ASP.NET Web Formsの`aspx` / `ascx` / `master`はHTML部分の色分けとして`html`へ正規化し、埋め込みサーバーコードの完全な色分けは保証しない
@@ -753,6 +796,13 @@
 - コピー内容は表の表示文字列やHTMLではなく、元assistantメッセージ内の当該表だけのMarkdown原文とする。`markdown-it`の`table_open.map`と元文字列のline offsetから範囲を求め、末尾の改行を1つだけ除く。複数表と`::code-comment{...}`で分割されたMarkdown segmentはそれぞれ独立して対応付ける
 - 表原文はDOM属性、hidden DOM、永続stateへ複製せず、表要素をkeyとする`WeakMap`で保持する。tokenとDOM表の対応数またはline mapが不正な場合は表の表示を維持してcopy buttonだけを出さない
 - copyは既存のtext-only clipboard messageを使う。Extension Hostは空でない文字列だけを受け付け、clipboard書き込み失敗時は本文、path、例外詳細をログへ出さず、Webviewへ失敗通知を返してlocalized toastを表示する。HTML / TSV / CSVコピーは対象外とする
+
+### 3.6.9 Codex の回答内にある追加の依頼候補
+
+- Codex の assistant 本文の `:codex-followup[表示文]{prompt="指示"}` は、表示文だけを既存 Markdown として表示する。埋め込まれた prompt や追加属性を表示・検索・本文コピーへ含めず、指示送信の操作は追加しない
+- 共通 message extractor の添付抽出前と async assistant 本文の投影に適用し、Chat、Search、preview、Markdown transcript、Resume / Handoff を揃える。text item をまたぐ記法も扱い、画像 item の順序は維持する
+- user / developer、Claude Code、tool 出力、コードフェンス、インラインコード、エスケープされた記法は変更しない。引用行とインデントコードも保守的に保持する。未完結・不正・空の候補と、65,536 UTF-16 code units を超える directive は原文を保持する
+- raw JSONL、メッセージ番号、履歴同一性は変更しない。正規化前の本文を保持した検索・解析の派生cacheは再構築する。後続の対応を含む現行versionは3.4節を参照する。この記法への対応自体ではnpm依存、翻訳キー、Webview messageを追加しない
 
 ### 3.7 設定（`codexHistoryViewer.*`）
 
@@ -838,7 +888,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `writeJson()` は同一ディレクトリの一時ファイルへ書いてから rename し、rename 失敗時は `beforeCommit` を再確認してから直接書き込みへフォールバックする。フォールバックの成功 / 失敗にかかわらず一時ファイルを best-effort で削除する
 - `src/services/historyService.ts`
   - `cache.v9.json` を読み書きする。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
-  - `SUMMARY_CACHE_ALGO_VERSION = 20`とし、現行Codex pasted-file形式、Claude pasted / truncated inputの本文／添付分離、本文保持専用照合の修正前、Claude cross-session受信の除外前、Codex standalone response itemのactivity timestamp対応前、またはCodex `history_base`論理preview対応前に生成した要約は、ファイル自体が未変更でも再生成する。outer cache versionとファイル名は変更しない
+  - 要約の再利用には3.4節の`SUMMARY_CACHE_ALGO_VERSION`との一致を要求する。本文・添付の正規化、Codexの指示編集、Claude端末入出力の分類などの修正前に生成した要約は、ファイル自体が未変更でも再生成する。outer cache version `9`とファイル名は変更しない
   - 有効な cache context から `HistoryIndex` を復元し、初回表示を先に完了できるようにする
   - cache 読み込み時の parse error は cache を削除して `null` 扱いにし、read error は削除せず `null` 扱いにする
   - 変更のないファイルはキャッシュ済み `summary` を再利用する
@@ -849,8 +899,12 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `HistoryIndex.byCacheKey` を構築し、`findByFsPath()` は `Map` で引く
   - `HistoryIndex.byIdentityKey` を構築し、active / archived 間の path 移動や pin 追従に使う
   - active と archived に同じ identity がある場合は active を優先して dedupe する
+  - 同一Codex会話の指示編集では、検証済みの編集子孫を祖先より優先し、兄弟の編集履歴は物理rolloutの作成順でメインを決める。cache復元時も同じ規則を適用し、旧ファイルは`historySources`へ残す
   - 最終的な一覧はローカル日付 / 時刻順で降順ソートする
   - `history.titleSource` に応じて `displayTitle` を後段で解決する
+- `src/sessions/codexRolloutRevisions.ts`
+  - 同じ会話ID・identity・保存root・archive内の編集関係、現在のメイン、旧物理履歴の参照を共通化する
+  - 祖先の探索は最大32段に制限し、通常Forkや無関係なコピーへ同一会話の編集関係を適用しない。ナビゲーション用の仮identityはsnapshot内だけで使う
 - `src/services/sessionTitleOverrideStore.ts`
   - カスタムタイトルを VS Code `globalState` に保存する
   - 本家の Codex / Claude Code 履歴ファイルは変更しない
@@ -923,7 +977,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 - `src/services/searchIndexService.ts`
   - `search-index.v2.json` を管理する。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
-  - `SEARCH_INDEX_FILE_VERSION = 22` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item / Codex `history_base`論理履歴 / Codex `item_completed` / `FileChange`のfile change hint / Codex非同期質問対応前に生成した既存インデックスは再構築対象にする
+  - `SEARCH_INDEX_FILE_VERSION = 23` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item / Codex `history_base`論理履歴 / Codex `item_completed` / `FileChange`のfile change hint / Codex非同期質問対応前に生成した既存インデックスは再構築対象にする
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
   - 検索インデックス読み込み時の parse error はインデックスを削除して `null` 扱いにし、次回検索時に再構築する
   - セッションごとに `mtime` / `size` を持ち、差分更新する
@@ -1173,6 +1227,10 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - session path 移動時は `relocateSessionPath()` で annotation を新 path へ移す
   - path 移動時に移行先 annotation がある場合、tags は merge し、note は空文字でも移行先を優先する
   - 初回readで検証・更新日時順sortしたsnapshotとpath key `Map`を作り、`get()`は平均O(1)で参照する。entryとtagsは防御的copyを返し、同一pathの旧重複値は従来どおり更新日時順の先頭を採用する
+- `src/services/codexRolloutMetadataInheritance.ts`
+  - History index確定時に、同一会話のメインへ注釈・タグと共通prefix内のしおり・保存位置をコピーする。実ファイル移動用の`SessionReferenceRelocator`とは別に扱い、旧物理履歴の情報を削除しない
+  - index・参照ファイル・継承元metadataを公開前に再検証し、準備中の利用者による変更・削除を優先する。保存は共有coordinatorで直列化し、失敗時は補償rollbackを試みる
+  - 処理済みメインのhashを記録して削除済み情報の復活を防ぎ、通常更新や注釈だけの継承では会話モデルを追加構築しない。詳細な継承条件は3.5のメイン履歴仕様に従う
 - `src/services/pinStore.ts`
   - ピン留め情報を `globalState` に保存する
   - `PinEntry` は `identityKey` / `archiveState` / `rootKind` を保持する
@@ -1224,6 +1282,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `chat.openPosition = latest` は保存位置を使わず、Webview 側で最新の描画済み visual target へ移動する。折りたたみ中の turn は勝手に展開しない
   - session path 移動時は `relocateSessionPath()` で保存位置を新 path へ移す
   - path 移動時に移行先 entry が既にある場合は移行先を優先し、source 側で上書きしない
+  - 共有metadata coordinatorでread-modify-writeを直列化し、永続化の成功後にメモリ状態を公開する。`getAll()` / `replaceAll()`は情報継承の保存・補償rollbackでも使用し、100件の保持上限を維持する
 
 ### 4.9.1 Handoff
 
@@ -1630,6 +1689,10 @@ KaTeX 0.18.0 では一部の内部 CSS class に `katex-` prefix が追加され
 
 ### 5.2 ビルド
 
+Mermaid 11.17.2 の配布済み JavaScript は js-yaml 4.3.0 を内包するため、通常の依存更新だけでは内包版の脆弱性を解消できない。2.14.2 では build-time の直接依存に公式修正版 `js-yaml@4.3.2` を exact pin し、`scripts/mermaid-yaml-dependency.mjs` の esbuild plugin が YAML 専用モジュールを置き換える。公開する `JSON_SCHEMA`／`load` と既存の描画制限を維持し、`node_modules` の配布ファイルは書き換えない。修正版のコードと既存のライセンス表記を Webview bundle／`THIRD_PARTY_NOTICES.txt` に含める。
+
+`build:webview`、`watch:webview`、`compile`、prepublish による build では、package manifest・lockfile・インストール済み version と、置換元／先の SHA-256 を確認する。置換が適用されない場合も build は失敗する。watch の rebuild でも同じ検証を行う。Mermaid／js-yaml の次回更新時は plugin の適合性を再検証し、上流が修正版を内包した場合はこの置換を廃止できるか判断する。version や hash だけを機械的に変更してはならない。`npm audit` に加え、実際の bundle 入力と内包コードを検査する。
+
 ```powershell
 # TypeScript をコンパイルします
 npm run compile
@@ -1651,6 +1714,8 @@ npm run lint
 git diff --check
 ```
 
+`npm run compile`は`dist/`を削除して再生成するため、生成済みJavaScriptを参照する回帰テストと同時実行しない。compile完了後にテストを開始する。文書だけの変更では、版番号・日付・UI文言・相対リンク・UTF-8（BOMなし）／LF・差分を確認する。
+
 ### 5.3 VSIX 作成
 
 ```powershell
@@ -1662,6 +1727,8 @@ npm run package
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 - README用の `media/screenshot*.png` は配布VSIXへ含めない。README内の画像はpackage時にremote URLへ変換されるため、`.vscodeignore`で除外する
 - ローカル最終確認用の `.root-review-*` は `.gitignore` と `.vscodeignore` の双方で除外する。リリース前は完成したVSIXを展開し、private docs、test、source map、別VSIX、レビュー用一時ファイルが混入していないことを確認する
+- リリース時はREADMEの最新版・What's New・Security、CHANGELOG、SECURITYの推奨版・対策・更新日を照合する。依存の追加・差し替えではTHIRD_PARTY_NOTICESの対象と著作権・ライセンス表記も確認する。DEVELOPMENTの現行cache・解析versionは実装の定数と一致させ、過去版のリリース記録は書き換えない
+- 文書を直した後はVSIXへの収録有無を確認する。README、CHANGELOG、SECURITY、THIRD_PARTY_NOTICES、docs/commands.mdは収録対象、DEVELOPMENTと私的設計書は除外対象である。収録文書を変更した場合は再作成したVSIXのハッシュと差分を改めて確認する
 
 ### 5.4 v2.11.0 リリースメモ（2026-08-14）
 
@@ -2098,6 +2165,12 @@ npm run package
 
 ## 6. 手動テスト観点
 
+- Codexの最後の指示を、中断後と回答完了後のそれぞれで編集する。元のSession Viewerと手動reloadは旧JSONLを保ち、「メイン履歴へ」で本拡張内のメイン表示へ切り替わる。旧版の主ボタンはCodex拡張・CLIを起動せず、切替後に通常の再開ボタンへ戻る
+- Branch Navigationの無効時にもメイン履歴への案内が表示される。有効時は「編集前」「編集後」を往復でき、通常のForkと区別される。元の履歴を表示中も既存のFork・エージェントのアイコンが消えない
+- 通常Forkを作った後、元会話の唯一の指示を編集し、編集前・編集後・Forkの各画面から各履歴へ移動できる。さらに指示を編集してもForkが選択肢に残り、参照履歴の欠損・境界不正・重複では誤った履歴へ移動しない
+- 編集前の画面で注釈・タグを変更すると旧履歴の情報が変わり、カスタムタイトルを変更すると同じ会話の共有タイトルが変わる。別会話のMarkdown履歴を開いていても対象が移らない
+- AI編集履歴が当初0件、または別会話だけが候補だった状態から、指示編集後のメインに対象ファイルの変更を含めると再検索される。連続編集中やpanel破棄後に古い解析結果を公開しない
+- 同じ言語・コードの繰り返し表示と異なるコードの表示で、着色、コードのコピー、ページ内検索、テーマ、折りたたみが一致する。複数WebviewでDOMや選択状態を共有しない
 - History ビューのタイトルメニュー / Command Palette から History Insights を開くと、起動時の History 条件に一致するセッションだけが集計される
 - History Insights を開いた後に History 条件や履歴ファイルが変わっても対象集合は自動で増減せず、`再集計` は同じ snapshot、`履歴の条件を適用` は現在の History 条件から作り直した snapshot を使う
 - History Insights のフィルターで From / To の片側開放・両端指定、複数プロジェクト、ソース、Codex の保存場所、タグを組み合わせて適用でき、不正日付、From > To、未選択 source は状態を変えずエラーになる
@@ -2126,7 +2199,7 @@ npm run package
 - History Insights の解析をキャンセルしても既存表示を stale として安全に保持し、panel を閉じて開き直した場合に旧 panel の進捗、エラー、model、VS Code通知が新しい panel へ混入しない。2秒未満のloadでは通知が出ず、2秒を超える初回load／model保持refreshでは通知からキャンセルできる。完了済みcancel後の新しいopen／条件適用はloadを開始し、snapshot保存中の最後の意図がcancelなら自動loadを抑止、cancel後にretryした場合は再開する
 - 新規 storage では `session-analysis-index.v1.json` は History Insights / Claude Code Branch Navigation / `Rebuild Cache` の初回解析要求まで作成されず、通常の History / Search / Pinned / セッションタイムライン表示を待たせない
 - Session Analysis Index は cache context が一致する限り未変更セッションを再利用し、mtime / size または parser version が変わった entry だけを再解析する。root / source context が変わった場合は新しい context で対象 entry を構築する
-- Session Analysis のsource parser versionはCodex `14` / Claude Code `10`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、`history_base`論理履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`を集計しないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entryは再解析される
+- Session Analysis のsource parser versionはCodex `16` / Claude Code `12`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、`history_base`論理履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`を集計しないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析される
 - 破損した `session-analysis-index.v1.json` は次の解析要求で安全に再生成され、read error では既存ファイルを削除しない
 - `Rebuild Cache` は確認後に履歴キャッシュ、検索インデックス、Session Analysis Index を同じ履歴集合から順番に再作成し、進捗とキャンセルが機能する。独立した Session Analysis 再構築コマンドは公開しない
 - `Rebuild Cache` をSession Analysis Index削除前にキャンセルした場合は既存indexが残り、削除後のキャンセルでは不完全なindexが保存されない。削除 / 保存失敗時は成功通知が出ない
@@ -2164,6 +2237,12 @@ npm run package
 - Codex / Claude Code の Branch Navigation overlay は同一セッションの手動 reload と自動更新 `preserve` / `follow` では開いた状態を維持し、最新 generation を current node 基準で再描画する。overlay 内の別セッションへの切り替え成功後は閉じ、後続navigationで勝手に再表示しない
 - History / Pinned / Searchのセッション右クリックとCommand Paletteに`Branch Navigationを表示`／`Agent Runsを表示`が出ず、現在のセッションビューのヘッダー／タイムライン操作は従来どおり利用できる。Codexサブエージェントの`親セッションを開く`は利用可能な場合だけ表示される
 - Claude Code user recordが短い単独`<local-command-stdout>`の場合は既定で閉じた出力カードになり、先頭以外に現れても通常user message番号、検索結果、preview、Resume、Handoff、Session Analysisのhuman messageへ混入しない。属性付き、複数block、通常文との混在、4,096文字超は通常textとして残る
+- Claude Codeのoriginを持たないuser record全体が`<bash-stdout>`と任意の`<bash-stderr>`・数値`<bash-exit-code>`、または単独`<bash-stderr>`に一致する場合は、`terminalOutput`の閉じたカードとして表示する。本文は標準出力・標準エラー・終了コードに分け、外側の記法を表示・コピー・検索へ含めない。本家の3種類のentityは一度だけ復号し、`persisted-output`内は再復号せず外側のみ除去する。stdout/stderrは各64,000文字まで、Unicodeの組を分断せず省略を明示する。本文はplain textとして扱い、外部ファイルを読まない
+- 端末出力は従来の1つのmessageIndexを保持して後続の検索・しおり・patch anchorを維持するが、user/assistantメッセージ・新たなhuman turn・依頼数・preview・Resume・Handoffには含めない。検索は`role:tool/source:toolOutput`としてツール出力の検索設定に従い、検索結果からはカードを展開する。Markdownには専用見出しと安全なcode blockで出力する。出力中のpatch風テキストはAIファイル変更として扱わない
+- 端末出力の分類修正に伴い、History summary algorithm `22`→`23`、Search file version `24`→`25`、Claude Analysis parser `10`→`11`を更新する。元のJSONLは変更せず、外側のHistory/Analysis cache schemaとCodex parser `16`は維持する。originあり、コード例、貼付け添付、通常文・画像・tool結果との混在、不完全なwrapperは再分類しない
+- 端末入力の`<bash-input>`は、originのないmaterialized user record全体が単独の完全なwrapperに一致した場合だけ外側を除去する。`extractClaudeMessageContent`へrecordを渡し、履歴タイトル・preview・Chat・検索・Markdown・Resume・Handoff・Analysis graphで同じコマンド本文を用いる。入力はuser message・依頼1件として保持し、採番・ターン・しおりの識別子を変えない。本文のentityは復号せず、添付風記法を再解釈しない。コード例、originあり、pasted、空・不正・混在contentは保持する
+- 端末入力のwrapperを含む旧cacheを無効化するため、History summary algorithm `23`→`24`、Search file version `25`→`26`、Claude Analysis parser `11`→`12`を更新する。既存の端末出力カードとその依頼数除外は維持する
+- 検証済みの端末入力は抽出結果と`ChatMessageItem`に任意の`isTerminalInput: true`を保持し、セッションビューの`user`直後に「端末入力」バッジを表示する。通常/簡易/詳細表示で共通とし、`role=user`かつ値が厳密に`true`の場合だけl10nの文言を表示する。本文・コピー・検索・export・履歴インサイト・AIファイル変更履歴にはバッジを混入させず、採番と集計を維持する。表示属性だけの追加なのでcache versionは上記を維持する
 - Codex rate limitの`used_percent`が`12.5`のような有限な非負小数でもusage cardとSession Analysisへ保持され、負数、非有限値、unsafeな大きさは従来どおり不正値になる
 - Codex / Claude Code の Branch Navigation経路ツリーはrole、#番号、秒までのtimestampを省略せず表示し、anchorと分岐前補助行のtooltipでも同じ完全値を確認できる
 - Agent Runs を有効化した既存 cache では未確認 Codex entry だけを bounded scanし、完了後の通常起動では再走査しない。部分失敗後は未確認 entry だけを再試行し、History / Search / Session Analysis Index の既存結果を作り直さない
@@ -2486,7 +2565,7 @@ npm run package
 - 2.12.0以前または内部version 16までのRCで作成した履歴要約／検索cacheが存在し、対象JSONLのmtimeとsizeが変わっていない場合も、内部version不一致により現行Codex／Claude pasted形式、本文保持専用照合、Claude cross-session受信のrole補正で一度再解析される
 - Claude pasted / truncated textが検証済みprompt-historyと一致する場合はdocument cardになり、Chat、preview、Search、Markdown、Resume、Handoffで展開済み本文やplaceholderが重複しない。補助情報不一致、cache不正、曖昧境界ではprimary本文が残る
 - 同じClaude pasted / truncated resolverをSession Analysisのraw graph照合にも使い、Chat modelとのfingerprint不一致や`unmatchedClaudeRecords`を発生させない。Claude parser version 9以前の既存entryはversion 10で再解析する
-- pasted card内の`[Request interrupted by user]`や`<local-command-stdout>`を外側control recordと誤認せず、Chat / Search / preview / Resume / Handoff / Session Analysis / File AI Change Historyで同じrecordを通常user messageとして扱う
+- pasted card内の`[Request interrupted by user]`、`<local-command-stdout>`、`<bash-stdout>`を外側control recordと誤認せず、Chat / Search / preview / Resume / Handoff / Session Analysis / File AI Change Historyで同じrecordを通常user messageとして扱う
 - Claude Code 2.1.248の直接peer受信とcoordinator `peer-send-message`受信は、通常user bubbleやtask notification cardではなく青系の専用cross-session cardになる。Searchではassistant由来として同じmessage indexへ移動でき、session preview、Resume、Handoff、Session Analysisのhuman countには混入しない
 - `origin.body`とwrapper本文が不一致、閉じtag欠落、上限超過などのmalformed peer recordは本文を表示せず、通常user messageへも戻さない。`isMeta` / origin根拠のない通常user本文内の`<cross-session-message>`は従来どおり本文として残る
 - Claude `[Image #N]`は`imagePasteIds`とstructured imageが一致する場合だけ1枚のimage cardになり、根拠のない同名literalは本文に残る

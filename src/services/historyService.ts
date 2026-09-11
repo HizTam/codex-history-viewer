@@ -31,6 +31,11 @@ import { isBoundedSessionIdentityKey } from "../sessions/sessionIdentity";
 import { isValidByteCount } from "../utils/formatBytes";
 import type { PerformanceProbe } from "../performance/performanceCounters";
 import { buildCanonicalFingerprint } from "../utils/canonicalFingerprint";
+import {
+  areCodexRolloutRevisionsRelated,
+  compareCodexRolloutCreation,
+  findSupersededCodexRolloutKeys,
+} from "../sessions/codexRolloutRevisions";
 
 interface CacheEntryV1 {
   mtimeMs: number;
@@ -44,7 +49,7 @@ interface HistoryInputStamp {
   readonly size: number;
 }
 
-const SUMMARY_CACHE_ALGO_VERSION = 20;
+const SUMMARY_CACHE_ALGO_VERSION = 24;
 const HISTORY_REFRESH_CONCURRENCY = 4;
 
 interface CacheFileV9 {
@@ -184,11 +189,18 @@ function sortSummariesByDisplayDate(summaries: SessionSummary[]): void {
   });
 }
 
-function selectPreferredSummariesByIdentity(summaries: readonly SessionSummary[]): SessionSummary[] {
+function selectPreferredSummariesByIdentity(
+  summaries: readonly SessionSummary[],
+  plans: ReadonlyMap<string, CodexLogicalHistoryPlan>,
+): SessionSummary[] {
+  const superseded = findSupersededCodexRolloutKeys(summaries, plans);
   const byIdentity = new Map<string, SessionSummary>();
   for (const summary of summaries) {
+    if (superseded.has(summary.cacheKey)) continue;
     const current = byIdentity.get(summary.identityKey);
-    if (!current || compareIdentityCandidate(summary, current) < 0) {
+    const creationOrder = current && areCodexRolloutRevisionsRelated(summary, current, summaries)
+      ? compareCodexRolloutCreation(summary, current) : 0;
+    if (!current || (creationOrder || compareIdentityCandidate(summary, current)) < 0) {
       byIdentity.set(summary.identityKey, summary);
     }
   }
@@ -448,7 +460,7 @@ export class HistoryService {
       this.logger?.debug(`history.cacheImmediate logicalPlanChanged totalMs=${elapsedMs(startedAt)}`);
       return false;
     }
-    const selectedSummaries = selectPreferredSummariesByIdentity(summaries);
+    const selectedSummaries = selectPreferredSummariesByIdentity(summaries, logicalPlans);
     const previewResults = await mapWithConcurrency(
       selectedSummaries,
       HISTORY_REFRESH_CONCURRENCY,
@@ -1176,7 +1188,7 @@ export class HistoryService {
       performanceProbe?.setOutcome("partial");
       return buildIncompleteResult();
     }
-    const selectedSummaries = selectPreferredSummariesByIdentity(summaries);
+    const selectedSummaries = selectPreferredSummariesByIdentity(summaries, logicalPlans);
     const previewResults = await mapWithConcurrency(
       selectedSummaries,
       HISTORY_REFRESH_CONCURRENCY,
@@ -1778,6 +1790,7 @@ function buildSessionSummaryFingerprint(
   const summaryFingerprint = buildCanonicalFingerprint("history-session-summary:v2", [
     summary.fsPath,
     summary.fileSizeBytes,
+    summary.codexRollbackRevision,
     summary.cacheKey,
     summary.identityKey,
     summary.source,
@@ -1794,6 +1807,7 @@ function buildSessionSummaryFingerprint(
       projectCodexAgent(summary.meta.codexAgent),
       projectCodexFork(summary.meta.codexFork),
       projectCodexHistoryBase(summary.meta.codexHistoryBase),
+      summary.meta.codexStandaloneHistory,
     ],
     summary.inferredYmd
       ? [summary.inferredYmd.year, summary.inferredYmd.month, summary.inferredYmd.day]
@@ -1966,6 +1980,7 @@ function normalizeCachedEntry(value: unknown, storageKey: string): CacheEntryV1 
     delete meta.codexAgent;
     delete meta.codexFork;
     delete meta.codexHistoryBase;
+    delete meta.codexStandaloneHistory;
     return {
       mtimeMs,
       size,
@@ -1979,6 +1994,8 @@ function normalizeCachedEntry(value: unknown, storageKey: string): CacheEntryV1 
   if (!sanitizedFork.valid) return null;
   const sanitizedHistoryBase = sanitizeCachedCodexHistoryBaseMetadata(summary.meta.codexHistoryBase);
   if (!sanitizedHistoryBase.valid) return null;
+  if (summary.meta.codexStandaloneHistory !== undefined &&
+    (summary.meta.codexStandaloneHistory !== true || sanitizedHistoryBase.value)) return null;
   const meta = { ...summary.meta };
   if (sanitized.value) meta.codexAgent = sanitized.value;
   else delete meta.codexAgent;
@@ -2025,7 +2042,9 @@ function normalizeCachedSummary(value: unknown, storageKey: string): SessionSumm
     !hasRequiredCachedSummaryStrings(value) ||
     !hasValidOptionalCachedSummaryStrings(value) ||
     !hasValidCachedPreviewMessages(value.previewMessages) ||
-    !hasValidCachedInferredYmd(value.inferredYmd)
+    !hasValidCachedInferredYmd(value.inferredYmd) ||
+    (value.codexRollbackRevision !== undefined &&
+      (value.source !== "codex" || !Number.isSafeInteger(value.codexRollbackRevision) || Number(value.codexRollbackRevision) <= 0))
   ) {
     return null;
   }

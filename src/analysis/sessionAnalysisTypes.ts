@@ -136,6 +136,7 @@ export interface ClaudeGraphRecordOccurrence {
 }
 
 export interface SessionAnalysisEntry {
+  codexRollbackRevision?: number;
   cacheKey: string;
   identityKey: string;
   fsPath: string;
@@ -206,8 +207,8 @@ export interface SessionAnalysisResult {
 }
 
 export const SESSION_ANALYSIS_CACHE_SCHEMA_VERSION = 1 as const;
-export const SESSION_ANALYSIS_CODEX_PARSER_VERSION = 14;
-export const SESSION_ANALYSIS_CLAUDE_PARSER_VERSION = 10;
+export const SESSION_ANALYSIS_CODEX_PARSER_VERSION = 16;
+export const SESSION_ANALYSIS_CLAUDE_PARSER_VERSION = 12;
 export const SESSION_ANALYSIS_PATH_NORMALIZATION_VERSION = 1;
 export const SESSION_ANALYSIS_MAX_FILE_CHANGE_ENTRIES = 100_000;
 export const SESSION_ANALYSIS_MAX_CACHE_ENTRIES = 200_000;

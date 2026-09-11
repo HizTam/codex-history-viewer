@@ -941,6 +941,7 @@ function hasConflictingRequestedSession(
       existing.source !== session.source ||
       existing.identityKey !== session.identityKey ||
       existing.fsPath !== session.fsPath ||
+      existing.codexRollbackRevision !== session.codexRollbackRevision ||
       existing.storage.rootKind !== session.storage.rootKind ||
       existing.storage.archiveState !== session.storage.archiveState
     ) {
@@ -1089,6 +1090,7 @@ function isSessionAnalysisEntry(value: unknown, key: string): value is SessionAn
   if (!isBoundedSessionIdentityKey(entry.identityKey)) return false;
   if (!isSafeNonNegativeNumber(entry.mtimeMs) || !isSafeNonNegativeInteger(entry.size) || !isSafeNonNegativeInteger(entry.parserVersion)) return false;
   if (entry.historySignature !== undefined && !isOptionalBoundedString(entry.historySignature, 256)) return false;
+  if (entry.codexRollbackRevision !== undefined && (entry.source !== "codex" || !isSafePositiveInteger(entry.codexRollbackRevision))) return false;
   if (!isStorageLocation(entry.storage) || !isMessageStats(entry.messageStats)) return false;
   const usageStats = entry.usageStats;
   if (!isUsageStats(usageStats) || !isFileChangeStats(entry.fileChangeStats)) return false;
@@ -1382,6 +1384,7 @@ function getLogicalHistorySize(plan: CodexLogicalHistoryPlan): number {
 
 function isEntryForSession(entry: SessionAnalysisEntry, session: SessionSummary): boolean {
   return entry.source === session.source && entry.identityKey === session.identityKey &&
+    entry.codexRollbackRevision === session.codexRollbackRevision &&
     entry.fsPath === session.fsPath && entry.storage.rootKind === session.storage.rootKind &&
     entry.storage.archiveState === session.storage.archiveState;
 }

@@ -31,6 +31,7 @@ export interface SessionMetaInfo {
   codexAgent?: CodexAgentMetadata;
   codexFork?: CodexForkMetadata;
   codexHistoryBase?: CodexHistoryBaseMetadata;
+  codexStandaloneHistory?: true; // Paginated ordinal-zero metadata with no declared history base.
 }
 
 export interface CodexAgentMetadata {
@@ -60,6 +61,7 @@ export interface PreviewMessage {
 }
 
 export interface SessionSummary {
+  codexRollbackRevision?: number;
   fsPath: string;
   fileSizeBytes?: number;
   cacheKey: string;

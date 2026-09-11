@@ -1,4 +1,5 @@
 import type { CodexAsyncQuestionDefinition } from "./codexQuestionReplies";
+import { projectCodexFollowupText } from "./codexFollowup";
 
 export type CodexRolloutRecordKind =
   | "session_meta"
@@ -113,7 +114,7 @@ export function readCodexAsyncQuestionMessage(value: unknown): CodexAsyncQuestio
   const turnId = normalizeCodexCorrelationId(value.payload.turn_id ?? value.payload.turnId);
   return {
     itemId,
-    text: content,
+    text: projectCodexFollowupText(content),
     ...(turnId ? { turnId } : {}),
     ...(Array.isArray(item.questions) && item.questions.length > 0 ? {
       questions: item.questions.map((question: CodexAsyncQuestionDefinition) => ({

@@ -61,6 +61,12 @@ import mermaid from "mermaid";
   const DARK_THEME_NAME = "dark-plus";
   const HIGH_CONTRAST_LIGHT_THEME_NAME = "github-light-high-contrast";
   const HIGH_CONTRAST_DARK_THEME_NAME = "github-dark-high-contrast";
+  const HIGHLIGHT_CACHE_MAX_ENTRIES = 128;
+  const HIGHLIGHT_CACHE_MAX_BYTES = 4 * 1024 * 1024;
+  const HIGHLIGHT_CACHE_MAX_ENTRY_BYTES = 256 * 1024;
+  const HIGHLIGHT_CACHE_MAX_CODE_CHARS = 65536;
+  const highlightCache = new Map();
+  let highlightCacheBytes = 0;
 
   const displayLabelMap = {
     shellscript: "bash",
@@ -237,7 +243,18 @@ import mermaid from "mermaid";
     if (!highlighter) return "";
 
     try {
-      return highlighter.codeToHtml(String(codeText || ""), {
+      const code = String(codeText || "");
+      const cacheable = code.length <= HIGHLIGHT_CACHE_MAX_CODE_CHARS &&
+        typeof normalizedLanguage === "string" && normalizedLanguage.length <= 128;
+      // Each HTML value already contains every fixed theme; never share mutable DOM fragments.
+      const key = cacheable ? `${normalizedLanguage}\0${code}` : "";
+      const cached = cacheable ? highlightCache.get(key) : undefined;
+      if (cached) {
+        highlightCache.delete(key);
+        highlightCache.set(key, cached);
+        return cached.html;
+      }
+      const html = highlighter.codeToHtml(code, {
         lang: normalizedLanguage,
         themes: {
           dark: DARK_THEME_NAME,
@@ -246,6 +263,19 @@ import mermaid from "mermaid";
           light: LIGHT_THEME_NAME,
         },
       });
+      if (cacheable && typeof html === "string" && html) {
+        const bytes = 2 * (key.length + html.length);
+        if (bytes <= HIGHLIGHT_CACHE_MAX_ENTRY_BYTES) {
+          highlightCache.set(key, { html, bytes });
+          highlightCacheBytes += bytes;
+          while (highlightCache.size > HIGHLIGHT_CACHE_MAX_ENTRIES || highlightCacheBytes > HIGHLIGHT_CACHE_MAX_BYTES) {
+            const [oldKey, oldValue] = highlightCache.entries().next().value;
+            highlightCache.delete(oldKey);
+            highlightCacheBytes -= oldValue.bytes;
+          }
+        }
+      }
+      return html;
     } catch (error) {
       console.warn("[codex-history-viewer] Shiki highlight fallback.", {
         error,

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import * as vscode from "vscode";
+import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import type {
   ChatPatchChangeType,
   ChatPatchEntry,
@@ -297,6 +298,7 @@ async function parseCodexSession(
   const fileChangeDeduper = new CodexFileChangeEventDeduper();
 
   for await (const record of readSessionJsonlRecords(session.fsPath, "codex", {
+    applyCodexRollbacks: true,
     sessionInventory,
     token,
     cancellationErrorFactory: () => new vscode.CancellationError(),
@@ -428,6 +430,10 @@ async function parseClaudeSession(
       const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
       if (role === "user" && extractClaudeRequestInterruptionContent(controlContent)) continue;
       if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
+      if (extractClaudeTerminalOutput(obj, controlContent)) {
+        messageIndex += 1;
+        continue;
+      }
       const parsed = parseClaudeMessageContent(rawContent);
       if (normalizeWhitespace(parsed.messageText)) messageIndex += 1;
       const timestampIso = resolveClaudeDiffTimestamp(obj, session);
