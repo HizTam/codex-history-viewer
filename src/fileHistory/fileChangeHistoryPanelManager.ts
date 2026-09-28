@@ -28,11 +28,13 @@ import {
   FILE_CHANGE_HISTORY_PAGE_SIZE,
   type FileChangeHistoryCandidate,
   type FileChangeHistoryCard,
+  type FileChangeHistoryOrigin,
   type FileChangeHistoryRevealTarget,
   type FileChangeHistoryTarget,
   type FileChangeHistoryWebviewModel,
 } from "./fileChangeHistoryTypes";
 import { FileChangeHistoryService } from "./fileChangeHistoryService";
+import { prioritizeFileChangeHistoryOrigin, sanitizeFileChangeHistoryOrigin } from "./fileChangeHistoryNavigation";
 import { resolveCodexRolloutMainline } from "../sessions/codexRolloutRevisions";
 import type { SessionSummary } from "../sessions/sessionTypes";
 
@@ -40,6 +42,9 @@ type StaleReason = "association" | "indexToolContent" | "sources";
 
 interface FileChangeHistoryPanelState {
   target: FileChangeHistoryTarget;
+  navigationOrigin?: FileChangeHistoryOrigin;
+  revealOnLoad?: boolean;
+  initialCancellation?: vscode.CancellationTokenSource;
   restoreCardCount?: number;
   restoreScrollAnchor?: FileChangeHistoryScrollAnchor;
   generation: number;
@@ -67,6 +72,7 @@ interface FileChangeBookmarkState {
 interface FileChangeHistoryRestoreState {
   version: 1;
   target: FileChangeHistoryTarget;
+  navigationOrigin?: FileChangeHistoryOrigin;
   cardCount?: number;
   scrollAnchor?: FileChangeHistoryScrollAnchor;
 }
@@ -129,7 +135,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
   public dispose(): void {
     this.bookmarkSubscription.dispose();
     for (const panel of this.panelsByKey.values()) {
-      this.cancelLoadMore(panel, true);
+      this.cancelLoads(panel, true);
       panel.dispose();
     }
     this.panelsByKey.clear();
@@ -173,7 +179,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       const state = this.stateByPanel.get(panel);
       if (!state || !this.hasReplacedCodexMainline(state.sessionSnapshot ?? state.candidates.map((candidate) => candidate.session))) continue;
       const count = Math.max(FILE_CHANGE_HISTORY_PAGE_SIZE, state.cards.length);
-      this.resetPanelState(panel, state.target);
+      this.resetPanelState(panel, state.target, state.navigationOrigin, false);
       this.bookmarkTargetsByPanel.delete(panel);
       if (!this.readyByPanel.get(panel)) continue;
       const generation = this.stateByPanel.get(panel)!.generation;
@@ -236,7 +242,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     }
   }
 
-  public async openForUri(uri: vscode.Uri | undefined): Promise<void> {
+  public async openForUri(uri: vscode.Uri | undefined, rawOrigin?: unknown): Promise<void> {
     const targetUri = uri ?? vscode.window.activeTextEditor?.document.uri;
     if (!targetUri || targetUri.scheme !== "file") {
       void vscode.window.showInformationMessage(t("fileChangeHistory.noFileSelected"));
@@ -253,7 +259,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     const target = this.fileChangeHistoryService.buildTarget(targetUri, workspaceFolder);
     const key = buildPanelKey(target);
     const panel = this.getOrCreatePanel(key, config);
-    this.resetPanelState(panel, target);
+    this.resetPanelState(panel, target, sanitizeFileChangeHistoryOrigin(rawOrigin));
     panel.title = t("fileChangeHistory.panelTitle", target.fileName);
     panel.iconPath = this.resolvePanelIconPath(config);
     panel.reveal(vscode.ViewColumn.Active, false);
@@ -313,7 +319,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
   private registerPanel(key: string, panel: vscode.WebviewPanel): void {
     this.panelsByKey.set(key, panel);
     panel.onDidDispose(() => {
-      this.cancelLoadMore(panel, true);
+      this.cancelLoads(panel, true);
       if (this.panelsByKey.get(key) === panel) {
         this.panelsByKey.delete(key);
       }
@@ -340,6 +346,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     panel.iconPath = this.resolvePanelIconPath(getConfig());
     this.stateByPanel.set(panel, {
       target: restored.target,
+      navigationOrigin: restored.navigationOrigin,
       restoreCardCount: restored.cardCount,
       restoreScrollAnchor: restored.scrollAnchor,
       generation: 1,
@@ -371,11 +378,13 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     }
   }
 
-  private resetPanelState(panel: vscode.WebviewPanel, target: FileChangeHistoryTarget): void {
+  private resetPanelState(panel: vscode.WebviewPanel, target: FileChangeHistoryTarget, navigationOrigin?: FileChangeHistoryOrigin, revealOnLoad = !!navigationOrigin): void {
     const previous = this.stateByPanel.get(panel);
-    this.cancelLoadMore(panel);
+    this.cancelLoads(panel);
     this.stateByPanel.set(panel, {
       target,
+      navigationOrigin,
+      revealOnLoad,
       generation: (previous?.generation ?? 0) + 1,
       candidates: [],
       cards: [],
@@ -399,6 +408,8 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     const sessionInventory = Object.freeze(Array.from(historyIndex.sessions));
     const limit = Math.max(FILE_CHANGE_HISTORY_PAGE_SIZE, Math.floor(targetCardCount));
     const totalStartedAt = nowMs();
+    const cancellation = new vscode.CancellationTokenSource();
+    let progressCancellation: vscode.Disposable | undefined;
     let indexMs = 0;
     let candidateMs = 0;
     let loadMs = 0;
@@ -409,7 +420,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       }),
     );
 
-    this.stateByPanel.set(panel, { ...state, loading: true, staleReason: undefined, sessionSnapshot: sessionInventory });
+    this.stateByPanel.set(panel, { ...state, loading: true, staleReason: undefined, sessionSnapshot: sessionInventory, initialCancellation: cancellation });
     try {
       await vscode.window.withProgress(
         {
@@ -417,7 +428,10 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
           title: t("fileChangeHistory.progress.syncIndex"),
           cancellable: true,
         },
-        async (progress, token) => {
+        async (progress, progressToken) => {
+          progressCancellation = progressToken.onCancellationRequested(() => cancellation.cancel());
+          if (progressToken.isCancellationRequested) cancellation.cancel();
+          const token = cancellation.token;
           await this.sendLoading(panel, "syncIndex");
           const indexStartedAt = nowMs();
           const searchIndexSnapshot = await this.searchIndexService.ensureUpToDate({
@@ -443,12 +457,12 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
           }
           await this.sendLoading(panel, "collectCandidates");
           const candidateStartedAt = nowMs();
-          const candidates = this.fileChangeHistoryService.buildCandidates({
+          const candidates = prioritizeFileChangeHistoryOrigin(this.fileChangeHistoryService.buildCandidates({
             index: historyIndex,
             searchIndexSnapshot,
             target: current.target,
             config,
-          });
+          }), current.navigationOrigin);
           candidateMs = elapsedMs(candidateStartedAt);
 
           await this.sendLoading(panel, "parseSessions");
@@ -460,11 +474,11 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
             pendingCards: [],
             limit,
             sessionInventory: historyIndex.historySources ?? historyIndex.sessions,
+            origin: current.navigationOrigin,
             token,
           });
           loadMs = elapsedMs(loadStartedAt);
 
-          await this.sendLoading(panel, "render");
           const latest = this.stateByPanel.get(panel);
           if (!latest || latest.generation !== generation) return;
           if (this.hasReplacedCodexMainline(sessionInventory)) {
@@ -482,8 +496,12 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
             nextCandidateIndex: loaded.nextCandidateIndex,
             hasMore: !loaded.exhausted,
             loading: false,
+            revealOnLoad: false,
           });
-          await this.sendModel(panel, { reason });
+          await this.sendModel(panel, { reason, revealCardId: latest.revealOnLoad ? loaded.revealCardId : undefined });
+          if (latest.revealOnLoad && !loaded.revealCardId && this.stateByPanel.get(panel)?.generation === generation) {
+            void vscode.window.showInformationMessage(t("fileChangeHistory.originUnavailable"));
+          }
           this.logger?.debug(
             formatDebugFields(`fileChangeHistory ${reason} done`, {
               totalMs: elapsedMs(totalStartedAt),
@@ -509,6 +527,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
               claudeEditParsed: loaded.stats.diffStats.claudeEditParsed,
               claudeMultiEditParsed: loaded.stats.diffStats.claudeMultiEditParsed,
               claudeWriteParsed: loaded.stats.diffStats.claudeWriteParsed,
+              claudeBashParsed: loaded.stats.diffStats.claudeBashParsed,
               noRenderableSkipped: loaded.stats.diffStats.noRenderableSkipped,
             }),
           );
@@ -536,6 +555,13 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
           type: "error",
           message: t("fileChangeHistory.error.loadFailed", formatError(error)),
         });
+      }
+    } finally {
+      progressCancellation?.dispose();
+      cancellation.dispose();
+      const latest = this.stateByPanel.get(panel);
+      if (latest?.initialCancellation === cancellation) {
+        this.stateByPanel.set(panel, { ...latest, initialCancellation: undefined });
       }
     }
   }
@@ -614,6 +640,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
           claudeEditParsed: loaded.stats.diffStats.claudeEditParsed,
           claudeMultiEditParsed: loaded.stats.diffStats.claudeMultiEditParsed,
           claudeWriteParsed: loaded.stats.diffStats.claudeWriteParsed,
+          claudeBashParsed: loaded.stats.diffStats.claudeBashParsed,
           noRenderableSkipped: loaded.stats.diffStats.noRenderableSkipped,
         }),
       );
@@ -735,7 +762,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
   private async reload(panel: vscode.WebviewPanel): Promise<void> {
     const state = this.stateByPanel.get(panel);
     if (!state) return;
-    this.cancelLoadMore(panel);
+    this.cancelLoads(panel);
     const targetCardCount = Math.max(FILE_CHANGE_HISTORY_PAGE_SIZE, state.cards.length);
     this.stateByPanel.set(panel, {
       ...state,
@@ -743,6 +770,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       loading: false,
       staleReason: undefined,
       loadMoreCancellation: undefined,
+      initialCancellation: undefined,
     });
     await this.sendLoading(panel, "syncIndex");
     void this.loadInitial(panel, targetCardCount, "reload");
@@ -816,14 +844,16 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     this.stateByPanel.set(panel, { ...state, staleReason: undefined });
   }
 
-  private cancelLoadMore(panel: vscode.WebviewPanel, invalidate = false): void {
+  private cancelLoads(panel: vscode.WebviewPanel, invalidate = false): void {
     const state = this.stateByPanel.get(panel);
-    if (!state || !state.loadMoreCancellation) return;
-    state.loadMoreCancellation.cancel();
+    if (!state) return;
+    state.loadMoreCancellation?.cancel();
+    state.initialCancellation?.cancel();
     this.stateByPanel.set(panel, {
       ...state,
       generation: invalidate ? state.generation + 1 : state.generation,
       loadMoreCancellation: undefined,
+      initialCancellation: undefined,
     });
   }
 
@@ -847,6 +877,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       addedCount?: number;
       addedSourceCounts?: { codex: number; claude: number };
       reason?: "initial" | "reload" | "loadMore";
+      revealCardId?: string;
     } = {},
   ): Promise<void> {
     const state = this.stateByPanel.get(panel);
@@ -857,6 +888,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     const restoreScrollAnchor = options.reason === "initial" ? state.restoreScrollAnchor : undefined;
     const model: FileChangeHistoryWebviewModel = {
       target: state.target,
+      navigationOrigin: state.navigationOrigin,
       cards,
       sourceCounts: countSources(cards),
       enabledSources: { codex: config.enableCodexSource || config.enableCodexArchivedSessions, claude: config.enableClaudeSource },
@@ -879,10 +911,11 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       timeGuideEnabled: config.timeGuideEnabled,
       debugLoggingEnabled: this.logger?.isDebugEnabled() ?? false,
       scrollAnchor: restoreScrollAnchor,
+      revealCardId: options.revealCardId,
     });
     if (restoreScrollAnchor) {
       const latest = this.stateByPanel.get(panel);
-      if (latest) this.stateByPanel.set(panel, { ...latest, restoreScrollAnchor: undefined });
+      if (latest?.generation === state.generation) this.stateByPanel.set(panel, { ...latest, restoreScrollAnchor: undefined });
     }
   }
 
@@ -1056,6 +1089,9 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       changeTypeRename: t("fileChangeHistory.changeType.rename"),
       changeTypeUpdate: t("fileChangeHistory.changeType.update"),
       changeTypeUnknown: t("fileChangeHistory.changeType.unknown"),
+      patchUnconfirmed: t("chat.patch.unconfirmed"),
+      patchShared: t("chat.patch.shared"),
+      patchIncomplete: t("chat.patch.incomplete"),
       top: t("fileChangeHistory.guide.top"),
       bottom: t("fileChangeHistory.guide.bottom"),
       prevMatch: t("fileChangeHistory.guide.prevMatch"),
@@ -1193,9 +1229,11 @@ function sanitizeFileChangeHistoryRestoreState(value: unknown): FileChangeHistor
       ? Math.max(FILE_CHANGE_HISTORY_PAGE_SIZE, Math.floor(restore.cardCount))
       : undefined;
   const scrollAnchor = sanitizeFileChangeHistoryScrollAnchor(restore.scrollAnchor);
+  const navigationOrigin = sanitizeFileChangeHistoryOrigin(restore.navigationOrigin);
   return {
     version: 1,
     target,
+    ...(navigationOrigin ? { navigationOrigin } : {}),
     ...(cardCount !== undefined ? { cardCount } : {}),
     ...(scrollAnchor ? { scrollAnchor } : {}),
   };

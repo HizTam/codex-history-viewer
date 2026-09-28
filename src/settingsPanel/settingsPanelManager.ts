@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { getExtensionVersion } from "../extensionVersion";
 import { resolveUiLanguage, t } from "../i18n";
 import {
   SETTINGS_DEFINITIONS,
@@ -1562,7 +1563,7 @@ export class SettingsPanelManager implements vscode.Disposable {
 
   private buildAboutModel(): SettingsAboutModel {
     const packageJson: unknown = this.context.extension.packageJSON;
-    const version = readPackageString(packageJson, "version") ?? "2.14.2";
+    const version = getExtensionVersion(packageJson);
     const licenseName = readPackageString(packageJson, "license") ?? "MIT";
     const currentYear = new Date().getFullYear();
     const copyrightEndYear = Number.isSafeInteger(currentYear) && currentYear >= COPYRIGHT_START_YEAR

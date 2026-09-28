@@ -581,6 +581,7 @@ export function buildFileChangeStats(
   sessionCwd: string | undefined,
 ): FileChangeStatsBuildResult {
   const groups = items.filter((item): item is ChatPatchGroupItem => item.type === "patchGroup");
+  const evidenceIncomplete = groups.some(group => group.incomplete || group.entries.some(entry => entry.incomplete || entry.evidence));
   const byPath = new Map<string, FileChangeEntryAccumulator>();
   const changeEventCount = createSafeFileChangeAccumulator();
   const linesAdded = createSafeFileChangeAccumulator();
@@ -591,6 +592,7 @@ export function buildFileChangeStats(
     const groupTimestampIso = normalizeSessionAnalysisTimestamp(group.timestampIso);
     if (group.timestampIso !== undefined && groupTimestampIso === undefined) invalidTimestamp = true;
     for (const entry of group.entries) {
+      if (entry.evidence) continue;
       addSafeFileChangeValue(changeEventCount, 1);
       addSafeFileChangeValue(linesAdded, entry.added);
       addSafeFileChangeValue(linesRemoved, entry.removed);
@@ -656,6 +658,7 @@ export function buildFileChangeStats(
     fileLinesRemovedOverflow;
   const fileAvailability: AnalysisAvailability =
     availability === "partial" ||
+    evidenceIncomplete ||
     unresolvedPathCount > 0 ||
     entriesTruncated ||
     numericOverflow ||
@@ -667,6 +670,7 @@ export function buildFileChangeStats(
       ? { availability: "unavailable" }
       : { value: value.value, availability: fileAvailability };
   const warnings: string[] = [];
+  if (evidenceIncomplete) warnings.push("fileChangeEvidenceIncomplete");
   if (entriesTruncated) warnings.push(`fileChangeEntryLimit:${SESSION_ANALYSIS_MAX_FILE_CHANGE_ENTRIES}`);
   if (changeEventCount.overflowed || fileChangeEventCountOverflow) {
     warnings.push("fileChangeEventCountOverflow");
@@ -683,7 +687,7 @@ export function buildFileChangeStats(
       linesRemoved: metric(linesRemoved),
       files: files.slice(0, SESSION_ANALYSIS_MAX_FILE_CHANGE_ENTRIES),
     },
-    entryPartial: entriesTruncated || numericOverflow || unresolvedPathCount > 0 || invalidTimestamp,
+    entryPartial: evidenceIncomplete || entriesTruncated || numericOverflow || unresolvedPathCount > 0 || invalidTimestamp,
     warnings,
   };
 }

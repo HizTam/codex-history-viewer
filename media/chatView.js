@@ -73,6 +73,8 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M10 1.5H6A1.5 1.5 0 0 0 4.5 3H3.75A1.75 1.75 0 0 0 2 4.75v8.5C2 14.216 2.784 15 3.75 15h8.5c.966 0 1.75-.784 1.75-1.75v-8.5C14 3.784 13.216 3 12.25 3H11.5A1.5 1.5 0 0 0 10 1.5Zm-4 1H10a.5.5 0 0 1 .5.5V3H5.5V3a.5.5 0 0 1 .5-.5ZM3.75 4h8.5a.75.75 0 0 1 .75.75v8.5a.75.75 0 0 1-.75.75h-8.5a.75.75 0 0 1-.75-.75v-8.5A.75.75 0 0 1 3.75 4Z"/></svg>';
   const REVEAL_FILE_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M1.75 2.5h4.1c.2 0 .39.08.53.22L7.66 4h4.59A1.75 1.75 0 0 1 14 5.75v.75h-1.5v-.75a.25.25 0 0 0-.25-.25H7.35a.75.75 0 0 1-.53-.22L5.54 4H1.75a.25.25 0 0 0-.25.25v7.5c0 .1.06.19.15.23L3.4 7.62A1.75 1.75 0 0 1 5.02 6.5h8.23a1.25 1.25 0 0 1 1.16 1.72l-1.9 4.75A1.75 1.75 0 0 1 10.89 14H1.75A1.75 1.75 0 0 1 0 12.25v-8A1.75 1.75 0 0 1 1.75 2.5Zm3.27 5.5a.25.25 0 0 0-.23.16L3.05 12.5h7.84a.25.25 0 0 0 .23-.16L12.86 8H5.02Z"/></svg>';
+  const FILE_HISTORY_ICON_SVG =
+    '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 6a6 6 0 1 1 0 4M2 2v4h4M8 4.5V8l2.5 1.5"/></svg>';
   const RELOAD_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M8 2.25a5.75 5.75 0 1 0 5.75 5.75.75.75 0 0 0-1.5 0A4.25 4.25 0 1 1 8 3.75h2.06l-.8.8a.75.75 0 0 0 1.06 1.06l2.08-2.08a.75.75 0 0 0 0-1.06L10.32.39A.75.75 0 0 0 9.26 1.45l.8.8H8Z"/></svg>';
   const SCROLL_TOP_ICON_SVG =
@@ -7557,7 +7559,7 @@
         roles.add("tool");
         continue;
       }
-      if (showDetails && item.type === "note") {
+      if ((showDetails || item.alwaysVisible === true) && item.type === "note") {
         roles.add("tool");
       }
     }
@@ -8863,6 +8865,7 @@
     if (model.meta && model.meta.cliVersion) metaLines.push(`CLI: ${model.meta.cliVersion}`);
     if (model.meta && model.meta.modelProvider) metaLines.push(`Model Provider: ${model.meta.modelProvider}`);
     if (model.meta && model.meta.source) metaLines.push(`Source: ${model.meta.source}`);
+    if (model.compressed) metaLines.push(i18n.sessionCompressed);
     if (model.sessionLocation && model.sessionLocation.archiveState === "archived") {
       metaLines.push(i18n.sessionLocationArchived || "Archived");
     }
@@ -10661,7 +10664,7 @@
     else if (item.type === "systemEvent") rendered = renderSystemEvent(item, cardKey);
     else if (item.type === "usage") rendered = showDetails ? renderUsage(item, cardKey) : null;
     else if (item.type === "environment") rendered = showDetails ? renderEnvironment(item, cardKey) : null;
-    else rendered = showDetails ? renderNote(item, cardKey) : null;
+    else rendered = showDetails || item.alwaysVisible === true ? renderNote(item, cardKey) : null;
 
     if (rendered instanceof HTMLElement) {
       rendered.dataset.cardKey = cardKey;
@@ -12907,7 +12910,7 @@
     titleWrap.appendChild(icon);
 
     const title = el("div", { className: "toolCardTitle" });
-    title.textContent = formatTemplate(
+    title.textContent = item.incomplete ? i18n.patchGroupTitle : formatTemplate(
       getSafeUiText(i18n.patchFilesEdited || i18n.patchGroupCount, "Edited {0} files"),
       item.entryCount || (Array.isArray(item.entries) ? item.entries.length : 0),
     );
@@ -12933,6 +12936,8 @@
     if (!allDiffActive) headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
     header.appendChild(headerActions);
     bubble.appendChild(header);
+
+    if (item.incomplete) bubble.appendChild(el("div", { className: "toolCardSecondary", textContent: i18n.patchIncomplete }));
 
     if (typeof item.timestampIso === "string" || typeof item.turnId === "string") {
       const metaLine = el("div", { className: "toolCardMetaLine" });
@@ -13124,6 +13129,7 @@
   }
 
   function renderPatchGroupFileRow(cardKey, item, entry) {
+    const row = el("div", { className: "patchGroupFileActions" });
     const button = el("button", { type: "button", className: "patchGroupFileRow" });
     const title = buildPatchEntryTitle(entry);
     button.title = title;
@@ -13133,16 +13139,43 @@
     counts.appendChild(renderSignedCountBadge(entry.added, "add"));
     counts.appendChild(renderSignedCountBadge(entry.removed, "remove"));
     button.appendChild(counts);
+    const evidenceLabel = appendPatchEvidenceLabel(button, entry);
+    if (evidenceLabel) button.setAttribute("aria-label", `${title} ${evidenceLabel}`);
     button.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
       openPatchGroupEntry(cardKey, entry);
     });
-    return button;
+    row.appendChild(button);
+    row.appendChild(renderPatchFileHistoryButton(entry));
+    return row;
+  }
+
+  function appendPatchEvidenceLabel(container, entry) {
+    const label = entry.evidence === "unconfirmed" ? i18n.patchUnconfirmed
+      : entry.evidence === "shared" ? i18n.patchShared : entry.incomplete ? i18n.patchIncomplete : "";
+    if (label) container.appendChild(el("span", { className: "toolCardSecondary patchEvidenceLabel", textContent: label }));
+    return label;
   }
 
   function openPatchGroupEntry(cardKey, entry) {
     openPatchGroupEntryTarget(cardKey, entry);
+  }
+
+  function renderPatchFileHistoryButton(entry) {
+    const label = i18n.patchFileHistory;
+    const button = el("button", { type: "button", className: "patchFileHistoryButton" });
+    button.innerHTML = FILE_HISTORY_ICON_SVG;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+    button.disabled = !getPatchEntryId(entry);
+    button.addEventListener("click", event => {
+      event.preventDefault();
+      event.stopPropagation();
+      // Send only a delivered entry ID; the host owns path resolution and session validation.
+      vscode.postMessage({ type: "openPatchFileHistory", entryId: getPatchEntryId(entry), revision: sessionInfoSnapshot && sessionInfoSnapshot.revision });
+    });
+    return button;
   }
 
   function openPatchGroupEntryTarget(cardKey, entry, options = {}) {
@@ -13260,12 +13293,14 @@
     pathEl.textContent = buildPatchEntryTitle(entry);
     pathEl.title = pathEl.textContent;
     pathWrap.appendChild(pathEl);
+    appendPatchEvidenceLabel(pathWrap, entry);
     summary.appendChild(pathWrap);
 
     const counts = el("div", { className: "patchEntryCounts" });
     counts.appendChild(renderSignedCountBadge(entry.added, "add"));
     counts.appendChild(renderSignedCountBadge(entry.removed, "remove"));
     summary.appendChild(counts);
+    summary.appendChild(renderPatchFileHistoryButton(entry));
     details.appendChild(summary);
 
     body = el("div", { className: "patchEntryBody" });
@@ -14064,6 +14099,9 @@
       badge.textContent = presentation.badgeText;
       headerActions.appendChild(badge);
     }
+    if (item.execution && (item.execution.status === "staged" || item.execution.status === "unconfirmed")) {
+      headerActions.appendChild(el("span", { className: "toolCardBadge", textContent: normalizeToolStatus(item.execution.status) }));
+    }
     appendBookmarkButton(headerActions, item);
     headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
     header.appendChild(headerActions);
@@ -14153,6 +14191,8 @@
     const status = typeof value === "string" ? value.trim().toLowerCase() : "";
     if (!status) return "";
     if (status === "success") return getSafeUiText(i18n.toolStatusSuccess, "success");
+    if (status === "staged") return i18n.toolStatusStaged;
+    if (status === "unconfirmed") return i18n.toolStatusUnconfirmed;
     if (status === "completed") return getSafeUiText(i18n.toolStatusCompleted, "completed");
     if (status === "error" || status === "failed") return getSafeUiText(i18n.toolStatusError, "error");
     if (status === "timeout" || status === "timed_out") return getSafeUiText(i18n.toolStatusTimeout, "timeout");

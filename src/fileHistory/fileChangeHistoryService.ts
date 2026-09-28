@@ -31,6 +31,7 @@ import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/p
 import type { SearchIndexReadSnapshot } from "../services/searchIndexService";
 import type { HistoryIndex, SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { readSessionJsonlRecords } from "../sessions/codexHistoryBase";
+import { ClaudeFileChangeTracker } from "../sessions/claudeFileChanges";
 import {
   CodexFileChangeEventDeduper,
   isSuccessfulCodexFileChangeEvent,
@@ -50,8 +51,10 @@ import type {
   FileChangeHistoryLoadResult,
   FileChangeHistoryLoadStats,
   FileChangeHistoryMatchedSide,
+  FileChangeHistoryOrigin,
   FileChangeHistoryTarget,
 } from "./fileChangeHistoryTypes";
+import { selectFileChangeHistoryWindow } from "./fileChangeHistoryNavigation";
 
 interface ParsedPatchEntry {
   entry: ChatPatchEntry;
@@ -96,8 +99,6 @@ interface ClaudeParsedContent {
 
 type PathMatch = { matched: true; side: FileChangeHistoryMatchedSide } | { matched: false };
 
-const MAX_SYNTHETIC_WRITE_LINES = 4000;
-
 function createDiffStats(): FileChangeHistoryDiffStats {
   return {
     codexPatchApplyEnd: 0,
@@ -108,6 +109,7 @@ function createDiffStats(): FileChangeHistoryDiffStats {
     claudeEditParsed: 0,
     claudeMultiEditParsed: 0,
     claudeWriteParsed: 0,
+    claudeBashParsed: 0,
     noRenderableSkipped: 0,
   };
 }
@@ -136,6 +138,7 @@ function addDiffStats(target: FileChangeHistoryDiffStats, source: FileChangeHist
   target.claudeEditParsed += source.claudeEditParsed;
   target.claudeMultiEditParsed += source.claudeMultiEditParsed;
   target.claudeWriteParsed += source.claudeWriteParsed;
+  target.claudeBashParsed += source.claudeBashParsed;
   target.noRenderableSkipped += source.noRenderableSkipped;
 }
 
@@ -145,6 +148,7 @@ function addClaudeDiffStats(stats: FileChangeHistoryDiffStats, toolCall: ClaudeT
   if (toolName.includes("multiedit")) stats.claudeMultiEditParsed += count;
   else if (toolName.includes("edit")) stats.claudeEditParsed += count;
   else if (toolName.includes("write")) stats.claudeWriteParsed += count;
+  else if (toolName === "bash") stats.claudeBashParsed += count;
 }
 
 export class FileChangeHistoryService {
@@ -203,6 +207,7 @@ export class FileChangeHistoryService {
     pendingCards: readonly FileChangeHistoryCard[];
     limit: number;
     sessionInventory?: readonly SessionSummary[];
+    origin?: FileChangeHistoryOrigin;
     token?: vscode.CancellationToken;
   }): Promise<FileChangeHistoryLoadResult> {
     const cards: FileChangeHistoryCard[] = [];
@@ -211,14 +216,13 @@ export class FileChangeHistoryService {
     const limit = Math.max(1, Math.floor(params.limit));
     const stats = createLoadStats();
     const projectPathMappings = this.getProjectPathMappings(params.target);
+    let revealCardId: string | undefined;
 
-    while (cards.length < limit && pendingCards.length > 0) {
-      const next = pendingCards.shift();
-      if (next) {
-        cards.push(next);
-        stats.pendingConsumed += 1;
-      }
-    }
+    throwIfCancelled(params.token);
+    const consumed = Math.min(limit, pendingCards.length);
+    cards.push(...pendingCards.slice(0, consumed));
+    pendingCards = pendingCards.slice(consumed);
+    stats.pendingConsumed = consumed;
 
     while (cards.length < limit && nextCandidateIndex < params.candidates.length) {
       throwIfCancelled(params.token);
@@ -237,16 +241,20 @@ export class FileChangeHistoryService {
       if (parsed.cards.length === 0) continue;
       stats.matchedSessions += 1;
 
+      const selection = params.origin && normalizeCacheKey(candidate.session.fsPath) === normalizeCacheKey(params.origin.sessionFsPath)
+        ? selectFileChangeHistoryWindow(parsed.cards, params.origin.entryId)
+        : { cards: parsed.cards };
+      revealCardId = selection.revealCardId ?? revealCardId;
       const remaining = limit - cards.length;
-      cards.push(...parsed.cards.slice(0, remaining));
-      if (parsed.cards.length > remaining) {
-        pendingCards = parsed.cards.slice(remaining).concat(pendingCards);
+      cards.push(...selection.cards.slice(0, remaining));
+      if (selection.cards.length > remaining) {
+        pendingCards = selection.cards.slice(remaining).concat(pendingCards);
       }
     }
 
     const exhausted = nextCandidateIndex >= params.candidates.length && pendingCards.length === 0;
     stats.cardsProduced = cards.length;
-    return { cards, nextCandidateIndex, pendingCards, exhausted, stats };
+    return { cards, revealCardId, nextCandidateIndex, pendingCards, exhausted, stats };
   }
 
   private async parseSession(
@@ -260,7 +268,10 @@ export class FileChangeHistoryService {
       session.source === "codex"
         ? await parseCodexSession(session, target, projectPathMappings, sessionInventory, token)
         : await parseClaudeSession(session, target, projectPathMappings, token);
-    const renderableEntries = parsed.entries.filter((item) => hasRenderableDiff(item.entry));
+    const renderableEntries = parsed.entries.filter((item) => hasRenderableDiff(item.entry) || (
+      session.source === "claude" && !item.entry.incomplete && !item.entry.evidence
+      && (item.entry.changeType === "create" || item.entry.changeType === "delete")
+    ));
     const diffStats = cloneDiffStats(parsed.diffStats);
     diffStats.noRenderableSkipped += parsed.entries.length - renderableEntries.length;
     const cards = renderableEntries.map((item, index) => toHistoryCard(session, target, projectPathMappings, item, index));
@@ -402,6 +413,7 @@ async function parseClaudeSession(
 ): Promise<ParsedPatchEntriesResult> {
   const out: ParsedPatchEntry[] = [];
   const diffStats = createDiffStats();
+  const changes = new ClaudeFileChangeTracker<{ bookmarkGroupId: string; messageIndex?: number; timestampIso?: string; name?: string }>();
   throwIfCancelled(token);
   const pastedPromptResolver = await createClaudePastedPromptResolver(session.fsPath);
   throwIfCancelled(token);
@@ -435,6 +447,7 @@ async function parseClaudeSession(
         continue;
       }
       const parsed = parseClaudeMessageContent(rawContent);
+      changes.acceptResults(obj);
       if (normalizeWhitespace(parsed.messageText)) messageIndex += 1;
       const timestampIso = resolveClaudeDiffTimestamp(obj, session);
 
@@ -442,16 +455,7 @@ async function parseClaudeSession(
         const toolCall = parsed.toolCalls[toolCallIndex]!;
         const callId = resolveClaudeToolCallId(toolCall.callId, lineIndex, toolCallIndex);
         const bookmarkGroupId = buildClaudePatchBookmarkGroupId(toolCall.callId, lineIndex, toolCallIndex, messageIndex);
-        const entries = buildClaudeToolUsePatchEntries(toolCall, session.meta.cwd, target, projectPathMappings, callId);
-        addClaudeDiffStats(diffStats, toolCall, entries.length);
-        for (const entry of entries) {
-          out.push({
-            entry,
-            bookmarkGroupId,
-            messageIndex: messageIndex > 0 ? messageIndex : undefined,
-            timestampIso,
-          });
-        }
+        changes.register(toolCall, callId, { bookmarkGroupId, messageIndex: messageIndex > 0 ? messageIndex : undefined, timestampIso, name: toolCall.name });
       }
     }
   } finally {
@@ -459,6 +463,13 @@ async function parseClaudeSession(
     stream.close();
   }
 
+  for (const operation of changes.operations) {
+    throwIfCancelled(token);
+    const entries = operation.projection.entries.filter(entry => matchPatchPaths(entry.path, undefined, session.meta.cwd, target, projectPathMappings).matched);
+    addClaudeDiffStats(diffStats, { name: operation.context.name }, entries.length);
+    for (const entry of entries) out.push({ ...operation.context,
+      entry: { ...entry, displayPath: formatPatchDisplayPath(entry.path, session.meta.cwd, target.workspaceRoot, projectPathMappings) } });
+  }
   return { entries: out, diffStats };
 }
 
@@ -794,147 +805,6 @@ function flushApplyPatchPendingRows(acc: ApplyPatchFileAccumulator): void {
   }
   acc.pendingDeletes = [];
   acc.pendingAdds = [];
-}
-
-function buildClaudeToolUsePatchEntries(
-  toolCall: ClaudeToolCall,
-  sessionCwd: string | undefined,
-  target: FileChangeHistoryTarget,
-  projectPathMappings: readonly ProjectPathMapping[],
-  callId: string,
-): ChatPatchEntry[] {
-  const input = typeof toolCall.input === "string" ? parseJsonLine(toolCall.input) ?? toolCall.input : toolCall.input;
-  if (!input || typeof input !== "object" || Array.isArray(input)) return [];
-  const toolName = normalizeToolName(toolCall.name);
-  const filePath = readPathField(input);
-  if (!filePath) return [];
-  if (!matchPatchPaths(filePath, undefined, sessionCwd, target, projectPathMappings).matched) return [];
-
-  const entries: ChatPatchEntry[] = [];
-  const baseId = `${callId}:0`;
-
-  if (toolName.includes("multiedit")) {
-    const edits = Array.isArray((input as { edits?: unknown }).edits) ? (input as { edits: unknown[] }).edits : [];
-    const hunks: ChatPatchHunk[] = [];
-    let added = 0;
-    let removed = 0;
-    for (let i = 0; i < edits.length; i += 1) {
-      const edit = edits[i];
-      if (!edit || typeof edit !== "object") continue;
-      const oldText = readStringField(edit, ["old_string", "oldString"]);
-      const newText = readStringField(edit, ["new_string", "newString"]);
-      if (oldText === undefined || newText === undefined || oldText === newText) continue;
-      const hunk = buildSyntheticReplacementHunk(oldText, newText, `@@ edit ${i + 1} @@`);
-      added += countAddedRows(hunk);
-      removed += countRemovedRows(hunk);
-      hunks.push(hunk);
-    }
-    if (hunks.length > 0) {
-      entries.push(buildSyntheticEntry(baseId, callId, filePath, sessionCwd, target, projectPathMappings, "update", added, removed, hunks));
-    }
-    return entries;
-  }
-
-  if (toolName.includes("edit")) {
-    const oldText = readStringField(input, ["old_string", "oldString"]);
-    const newText = readStringField(input, ["new_string", "newString"]);
-    if (oldText === undefined || newText === undefined || oldText === newText) return [];
-    const hunk = buildSyntheticReplacementHunk(oldText, newText);
-    entries.push(
-      buildSyntheticEntry(
-        baseId,
-        callId,
-        filePath,
-        sessionCwd,
-        target,
-        projectPathMappings,
-        "update",
-        countAddedRows(hunk),
-        countRemovedRows(hunk),
-        [hunk],
-      ),
-    );
-    return entries;
-  }
-
-  if (toolName.includes("write")) {
-    const content = readStringField(input, ["content"]);
-    if (content === undefined) return [];
-    const hunk = buildSyntheticCreateHunk(content, MAX_SYNTHETIC_WRITE_LINES);
-    if (hunk.rows.length === 0) return [];
-    entries.push(
-      buildSyntheticEntry(
-        baseId,
-        callId,
-        filePath,
-        sessionCwd,
-        target,
-        projectPathMappings,
-        "create",
-        countAddedRows(hunk),
-        0,
-        [hunk],
-      ),
-    );
-  }
-
-  return entries;
-}
-
-function buildSyntheticEntry(
-  id: string,
-  callId: string,
-  filePath: string,
-  sessionCwd: string | undefined,
-  target: FileChangeHistoryTarget,
-  projectPathMappings: readonly ProjectPathMapping[],
-  changeType: ChatPatchChangeType,
-  added: number,
-  removed: number,
-  hunks: ChatPatchHunk[],
-): ChatPatchEntry {
-  return {
-    id,
-    callId,
-    path: filePath,
-    displayPath: formatPatchDisplayPath(filePath, sessionCwd, target.workspaceRoot, projectPathMappings),
-    changeType,
-    added,
-    removed,
-    hunks,
-  };
-}
-
-function buildSyntheticReplacementHunk(oldText: string, newText: string, header = "@@ -1 +1 @@"): ChatPatchHunk {
-  const oldLines = splitContentLines(oldText);
-  const newLines = splitContentLines(newText);
-  const rows: ChatPatchRow[] = [];
-  const count = Math.max(oldLines.length, newLines.length);
-  for (let i = 0; i < count; i += 1) {
-    const hasOld = i < oldLines.length;
-    const hasNew = i < newLines.length;
-    rows.push({
-      kind: hasOld && hasNew ? "modify" : hasOld ? "delete" : "add",
-      leftLine: hasOld ? i + 1 : undefined,
-      leftText: hasOld ? oldLines[i]! : "",
-      rightLine: hasNew ? i + 1 : undefined,
-      rightText: hasNew ? newLines[i]! : "",
-    });
-  }
-  return { header, rows };
-}
-
-function buildSyntheticCreateHunk(content: string, maxLines: number): ChatPatchHunk {
-  const lines = splitContentLines(content).slice(0, Math.max(0, maxLines));
-  return {
-    header: `@@ -0,0 +1,${lines.length} @@`,
-    rows: lines.map((line, index) => ({
-      kind: "add",
-      leftText: "",
-      rightLine: index + 1,
-      rightText: line,
-    })),
-  };
 }
 
 function toHistoryCard(
@@ -1347,20 +1217,6 @@ function splitContentLines(value: string): string[] {
   const lines = normalized.split("\n");
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines;
-}
-
-function readPathField(value: Record<string, unknown>): string | undefined {
-  return readStringField(value, ["file_path", "filePath", "path", "target_file", "targetPath"]);
-}
-
-function readStringField(value: unknown, keys: readonly string[]): string | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const record = value as Record<string, unknown>;
-  for (const key of keys) {
-    const candidate = record[key];
-    if (typeof candidate === "string") return candidate;
-  }
-  return undefined;
 }
 
 function normalizeToolName(value: unknown): string {

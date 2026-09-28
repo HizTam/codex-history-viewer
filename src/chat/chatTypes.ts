@@ -375,6 +375,7 @@ export type ChatPatchRowKind = "context" | "add" | "delete" | "modify";
 
 export interface ChatPatchGroupItem {
   type: "patchGroup";
+  incomplete?: boolean;
   messageIndex?: number;
   timestampIso?: string;
   turnId?: string;
@@ -389,6 +390,8 @@ export interface ChatPatchGroupItem {
 
 export interface ChatPatchEntry {
   id: string;
+  evidence?: "unconfirmed" | "shared";
+  incomplete?: boolean;
   callId?: string;
   path: string;
   displayPath: string;
@@ -416,6 +419,7 @@ export interface ChatPatchRow {
 
 export interface ChatNoteItem {
   type: "note";
+  alwaysVisible?: boolean;
   timestampIso?: string;
   title: string;
   text?: string;
@@ -424,6 +428,7 @@ export interface ChatNoteItem {
 }
 
 export interface ChatSessionModel {
+  compressed?: boolean;
   codexHasRollback?: boolean;
   fsPath: string;
   meta: ChatSessionMeta;

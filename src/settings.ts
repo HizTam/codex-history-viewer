@@ -37,6 +37,7 @@ export interface CodexHistoryViewerConfig {
   claudeSessionsRoot: string;
   enableCodexSource: boolean;
   enableCodexArchivedSessions: boolean;
+  enableCodexCompressedSessions?: boolean;
   enableClaudeSource: boolean;
   branchNavigationEnabled: boolean;
   agentRunsEnabled: boolean;
@@ -209,6 +210,7 @@ export function getConfig(): CodexHistoryViewerConfig {
     claudeSessionsRoot: claudeSessionsRootRaw.length > 0 ? claudeSessionsRootRaw : getDefaultClaudeSessionsRoot(),
     enableCodexSource: enabledSources.enableCodexSource,
     enableCodexArchivedSessions: enabledSources.enableCodexSource && codexArchivedSessionsEnabledSetting,
+    enableCodexCompressedSessions: enabledSources.enableCodexSource && cfg.get<boolean>("codex.compressedSessions.enabled") === true,
     enableClaudeSource: enabledSources.enableClaudeSource,
     branchNavigationEnabled: cfg.get<boolean>("branchNavigation.enabled") ?? false,
     agentRunsEnabled: cfg.get<boolean>("agentRuns.enabled") ?? false,

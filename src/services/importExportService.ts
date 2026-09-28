@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { isSessionFile, isCompressedSessionFile, importSessionWithDestinationFormat } from "../utils/sessionFileReader";
 import * as fs from "node:fs/promises";
 import * as vscode from "vscode";
 import type { SessionRootKind, SessionSource, SessionStorageLocation, SessionSummary } from "../sessions/sessionTypes";
@@ -565,11 +566,15 @@ export async function importSessions(params: {
         if (!(await isRealPathContainedOrEqual(operation.destinationRoot, path.dirname(operation.destinationPath)))) {
           throw new Error("Import destination escaped its configured root.");
         }
-        await vscode.workspace.fs.copy(
-          vscode.Uri.file(operation.sourcePath),
-          vscode.Uri.file(operation.destinationPath),
-          { overwrite: operation.operation === "overwritten" },
-        );
+        if (isCompressedSessionFile(operation.sourcePath) !== isCompressedSessionFile(operation.destinationPath)) {
+          await importSessionWithDestinationFormat(operation.sourcePath, operation.destinationPath);
+        } else {
+          await vscode.workspace.fs.copy(
+            vscode.Uri.file(operation.sourcePath),
+            vscode.Uri.file(operation.destinationPath),
+            { overwrite: operation.operation === "overwritten" },
+          );
+        }
         await touchImportedPaths(
           operation.destinationPath,
           [codexSessionsRoot, codexArchivedSessionsRoot, claudeSessionsRoot],
@@ -846,7 +851,7 @@ async function listJsonlFiles(rootDir: string): Promise<string[]> {
         stack.push(full);
         continue;
       }
-      if (ent.isFile() && ent.name.toLowerCase().endsWith(".jsonl")) out.push(full);
+      if (ent.isFile() && isSessionFile(ent.name)) out.push(full);
     }
   }
   return out;
@@ -904,7 +909,7 @@ function tryBuildDestinationBySourceLayout(params: {
   const parts = relativeHint.split("/").filter((p) => p.length > 0 && p !== "." && p !== "..");
   if (parts.length === 0) return null;
   const fileName = parts[parts.length - 1]!;
-  if (!fileName.toLowerCase().endsWith(".jsonl")) return null;
+  if (!isSessionFile(fileName) || (params.source === "claude" && !fileName.toLowerCase().endsWith(".jsonl"))) return null;
 
   if (params.source === "codex") {
     if (params.rootKind === "codexArchivedSessions") return path.join(params.root, ...parts);
@@ -1149,7 +1154,7 @@ function isValidExportManifest(value: unknown): value is ExportManifest {
     if (file.rootKind !== undefined && !isCompatibleRootKind(file.source, file.rootKind)) return false;
     if (!isBoundedText(file.originalPath, 4096)) return false;
     if (!isPortableManifestRelativePath(file.relativePathFromSourceRoot)) return false;
-    if (!isPortableManifestRelativePath(file.exportedRelativePath) || !file.exportedRelativePath.toLowerCase().endsWith(".jsonl")) {
+    if (!isPortableManifestRelativePath(file.exportedRelativePath) || !isSessionFile(file.exportedRelativePath)) {
       return false;
     }
     if (file.sessionId !== undefined && !isBoundedText(file.sessionId, 512)) return false;

@@ -2,6 +2,7 @@ import type { SessionSummary } from "../sessions/sessionTypes";
 import { t } from "../i18n";
 import { safeDisplayPath } from "../utils/textUtils";
 import type { CodexAgentPresentation } from "../agents/codexAgentRunsTypes";
+import { isCompressedSessionFile } from "../utils/sessionFileReader";
 
 export interface SessionRowLabelPresentation {
   label: string;
@@ -64,6 +65,7 @@ export function buildSessionDescriptionPresentation(
   showProject = true,
 ): SessionDescriptionPresentation {
   const leadingParts: string[] = [];
+  if (isCompressedSessionFile(session.fsPath)) leadingParts.push(t("history.compressed"));
   if (agentPresentation?.relation === "child" || agentPresentation?.relation === "both") {
     leadingParts.push(`${t("codexAgentRuns.subagent")} · ${agentPresentation.taskLabel}`);
   }

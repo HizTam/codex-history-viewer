@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.14.2",
+  "version": "2.15.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -1151,12 +1151,14 @@
       {
         "command": "codexHistoryViewer.ui.ja.filterPinned",
         "title": "ピン留めを絞り込む...",
-        "icon": "$(filter)"
+        "icon": "$(filter)",
+        "category": "%cmd.category%"
       },
       {
         "command": "codexHistoryViewer.ui.en.filterPinned",
         "title": "Filter Pinned...",
-        "icon": "$(filter)"
+        "icon": "$(filter)",
+        "category": "%cmd.category%"
       },
       {
         "command": "codexHistoryViewer.ui.ja.clearPinnedFilter",
@@ -1221,12 +1223,14 @@
       {
         "command": "codexHistoryViewer.ui.ja.filterHistory",
         "title": "履歴を絞り込む...",
-        "icon": "$(filter)"
+        "icon": "$(filter)",
+        "category": "%cmd.category%"
       },
       {
         "command": "codexHistoryViewer.ui.en.filterHistory",
         "title": "Filter History...",
-        "icon": "$(filter)"
+        "icon": "$(filter)",
+        "category": "%cmd.category%"
       },
       {
         "command": "codexHistoryViewer.ui.ja.filterHistoryByTag",
@@ -2316,6 +2320,134 @@
       {
         "command": "codexHistoryViewer.ui.en.historyMenuDisplayTargetAllChecked",
         "title": "All ✓"
+      },
+      {
+        "command": "codexHistoryViewer.changeHistorySortOrder",
+        "title": "%cmd.changeHistorySortOrder%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.changeHistorySortOrder",
+        "title": "%cmd.ui.ja.changeHistorySortOrder%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.changeHistorySortOrder",
+        "title": "%cmd.ui.en.changeHistorySortOrder%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.changePinnedSortMode",
+        "title": "%cmd.changePinnedSortMode%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.changePinnedSortMode",
+        "title": "%cmd.ui.ja.changePinnedSortMode%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.changePinnedSortMode",
+        "title": "%cmd.ui.en.changePinnedSortMode%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.configureHistoryView",
+        "title": "%cmd.configureHistoryView%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.configureHistoryView",
+        "title": "%cmd.ui.ja.configureHistoryView%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.configureHistoryView",
+        "title": "%cmd.ui.en.configureHistoryView%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.configurePinnedView",
+        "title": "%cmd.configurePinnedView%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.configurePinnedView",
+        "title": "%cmd.ui.ja.configurePinnedView%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.configurePinnedView",
+        "title": "%cmd.ui.en.configurePinnedView%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.setHistoryCompressionAll",
+        "title": "%cmd.setHistoryCompressionAll%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.historyMenuCompressionAllChecked",
+        "title": "%cmd.ui.ja.historyMenuCompressionAllChecked%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.historyMenuCompressionAll",
+        "title": "%cmd.ui.ja.historyMenuCompressionAll%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.historyMenuCompressionAllChecked",
+        "title": "%cmd.ui.en.historyMenuCompressionAllChecked%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.historyMenuCompressionAll",
+        "title": "%cmd.ui.en.historyMenuCompressionAll%"
+      },
+      {
+        "command": "codexHistoryViewer.setHistoryCompressionCompressed",
+        "title": "%cmd.setHistoryCompressionCompressed%",
+        "category": "%cmd.category%",
+        "enablement": "codexHistoryViewer.codexCompressedSessionsEnabled"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.historyMenuCompressionCompressedChecked",
+        "title": "%cmd.ui.ja.historyMenuCompressionCompressedChecked%",
+        "enablement": "codexHistoryViewer.codexCompressedSessionsEnabled"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.historyMenuCompressionCompressed",
+        "title": "%cmd.ui.ja.historyMenuCompressionCompressed%",
+        "enablement": "codexHistoryViewer.codexCompressedSessionsEnabled"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.historyMenuCompressionCompressedChecked",
+        "title": "%cmd.ui.en.historyMenuCompressionCompressedChecked%",
+        "enablement": "codexHistoryViewer.codexCompressedSessionsEnabled"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.historyMenuCompressionCompressed",
+        "title": "%cmd.ui.en.historyMenuCompressionCompressed%",
+        "enablement": "codexHistoryViewer.codexCompressedSessionsEnabled"
+      },
+      {
+        "command": "codexHistoryViewer.setHistoryCompressionUncompressed",
+        "title": "%cmd.setHistoryCompressionUncompressed%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.historyMenuCompressionUncompressedChecked",
+        "title": "%cmd.ui.ja.historyMenuCompressionUncompressedChecked%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.historyMenuCompressionUncompressed",
+        "title": "%cmd.ui.ja.historyMenuCompressionUncompressed%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.historyMenuCompressionUncompressedChecked",
+        "title": "%cmd.ui.en.historyMenuCompressionUncompressedChecked%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.historyMenuCompressionUncompressed",
+        "title": "%cmd.ui.en.historyMenuCompressionUncompressed%"
       }
     ],
     "submenus": [
@@ -2382,6 +2514,14 @@
       {
         "id": "codexHistoryViewer.historyDisplayTargetSubmenu.en",
         "label": "Session Display Target"
+      },
+      {
+        "id": "codexHistoryViewer.historyCompressionSubmenu.ja",
+        "label": "%menu.historyCompression.ja%"
+      },
+      {
+        "id": "codexHistoryViewer.historyCompressionSubmenu.en",
+        "label": "%menu.historyCompression.en%"
       }
     ],
     "menus": {
@@ -2883,11 +3023,11 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.filterPinned",
-          "when": "false"
+          "when": "codexHistoryViewer.uiLang == 'ja'"
         },
         {
           "command": "codexHistoryViewer.ui.en.filterPinned",
-          "when": "false"
+          "when": "codexHistoryViewer.uiLang != 'ja'"
         },
         {
           "command": "codexHistoryViewer.ui.ja.clearPinnedTagFilter",
@@ -2955,11 +3095,11 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.filterHistory",
-          "when": "false"
+          "when": "codexHistoryViewer.uiLang == 'ja'"
         },
         {
           "command": "codexHistoryViewer.ui.en.filterHistory",
-          "when": "false"
+          "when": "codexHistoryViewer.uiLang != 'ja'"
         },
         {
           "command": "codexHistoryViewer.ui.ja.historyProjectDisplayList",
@@ -3823,6 +3963,294 @@
         },
         {
           "command": "codexHistoryViewer.ui.en.historyMenuDisplayTargetAllChecked",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.changeHistorySortOrder",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.changeHistorySortOrder",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.changeHistorySortOrder",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.changePinnedSortMode",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.changePinnedSortMode",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.changePinnedSortMode",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.configureHistoryView",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.configureHistoryView",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.configureHistoryView",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.configurePinnedView",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.configurePinnedView",
+          "when": "codexHistoryViewer.uiLang == 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.configurePinnedView",
+          "when": "codexHistoryViewer.uiLang != 'ja'"
+        },
+        {
+          "command": "codexHistoryViewer.filterHistory",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.filterPinned",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setHistorySortCreatedDesc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setHistorySortCreatedAsc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setHistorySortLastActivityDesc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setHistorySortLastActivityAsc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setHistorySortTitleAsc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setHistorySortTitleDesc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setHistorySortFileSizeDesc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setHistorySortFileSizeAsc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setPinnedSortPinnedAtDesc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setPinnedSortPinnedAtAsc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setPinnedSortCreatedDesc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setPinnedSortCreatedAsc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setPinnedSortLastActivityDesc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setPinnedSortLastActivityAsc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setPinnedSortTitleAsc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setPinnedSortTitleDesc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setPinnedSortFileSizeDesc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setPinnedSortFileSizeAsc",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.showHistoryLatestView",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.showHistoryDateView",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.toggleHistoryViewMode",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.filterHistoryCurrentProject",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.showHistoryProjectGrouped",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.clearHistoryProjectMode",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.toggleHistoryProjectDisplay",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.toggleHistoryProjectScope",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.filterPinnedCurrentProject",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.showPinnedProjectGrouped",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.clearPinnedProjectMode",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.togglePinnedProjectDisplay",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.togglePinnedProjectScope",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.filterHistorySourceCodex",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.filterHistorySourceClaude",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.clearHistorySourceFilter",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.toggleHistorySourceCodex",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.toggleHistorySourceClaude",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.cycleHistorySourceFilter",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.filterHistoryDisplayTarget",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.filterPinnedDisplayTarget",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.filterHistoryByTag",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.clearHistoryTagFilter",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.filterPinnedByTag",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.clearPinnedTagFilter",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setHistoryCompressionAll",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionAllChecked",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionAll",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionAllChecked",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionAll",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setHistoryCompressionCompressed",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionCompressedChecked",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionCompressed",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionCompressedChecked",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionCompressed",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.setHistoryCompressionUncompressed",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionUncompressedChecked",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionUncompressed",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionUncompressedChecked",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionUncompressed",
           "when": "false"
         }
       ],
@@ -4844,6 +5272,16 @@
           "command": "codexHistoryViewer.ui.cycleHistorySourceClaude",
           "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'claude'",
           "group": "navigation@9"
+        },
+        {
+          "submenu": "codexHistoryViewer.historyCompressionSubmenu.ja",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja'",
+          "group": "2_historyOptions@6"
+        },
+        {
+          "submenu": "codexHistoryViewer.historyCompressionSubmenu.en",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja'",
+          "group": "2_historyOptions@6"
         }
       ],
       "view/item/context": [
@@ -5526,6 +5964,70 @@
           "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyDisplayTarget == 'all' && codexHistoryViewer.uiLang != 'ja'",
           "group": "6_historyVisibility@5"
         }
+      ],
+      "codexHistoryViewer.historyCompressionSubmenu.ja": [
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionAllChecked",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja' && codexHistoryViewer.historyCompressionFilter == 'all'",
+          "group": "7_historyCompression@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionAll",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja' && codexHistoryViewer.historyCompressionFilter != 'all'",
+          "group": "7_historyCompression@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionCompressedChecked",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja' && codexHistoryViewer.historyCompressionFilter == 'compressed'",
+          "group": "7_historyCompression@2"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionCompressed",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja' && codexHistoryViewer.historyCompressionFilter != 'compressed'",
+          "group": "7_historyCompression@2"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionUncompressedChecked",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja' && codexHistoryViewer.historyCompressionFilter == 'uncompressed'",
+          "group": "7_historyCompression@3"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuCompressionUncompressed",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang == 'ja' && codexHistoryViewer.historyCompressionFilter != 'uncompressed'",
+          "group": "7_historyCompression@3"
+        }
+      ],
+      "codexHistoryViewer.historyCompressionSubmenu.en": [
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionAllChecked",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja' && codexHistoryViewer.historyCompressionFilter == 'all'",
+          "group": "7_historyCompression@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionAll",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja' && codexHistoryViewer.historyCompressionFilter != 'all'",
+          "group": "7_historyCompression@1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionCompressedChecked",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja' && codexHistoryViewer.historyCompressionFilter == 'compressed'",
+          "group": "7_historyCompression@2"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionCompressed",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja' && codexHistoryViewer.historyCompressionFilter != 'compressed'",
+          "group": "7_historyCompression@2"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionUncompressedChecked",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja' && codexHistoryViewer.historyCompressionFilter == 'uncompressed'",
+          "group": "7_historyCompression@3"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuCompressionUncompressed",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.uiLang != 'ja' && codexHistoryViewer.historyCompressionFilter != 'uncompressed'",
+          "group": "7_historyCompression@3"
+        }
       ]
     },
     "configuration": {
@@ -6076,6 +6578,12 @@
           "description": "%cfg.debugLoggingEnabled%",
           "scope": "application",
           "order": 160
+        },
+        "codexHistoryViewer.codex.compressedSessions.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "%config.codexCompressedSessionsEnabled%"
         }
       }
     }
@@ -6084,7 +6592,7 @@
     "vscode:prepublish": "npm run check:katex && npm run compile",
     "clean:dist": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build:webview": "node scripts/build-webview-shiki.mjs",
-    "compile": "npm run clean:dist && npm run build:webview && tsc -p .",
+    "compile": "npm run clean:dist && npm run build:webview && tsc -p . && npm run build:zstd",
     "watch:webview": "node scripts/build-webview-shiki.mjs --watch",
     "watch": "tsc -watch -p .",
     "package": "vsce package --allow-missing-repository",
@@ -6092,22 +6600,24 @@
     "check:l10n": "node scripts/check-l10n-garbled.js",
     "check:katex": "node scripts/sync-katex-vendor.mjs --check",
     "sync:katex": "node scripts/sync-katex-vendor.mjs --write",
-    "typecheck": "tsc -p . --noEmit"
+    "typecheck": "tsc -p . --noEmit",
+    "build:zstd": "node scripts/build-zstd.mjs"
   },
   "dependencies": {
-    "markdown-it": "^14.3.1",
+    "@hpcc-js/wasm-zstd": "1.16.1",
+    "markdown-it": "^14.3.2",
     "mermaid": "11.17.2"
   },
   "devDependencies": {
     "@shikijs/langs": "^4.4.3",
     "@shikijs/themes": "^4.4.3",
-    "@types/node": "^20.11.30",
-    "@types/vscode": "^1.90.0",
-    "@vscode/vsce": "^3.9.2",
+    "@types/node": "^20.19.43",
+    "@types/vscode": "~1.90.0",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
     "js-yaml": "4.3.2",
-    "katex": "0.18.5",
+    "katex": "0.18.9",
     "shiki": "^4.4.3",
-    "typescript": "^5.5.4"
+    "typescript": "^6.0.3"
   }
 }

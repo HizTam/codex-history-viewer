@@ -2,6 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.15.0] - 2026-09-28
+
+### Added
+
+- Added experimental support for compressed Codex histories (`.jsonl.zst`). Disabled by default.
+- Added **Compression** to the History pane's **...** menu and filter picker.
+- Added an option to save search queries together with their filters as search presets.
+- Added a **File AI Change History** icon to diff cards in the Session Viewer, opening the file's history at the selected change.
+
+### Changed
+
+- Consolidated Command Palette entries for History and Pinned display and filtering into **Filter...**, **Change Sort Order...**, and **Change Presentation...** commands for each view.
+- Added support for importing and exporting compressed histories.
+- Updated the bundled KaTeX to 0.18.9 and DOMPurify to 3.4.16, along with related dependencies and build tools.
+
+### Fixed
+
+- Fixed the beginning of long Codex histories sometimes being missing when restoring an open session after restarting VS Code. If a referenced history cannot be read, a notice is shown regardless of the detail-display setting.
+- Fixed Codex automatic approval review sessions (Guardian) being treated as regular conversations. They are now recognized as Agent Runs and follow the same agent-session handling as other agents in History, Search, History Insights, and File AI Change History.
+- Fixed failed, interrupted, or unapplied Claude Code edits being displayed and counted as applied file changes.
+- Fixed Claude Code overwrites of existing files being treated as file creation, resulting in incorrect diffs and added/deleted line counts.
+- Distinguished unconfirmed Claude Code changes and excluded them from confirmed History Insights totals. Incomplete change records are now identified as such.
+
+### Security
+
+- Updated the Markdown renderer to `markdown-it@14.3.2`, incorporating upstream security fixes for excessive processing time in quote formatting.
+
 ## [2.14.2] - 2026-09-11
 
 ### Added

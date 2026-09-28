@@ -4,8 +4,9 @@ import type { DateScope } from "../types/dateScope";
 import type { ProjectSelection, ProjectSelectionGroup } from "../types/projectSelection";
 import type { AnalysisAvailability } from "../analysis/sessionAnalysisTypes";
 import type { FilePresentationKind } from "../utils/fileKind";
-import type { HistoryDisplayTarget } from "../types/historyFilterState";
+import type { HistoryDisplayTarget, HistoryCompressionFilter } from "../types/historyFilterState";
 export interface HistoryInsightsCondition {
+  compression?: HistoryCompressionFilter;
   date: DateScope;
   projects: ProjectSelection;
   source: SessionSourceFilter;
@@ -29,6 +30,7 @@ export interface HistoryInsightsDateRange {
 }
 
 export interface HistoryInsightsFilterDescriptor {
+  compression?: HistoryCompressionFilter;
   date: DateScope;
   dateRange: HistoryInsightsDateRange;
   source: SessionSourceFilter;
@@ -144,6 +146,7 @@ export type HistoryInsightsFilterSelection =
   | { filter: "tags"; tags: string[] };
 
 export interface HistoryInsightsFilterApplication {
+  compression?: HistoryCompressionFilter;
   source: SessionSourceFilter;
   displayTarget: HistoryDisplayTarget;
   projects: ProjectSelection;

@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isSessionFile, isCompressedSessionFile } from "../utils/sessionFileReader";
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig } from "../settings";
 import { normalizeCacheKey, pathExists } from "../utils/fsUtils";
@@ -29,6 +30,7 @@ export class AutoRefreshService implements vscode.Disposable {
   private debounceMs = 2000;
   private minIntervalMs = 5000;
   private enabled = false;
+  private includeCompressed = false;
   private visible = false;
   private focused = false;
   private readonly pendingFsPaths = new Set<string>();
@@ -58,6 +60,7 @@ export class AutoRefreshService implements vscode.Disposable {
 
     this.visible = visible;
     this.focused = focused;
+    this.includeCompressed = config.enableCodexCompressedSessions === true;
     this.debounceMs = config.autoRefresh.debounceMs;
     this.minIntervalMs = config.autoRefresh.minIntervalMs;
 
@@ -273,7 +276,7 @@ export class AutoRefreshService implements vscode.Disposable {
     const targetByKey = new Map<string, string>();
     for (const fsPath of this.pollTargets()
       .map((fsPath) => (typeof fsPath === "string" ? fsPath.trim() : ""))
-      .filter((fsPath) => fsPath && path.extname(fsPath).toLowerCase() === ".jsonl")) {
+      .filter((fsPath) => fsPath && isSessionFile(fsPath) && (this.includeCompressed || !isCompressedSessionFile(fsPath)))) {
       const key = normalizeCacheKey(fsPath);
       if (!targetByKey.has(key)) targetByKey.set(key, fsPath);
     }
@@ -373,14 +376,15 @@ export class AutoRefreshService implements vscode.Disposable {
 async function resolveWatchRoots(config: CodexHistoryViewerConfig): Promise<WatchRoot[]> {
   const candidates: WatchRoot[] = [];
   if (config.enableCodexSource) {
-    candidates.push({ source: "codex", rootKind: "codexSessions", root: config.sessionsRoot, pattern: "**/rollout-*.jsonl" });
+    candidates.push({ source: "codex", rootKind: "codexSessions", root: config.sessionsRoot,
+      pattern: config.enableCodexCompressedSessions ? "**/rollout-*.jsonl{,.zst}" : "**/rollout-*.jsonl" });
   }
   if (config.enableCodexArchivedSessions) {
     candidates.push({
       source: "codex",
       rootKind: "codexArchivedSessions",
       root: config.codexArchivedSessionsRoot,
-      pattern: "**/rollout-*.jsonl",
+      pattern: config.enableCodexCompressedSessions ? "**/rollout-*.jsonl{,.zst}" : "**/rollout-*.jsonl",
     });
   }
   if (config.enableClaudeSource) {
@@ -408,7 +412,7 @@ function buildRootSignature(roots: readonly WatchRoot[]): string {
 }
 
 function isJsonlFileUri(uri: vscode.Uri): boolean {
-  return uri.scheme === "file" && path.extname(uri.fsPath).toLowerCase() === ".jsonl";
+  return uri.scheme === "file" && isSessionFile(uri.fsPath);
 }
 
 function formatError(error: unknown): string {

@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import * as vscode from "vscode";
+import { getExtensionVersion, isBoundedExtensionVersion } from "../extensionVersion";
 import type { HistoryIndex, SessionRootKind, SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { isBoundedSessionIdentityKey } from "../sessions/sessionIdentity";
 import type { SessionAnnotation, SessionAnnotationStore } from "./sessionAnnotationStore";
@@ -157,7 +158,7 @@ export function createSessionMetadataBackup(
   index: HistoryIndex,
   stores: SessionMetadataStores,
   sessions: readonly SessionSummary[] = index.sessions,
-  extensionVersion = "2.14.2",
+  extensionVersion = getExtensionVersion(),
 ): SessionMetadataBackupFile {
   if (sessions.length > MAX_BACKUP_SESSIONS) {
     throw new Error("Too many sessions for a complete metadata sidecar.");
@@ -236,7 +237,7 @@ export function createSessionMetadataBackup(
     format: SESSION_METADATA_BACKUP_FORMAT,
     version: SESSION_METADATA_BACKUP_VERSION,
     generatedAtIso: new Date().toISOString(),
-    extensionVersion: isBoundedExtensionVersion(extensionVersion) ? extensionVersion : "2.14.2",
+    extensionVersion: isBoundedExtensionVersion(extensionVersion) ? extensionVersion : getExtensionVersion(),
     scope: sessions === index.sessions ? "all" : "selection",
     sessions: output,
   };
@@ -1487,10 +1488,4 @@ function isSessionRootKind(value: unknown): value is SessionRootKind {
 
 function isBookmarkKind(value: unknown): value is BookmarkTargetKind {
   return value === "message" || value === "patchGroup" || value === "tool" || value === "usage" || value === "environment" || value === "note";
-}
-
-function isBoundedExtensionVersion(value: unknown): value is string {
-  return typeof value === "string" &&
-    value.length <= 64 &&
-    /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(value);
 }

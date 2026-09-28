@@ -37,6 +37,7 @@ export async function resolveLocalFileLinkTarget(
     baseDirs?: readonly string[];
     projectPathMappings?: readonly ProjectPathMapping[];
     claudeSessionFsPath?: string;
+    allowMissing?: boolean;
   },
 ): Promise<LinkedFileTarget | null> {
   const parsed = splitPathAndLocation(rawFsPath);
@@ -53,7 +54,7 @@ export async function resolveLocalFileLinkTarget(
       return { fsPath: rawPathLiteral, line: requestedLine, column: requestedColumn };
     }
     const relocated = mapAssociatedProjectPath(parsed.fsPath, options?.projectPathMappings ?? []);
-    if (relocated && (await pathExists(relocated.fsPath))) {
+    if (relocated && (options?.allowMissing || await pathExists(relocated.fsPath))) {
       return {
         fsPath: relocated.fsPath,
         line: requestedLine ?? parsed.line,
@@ -77,6 +78,10 @@ export async function resolveLocalFileLinkTarget(
   }
 
   const baseDirs = collectLocalLinkBaseDirs(...(options?.baseDirs ?? []));
+  // History navigation can refer to deleted files; use the authoritative first base only.
+  if (options?.allowMissing && baseDirs[0]) {
+    return { fsPath: path.resolve(baseDirs[0], parsed.fsPath), line: requestedLine ?? parsed.line, column: requestedColumn ?? parsed.column };
+  }
   for (const baseDir of baseDirs) {
     const candidate = path.resolve(baseDir, parsed.fsPath);
     if (!(await pathExists(candidate))) continue;

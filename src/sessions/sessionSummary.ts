@@ -1,4 +1,4 @@
-import * as fs from "node:fs";
+import { createSessionReadStream } from "../utils/sessionFileReader";
 import * as path from "node:path";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import * as readline from "node:readline";
@@ -56,7 +56,7 @@ export async function tryReadSessionMeta(
 ): Promise<SessionMetaInfo | null> {
   performanceProbe?.add("segmentCount");
   performanceProbe?.add("streamOpenCount");
-  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
+  const stream = createSessionReadStream(fsPath);
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
 
   const claudeMeta: SessionMetaInfo = { historySource: "claude" };
@@ -90,7 +90,7 @@ export async function tryReadSessionMeta(
     }
   } finally {
     rl.close();
-    stream.close();
+    stream.destroy();
   }
 
   return hasClaudeSessionMeta(claudeMeta) ? claudeMeta : null;
@@ -99,7 +99,7 @@ export async function tryReadSessionMeta(
 function extractCodexSessionMeta(obj: any, isFirstParsedRecord: boolean): SessionMetaInfo | undefined {
   if (obj?.type !== "session_meta" || !obj?.payload || typeof obj.payload !== "object") return undefined;
   const payload = obj.payload as Record<string, unknown>;
-  const codexAgent = extractCodexAgentMetadata(payload.source);
+  const codexAgent = extractCodexAgentMetadata(payload.source, payload.parent_thread_id);
   const codexFork = extractCodexForkMetadata(payload);
   const codexHistoryBase = isFirstParsedRecord
     ? extractCodexHistoryBaseMetadata(payload, obj?.ordinal)
@@ -367,7 +367,7 @@ async function scanPhysicalSessionSummary(
 
   performanceProbe?.add("segmentCount");
   performanceProbe?.add("streamOpenCount");
-  const stream = fs.createReadStream(fsPath, { encoding: "utf8" });
+  const stream = createSessionReadStream(fsPath, { token });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   try {
     for await (const line of rl) {
@@ -434,7 +434,7 @@ async function scanPhysicalSessionSummary(
     }
   } finally {
     rl.close();
-    stream.close();
+    stream.destroy();
   }
 
   const claudeNativeTitle = claudeCustomTitle ?? claudeAiTitle ?? claudeRenameTitle ?? claudeSummaryTitle;
@@ -669,7 +669,7 @@ export function resolveSessionIdentityKey(
 function extractCodexRolloutId(fsPath: string): string {
   const base = path.basename(fsPath);
   const match =
-    /^rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/iu.exec(base);
+    /^rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/iu.exec(base);
   return match?.[1]?.toLowerCase() ?? "";
 }
 

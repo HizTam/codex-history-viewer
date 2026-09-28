@@ -36,6 +36,7 @@ export interface SessionMetaInfo {
 
 export interface CodexAgentMetadata {
   parentThreadId: string;
+  kind?: "guardian"; // Absent for the original thread_spawn metadata contract.
   recordedDepth?: number;
   agentPath?: string;
   agentNickname?: string;

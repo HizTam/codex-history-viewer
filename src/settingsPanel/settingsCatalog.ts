@@ -162,6 +162,12 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
       sourceBadge: "codex"
     }
   ),
+  definition("codex.compressedSessions.enabled", "sources", "sources.codex", "switch", "application", false, {
+    dependency: CODEX_SOURCE,
+    sourceBadge: "codex",
+    resourceImpact: true,
+    experimental: true
+  }),
   definition("claude.sessionsRoot", "sources", "sources.claude", "path", "application", "", {
     dependency: CLAUDE_SOURCE,
     sourceBadge: "claude"

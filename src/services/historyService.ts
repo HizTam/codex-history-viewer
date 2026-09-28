@@ -7,7 +7,7 @@ import {
   rebuildCodexHistoryBasePreview,
   tryReadSessionMeta,
 } from "../sessions/sessionSummary";
-import { sanitizeCachedCodexAgentMetadata } from "../agents/codexAgentMetadata";
+import { CODEX_AGENT_METADATA_VERSION, sanitizeCachedCodexAgentMetadata } from "../agents/codexAgentMetadata";
 import { sanitizeCachedCodexForkMetadata } from "../branchMap/codexForkMetadata";
 import {
   resolveCodexLogicalHistoryPlan,
@@ -41,7 +41,7 @@ interface CacheEntryV1 {
   mtimeMs: number;
   size: number;
   summary: SessionSummary;
-  codexAgentMetadataVersion?: 1;
+  codexAgentMetadataVersion?: typeof CODEX_AGENT_METADATA_VERSION;
 }
 
 interface HistoryInputStamp {
@@ -55,12 +55,13 @@ const HISTORY_REFRESH_CONCURRENCY = 4;
 interface CacheFileV9 {
   version: 9;
   summaryAlgoVersion: number;
-  codexAgentMetadataVersion?: 1;
+  codexAgentMetadataVersion?: typeof CODEX_AGENT_METADATA_VERSION;
   codexSessionsRoot: string;
   codexArchivedSessionsRoot: string;
   claudeSessionsRoot: string;
   includeCodex: boolean;
   includeCodexArchived: boolean;
+  includeCodexCompressed?: boolean;
   includeClaude: boolean;
   previewMaxMessages: number;
   dateTimeSettingsKey: string;
@@ -583,7 +584,7 @@ export class HistoryService {
     const entries = normalized.entries;
 
     const targets = Object.entries(entries).filter(([, entry]) =>
-      entry.summary.source === "codex" && entry.codexAgentMetadataVersion !== 1
+      entry.summary.source === "codex" && entry.codexAgentMetadataVersion !== CODEX_AGENT_METADATA_VERSION
     );
     let completed = 0;
     const results = await mapWithConcurrency(targets, HISTORY_REFRESH_CONCURRENCY, async ([key, entry]) => {
@@ -602,8 +603,8 @@ export class HistoryService {
           entry: {
             ...entry,
             summary: { ...entry.summary, meta: nextMeta },
-            codexAgentMetadataVersion: 1 as const,
-          },
+            codexAgentMetadataVersion: CODEX_AGENT_METADATA_VERSION,
+          } satisfies CacheEntryV1,
           ok: true as const,
         };
       } catch (error) {
@@ -656,7 +657,7 @@ export class HistoryService {
     const complete = areAllCodexEntriesVerifiedForIndex(entries, nextIndex);
     const nextCache: CacheFileV9 = {
       ...cache,
-      codexAgentMetadataVersion: complete ? 1 : undefined,
+      codexAgentMetadataVersion: complete ? CODEX_AGENT_METADATA_VERSION : undefined,
       entries,
     };
     const nextFingerprints = this.buildHistoryStateFingerprints({
@@ -1100,6 +1101,7 @@ export class HistoryService {
       claudeRoot: config.claudeSessionsRoot,
       includeCodex: config.enableCodexSource,
       includeCodexArchived: config.enableCodexArchivedSessions,
+      includeCodexCompressed: config.enableCodexCompressedSessions === true,
       includeClaude: config.enableClaudeSource,
       performanceProbe,
     });
@@ -1311,7 +1313,7 @@ export class HistoryService {
     }
 
     const cached = cachedEntries[key];
-    if (cached && cached.mtimeMs === inputStamp.mtimeMs && cached.size === inputStamp.size) {
+    if (cached && cached.summary.fsPath === fsPath && cached.mtimeMs === inputStamp.mtimeMs && cached.size === inputStamp.size) {
       performanceProbe?.add("cacheHitCount");
       const sizedSummary = cached.summary.fileSizeBytes === inputStamp.size
         ? cached.summary
@@ -1412,7 +1414,7 @@ export class HistoryService {
           mtimeMs: inputStamp.mtimeMs,
           size: inputStamp.size,
           summary,
-          ...(summary.source === "codex" ? { codexAgentMetadataVersion: 1 as const } : {}),
+          ...(summary.source === "codex" ? { codexAgentMetadataVersion: CODEX_AGENT_METADATA_VERSION } : {}),
         },
         summary,
         cacheMiss: 1,
@@ -1586,6 +1588,7 @@ export class HistoryService {
       cache.claudeSessionsRoot,
       cache.includeCodex,
       cache.includeCodexArchived,
+      cache.includeCodexCompressed === true,
       cache.includeClaude,
       cache.previewMaxMessages,
       cache.dateTimeSettingsKey,
@@ -1648,6 +1651,7 @@ export class HistoryService {
       cache.claudeSessionsRoot === config.claudeSessionsRoot &&
       cache.includeCodex === config.enableCodexSource &&
       cache.includeCodexArchived === config.enableCodexArchivedSessions &&
+      (cache.includeCodexCompressed === true) === (config.enableCodexCompressedSessions === true) &&
       cache.includeClaude === config.enableClaudeSource &&
       cache.previewMaxMessages === config.previewMaxMessages &&
       cache.dateTimeSettingsKey === dateTimeSettingsKey &&
@@ -1768,6 +1772,7 @@ function isCacheStructurallyReused(left: CacheFileV9, right: CacheFileV9): boole
     left.claudeSessionsRoot !== right.claudeSessionsRoot ||
     left.includeCodex !== right.includeCodex ||
     left.includeCodexArchived !== right.includeCodexArchived ||
+    (left.includeCodexCompressed === true) !== (right.includeCodexCompressed === true) ||
     left.includeClaude !== right.includeClaude ||
     left.previewMaxMessages !== right.previewMaxMessages ||
     left.dateTimeSettingsKey !== right.dateTimeSettingsKey
@@ -1838,7 +1843,7 @@ function projectHistoryRoots(roots: HistoryRoots): unknown[] {
 
 function projectCodexAgent(value: SessionSummary["meta"]["codexAgent"]): unknown[] | undefined {
   return value
-    ? [value.parentThreadId, value.recordedDepth, value.agentPath, value.agentNickname, value.agentRole]
+    ? [value.parentThreadId, value.kind, value.recordedDepth, value.agentPath, value.agentNickname, value.agentRole]
     : undefined;
 }
 
@@ -1886,12 +1891,13 @@ function buildHistoryCacheCandidate(
   return {
     version: 9,
     summaryAlgoVersion: SUMMARY_CACHE_ALGO_VERSION,
-    ...(metadataComplete ? { codexAgentMetadataVersion: 1 } : {}),
+    ...(metadataComplete ? { codexAgentMetadataVersion: CODEX_AGENT_METADATA_VERSION } : {}),
     codexSessionsRoot: config.sessionsRoot,
     codexArchivedSessionsRoot: config.codexArchivedSessionsRoot,
     claudeSessionsRoot: config.claudeSessionsRoot,
     includeCodex: config.enableCodexSource,
     includeCodexArchived: config.enableCodexArchivedSessions,
+    includeCodexCompressed: config.enableCodexCompressedSessions === true,
     includeClaude: config.enableClaudeSource,
     previewMaxMessages: config.previewMaxMessages,
     dateTimeSettingsKey,
@@ -1920,6 +1926,7 @@ function getHistoryServiceConfigKey(config: CodexHistoryViewerConfig): string {
     config.claudeSessionsRoot,
     config.enableCodexSource,
     config.enableCodexArchivedSessions,
+    config.enableCodexCompressedSessions === true,
     config.enableClaudeSource,
     config.previewMaxMessages,
     config.historyDateBasis,
@@ -1949,12 +1956,13 @@ function normalizeCacheFile(cache: CacheFileV9, entries: Record<string, CacheEnt
   return {
     version: 9,
     summaryAlgoVersion: SUMMARY_CACHE_ALGO_VERSION,
-    codexAgentMetadataVersion: cache.codexAgentMetadataVersion === 1 ? 1 : undefined,
+    codexAgentMetadataVersion: cache.codexAgentMetadataVersion === CODEX_AGENT_METADATA_VERSION ? CODEX_AGENT_METADATA_VERSION : undefined,
     codexSessionsRoot: cache.codexSessionsRoot,
     codexArchivedSessionsRoot: cache.codexArchivedSessionsRoot,
     claudeSessionsRoot: cache.claudeSessionsRoot,
     includeCodex: cache.includeCodex,
     includeCodexArchived: cache.includeCodexArchived,
+    includeCodexCompressed: cache.includeCodexCompressed === true,
     includeClaude: cache.includeClaude,
     previewMaxMessages: cache.previewMaxMessages,
     dateTimeSettingsKey: cache.dateTimeSettingsKey,
@@ -2008,7 +2016,7 @@ function normalizeCachedEntry(value: unknown, storageKey: string): CacheEntryV1 
     size,
     summary: { ...summary, fileSizeBytes: size, meta },
     codexAgentMetadataVersion:
-      value.codexAgentMetadataVersion === 1 && sanitized.valid ? 1 : undefined,
+      value.codexAgentMetadataVersion === CODEX_AGENT_METADATA_VERSION && sanitized.valid ? CODEX_AGENT_METADATA_VERSION : undefined,
   };
 }
 
@@ -2110,7 +2118,7 @@ function hasValidCachedInferredYmd(value: unknown): boolean {
 
 function areAllCodexEntriesVerified(entries: Record<string, CacheEntryV1>): boolean {
   return Object.values(entries).every((entry) =>
-    entry.summary.source !== "codex" || entry.codexAgentMetadataVersion === 1
+    entry.summary.source !== "codex" || entry.codexAgentMetadataVersion === CODEX_AGENT_METADATA_VERSION
   );
 }
 
@@ -2135,7 +2143,7 @@ function areAllCodexEntriesVerifiedForSessions(
 function collectVerifiedCodexMetadataCacheKeys(entries: Record<string, CacheEntryV1>): Set<string> {
   const verified = new Set<string>();
   for (const entry of Object.values(entries)) {
-    if (entry.summary.source !== "codex" || entry.codexAgentMetadataVersion !== 1) continue;
+    if (entry.summary.source !== "codex" || entry.codexAgentMetadataVersion !== CODEX_AGENT_METADATA_VERSION) continue;
     verified.add(entry.summary.cacheKey);
   }
   return verified;
@@ -2147,7 +2155,7 @@ function isCompleteCodexAgentMetadataCache(
   index: HistoryIndex,
 ): boolean {
   return (
-    cache.codexAgentMetadataVersion === 1 &&
+    cache.codexAgentMetadataVersion === CODEX_AGENT_METADATA_VERSION &&
     areAllCodexEntriesVerifiedForIndex(entries, index)
   );
 }

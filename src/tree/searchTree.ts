@@ -157,7 +157,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
       const node = new SessionNode(element.session, pinned);
       const config = this.getConfigSnapshot();
       const agentPresentation = config.agentRunsEnabled && element.session.source === "codex"
-        ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"))
+        ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"), t("codexAgentRuns.guardian"))
         : undefined;
       item.contextValue = toTreeItemContextValue(
         node,
@@ -272,7 +272,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
     const config = this.getConfigSnapshot();
     const agentPresentation = config.agentRunsEnabled && element.session.source === "codex"
-      ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"))
+      ? this.codexAgentRuns.getPresentation(element.session, t("codexAgentRuns.subagent"), t("codexAgentRuns.guardian"))
       : undefined;
     const titleWithHitCount = `${shortTitle} (${element.hits.length})`;
     const timestamp = `${element.session.localDate} ${element.session.timeLabel}`;

@@ -154,6 +154,11 @@
       bookmarkedKeys = normalizeBookmarkKeys(msg.bookmarks);
       const modelReason = typeof msg.reason === "string" ? msg.reason : "";
       sourceFilter = normalizeSourceFilterForModel(sourceFilter, model);
+      const revealCard = typeof msg.revealCardId === "string" ? modelCardById.get(msg.revealCardId) : null;
+      if (revealCard && (revealCard.source === "codex" || revealCard.source === "claude")) {
+        sourceFilter = { ...sourceFilter, [revealCard.source]: true };
+        persistSourceFilter();
+      }
       staleReason = msg.staleReason || null;
       loadingMore = false;
       const addedCount = normalizePositiveInteger(msg.addedCount);
@@ -184,7 +189,15 @@
         });
       }
       render(modelReason);
-      if (reloadScrollAnchor) restoreScrollAnchor(reloadScrollAnchor, scrollTop, persistRestoreState, "reloadAnchor");
+      if (revealCard) {
+        const revealedModel = model;
+        requestAnimationFrame(() => {
+          if (model !== revealedModel) return;
+          scrollToCard(revealCard.id, { behavior: "auto", focus: true });
+          updateDateGuideCurrent();
+          persistRestoreState();
+        });
+      } else if (reloadScrollAnchor) restoreScrollAnchor(reloadScrollAnchor, scrollTop, persistRestoreState, "reloadAnchor");
       else if (msg.scrollAnchor) restoreScrollAnchor(msg.scrollAnchor, scrollTop, persistRestoreState, "reloadAnchor");
       else if (loadMoreScrollAnchor) restoreScrollAnchor(loadMoreScrollAnchor, scrollTop, persistRestoreState, "loadMoreAnchor");
       else restoreScroll(scrollTop, persistRestoreState);
@@ -696,6 +709,10 @@
     meta.appendChild(renderCardNumberBadge(cardNumber));
     appendMeta(meta, card.dateTimeLabel);
     appendMeta(meta, changeTypeLabel(card.changeType));
+    const evidence = card.entry && card.entry.evidence;
+    if (evidence === "unconfirmed") appendMeta(meta, text("patchUnconfirmed", ""));
+    else if (evidence === "shared") appendMeta(meta, text("patchShared", ""));
+    else if (card.entry && card.entry.incomplete) appendMeta(meta, text("patchIncomplete", ""));
     left.appendChild(meta);
 
     const title = el("h2", {});
@@ -2154,6 +2171,7 @@
       restore: {
         version: 1,
         target: model.target,
+        navigationOrigin: model.navigationOrigin,
         cardCount: cards.length,
         scrollAnchor: captureVisibleCardAnchor(),
       },
@@ -2478,10 +2496,14 @@
     updateDateGuide();
   }
 
-  function scrollToCard(id) {
+  function scrollToCard(id, options) {
     const target = document.getElementById(id);
     if (!target) return;
-    scrollElementIntoRootView(target, { behavior: "smooth", block: "start" });
+    scrollElementIntoRootView(target, { behavior: options && options.behavior || "smooth", block: "start" });
+    if (options && options.focus) {
+      target.tabIndex = -1;
+      target.focus({ preventScroll: true });
+    }
     target.classList.add("highlight");
     setTimeout(() => target.classList.remove("highlight"), 2000);
   }

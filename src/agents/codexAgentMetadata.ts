@@ -1,6 +1,8 @@
 import type { CodexAgentMetadata } from "../sessions/sessionTypes";
 import { truncateByDisplayWidth } from "../utils/textUtils";
 
+export const CODEX_AGENT_METADATA_VERSION = 2;
+
 const MAX_PARENT_THREAD_ID_LENGTH = 256;
 const MAX_AGENT_PATH_LENGTH = 512;
 const MAX_AGENT_LABEL_LENGTH = 120;
@@ -13,13 +15,19 @@ export interface SanitizedCodexAgentMetadata {
   value?: CodexAgentMetadata;
 }
 
-export function extractCodexAgentMetadata(source: unknown): CodexAgentMetadata | undefined {
+export function extractCodexAgentMetadata(
+  source: unknown,
+  parentThreadId?: unknown,
+): CodexAgentMetadata | undefined {
   if (!source || typeof source !== "object" || Array.isArray(source)) return undefined;
   const subagent = (source as { subagent?: unknown }).subagent;
   if (!subagent || typeof subagent !== "object" || Array.isArray(subagent)) return undefined;
-  const threadSpawn = (subagent as { thread_spawn?: unknown }).thread_spawn;
-  if (!threadSpawn || typeof threadSpawn !== "object" || Array.isArray(threadSpawn)) return undefined;
-  return sanitizeCodexAgentMetadata(threadSpawn, true).value;
+  // Never reinterpret malformed thread_spawn metadata as a different agent kind.
+  if ("thread_spawn" in subagent) {
+    return sanitizeCodexAgentMetadata(subagent.thread_spawn, true).value;
+  }
+  if ((subagent as { other?: unknown }).other !== "guardian") return undefined;
+  return sanitizeCodexAgentMetadata({ kind: "guardian", parentThreadId }, false).value;
 }
 
 export function sanitizeCachedCodexAgentMetadata(value: unknown): SanitizedCodexAgentMetadata {
@@ -31,7 +39,9 @@ export function sanitizeCachedCodexAgentMetadata(value: unknown): SanitizedCodex
 export function resolveCodexAgentTaskLabel(
   metadata: CodexAgentMetadata | undefined,
   fallback: string,
+  guardianLabel: string = fallback,
 ): string {
+  if (metadata?.kind === "guardian") return guardianLabel;
   const pathLabel = getAgentPathLabel(metadata?.agentPath);
   if (pathLabel) return pathLabel;
   const nickname = sanitizeDisplayCandidate(metadata?.agentNickname);
@@ -39,6 +49,7 @@ export function resolveCodexAgentTaskLabel(
 }
 
 export function resolveCodexAgentTaskSortKey(metadata: CodexAgentMetadata | undefined): string {
+  if (metadata?.kind === "guardian") return "guardian";
   return getAgentPathLabel(metadata?.agentPath) || sanitizeDisplayCandidate(metadata?.agentNickname);
 }
 
@@ -49,10 +60,15 @@ export function normalizeCodexThreadId(value: unknown): string {
 function sanitizeCodexAgentMetadata(value: unknown, rawThreadSpawn: boolean): SanitizedCodexAgentMetadata {
   if (!value || typeof value !== "object" || Array.isArray(value)) return { valid: false };
   const candidate = value as Record<string, unknown>;
+  if (!rawThreadSpawn && candidate.kind !== undefined && candidate.kind !== "guardian") return { valid: false };
   const parentThreadId = normalizeCodexThreadId(
     rawThreadSpawn ? candidate.parent_thread_id : candidate.parentThreadId,
   );
   if (!parentThreadId) return { valid: false };
+  // Guardian has an explicit parent but no user-assigned task name or role.
+  if (!rawThreadSpawn && candidate.kind === "guardian") {
+    return { valid: true, value: { parentThreadId, kind: "guardian" } };
+  }
 
   const recordedDepthRaw = rawThreadSpawn ? candidate.depth : candidate.recordedDepth;
   const recordedDepth =

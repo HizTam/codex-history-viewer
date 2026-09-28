@@ -9,6 +9,7 @@ import { findSessionFiles } from "../sessions/sessionDiscovery";
 import { buildSessionSummary } from "../sessions/sessionSummary";
 import { pad2, toYmdInTimeZone } from "../utils/dateUtils";
 import { normalizeCacheKey, pathExists } from "../utils/fsUtils";
+import { resolveSessionFilePath } from "../utils/sessionFileReader";
 import { resolveDateTimeSettings } from "../utils/dateTimeSettings";
 import type { HistoryService } from "./historyService";
 import type { DebugLogger } from "./logger";
@@ -630,7 +631,9 @@ async function resolveOfficialRestoredSummary(
   thread: Record<string, unknown>,
 ): Promise<SessionSummary | null> {
   const dateTime = resolveDateTimeSettings();
-  const threadPath = typeof thread.path === "string" ? thread.path : null;
+  const declaredPath = typeof thread.path === "string" ? thread.path : null;
+  const threadPath = declaredPath && isPathInsideRoot(declaredPath, config.sessionsRoot)
+    ? await resolveSessionFilePath(declaredPath) : undefined;
   if (threadPath && isPathInsideRoot(threadPath, config.sessionsRoot) && (await pathExists(threadPath))) {
     return (
       (await buildActiveSummaryFromPath(session, config, threadPath, dateTime.timeZone, { acceptMatchingThread: true })) ??
@@ -730,6 +733,7 @@ async function findActiveSummaryByIdentity(
     claudeRoot: config.claudeSessionsRoot,
     includeCodex: true,
     includeCodexArchived: false,
+    includeCodexCompressed: config.enableCodexCompressedSessions === true,
     includeClaude: false,
   });
 
@@ -761,6 +765,7 @@ async function findArchivedSummaryByIdentity(
     claudeRoot: config.claudeSessionsRoot,
     includeCodex: false,
     includeCodexArchived: true,
+    includeCodexCompressed: config.enableCodexCompressedSessions === true,
     includeClaude: false,
   });
 
@@ -793,7 +798,10 @@ async function buildActiveSummaryFromPath(
   timeZone: string,
   options: { acceptMatchingThread: boolean },
 ): Promise<SessionSummary | null> {
-  if (!isPathInsideRoot(fsPath, config.sessionsRoot) || !(await pathExists(fsPath))) return null;
+  if (!isPathInsideRoot(fsPath, config.sessionsRoot)) return null;
+  const physicalPath = await resolveSessionFilePath(fsPath);
+  if (!physicalPath) return null;
+  fsPath = physicalPath;
   const summary = await buildSessionSummary({
     sessionsRoot: config.sessionsRoot,
     sourceRoot: config.sessionsRoot,
@@ -818,7 +826,10 @@ async function buildArchivedSummaryFromPath(
   fsPath: string,
   timeZone: string,
 ): Promise<SessionSummary | null> {
-  if (!isPathInsideRoot(fsPath, config.codexArchivedSessionsRoot) || !(await pathExists(fsPath))) return null;
+  if (!isPathInsideRoot(fsPath, config.codexArchivedSessionsRoot)) return null;
+  const physicalPath = await resolveSessionFilePath(fsPath);
+  if (!physicalPath) return null;
+  fsPath = physicalPath;
   const summary = await buildSessionSummary({
     sessionsRoot: config.sessionsRoot,
     sourceRoot: config.codexArchivedSessionsRoot,

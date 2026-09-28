@@ -1,4 +1,3 @@
-import * as fs from "node:fs";
 import { open, stat, type FileHandle } from "node:fs/promises";
 import * as path from "node:path";
 import * as readline from "node:readline";
@@ -11,6 +10,7 @@ import { normalizeCacheKey } from "../utils/fsUtils";
 import { stableTextSha256 } from "../utils/stableTextHash";
 import type { PerformanceProbe } from "../performance/performanceCounters";
 import { CodexRollbackTracker, type CodexRollbackProjection } from "./codexRollbackHistory";
+import { createSessionReadStream, isCompressedSessionFile, readCompressedBytes, resolveSessionFilePath } from "../utils/sessionFileReader";
 
 const MAX_HISTORY_ID_LENGTH = 256;
 const MAX_HISTORY_DEPTH = 32;
@@ -19,7 +19,7 @@ const FIRST_RECORD_READ_CHUNK_BYTES = 64 * 1024;
 const BOUNDARY_SCAN_CHUNK_BYTES = 64 * 1024;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f-\u009f]/u;
 const CODEX_ROLLOUT_ID_PATTERN =
-  /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=\.jsonl$)/iu;
+  /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=\.jsonl(?:\.zst)?$)/iu;
 
 export type CodexHistoryPlanIssue =
   | "missingLeaf"
@@ -77,6 +77,8 @@ interface HistoryBoundary {
   endOrdinalExclusive: number;
   endByteOffset: number;
 }
+
+type HistoryPlanSession = Pick<SessionSummary, "fsPath" | "cacheKey" | "source" | "meta">;
 
 interface Catalog {
   byPath: ReadonlyMap<string, SessionSummary>;
@@ -185,10 +187,32 @@ export function findCodexHistoryParent(
 export async function resolveCodexLogicalHistoryPlan(
   leafFsPath: string,
   sessionInventory: readonly SessionSummary[] | undefined,
+  options: { verifyLeafHeader?: boolean } = {},
 ): Promise<CodexLogicalHistoryPlan> {
+  leafFsPath = await resolveSessionFilePath(leafFsPath) ?? leafFsPath;
   const catalog = sessionInventory ? getOrBuildCatalog(sessionInventory) : buildCatalog([]);
   const leafKey = normalizeCacheKey(leafFsPath);
-  const leaf = catalog.byPath.get(leafKey);
+  let leaf: HistoryPlanSession | undefined = catalog.byPath.get(leafKey);
+  if (options.verifyLeafHeader) {
+    try {
+      const fileStat = await statSessionFile(leafFsPath);
+      const handle = isCompressedSessionFile(leafFsPath) ? undefined : await open(leafFsPath, "r");
+      let record: unknown;
+      try { record = handle ? await readFirstJsonRecord(handle, fileStat.size) : await readFirstCompressedRecord(leafFsPath); }
+      finally { await handle?.close(); }
+      if (!isRecord(record) || record.type !== "session_meta" || !isRecord(record.payload)) {
+        return fallbackPlan(leafFsPath, "invalidBoundary");
+      }
+      const base = extractCodexHistoryBaseMetadata(record.payload, record.ordinal);
+      if (record.payload.history_base != null && !base) return fallbackPlan(leafFsPath, "invalidBoundary");
+      if (!base) return physicalPlan(leafFsPath);
+      // A restored tab can have a valid leaf before the first inventory succeeds.
+      leaf = { fsPath: leafFsPath, cacheKey: leafKey, source: "codex",
+        meta: { id: normalizeCodexHistoryId(record.payload.id), codexHistoryBase: base } };
+    } catch {
+      return fallbackPlan(leafFsPath, "unreadableFile");
+    }
+  }
   if (!leaf || leaf.source !== "codex") {
     return fallbackPlan(leafFsPath, leaf ? undefined : "missingLeaf");
   }
@@ -264,18 +288,16 @@ async function* readSessionJsonlEntries(
     throwIfCancelled(options.token, options.cancellationErrorFactory);
     performanceProbe?.add("segmentCount");
     // A resolved plan is a point-in-time snapshot; do not consume bytes appended after it was fixed.
+    const physicalPath = await resolveSessionFilePath(segment.fsPath) ?? segment.fsPath;
     const readEndByteOffset = segment.endByteOffset ?? (
-      (providedPlan || projection) && Number.isSafeInteger(segment.size) && segment.size >= 0
+      !isCompressedSessionFile(physicalPath) && (providedPlan || projection) && Number.isSafeInteger(segment.size) && segment.size >= 0
         ? segment.size
         : undefined
     );
     if (readEndByteOffset === 0) continue;
     performanceProbe?.add("streamOpenCount");
-    const stream = fs.createReadStream(segment.fsPath, {
-      encoding: "utf8",
-      ...(readEndByteOffset !== undefined
-        ? { start: 0, end: readEndByteOffset - 1 }
-        : {}),
+    const stream = createSessionReadStream(physicalPath, {
+      endByteOffset: readEndByteOffset, token: options.token, cancellationErrorFactory: options.cancellationErrorFactory,
     });
     const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
     let physicalLineIndex = 0;
@@ -308,7 +330,7 @@ async function* readSessionJsonlEntries(
             value,
             lineIndex,
             physicalLineIndex,
-            sourceFsPath: segment.fsPath,
+            sourceFsPath: physicalPath,
             isLeaf: segment.isLeaf,
           };
         } else {
@@ -316,14 +338,14 @@ async function* readSessionJsonlEntries(
             line,
             lineIndex,
             physicalLineIndex,
-            sourceFsPath: segment.fsPath,
+            sourceFsPath: physicalPath,
             isLeaf: segment.isLeaf,
           };
         }
       }
     } finally {
       rl.close();
-      stream.close();
+      stream.destroy();
     }
   }
 }
@@ -349,12 +371,14 @@ async function resolveRollbackProjection(
     throwIfCancelled(options.token, options.cancellationErrorFactory);
     if (segment.endByteOffset === 0 || (hasProvidedPlan && segment.size === 0)) continue;
     options.performanceProbe?.add("statCount");
-    const state = await stat(segment.fsPath);
+    const physicalPath = await resolveSessionFilePath(segment.fsPath) ?? segment.fsPath;
+    const state = await stat(physicalPath);
     segments.push({
       ...segment,
+      fsPath: physicalPath,
       size: state.size,
       mtimeMs: state.mtimeMs,
-      endByteOffset: segment.endByteOffset ?? (hasProvidedPlan ? segment.size : state.size),
+      endByteOffset: segment.endByteOffset ?? (isCompressedSessionFile(physicalPath) ? undefined : hasProvidedPlan ? segment.size : state.size),
     });
   }
   const snapshot = { ...plan, segments };
@@ -397,7 +421,7 @@ async function resolveRollbackProjection(
 
 function rollbackProjectionKey(segments: readonly CodexLogicalHistorySegment[]): string {
   return JSON.stringify(segments.map(segment => [
-    normalizeCacheKey(segment.fsPath), segment.size, segment.mtimeMs, segment.endByteOffset ?? segment.size,
+    normalizeCacheKey(segment.fsPath), isCompressedSessionFile(segment.fsPath), segment.size, segment.mtimeMs, segment.endByteOffset ?? segment.size,
   ]));
 }
 
@@ -518,7 +542,7 @@ export function planCodexHistoryDeletionTargets(
 }
 
 async function appendSessionSegments(
-  session: SessionSummary,
+  session: HistoryPlanSession,
   boundary: HistoryBoundary | undefined,
   catalog: Catalog,
   stack: Set<string>,
@@ -568,11 +592,15 @@ async function appendSessionSegments(
 }
 
 async function validateBoundary(
-  session: SessionSummary,
+  session: HistoryPlanSession,
   boundary: HistoryBoundary,
   fileSize: number,
 ): Promise<void> {
   const { endByteOffset, endOrdinalExclusive } = boundary;
+  if (isCompressedSessionFile(session.fsPath)) {
+    await validateCompressedBoundary(session, boundary);
+    return;
+  }
   if (endByteOffset > fileSize) throw new CodexHistoryResolutionError("invalidBoundary");
   const physicalStartOrdinal = session.meta.codexHistoryBase?.endOrdinalExclusive ?? 0;
   if (endOrdinalExclusive < physicalStartOrdinal) {
@@ -654,9 +682,9 @@ async function validateDeclaredHistoryBase(
   fileSize: number,
   expected: CodexHistoryBaseMetadata,
 ): Promise<void> {
-  const handle = await open(fsPath, "r");
+  const handle = isCompressedSessionFile(fsPath) ? undefined : await open(fsPath, "r");
   try {
-    const record = await readFirstJsonRecord(handle, fileSize);
+    const record = handle ? await readFirstJsonRecord(handle, fileSize) : await readFirstCompressedRecord(fsPath);
     if (!isRecord(record) || record.type !== "session_meta" || !isRecord(record.payload)) {
       throw new CodexHistoryResolutionError("invalidBoundary");
     }
@@ -671,7 +699,55 @@ async function validateDeclaredHistoryBase(
       throw new CodexHistoryResolutionError("invalidBoundary");
     }
   } finally {
-    await handle.close();
+    await handle?.close();
+  }
+}
+
+async function readFirstCompressedRecord(fsPath: string): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of readCompressedBytes(fsPath, { endByteOffset: MAX_BOUNDARY_RECORD_BYTES + 1 })) {
+    const newline = chunk.indexOf(0x0a);
+    const part = newline >= 0 ? chunk.subarray(0, newline) : chunk;
+    size += part.length;
+    if (size > MAX_BOUNDARY_RECORD_BYTES) throw new CodexHistoryResolutionError("invalidBoundary");
+    chunks.push(part);
+    if (newline >= 0) break;
+  }
+  if (size === 0) throw new CodexHistoryResolutionError("invalidBoundary");
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
+}
+
+async function validateCompressedBoundary(session: HistoryPlanSession, boundary: HistoryBoundary): Promise<void> {
+  const first = await readFirstCompressedRecord(session.fsPath);
+  const start = session.meta.codexHistoryBase?.firstOrdinal ?? 0;
+  if (!isRecord(first) || first.type !== "session_meta" || first.ordinal !== start || boundary.endOrdinalExclusive < start) {
+    throw new CodexHistoryResolutionError("invalidBoundary");
+  }
+  if (boundary.endByteOffset === 0) {
+    if (boundary.endOrdinalExclusive !== start) throw new CodexHistoryResolutionError("invalidBoundary");
+    return;
+  }
+  let size = 0;
+  let lastLine: Buffer = Buffer.alloc(0);
+  let lastByte: number | undefined;
+  // Retain only the boundary record, not the entire inherited prefix.
+  for await (const bytes of readCompressedBytes(session.fsPath, { endByteOffset: boundary.endByteOffset })) {
+    size += bytes.length;
+    lastByte = bytes.at(-1);
+    const end = size === boundary.endByteOffset ? bytes.length - 1 : bytes.length;
+    const previousNewline = end > 0 ? bytes.lastIndexOf(0x0a, end - 1) : -1;
+    lastLine = previousNewline >= 0
+      ? bytes.subarray(previousNewline + 1, end)
+      : Buffer.concat([lastLine, bytes.subarray(0, end)]);
+    if (lastLine.length > MAX_BOUNDARY_RECORD_BYTES) throw new CodexHistoryResolutionError("invalidBoundary");
+  }
+  if (size !== boundary.endByteOffset || lastByte !== 0x0a || boundary.endOrdinalExclusive <= start) {
+    throw new CodexHistoryResolutionError("invalidBoundary");
+  }
+  const record = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(lastLine));
+  if (!isRecord(record) || record.ordinal !== boundary.endOrdinalExclusive - 1) {
+    throw new CodexHistoryResolutionError("invalidBoundary");
   }
 }
 
@@ -826,6 +902,7 @@ function freezePlan(
     issue: issue ?? null,
     segments: frozenSegments.map((segment) => [
       segment.cacheKey,
+      isCompressedSessionFile(segment.fsPath),
       segment.size,
       segment.mtimeMs,
       segment.endByteOffset ?? null,

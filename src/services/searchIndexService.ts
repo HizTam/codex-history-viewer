@@ -4,6 +4,7 @@ import { extractClaudeTerminalOutput, getClaudeTerminalOutputText } from "../cha
 import type { SearchIndexToolContent } from "../settings";
 import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
 import { SEARCH_INDEX_FILE_NAME } from "../storage/cacheFiles";
+import { claudeChangeSearchText, readClaudeEditResults, readClaudeResultChanges } from "../sessions/claudeFileChanges";
 import {
   formatJsonReadOrDropCorruptDebug,
   isFileNotFoundError,
@@ -54,7 +55,7 @@ import {
   readCodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
 
-const SEARCH_INDEX_FILE_VERSION = 26;
+const SEARCH_INDEX_FILE_VERSION = 27;
 const SEARCH_STAT_CONCURRENCY = 8;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
@@ -1183,6 +1184,17 @@ async function indexClaudeRecord(obj: any, state: BuildState): Promise<boolean> 
         source: "toolArguments",
         text: args,
       });
+    }
+  }
+
+  for (const result of readClaudeEditResults(obj)) {
+    const projection = readClaudeResultChanges(result);
+    const linkedAnchor = state.toolAnchorByCallId.get(result.callId) ?? anchor;
+    addFileChangeHint(state, { messageIndex: linkedAnchor, paths: projection.entries.map(entry => entry.path),
+      timestampIso, origin: "toolOutput", hasDiffLikeContent: projection.entries.length > 0 });
+    if (indexToolOutputs) {
+      const text = normalizeWhitespace(claudeChangeSearchText(projection.entries));
+      if (text) state.messages.push({ messageIndex: linkedAnchor, role: "tool", source: "toolOutput", text });
     }
   }
 

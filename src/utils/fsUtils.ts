@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { createSessionReadStream, isCompressedSessionFile, uncompressedSessionPath } from "./sessionFileReader";
 
 // Small filesystem helpers.
 export async function pathExists(fsPath: string): Promise<boolean> {
@@ -25,6 +26,18 @@ export async function statSafe(fsPath: string): Promise<{ mtimeMs: number; size:
 }
 
 export async function readFirstLineUtf8(fsPath: string, maxBytes = 512 * 1024): Promise<string | null> {
+  if (isCompressedSessionFile(fsPath)) {
+    const stream = createSessionReadStream(fsPath, { endByteOffset: maxBytes });
+    let text = "";
+    try {
+      for await (const chunk of stream) {
+        text += String(chunk);
+        const newline = text.indexOf("\n");
+        if (newline >= 0) return text.slice(0, newline).replace(/\r$/u, "");
+      }
+      return text ? text.replace(/\r$/u, "") : null;
+    } finally { stream.destroy(); }
+  }
   // Efficiently read only the first line of a JSONL file (typically session_meta).
   const handle = await fs.open(fsPath, "r");
   try {
@@ -43,7 +56,8 @@ export async function readFirstLineUtf8(fsPath: string, maxBytes = 512 * 1024): 
 
 export function normalizeCacheKey(fsPath: string): string {
   // Avoid cache misses caused by Windows case/path-separator differences.
-  const normalized = path.normalize(fsPath);
+  const normalized = path.normalize(path.basename(fsPath).toLowerCase().startsWith("rollout-")
+    ? uncompressedSessionPath(fsPath) : fsPath);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 

@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { isCompressedSessionFile } from "../utils/sessionFileReader";
 import type { HistoryService } from "../services/historyService";
 import type { PinEntry, PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
@@ -282,6 +283,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
 
   private matchesMissingPinnedDisplayTarget(pin: PinEntry): boolean {
     const config = this.getConfigSnapshot();
+    if (isCompressedSessionFile(pin.fsPath) && !config.enableCodexCompressedSessions) return false;
     const archived = isArchivedPinEntry(pin, config);
     if (archived && !config.enableCodexArchivedSessions) return false;
     const hidden = this.hiddenSessionStore.isHidden({
@@ -411,7 +413,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     const dateAxis = getSessionDateAxisForPinnedSortMode(this.sortMode);
     const config = this.getConfigSnapshot();
     const agentPresentation = config.agentRunsEnabled && session.source === "codex"
-      ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent"))
+      ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent"), t("codexAgentRuns.guardian"))
       : undefined;
     const hidden = this.hiddenSessionStore.isHidden(session);
     const timestamp = formatSessionDateTimeForAxis(session, dateAxis);

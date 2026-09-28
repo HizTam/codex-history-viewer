@@ -345,7 +345,7 @@ function sanitizeRootKind(value: unknown): SessionRootKind | undefined {
 function extractCodexRolloutId(fsPath: string): string {
   const base = path.basename(fsPath);
   const match =
-    /^rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/iu.exec(base);
+    /^rollout-.*-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/iu.exec(base);
   return match?.[1]?.toLowerCase() ?? "";
 }
 

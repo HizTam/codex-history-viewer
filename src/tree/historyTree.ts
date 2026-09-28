@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { matchesHistoryCompression, type HistoryCompressionFilter } from "../types/historyFilterState";
 import type { HistoryService } from "../services/historyService";
 import type { PinStore } from "../services/pinStore";
 import type { SessionAnnotationStore } from "../services/sessionAnnotationStore";
@@ -134,6 +135,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private projectGrouped: boolean;
   private sourceFilter: SessionSourceFilter;
   private tagFilter: string[];
+  private compressionFilter: HistoryCompressionFilter = "all";
   private displayTarget: HistoryDisplayTarget;
   private sortOrder: HistorySortOrder;
   private initialLoadComplete = false;
@@ -272,6 +274,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.clearSessionDerivedCaches();
   }
 
+  public setCompressionFilter(filter: HistoryCompressionFilter): void {
+    this.compressionFilter = filter;
+  }
+
   public setDisplayTarget(displayTarget: HistoryDisplayTarget): void {
     this.displayTarget = displayTarget;
     this.clearSessionDerivedCaches();
@@ -318,6 +324,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
           projects: override.projects,
           source: normalizeSourceFilter(override.source),
           tags: normalizeTagFilter(override.tags),
+          compression: override.compression ?? "all",
           displayTarget: override.displayTarget ?? historyDisplayTargetFromArchiveLocation(override.archiveLocation),
         }
       : {
@@ -326,10 +333,12 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
           projects: this.projectSelection,
           source: this.sourceFilter,
           tags: this.tagFilter,
+          compression: this.compressionFilter,
           displayTarget: this.displayTarget,
         };
     const sessions = this.historyService.getIndex().sessions.filter(
       (session) =>
+        matchesHistoryCompression(session.fsPath, condition.compression) &&
         matchesHistoryDisplayTarget(session, condition.displayTarget, this.hiddenSessionStore) &&
         matchProjectSelection(session.meta?.cwd, condition.projects, (cwd) => this.getCanonicalProjectKey(cwd)) &&
         matchesSourceFilter(session, condition.source) &&
@@ -361,6 +370,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       t("historyInsights.filter.date", formatInsightsDateRangeLabel(condition.dateRange)),
       t("historyInsights.filter.location", t(`historyDisplayTarget.${condition.displayTarget}`)),
     ];
+    if (condition.compression !== "all") chips.push(t(`history.filter.compression.${condition.compression}`));
     const formatProject = (cwd: string): string => {
       const displayCwd = this.getProjectDisplayCwd(cwd);
       return this.projectAliasStore.getAliasByCwd(displayCwd) ?? buildProjectLabel(displayCwd);
@@ -385,6 +395,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
         date: condition.date,
         dateRange: condition.dateRange,
         source: condition.source,
+        ...(condition.compression !== "all" ? { compression: condition.compression } : {}),
         projects: condition.projects,
         tags: condition.tags.slice(),
         archiveLocation: archiveLocationFromHistoryDisplayTarget(condition.displayTarget),
@@ -418,7 +429,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   private matchesSessionWithoutDate(session: SessionSummary): boolean {
-    return this.matchesArchiveVisibility(session) && this.matchesProject(session) && this.matchesSource(session) && this.matchesTags(session);
+    return matchesHistoryCompression(session.fsPath, this.compressionFilter) && this.matchesArchiveVisibility(session) && this.matchesProject(session) && this.matchesSource(session) && this.matchesTags(session);
   }
 
   private matchesSource(session: SessionSummary): boolean {
@@ -625,7 +636,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(session));
     const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
     const agentPresentation = config.agentRunsEnabled && session.source === "codex"
-      ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent"))
+      ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent"), t("codexAgentRuns.guardian"))
       : undefined;
     const hidden = this.hiddenSessionStore.isHidden(session);
     const descriptionPresentation = buildSessionDescriptionPresentation(
@@ -1053,6 +1064,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       this.projectSelection.kind !== "all" ||
       this.sourceFilter !== "all" ||
       this.tagFilter.length > 0 ||
+      this.compressionFilter !== "all" ||
       this.codexAgentRuns.isPresentationEnabled();
     if (this.projectGrouped) {
       return this.buildProjectChildren(element, shouldFilterSessions);

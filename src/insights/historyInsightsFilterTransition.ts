@@ -16,6 +16,7 @@ export function buildHistoryInsightsFilterTransition(
   effectiveDisplayTarget: HistoryDisplayTarget,
 ): HistoryInsightsFilterTransition {
   const condition: HistoryInsightsCondition = {
+    ...(application.compression ? { compression: application.compression } : {}),
     date: historyInsightsDateRangeToDateScope(application.dateRange),
     projects: application.projects,
     source: application.source,

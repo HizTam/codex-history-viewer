@@ -93,6 +93,7 @@ import {
 } from "../sessions/codexFileChangeEvents";
 import type { PerformanceProbe } from "../performance/performanceCounters";
 import { extractChatTokenUsage } from "./tokenUsage";
+import { ClaudeFileChangeTracker, type ClaudeEditResult, type ClaudeFileChangeOperation } from "../sessions/claudeFileChanges";
 
 const CODEX_USAGE_PAIR_WINDOW_LINES = 64;
 const MAX_PENDING_CODEX_USAGE_PAIRS = 64;
@@ -267,6 +268,7 @@ export async function createChatTimelineRecordAccumulator(
   const seenCodexAsyncQuestionIds = new Set<string>();
   const codexQuestionReplyResolver = new CodexQuestionReplyResolver();
   const pendingPatchGroups = new Map<string, PendingPatchGroup>();
+  const claudeChanges = new ClaudeFileChangeTracker<void>();
   const fileChangeDeduper = new CodexFileChangeEventDeduper(undefined, options.performanceProbe);
   const codexTurnMeta: ChatMessageModelMeta = {};
   const usageState: UsageBuildState = {};
@@ -400,6 +402,7 @@ export async function createChatTimelineRecordAccumulator(
       () => (messageIndex += 1),
       () => messageIndex,
       usageState,
+      claudeChanges,
       sessionCwd,
       options,
       lineIndex,
@@ -410,12 +413,20 @@ export async function createChatTimelineRecordAccumulator(
 
   const finalize = (): ChatTimelineBuildResult => {
     if (finalizedResult) return finalizedResult;
+    if (source === "claude") finalizeClaudePatchGroups(items, pendingPatchGroups, sessionCwd, shouldIncludeDetails(options));
     flushPendingClaudeUsage(items, usageState);
     const completedTurnId = finalizePendingClaudeCompletion(claudeTurnState);
     if (completedTurnId) {
       flushClaudeTurnPatchGroup(items, pendingPatchGroups, completedTurnId, turnState);
     }
     flushPendingPatchGroups(items, pendingPatchGroups, turnState);
+    if (source === "claude") {
+      // Failed and staged edits must not leave empty change cards behind.
+      for (let i = items.length - 1; i >= 0; i--) {
+        const item = items[i]!;
+        if (item.type === "patchGroup" && !item.entries.length && !item.incomplete) items.splice(i, 1);
+      }
+    }
     finalizeTimelineItems(items);
     if (!turnState) {
       finalizedResult = { items, ...(activityEvidence ? { activityEvidence } : {}) };
@@ -445,6 +456,7 @@ async function readPatchEntryDetails(
 ): Promise<ChatPatchEntry | null> {
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
   const pendingApplyPatchEntries = new Map<string, ChatPatchEntry[]>();
+  const claudeChanges = new ClaudeFileChangeTracker<string>();
   const entriesByGroup = new Map<string, ChatPatchEntry[]>();
   const fileChangeDeduper = new CodexFileChangeEventDeduper();
   const groupClaudePatchesByTurn = source === "claude" && (turnTimelineMode === "basic" || turnTimelineMode === "live");
@@ -531,6 +543,7 @@ async function readPatchEntryDetails(
       continue;
     }
     const parsed = parseClaudeMessageContent(rawContent);
+    claudeChanges.acceptResults(obj);
     const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, { enabled: false }, { role, pastedPrompt, record: obj });
     const compactUserText = role === "user" ? extractCompactUserText(normalizeText(extracted.text)) : null;
     const turnResolution = resolveClaudeRecordTurnId(
@@ -547,22 +560,26 @@ async function readPatchEntryDetails(
     for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
       const toolCall = parsed.toolCalls[toolCallIndex]!;
       const callId = resolveClaudeToolCallId(toolCall.callId, lineIndex, toolCallIndex);
-      const entries = buildClaudeToolUsePatchEntries(toolCall, sessionCwd, callId, true).filter((entry) =>
-        groupClaudePatchesByTurn
-          ? isTurnPatchDetailCandidate(entry, target)
-          : isPatchEntryDetailCandidate(entry, target),
-      );
       registerClaudeToolTurn(claudeDetailTurnState, toolCall.callId, turnId);
       const groupKey = turnId && groupClaudePatchesByTurn
         ? buildClaudeTurnPatchGroupKey(turnId)
         : buildClaudePatchBookmarkGroupId(toolCall.callId, lineIndex, toolCallIndex, messageIndex);
-      appendGroupEntries(groupKey, entries);
+      claudeChanges.register(toolCall, callId, groupKey);
     }
     observeClaudeAssistantCompletion(obj, role, turnId, lineIndex, claudeDetailTurnState);
   }
 
   for (const [key, entries] of pendingApplyPatchEntries.entries()) {
     appendGroupEntries(`apply:${key}`, entries);
+  }
+  for (const operation of claudeChanges.operations) {
+    const entries = operation.projection.entries.map(entry => formatClaudePatchEntry(entry, sessionCwd, true)).filter(entry =>
+      groupClaudePatchesByTurn ? isTurnPatchDetailCandidate(entry, target) : isPatchEntryDetailCandidate(entry, target));
+    appendGroupEntries(operation.context, entries);
+  }
+  if (source === "claude") {
+    const requested = claudeChanges.operations.find(operation => operation.callId === target.callId || target.entryId.startsWith(`${operation.callId}:`));
+    if (requested && !requested.projection.entries.some(entry => isTurnPatchDetailCandidate(entry, target))) return null;
   }
   finalizePendingClaudeCompletion(claudeDetailTurnState);
   return selectPatchEntryDetail(entriesByGroup, target, source, groupClaudePatchesByTurn);
@@ -1010,6 +1027,7 @@ async function indexClaudeTimelineRecord(
   nextMessageIndex: () => number,
   currentMessageIndex: () => number,
   usageState: UsageBuildState,
+  claudeChanges: ClaudeFileChangeTracker<void>,
   sessionCwd?: string,
   options: ChatSessionModelBuildOptions = {},
   lineIndex = 0,
@@ -1143,6 +1161,7 @@ async function indexClaudeTimelineRecord(
   }
 
   const includeDetails = shouldIncludeDetails(options);
+  const normalizedResults = claudeChanges.acceptResults(obj);
   for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
     const toolCall = parsed.toolCalls[toolCallIndex]!;
     const name = normalizeText(toolCall.name ?? "") || "tool_use";
@@ -1165,43 +1184,34 @@ async function indexClaudeTimelineRecord(
     registerClaudeToolTurn(claudeTurnState, callId, turnId);
     observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
 
-    const patchEntries = buildClaudeToolUsePatchEntries(
+    const operation = claudeChanges.register(
       toolCall,
-      sessionCwd,
       resolveClaudeToolCallId(callId, lineIndex, toolCallIndex),
-      includeDetails,
+      undefined,
     );
-    if (patchEntries.length > 0) {
+    if (operation) {
       const bookmarkGroupId = buildClaudePatchBookmarkGroupId(callId, lineIndex, toolCallIndex, messageIndex);
-      if (turnId && claudeTurnState) {
-        upsertClaudeTurnPatchGroup(
-          items,
-          pendingPatchGroups,
-          turnId,
-          bookmarkGroupId,
-          messageIndex,
-          ts,
-          patchEntries,
-        );
-      } else {
-        items.push({
-          type: "patchGroup",
-          bookmarkGroupId,
-          messageIndex: messageIndex > 0 ? messageIndex : undefined,
-          timestampIso: ts,
-          entryCount: patchEntries.length,
-          totalAdded: patchEntries.reduce((sum, entry) => sum + entry.added, 0),
-          totalRemoved: patchEntries.reduce((sum, entry) => sum + entry.removed, 0),
-          entries: patchEntries,
-        });
+      const grouped = !!turnId && !!claudeTurnState;
+      const key = grouped ? buildClaudeTurnPatchGroupKey(turnId!) : `claude-call:${operation.callId}`;
+      const group: PendingPatchGroup = pendingPatchGroups.get(key) ?? {
+        ...(grouped ? { turnId } : {}), bookmarkGroupId,
+        messageIndex: messageIndex > 0 ? messageIndex : undefined,
+        firstTimestampIso: ts, entries: [], totalAdded: 0, totalRemoved: 0, claudeOperations: [],
+      };
+      group.claudeOperations!.push(operation);
+      group.lastTimestampIso = maxIsoTimestamp(group.lastTimestampIso ?? group.firstTimestampIso, ts);
+      pendingPatchGroups.set(key, group);
+      if (!grouped) {
+        group.flushed = true;
+        group.itemIndex = items.length;
+        items.push(toPatchGroupItem(group));
       }
     }
   }
 
   for (const toolResult of parsed.toolResults) {
     const outputText = normalizeText(toolResult.outputText ?? "");
-    if (!outputText) continue;
-    const execution = buildClaudeToolExecution(obj, toolResult.isError);
+    const execution = buildClaudeToolExecution(obj, toolResult.isError, normalizedResults.find(result => result.callId === toolResult.callId));
     attachOrPushToolOutput(items, toolByCallId, {
       callId: toolResult.callId,
       outputText,
@@ -2640,12 +2650,12 @@ function mergeToolExecution(
   };
 }
 
-function buildClaudeToolExecution(obj: any, isError?: boolean): ChatToolExecution | undefined {
+function buildClaudeToolExecution(obj: any, isError?: boolean, normalized?: ClaudeEditResult): ChatToolExecution | undefined {
   const result = obj?.toolUseResult;
   const interrupted = result && typeof result === "object" && (result as Record<string, unknown>).interrupted === true;
   const errorText = isError ? normalizeToolMetaText(result) : undefined;
   const execution: ChatToolExecution = {
-    ...(interrupted ? { status: "interrupted" } : isError === true ? { status: "error" } : { status: "success" }),
+    status: normalized?.state ?? (interrupted ? "interrupted" : isError === true ? "error" : "success"),
     ...(errorText ? { error: errorText } : {}),
   };
   return execution;
@@ -2830,7 +2840,9 @@ function attachOrPushToolOutput(
 function finalizeTimelineItems(items: ChatTimelineItem[]): void {
   for (const item of items) {
     if (item.type !== "tool") continue;
-    mergeToolExecutionIntoItem(item, extractToolExecutionFromText(item.outputText));
+    if (item.execution?.status !== "staged" && item.execution?.status !== "unconfirmed") {
+      mergeToolExecutionIntoItem(item, extractToolExecutionFromText(item.outputText));
+    }
     if (item.presentation) continue;
     item.presentation = buildToolPresentation(item);
   }
@@ -2854,6 +2866,8 @@ function toImageExtractionOptions(images?: ImagesConfig): { enabled: boolean; ma
 }
 
 interface PendingPatchGroup {
+  incomplete?: boolean;
+  claudeOperations?: ClaudeFileChangeOperation<void>[];
   turnId?: string;
   bookmarkGroupId?: string;
   messageIndex?: number;
@@ -2863,7 +2877,6 @@ interface PendingPatchGroup {
   matchEntries?: ChatPatchEntry[];
   totalAdded: number;
   totalRemoved: number;
-  claudeEntryIndexByPath?: Map<string, number>;
   flushed?: boolean;
   itemIndex?: number;
 }
@@ -2921,6 +2934,7 @@ function flushPendingPatchGroups(
 function toPatchGroupItem(group: PendingPatchGroup): ChatPatchGroupItem {
   return {
     type: "patchGroup",
+    ...(group.incomplete ? { incomplete: true } : {}),
     messageIndex: group.messageIndex,
     timestampIso: group.lastTimestampIso ?? group.firstTimestampIso,
     turnId: group.turnId,
@@ -2936,50 +2950,43 @@ function buildClaudeTurnPatchGroupKey(turnId: string): string {
   return `claude-turn:${turnId}`;
 }
 
-function upsertClaudeTurnPatchGroup(
+function finalizeClaudePatchGroups(
   items: ChatTimelineItem[],
   pendingPatchGroups: Map<string, PendingPatchGroup>,
-  turnId: string,
-  bookmarkGroupId: string,
-  messageIndex: number,
-  timestampIso: string | undefined,
-  nextEntries: readonly ChatPatchEntry[],
+  sessionCwd: string | undefined,
+  includeDetails: boolean,
 ): void {
-  if (nextEntries.length === 0) return;
-  const key = buildClaudeTurnPatchGroupKey(turnId);
-  const existing = pendingPatchGroups.get(key);
-  const group: PendingPatchGroup = existing ?? {
-    turnId,
-    bookmarkGroupId,
-    messageIndex: messageIndex > 0 ? messageIndex : undefined,
-    firstTimestampIso: timestampIso,
-    entries: [],
-    totalAdded: 0,
-    totalRemoved: 0,
-    claudeEntryIndexByPath: new Map<string, number>(),
-  };
-  const entryIndexByPath = group.claudeEntryIndexByPath ?? new Map<string, number>();
-  group.claudeEntryIndexByPath = entryIndexByPath;
-  for (const entry of nextEntries) {
-    const aggregateKey = getCodexPatchAggregatePath(entry);
-    const existingIndex = aggregateKey ? entryIndexByPath.get(aggregateKey) : undefined;
-    if (existingIndex !== undefined) {
-      mergePatchEntryInto(group.entries[existingIndex]!, entry);
-    } else {
-      group.entries.push(clonePatchEntry(entry));
-      if (aggregateKey) entryIndexByPath.set(aggregateKey, group.entries.length - 1);
+  for (const group of pendingPatchGroups.values()) {
+    if (!group.claudeOperations) continue;
+    group.entries = [];
+    group.totalAdded = 0;
+    group.totalRemoved = 0;
+    group.incomplete = group.claudeOperations.some(operation => operation.projection.incomplete);
+    const entryIndexByPath = new Map<string, number>();
+    for (const operation of group.claudeOperations) {
+      for (const raw of operation.projection.entries) {
+        const entry = formatClaudePatchEntry(raw, sessionCwd, includeDetails);
+        const aggregatePath = group.turnId ? getCodexPatchAggregatePath(entry) : undefined;
+        const key = aggregatePath ? `${aggregatePath}\u0000${entry.evidence ?? "confirmed"}\u0000${!!entry.incomplete}` : undefined;
+        const existingIndex = key ? entryIndexByPath.get(key) : undefined;
+        if (existingIndex !== undefined) mergePatchEntryInto(group.entries[existingIndex]!, entry);
+        else {
+          group.entries.push(clonePatchEntry(entry));
+          if (key) entryIndexByPath.set(key, group.entries.length - 1);
+        }
+        group.totalAdded = addPatchLineCounts(group.totalAdded, entry.added);
+        group.totalRemoved = addPatchLineCounts(group.totalRemoved, entry.removed);
+      }
     }
-    group.totalAdded = addPatchLineCounts(group.totalAdded, entry.added);
-    group.totalRemoved = addPatchLineCounts(group.totalRemoved, entry.removed);
+    if (group.flushed && typeof group.itemIndex === "number" && items[group.itemIndex]?.type === "patchGroup") {
+      items[group.itemIndex] = toPatchGroupItem(group);
+    }
   }
-  group.lastTimestampIso = maxIsoTimestamp(group.lastTimestampIso ?? group.firstTimestampIso, timestampIso);
-  pendingPatchGroups.set(key, group);
+}
 
-  if (!group.flushed) return;
-  const itemIndex = group.itemIndex;
-  if (typeof itemIndex === "number" && items[itemIndex]?.type === "patchGroup") {
-    items[itemIndex] = toPatchGroupItem(group);
-  }
+function formatClaudePatchEntry(entry: ChatPatchEntry, sessionCwd: string | undefined, includeDetails: boolean): ChatPatchEntry {
+  return { ...entry, displayPath: formatPatchDisplayPath(entry.path, sessionCwd),
+    ...(!includeDetails ? { detailsOmitted: true } : {}), hunks: includeDetails ? entry.hunks : [] };
 }
 
 function flushClaudeTurnPatchGroup(
@@ -3301,7 +3308,8 @@ function aggregateClaudeTurnPatchEntries(entries: readonly ChatPatchEntry[]): Ch
   const entryIndexByPath = new Map<string, number>();
 
   for (const entry of entries) {
-    const aggregateKey = getCodexPatchAggregatePath(entry);
+    const aggregatePath = getCodexPatchAggregatePath(entry);
+    const aggregateKey = aggregatePath ? `${aggregatePath}\u0000${entry.evidence ?? "confirmed"}\u0000${!!entry.incomplete}` : "";
     if (aggregateKey) {
       const existingIndex = entryIndexByPath.get(aggregateKey);
       if (existingIndex !== undefined) {
@@ -3867,156 +3875,6 @@ function flushApplyPatchPendingRows(acc: ApplyPatchFileAccumulator): void {
   acc.pendingAdds = [];
 }
 
-function buildClaudeToolUsePatchEntries(
-  toolCall: { name?: string; input?: unknown },
-  sessionCwd: string | undefined,
-  callId: string,
-  includeDetails: boolean,
-): ChatPatchEntry[] {
-  const input =
-    typeof toolCall.input === "string" ? tryParseJsonObject(toolCall.input) ?? toolCall.input : toolCall.input;
-  if (!input || typeof input !== "object" || Array.isArray(input)) return [];
-
-  const toolName = normalizeClaudeToolName(toolCall.name);
-  const filePath = readClaudeToolPath(input as Record<string, unknown>);
-  if (!filePath) return [];
-
-  if (toolName.includes("multiedit")) {
-    const edits = Array.isArray((input as { edits?: unknown }).edits) ? (input as { edits: unknown[] }).edits : [];
-    const hunks: ChatPatchHunk[] = [];
-    let added = 0;
-    let removed = 0;
-    for (let i = 0; i < edits.length; i += 1) {
-      const edit = edits[i];
-      const oldText = readClaudeToolString(edit, ["old_string", "oldString"]);
-      const newText = readClaudeToolString(edit, ["new_string", "newString"]);
-      if (oldText === undefined || newText === undefined || oldText === newText) continue;
-      const hunk = buildSyntheticPatchHunk(oldText, newText, `@@ edit ${i + 1} @@`, includeDetails);
-      added += splitPatchContentLines(newText).length;
-      removed += splitPatchContentLines(oldText).length;
-      hunks.push(hunk);
-    }
-    if (hunks.length === 0) return [];
-    return [
-      buildSyntheticPatchEntry({
-        id: `${callId}:0`,
-        callId,
-        filePath,
-        sessionCwd,
-        changeType: "update",
-        added,
-        removed,
-        hunks,
-        includeDetails,
-      }),
-    ];
-  }
-
-  if (toolName.includes("edit")) {
-    const oldText = readClaudeToolString(input, ["old_string", "oldString"]);
-    const newText = readClaudeToolString(input, ["new_string", "newString"]);
-    if (oldText === undefined || newText === undefined || oldText === newText) return [];
-    const hunk = buildSyntheticPatchHunk(oldText, newText, "@@ -1 +1 @@", includeDetails);
-    const added = splitPatchContentLines(newText).length;
-    const removed = splitPatchContentLines(oldText).length;
-    return [
-      buildSyntheticPatchEntry({
-        id: `${callId}:0`,
-        callId,
-        filePath,
-        sessionCwd,
-        changeType: "update",
-        added,
-        removed,
-        hunks: [hunk],
-        includeDetails,
-      }),
-    ];
-  }
-
-  if (toolName.includes("write")) {
-    const content = readClaudeToolString(input, ["content"]);
-    if (content === undefined) return [];
-    const lines = splitPatchContentLines(content);
-    if (lines.length === 0) return [];
-    const hunk: ChatPatchHunk = {
-      header: `@@ -0,0 +1,${lines.length} @@`,
-      rows: includeDetails
-        ? lines.map((line, index) => ({
-            kind: "add",
-            leftText: "",
-            rightLine: index + 1,
-            rightText: line,
-          }))
-        : [],
-    };
-    return [
-      buildSyntheticPatchEntry({
-        id: `${callId}:0`,
-        callId,
-        filePath,
-        sessionCwd,
-        changeType: "create",
-        added: lines.length,
-        removed: 0,
-        hunks: [hunk],
-        includeDetails,
-      }),
-    ];
-  }
-
-  return [];
-}
-
-function buildSyntheticPatchEntry(params: {
-  id: string;
-  callId: string;
-  filePath: string;
-  sessionCwd?: string;
-  changeType: ChatPatchChangeType;
-  added: number;
-  removed: number;
-  hunks: ChatPatchHunk[];
-  includeDetails: boolean;
-}): ChatPatchEntry {
-  return {
-    id: params.id,
-    callId: params.callId,
-    path: params.filePath,
-    displayPath: formatPatchDisplayPath(params.filePath, params.sessionCwd),
-    changeType: params.changeType,
-    added: params.added,
-    removed: params.removed,
-    ...(!params.includeDetails ? { detailsOmitted: true } : {}),
-    hunks: params.includeDetails ? params.hunks : [],
-  };
-}
-
-function buildSyntheticPatchHunk(
-  oldText: string,
-  newText: string,
-  header: string,
-  includeDetails: boolean,
-): ChatPatchHunk {
-  const oldLines = splitPatchContentLines(oldText);
-  const newLines = splitPatchContentLines(newText);
-  if (!includeDetails) return { header, rows: [] };
-  const rows: ChatPatchRow[] = [];
-  const count = Math.max(oldLines.length, newLines.length);
-  for (let i = 0; i < count; i += 1) {
-    const hasOld = i < oldLines.length;
-    const hasNew = i < newLines.length;
-    rows.push({
-      kind: hasOld && hasNew ? "modify" : hasOld ? "delete" : "add",
-      leftLine: hasOld ? i + 1 : undefined,
-      leftText: hasOld ? oldLines[i]! : "",
-      rightLine: hasNew ? i + 1 : undefined,
-      rightText: hasNew ? newLines[i]! : "",
-    });
-  }
-  return { header, rows };
-}
-
 function splitPatchContentLines(value: string): string[] {
   const normalized = String(value ?? "").replace(/^\uFEFF/u, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   if (!normalized) return [];
@@ -4025,34 +3883,8 @@ function splitPatchContentLines(value: string): string[] {
   return lines;
 }
 
-function readClaudeToolPath(value: Record<string, unknown>): string | undefined {
-  return readClaudeToolString(value, ["file_path", "filePath", "path", "target_file", "targetPath"]);
-}
-
-function readClaudeToolString(value: unknown, keys: readonly string[]): string | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const record = value as Record<string, unknown>;
-  for (const key of keys) {
-    const candidate = record[key];
-    if (typeof candidate === "string") return candidate;
-  }
-  return undefined;
-}
-
-function normalizeClaudeToolName(value: unknown): string {
-  return String(value ?? "").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
-}
-
 function normalizePatchToolName(value: unknown): string {
   return String(value ?? "").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
-}
-
-function tryParseJsonObject(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return undefined;
-  }
 }
 
 function parseCodexPatchApplyEndChange(

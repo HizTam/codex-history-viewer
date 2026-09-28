@@ -4042,6 +4042,53 @@ body.vscode-high-contrast-light .branchTreeViewport {
   background: color-mix(in srgb, var(--chv-tool-bg) 72%, transparent);
 }
 
+.patchGroupFileRow > .patchEvidenceLabel {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+
+.patchGroupFileActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.patchFileHistoryButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  color: var(--chv-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 3px;
+  cursor: pointer;
+}
+
+.patchFileHistoryButton svg {
+  width: 16px;
+  height: 16px;
+}
+
+.patchFileHistoryButton:hover:not(:disabled) {
+  color: var(--vscode-foreground);
+  background: var(--vscode-toolbar-hoverBackground);
+}
+
+.patchFileHistoryButton:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.patchFileHistoryButton:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
 .patchGroupFilePath {
   min-width: 0;
   overflow: hidden;

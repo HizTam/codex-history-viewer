@@ -17,6 +17,11 @@ export interface FileChangeHistoryCandidate {
   matchScore: number;
 }
 
+export interface FileChangeHistoryOrigin {
+  sessionFsPath: string;
+  entryId: string;
+}
+
 export interface FileChangeHistoryCard {
   id: string;
   source: SessionSource;
@@ -45,6 +50,7 @@ export interface FileChangeHistoryCard {
 
 export interface FileChangeHistoryLoadResult {
   cards: FileChangeHistoryCard[];
+  revealCardId?: string;
   nextCandidateIndex: number;
   pendingCards: FileChangeHistoryCard[];
   exhausted: boolean;
@@ -60,6 +66,7 @@ export interface FileChangeHistoryDiffStats {
   claudeEditParsed: number;
   claudeMultiEditParsed: number;
   claudeWriteParsed: number;
+  claudeBashParsed: number;
   noRenderableSkipped: number;
 }
 
@@ -79,6 +86,7 @@ export interface FileChangeHistorySourceCounts {
 
 export interface FileChangeHistoryWebviewModel {
   target: FileChangeHistoryTarget;
+  navigationOrigin?: FileChangeHistoryOrigin;
   cards: FileChangeHistoryCard[];
   sourceCounts: FileChangeHistorySourceCounts;
   enabledSources: { codex: boolean; claude: boolean };

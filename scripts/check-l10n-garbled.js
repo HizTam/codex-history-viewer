@@ -17,6 +17,7 @@ const targetPairs = [
 
 // Detect patterns that are likely mojibake.
 const suspiciousPatterns = [
+  /\?{3,}/u, // Consecutive replacement question marks indicate lossy text conversion.
   /\uFFFD/u, // replacement character
   /\u7AB6\uFF66/u,
   /\u7E67/u,

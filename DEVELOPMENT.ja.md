@@ -1,14 +1,14 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-09-11
-- 対象バージョン: 2.14.2
+- 最終更新: 2026-09-28
+- 対象バージョン: 2.15.0
 
 ## 1. 概要
 
 - 目的: Codex CLI / Claude Code のローカル履歴を VS Code 上で閲覧・検索・整理・再開しやすくする
 - 対象データ:
-  - Codex: `~/.codex/sessions` 配下の `rollout-*.jsonl`
-  - Codex archived: `~/.codex/archived_sessions` 配下の `rollout-*.jsonl`（任意）
+  - Codex: `~/.codex/sessions` 配下の `rollout-*.jsonl`（圧縮履歴設定ONなら `.jsonl.zst` も対象）
+  - Codex archived: `~/.codex/archived_sessions` 配下の同形式ファイル（任意）
   - Claude Code: `~/.claude/projects/<project>/<session>.jsonl`
 - 通信: ネットワーク通信は行わない。ローカルファイルと VS Code のストレージだけを扱う
 - 対応ソース: `codexHistoryViewer.sources.enabled` で `codex` / `claude` を切り替える。Codex archived sessions は `codex` source が有効な場合だけ使える追加保存場所として扱う
@@ -16,6 +16,7 @@
 ## 2. ディレクトリ構成（主要）
 
 - `src/`: TypeScript 実装
+  - `extensionVersion.ts`: 同梱package.jsonを正本に、About・ステータス・エクスポート・バックアップの版数取得と形式検証を共通化する。ExtensionContextの正常な版数を優先し、欠落・不正時は同梱版数へ戻す。製品版数の手書きfallbackは置かない
   - `analysis/`: History Insights / Claude Code Branch Navigation 共通のセッション解析基盤
   - `insights/`: History Insights の snapshot、集計、Webview 管理
   - `branchMap/`: Branch Navigation（Codex / Claude Code）の関係解析、表示モデル、遷移解決
@@ -64,6 +65,39 @@
 - 現在の共通先頭がない通常Forkも、一方が検証済みの自己完結paginated履歴であれば双方の実在する先頭メッセージへ移動できる。共通メッセージや過去のFork地点を作らず、Forkの親ID・cwd・agent除外・cycle・実ファイル検証を維持する
 - 詳細は`.private-docs/v2.14.2-standalone-revision-design.ja.md`を参照する
 
+### 3.0.3 Codex圧縮履歴（実験的）
+
+- `codexHistoryViewer.codex.compressedSessions.enabled`（application scope、既定OFF）を有効にすると、通常・アーカイブの `rollout-*.jsonl.zst` を対象に含める。設定画面では「Codex アーカイブフォルダー」の直後に配置し、既存のCodex・実験的・リソース負荷バッジを表示する
+- 一覧・チャット・本文検索・履歴インサイト・AIファイル変更履歴は同じ展開済みJSONLのreaderを使う。一覧とチャットに圧縮状態を表示する。Historyの絞り込みには「圧縮・非圧縮の両方」「圧縮のみ」「非圧縮のみ」を追加し、検索・Insights・保存した検索条件へ引き継ぐ
+- `@hpcc-js/wasm-zstd@1.16.1` を `dist/vendor/zstd.cjs` へbundleする。Windows/macOS/Linuxで同じWASMを使い、Codex CLI・zstdコマンド・native addon・実行時downloadを必要としない。Node.js標準Zstandardは連結frameの互換試験で問題があったため使用しない
+- 閲覧用の展開済みファイルをディスクへ保存せず、展開全文のメモリcacheも作らない。既存の検索・解析などの派生cacheは維持する。展開は最大1 GiB、decoder windowはlibzstd既定の128 MiB。圧縮入力512 byteごとの処理とイベントループへの定期的な返却でメモリ・応答性を制御し、singletonの読取を直列化する
+- 同一rollout basenameの `.jsonl` と `.jsonl.zst` は同じmetadata identityを用い、併存時は `.jsonl` を優先する。物理パス・size・mtimeの変化で内容cacheを更新する。異なるrollout revisionは統合しない。`history_base` のbyte境界は圧縮後のファイルサイズではなく展開後のJSONL上で検証する
+- raw export/importは圧縮形式を保つ。上書きimportで既存の保存形式と入力形式が異なる場合だけ、保存先形式へ変換する。排他的な一時ファイルへ書き、読取完了と入出力stamp不変を確認後renameする。失敗時に既存ファイルを置き換えず、一時ファイルを除去する
+- 設定OFFでは圧縮履歴を新しく探索・watch・解析しない。圧縮されたタブの復元・再読込を求められた場合は設定が無効であることを通知して閉じる。既存のpin・注釈・元ファイルは消さない
+- 閲覧のために本家 `thread/resume` を実行しない。同APIは圧縮ファイルを展開・置換する副作用がある。手動圧縮・恒久解凍の新規コマンドは提供しない
+- 復元本文の構築は初回authoritative History inventoryの準備完了を待つ。待機後にrequest/panel/stateを再検証し、auto refreshがOFFでも参照元のある長い履歴を復元する。参照元が欠落・不正の場合は前半が読めない旨を表示する
+- 一覧取得失敗でinventoryが空の場合も、Codexの実headerを上限付きで確認する。leafが一覧になくても既存inventory内のparent解決を試み、前半欠落の案内を省略しない。通常の単一ファイルには欠落案内を出さず、参照先を探すための追加ディレクトリ走査は行わない
+- 前半欠落のnoteはHostが `alwaysVisible` を付け、詳細表示OFFでも表示する。通常の診断noteは従来どおり詳細表示に従う
+- 設計・根拠・検証限界は `.private-docs/v2.15.0-design.ja.md`、ライセンスは `resources/licenses/wasm-zstd.txt` を参照する
+
+### 3.0.4 検索プリセットと差分からの移動
+
+- 検索結果の保存時に「検索語のみ」「検索語と絞り込み条件」を選択する。後者は実際に公開した検索結果の日付・プロジェクト・source・tag・表示対象・圧縮条件を保存する。保存中の別検索で取り違えないよう、QuickPickの前にsnapshotを取得する
+- 同じ検索語でも条件が違えば別プリセットにし、同じ語と条件なら更新する。並行する保存・削除は直列化する。旧プリセットは検索語のみとして互換読取する
+- 条件付きプリセットを実行するとHistory/Searchへ条件を原子的に適用し、検索を1回行う。Pinnedには適用しない。不正条件・無効な必須source・archive・圧縮設定では対象を広げず理由を表示する。roleと大小文字の設定は従来どおり実行時の設定を使う
+- 通常履歴の差分ファイル行に履歴アイコンを追加する。tooltip・aria-labelは既存の `fileChangeHistory.title`（「ファイルの AI 更新履歴」）を共用する。Hostは配送済みentry IDとsession revisionからパスを解決し、既存の `openFileChangeHistory` へ渡す。Webviewの任意パスは受け付けず、古いrevision・別sessionを拒否する。移転先cwd・削除済みファイルも既存のworkspace内の履歴対象として扱う。Explorer設定は右クリックメニューの表示だけを制御し、アイコンの利用可否には影響しない
+- 同コマンドの任意第2引数は `navigationOrigin = { sessionFsPath, entryId }`。型・長さ・制御文字を検査し、許可済み候補の照合にだけ使用する。該当sessionを優先解析してentry IDが一意に一致する変更前後の最大100件を初期表示し、対応カードへ移動・focus・一時強調する。対象sourceが画面内で非表示ならそのsourceだけを表示する。行が複数の変更を集約している場合は保持された最初のentry IDを使い、一意に照合できない場合は案内する
+- `fileChangeHistoryNavigation.ts` がorigin検証・候補優先付け・固定100件windowを担当する。残りのカードは既存pending queueへ戻し、変更時刻順の表示と追加読み込みで全件到達を維持する。originは既存version 1復元stateの任意項目として保存し、reload・復元で読み込み集合を再現する。初回reveal指示は保存せず、復元時は従来のscroll anchorを使用する。再利用・破棄・reloadは初期読取もキャンセルし、generationで古い結果を破棄する
+
+### 3.0.5 Claudeの編集結果と構造化差分
+
+- `src/sessions/claudeFileChanges.ts` がtool IDによる要求・結果の対応付けと差分の正規化を担当する。通常チャット、遅延詳細、AIファイル変更履歴、Insightsが同じ結果判定を使用する
+- `staged: true` は未適用として表示し、失敗・中断とともに変更カード・変更集計から除外する。空の出力本文でも状態を反映する。ツール要求・出力自体は履歴に残す
+- Write上書きは `type: update`、`structuredPatch`、`originalFile` と結果のcontentを優先し、変更前が不明なら新規作成や削除行数を推測しない。古い結果欠落の差分は未確認として表示し、確定集計へ加算しない
+- Bashの `bashEditDiff` を表示・検索・集計へ取り込む。`shared` は共有差分として注記し、コマンドごとの確定集計には加算しない。部分取得・取得不能・不正hunk・上限超過はpartialとして伝える
+- 差分本文の索引への追加はツール出力検索の設定に従い、ファイル候補hintは検証済みパスから独立して生成する。要求引数の検索を維持する。Search version 27 / Claude parser 13で旧キャッシュを再構築する
+- path、整数、hunkの旧新行数、行prefixを検証し、結果先着の保留、ファイル・行・文字数、before / afterの補助計算を制限する。ログへの本文追加、外部アクセス、履歴の書換えは行わない
+
 ### 3.1 ビュー
 
 - **Control**: 全体操作と保守操作
@@ -96,14 +130,15 @@
 - **History**: 年 / 月 / 日でグルーピングした履歴ツリー、またはセッション一覧のフラット一覧
   - 表示モード: `日付別` / `セッション一覧`
   - 表示順: More Actions から `開始日時 新しい順 / 古い順`、`最終メッセージ日時 新しい順 / 古い順`、`名前 昇順 / 降順`、`ファイルサイズ 大きい順 / 小さい順` を選択する
-  - 絞り込み: 日付スコープ / プロジェクト選択 (`ProjectSelection`: `all` / `groups` / `none`) / ソース / 表示対象 / タグ
+  - 絞り込み: 日付スコープ / プロジェクト選択 (`ProjectSelection`: `all` / `groups` / `none`) / ソース / 表示対象 / タグ / 圧縮状態
   - プロジェクト表示: `一覧表示` / `プロジェクト別表示`
   - プロジェクト対象範囲: `すべて` / `現在のプロジェクトグループ`。実効対象は`ProjectSelection`を正本とし、後者は現在workspaceの1groupを選んだことを表す保存UI状態として扱う
   - プロジェクト (`cwd`) に別名が設定されている場合は、プロジェクト見出し、セッション行の CWD 表示、tooltip、絞り込み表示で別名を優先する
   - `プロジェクト別表示` では、`セッション一覧` は `Project -> Session`、`日付別` は `Project -> Year -> Month -> Day -> Session` として表示する
-  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、表示モード切替、並び替え、タグ絞り込み、タグ絞り込み解除、表示対象切替、ソース切替、履歴インサイト、再読み込み、エクスポート、Undoなど。More Actionsでは並び替えをフラット表示し、表示単位、プロジェクト表示、プロジェクト範囲、ソース、セッションの表示対象を1階層のサブメニューへまとめる。サブメニュー内は現在値によらない固定順とし、表示単位は`日付別`→`セッション一覧`、プロジェクト範囲は`現在のプロジェクトグループ`→`すべて`の順にする
+  - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、表示モード切替、並び替え、タグ絞り込み、タグ絞り込み解除、表示対象切替、ソース切替、履歴インサイト、再読み込み、エクスポート、Undoなど。More Actionsでは並び替えをフラット表示し、表示単位、プロジェクト表示、プロジェクト範囲、ソース、セッションの表示対象、圧縮状態を1階層のサブメニューへまとめる。サブメニュー内は現在値によらない固定順とし、表示単位は`日付別`→`セッション一覧`、プロジェクト範囲は`現在のプロジェクトグループ`→`すべて`、圧縮状態は`圧縮・非圧縮の両方`→`圧縮のみ`→`非圧縮のみ`の順にする。圧縮状態は絞り込みQuickPickと同じ保存状態を参照する。圧縮利用設定OFFでは`圧縮のみ`を無効にし、直接実行・QuickPickでも設定を再確認して案内する
   - 表示対象は `通常のみ` / `通常＋アーカイブ` / `アーカイブのみ` / `非表示のみ` / `すべて` の5種類とする。Codex archive が利用できない場合も保存済みの選択は維持し、実効 UI は `通常のみ` / `非表示のみ` / `すべて` に縮退する
-  - `絞り込み解除`は日付 / 明示的なプロジェクト選択 / ソース / 表示対象 / タグを解除し、プロジェクト表示と対象範囲は表示状態として維持する。対象範囲が`現在のプロジェクトグループ`なら、その裏付けとなる1groupの`ProjectSelection`も維持する
+  - `絞り込み解除`は日付 / 明示的なプロジェクト選択 / ソース / 表示対象 / タグ / 圧縮状態を解除し、プロジェクト表示と対象範囲は表示状態として維持する。対象範囲が`現在のプロジェクトグループ`なら、その裏付けとなる1groupの`ProjectSelection`も維持する
+  - コマンドパレットはHistory / Pinnedそれぞれの`絞り込み...`、`並び順を変更...`、`表示方法を変更...`へ集約する。個別の並び順、表示単位、プロジェクト表示・範囲、ソース、表示対象、タグ切替はパレットから隠すが、コマンドID・キーバインド・メニュー操作は維持する。絞り込み解除と設定・検索・再読み込みなどの主要操作は残す。新しいQuickPickは`src/ui/viewOptionsPicker.ts`で固定順・現在値を表示し、一項目だけの変更を既存の適用処理へ渡す。キャンセル時は無変更、workspaceの有無は適用時に再検査する
   - 複数選択で開く / エクスポート / Promote / Delete / 非表示 / 再表示が可能。Codex / Claude Code の混在選択を許可し、Ctrl / Cmd での追加・解除と Shift での連続範囲選択はソース種別で分断しない
   - 非表示は拡張機能内のメタデータであり、通常履歴と Codex アーカイブの双方に適用する。元の JSONL は変更しない
   - Codex アーカイブ済みセッションは、表示対象が `通常＋アーカイブ` / `アーカイブのみ` / `すべて` のときに表示し、アイコン / 説明 / tooltip で通常履歴と区別する
@@ -180,7 +215,7 @@
 - `Undo Last Action`: delete / pin / annotation / tag 操作などを 1 手戻す
 - `Edit Session Annotation`: タグ / ノート編集
 - `Export Sessions`: 生 JSONL または Markdown transcript を出力。生 JSONL のフォルダ出力には対象セッションの `session-metadata.json` を併記する
-- `Import Sessions`: フォルダ単位で `.jsonl` を再帰取り込みし、manifest V2が宣言する `session-metadata.json` があれば検証後に復元確認を出す。manifest V1も従来どおり受理する
+- `Import Sessions`: フォルダ単位で `.jsonl` とCodexの `.jsonl.zst` を再帰取り込みし、manifest V2が宣言する `session-metadata.json` があれば検証後に復元確認を出す。manifest V1も従来どおり受理する
 
 ### 3.2.1 CLI 再開
 
@@ -294,8 +329,8 @@
 - 表示対象に一致しない hit を先に除外してから `search.maxResults` を適用するため、対象内の表示件数が最大件数に達する
 - PDF / Office / binary / base64 document の内容や、Codex file reference の参照先ファイル内容は検索インデックスへ入れない
 - 保存済み検索:
-  - 実行: 保存済み検索 QuickPick で検索語を選択し、保存済みの検索語だけを再利用する。検索対象ロールと大文字小文字の扱いは現在設定を使う
-  - 保存: 直近の検索語だけを保存する
+  - 実行: 保存済み検索 QuickPick で選択する。検索語のみのプリセットは現在のHistory条件を使い、条件付きプリセットは保存された日付・プロジェクト・source・表示対象・tag・圧縮状態をHistory/Searchへ適用する。Pinnedには適用せず、検索対象ロールと大文字小文字の扱いはどちらも現在設定を使う
+  - 保存: 「検索語のみ」「検索語と絞り込み条件」を選択する。保存する条件は表示済み検索結果のsnapshotで、保存時の日付を固定する。設定が無効な必須source・archive・圧縮履歴や不正条件を持つプリセットは、対象を広げず実行できない理由を表示する
   - 削除: 保存済み検索 QuickPick の項目右側にあるゴミ箱ボタンで個別削除する。Search ヘッダーには削除専用ボタンを置かない
 - 検索履歴:
   - 全体検索、履歴ビュー内検索、ファイル変更履歴の検索で検索語履歴を共有する
@@ -310,14 +345,14 @@
 
 ### 3.4 キャッシュ / インデックス / 保守
 
-2.14.2の現行値は次のとおり。各機能の導入時の更新番号と区別し、計算規則を更新した場合は実装の定数とこの表を合わせる。
+2.15.0の現行値は次のとおり。各機能の導入時の更新番号と区別し、計算規則を更新した場合は実装の定数とこの表を合わせる。
 
 | 対象 | 実装の定数 | 現行値 |
 | --- | --- | ---: |
 | History summary | `SUMMARY_CACHE_ALGO_VERSION` | 24 |
-| Search index | `SEARCH_INDEX_FILE_VERSION` | 26 |
+| Search index | `SEARCH_INDEX_FILE_VERSION` | 27 |
 | Codex Analysis | `SESSION_ANALYSIS_CODEX_PARSER_VERSION` | 16 |
-| Claude Code Analysis | `SESSION_ANALYSIS_CLAUDE_PARSER_VERSION` | 12 |
+| Claude Code Analysis | `SESSION_ANALYSIS_CLAUDE_PARSER_VERSION` | 13 |
 | Codex Branch Navigation | `CODEX_FORK_NAVIGATION_ALGORITHM_VERSION` | 6 |
 
 - 履歴キャッシュ:
@@ -351,7 +386,7 @@
   - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
-  - 内部 file version: 26
+  - 内部 file version: 27
   - 用途: 繰り返し検索を高速化する増分インデックス
   - `search-index.v2.json` が破損して JSON parse error になった場合は、破損内容を退避せず削除し、次回検索時に再構築する
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
@@ -380,7 +415,7 @@
   - 用途: History Insights の統計と Claude Code Branch Navigation の構造化 occurrence を共用する差分解析キャッシュ。履歴キャッシュや検索インデックスの代替にはしない
   - History Insights、Claude Code Branch Navigation、または `Rebuild Cache` を要求したときだけ lazy load / lazy build し、拡張機能の起動や通常の History / Search 表示を待たせない
   - セッションごとの `cacheKey`、source、`mtime`、`size`、parser version と、sessions root / 有効ソースを含む cache context を検証し、変更された entry だけを再解析する
-  - 現行source parser versionはCodex `16` / Claude Code `12`とする。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析する
+  - 現行source parser versionはCodex `16` / Claude Code `13`とする。Claudeの編集結果とBash差分を反映しないversion 12 entryは再解析する。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析する
   - 既存 Chat model builder と同じ抽出結果を使って message index、turn、usage、file change、ツール名別呼び出し回数を集計し、解析側で独自の message index を採番しない
   - 同一セッションの重複解析を共有し、全体の更新、保存、clear は直列化する。進捗通知とキャンセルに対応する
   - 破損 JSON は削除して次回要求時に再生成し、権限エラーなどの read error では既存ファイルを削除しない
@@ -708,7 +743,7 @@
 - Codexの通常のForkは、ローカルFork操作が先頭`session_meta.payload.forked_from_id`に保存したdirect parent IDだけを関係の正本とする。Codex アプリの `ローカルにフォークする` と Codex 拡張機能の `新しいタスクで続ける` のどちらも対象とし、本文の類似、開始時刻、同じ `cwd` だけを根拠に Fork を推定しない
 - 同じ会話IDの指示編集による物理履歴の分岐は、同じ保存root・archive状態内で既存`history_base`規則が一意に解決した親、または3.0.2の検証済み自己完結編集の関係から構成する。選択肢に「編集前」「編集後」を表示し、通常の「Fork」と区別して前後の履歴へ移動できる。先頭質問の編集は存在しない共通メッセージを作らず、連続編集と通常Forkの混在も現在component内で扱う
 - 旧履歴の経路identityはナビゲーションsnapshot内だけで物理cacheKeyのhashから作り、会話identityや永続metadataを変更しない。通常Forkの親IDは、`history_base`が一意に参照する物理履歴の会話IDと一致し、その履歴が経路候補にある場合、その物理履歴へ解決する。それ以外は代表sessionへの従来の解決を維持し、nested Forkの祖先参照を直接の親と取り違えない。agent除外・同一absolute `cwd`・cycle・実ファイル境界の検証を適用する。Codex Branch Navigation algorithmは`6`とし、旧snapshotを再利用しない。legacyの取り消し・自己完結編集・追加入力候補・Claude端末出力の分類を反映した現行cacheはHistory summary `24`、Search index `26`、分析parser Codex `16` / Claude `12`を使う
-- Codex subagent も `forked_from_id` を持つため、検証済みの `session_meta.payload.source.subagent.thread_spawn` を Fork metadata より優先する。`codexAgent` と `codexFork` の両方を持つ session は Agent Runs の対象とし、Branch Navigation の node / edge に含めない
+- Codex subagent も `forked_from_id` を持つため、検証済みの `session_meta.payload.source.subagent.thread_spawn`、または明示的な親ID付き Guardian を Fork metadata より優先する。`codexAgent` と `codexFork` の両方を持つ session は Agent Runs の対象とし、Branch Navigation の node / edge に含めない
 - Agent Runs の設定に依存せず、Codex Branch Navigation の load 前に未確認 agent metadata を補完する。一部を確認できない場合は未確認 session を Fork と推測せず除外し、確認済みの関係だけを partial として扱う
 - parent / child の正規化済み absolute `cwd` が同一の場合だけ local Fork の resolved edge とする。`新しい Worktree にフォークする`、異なる `cwd`、relative path、比較不能な `cwd` は 2.8.0 の対象外とし、通常の Fork 経路へ混在させない
 - direct Fork、同じ parent からの複数 Fork、nested Forkを current session の component 内で表示する。parent 欠落、ID 重複、self reference、cycle、上限超過は任意の別sessionへ補完せず、確認できる経路だけを partial として扱う
@@ -742,7 +777,9 @@
 ### 3.6.5 Agent Runs（Codex 対応）
 
 - `codexHistoryViewer.agentRuns.enabled` が `true` のときだけ有効になる実験的機能で、既定は無効とする。現在は Codex セッションのみに対応する。設定が有効なら Codex のセッションビューのヘッダーへ常に操作アイコンを表示し、関連する実行がない場合は toast で通知する
-- Codex JSONL の `session_meta.payload.source.subagent.thread_spawn` だけを親子関係の正本とし、親セッション ID、depth、agent nickname、agent role、task path を bounded に取得する。本文の類似度、時刻の近さ、同じ `cwd` だけを根拠に関係を推測しない
+- Codex JSONL の `session_meta.payload.source.subagent.thread_spawn`、または `source.subagent.other === "guardian"` と同じ payload の `parent_thread_id` の組を親子関係の正本とする。通常agentの親ID・depth・nickname・role・task pathと、Guardianの親IDをboundedに検証し、Guardianはlanguage-neutralな `codexAgent.kind: "guardian"` で保持する。未知のsourceや不正・欠落した親IDは接続せず、本文・時刻・CWD・`thread_source`だけから推測しない
+- Guardianは既存のAgent Runs設定に従い、task labelを「自動承認レビュー（Guardian）」として表示する。既知の審査入力冒頭をAgent Runsの自動タイトルとして表示せず、カスタムタイトルと保存済みsummary・本文は保持する。新設定やコマンドは追加しない
+- Agent metadataのentry / file markerはversion 2。旧version 1のsummary cacheは再利用し、関係表示の準備時だけ未確認entryの先頭メタデータを限定再走査する。全成功後は再走査を省略し、部分失敗・キャンセル・世代変更は既存の再試行とstale commit防止に従う。summary / search / analysis cacheのversionは変更しない。圧縮履歴が有効な場合はJSONL.zstも同じreaderで扱う
 - relation presentation の準備完了後は、利用可能な親を解決できたサブエージェントだけを History から抑制する。親不明、削除済み親、cycle / self-parent、未確認 metadata のサブエージェントは fail-open で History に残す。Pinned / Search では全サブエージェントを専用アイコン、説明、tooltip で区別して独立表示し、検索・集計の対象集合は変更しない
 - セッションビューの右側ペインは、現在セッションを含む component の root、ancestor、sibling、descendant を縦方向の pre-order tree で表示する。主見出しは利用可能な root session title、副見出しは機能名と関連 agent 件数とする
 - node card は task label、設定されている場合の agent role、必要な場合の session title、開始日時、最終アクティビティ、bookmark / tag / note、直接の子件数を表示する。固定の最小高さを設けず、情報を省略しない範囲で compact にする
@@ -859,8 +896,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 ### 4.1 セッション探索
 
 - `src/sessions/sessionDiscovery.ts`
-  - Codex は `rollout-*.jsonl` を再帰走査で収集する
-  - Codex source と Codex archived sessions が有効な場合は archived root も `rollout-*.jsonl` の再帰走査対象にする
+  - Codex は `rollout-*.jsonl` を再帰走査で収集し、圧縮履歴設定ONなら `.jsonl.zst` も含める。同名両形式は非圧縮を優先する
+  - Codex source と Codex archived sessions が有効な場合は archived root も同じ再帰走査対象にする
   - 収集結果には `rootKind` / `rootPath` を付与し、通常 Codex と archived Codex を区別する
   - Claude Code は `.claude/projects/<project>/<session>.jsonl` の 2 階層構造のみを対象にする
   - 有効rootまたは再帰走査中のsubtreeを読み取れなかった場合は失敗scope数を返し、空inventoryと区別する。root自体のFileNotFoundだけは存在しないsource rootとして扱う
@@ -934,8 +971,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 - `src/services/autoRefreshService.ts`
   - 履歴の自動更新設定 (`codexHistoryViewer.autoRefresh.enabled`) が `true` のときだけ FileSystemWatcher を作成する
-  - Codex は `**/rollout-*.jsonl`、Claude Code は `*/*.jsonl` を監視する
-  - Codex source と Codex archived sessions が有効な場合は archived root にも `**/rollout-*.jsonl` watcher を作成する
+  - Codex は `**/rollout-*.jsonl`（圧縮履歴設定ONなら `**/rollout-*.jsonl{,.zst}`）、Claude Code は `*/*.jsonl` を監視する
+  - Codex source と Codex archived sessions が有効な場合は archived root にも同じpatternのwatcherを作成する
   - watcher root signature には `rootKind` を含め、通常 Codex と archived Codex の root を区別する
   - watcher イベントは即 refresh せず、変更された `fsPath` を pending 集合に入れて debounce / min interval を適用する
   - refresh callback には変更された `fsPath` の配列を渡す
@@ -1010,7 +1047,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - Codex は旧形式の `patch_apply_end` と新形式の `item_completed` / `FileChange` を共通正規化し、`apply_patch` 入力との重複に加えて移行期に両形式が同じ変更を表す場合の重複 diff も避ける
   - 新形式の `FileChange` は `status === "completed"` の場合だけ成功として扱い、旧形式は明示的な失敗情報がない履歴との後方互換性を維持する
   - `apply_patch verification failed` など失敗出力がある場合は成功 diff として扱わない
-  - Claude Code は `Edit` / `MultiEdit` / `Write` から復元可能な diff だけを `ChatPatchEntry` 相当へ変換する
+  - Claude Codeは共通の `claudeFileChanges` trackerで `Edit` / `MultiEdit` / `Write` の結果とBashの `bashEditDiff` を正規化する。失敗・未適用・中断を除外し、Writeの更新は結果の変更種別・差分・変更前本文に基づいて復元する。結果欠落は未確認、共有差分と部分取得は注記付きで表示する。空ファイルの確定した作成・削除は0行の変更として表示できる
   - 絶対パス、workspace 相対パス、session cwd 相対パス、move / rename の before / after path を正規化して照合する
   - Windows では大小文字差と区切り文字差を吸収する
 - `src/fileHistory/fileChangeHistoryPanelManager.ts`
@@ -1158,11 +1195,12 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 ### 4.6.2 Agent Runs（Codex）実装
 
 - `src/agents/codexAgentMetadata.ts` / `src/agents/codexAgentRunsTypes.ts`
-  - `thread_spawn` の外部入力を検証し、親 rollout ID、recorded depth、task path、nickname、role だけを bounded metadata として保持する
+  - `thread_spawn` の外部入力を検証し、親 rollout ID、recorded depth、task path、nickname、role を bounded metadata として保持する。Guardianは明示的なsourceとトップレベルの親IDを検証し、kindと親IDだけを保持する
+  - Guardianのkindもsummaryのpresentation / durable cache fingerprintに含め、種別だけの訂正でもIndexと表示を更新する。task labelの翻訳はTree / ChatのUI境界で行い、永続metadataには表示文字列を保存しない
   - raw prompt、response、tool output、absolute session path は relation ID や表示名として使用しない
 - `src/services/historyService.ts` / `src/sessions/sessionSummary.ts`
   - 新規・更新 Codex session の通常 summary 作成時に agent metadata を同時抽出する
-  - 既存 `cache.v9.json` は設定無効時もそのまま利用し、有効化時だけ未確認 entry の `session_meta` を bounded scan して metadata marker version 1 を補完する。成功済み entry は再走査せず、全 Codex entry を確認できた場合だけ file marker を付ける
+  - 既存 `cache.v9.json` は設定無効時もそのまま利用し、有効化時だけ未確認 entry の `session_meta` を bounded scan して metadata marker version 2 を補完する。旧version 1も未確認として扱い、成功済み entry は再走査せず、全 Codex entry を確認できた場合だけ file marker を付ける
   - metadata backfill は通常の History summary、mtime、size、Search Index、Session Analysis Index を再生成しない。read / save の部分失敗では確認済み結果を利用しつつ、未確認 entry を次回再試行できる状態にする
   - process-local の Index / cache snapshot は構築時の History config key と generation に結び付ける。現在設定、要求設定、Index構築時設定、cacheのtime zone keyが一致する場合だけcurrentと判定し、date basis / title source変更後の旧IndexをAgent Runsへ流用しない
 - `src/agents/codexAgentRunsService.ts`
@@ -1255,7 +1293,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 有効なV2 importはJSONLとmetadataへの全書き込み前に事前計画し、modalで`すべて復元` / `セッションデータのみ` / 既存重複対象がある場合の`メタデータのみ` / キャンセルを選ぶ。キャンセル時は何も変更せず、`メタデータのみ`はJSONLを変更しない
   - metadata保存成功後のHistory再読込に失敗してもrestore失敗へ読み替えず、確定済みmetadataを維持して手動refreshを案内する
 - View / filter state
-  - Historyの日付 / `ProjectSelection` / source / tag / `displayTarget` は`HistoryFilterStateV3`として`workspaceState`に保存する。`ProjectSelection`がHistory / Searchの実効project集合の正本で、project display / project scope / view modeはV3の対象集合に含めず独立して保存する。`historyProjectScope=currentGroup`は、V3 selectionが現在workspaceのcanonical group 1件と一致する場合だけ有効なtoolbar由来状態とする
+  - Historyの日付 / `ProjectSelection` / source / tag / `displayTarget` / compressionは`HistoryFilterStateV3`として`workspaceState`に保存する。compressionは`all` / `compressed` / `uncompressed`で、旧データの未指定は`all`として扱う。`ProjectSelection`がHistory / Searchの実効project集合の正本で、project display / project scope / view modeはV3の対象集合に含めず独立して保存する。`historyProjectScope=currentGroup`は、V3 selectionが現在workspaceのcanonical group 1件と一致する場合だけ有効なtoolbar由来状態とする
   - 初回は`HistoryFilterStateV2`とarchive preferenceからV3へ移行する。V2のsourceがClaudeのみの場合は、V2本体の実効値`archiveLocation=all`ではなく、別保存されていたCodex用archive preferenceを5状態preferenceへ引き継ぐ。Reload時はV3とproject scopeを両方復元し、current-group不変条件を検証する。不一致ならV3 selectionを安全な明示条件として維持してscopeだけ`all`へ正規化し、scopeが`all`でも明示selectionは保持する。scopeが`all`のときにV3 selectionから`currentGroup`を推測しない
   - V3が破損している場合は旧条件へfallbackせず`ProjectSelection.none`、`displayTarget=activeVisible`、scope=`all`を使う。破損値から意図しない非表示セッションを露出させない
   - date / source / tag / display targetだけの変更ではproject selectionを維持し、現在workspace groupとの一致が続く場合だけ`currentGroup` scopeも維持する。不一致またはworkspaceなしならselectionを変えずscopeだけ`all`へ正規化する。明示project選択、History InsightsからのHistory適用、drill-downではscopeを`all`へする。clearはscopeが`currentGroup`なら現在group selectionを維持する
@@ -1267,8 +1305,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `pinnedSourceFilter` の初回未保存時は `historySourceFilter` を初期値として移行し、`pinnedDisplayTargetPreference` の初回未保存時は従来の `pinnedArchiveLocationFilter`（それも未保存なら `archiveLocationFilter`）を対応するvisible系表示対象へ移行する
   - プロジェクト判定用の key は `normalizeProjectKey()` で正規化し、全 OS で大文字小文字を区別しない
 - `src/services/searchPresetStore.ts`
-  - 保存済み検索語を `globalState` に保存する
-  - 保存済み検索はプロジェクト単位に分けず全体共有とし、検索語だけを保存 / 表示 / 再利用する
+  - 検索語と任意の`HistoryFilterStateV3` snapshotを`globalState`の既存keyへ保存する。旧プリセットは検索語のみとして読み、壊れたscopeは未指定へ読み替えず`invalidScope`として実行を止める
+  - 保存済み検索はプロジェクト単位に分けず全体共有とする。同じ検索語でも条件が異なれば別プリセットとして扱い、同じ検索語と条件の保存は既存項目を更新する。保存・削除はstore内で直列化し、tagやprojectの集合順序では重複を作らない
 - `src/services/searchHistoryStore.ts`
   - 検索履歴を `workspaceState` に保存する
   - 検索履歴は project bucket ごとに最大 20 件を保持する
@@ -1380,7 +1418,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `chatModelBuilder.ts` は Claude Code の通常user入力をturn開始、同一`message.id`のassistant block列にある`stop_reason=end_turn`の終端を完了として扱う。tool result、`isMeta`、sidechain、queued prompt、cross-session受信は偽のturnを開始せず、request interruptionはactive turnを中断する
   - Claude Codeのtask notificationは`tool-use-id`から元のtool callとturnを解決し、完了後にassistant処理が継続した場合も元の開始時刻とturn IDを保って再開する。対応IDがない場合はactive turn、直近turnの順に限定して補完する
   - `chatModelBuilder.ts` は Claude Code の `message.model` / `message.usage` から usage 行を生成し、同一assistant応答の連続blockにあるusageを1件へ畳み、解決済みturnへ帰属させる
-  - `chatTurnTimelineMode=basic` / `live`ではClaude CodeのEdit / MultiEdit / Writeをturnごとに1枚のdiffカードへまとめ、同一正規化対象パスの操作量とhunkを履歴順に合算する。Writeの新規作成・上書きは推測せず、`off`では従来のtool call単位カードとturnなし表示を維持する。compact summaryと遅延詳細読込は同じturn・path照合を使う
+  - `chatTurnTimelineMode=basic` / `live`ではClaude CodeのEdit / MultiEdit / Write / Bash差分をturnごとに1枚のdiffカードへまとめ、同じ対象パス・確認状態の操作量とhunkを結果の解釈後に合算する。Writeの新規作成・上書きは推測せず、`off`ではtool call単位カードとturnなし表示を維持する。compact summaryと遅延詳細読込は同じ共通trackerを使い、失敗したentryへの詳細要求を同じパスの別編集へ転送しない
   - `chatModelBuilder.ts` は `session_meta` などから CWD / Git ブランチ / Git コミット / dirty 状態を environment 行に変換し、同一 snapshot の重複表示を抑制する
   - `chatModelBuilder.ts` は Codex の `custom_tool_call` / `custom_tool_call_output`、`local_shell_call`、`web_search_call`、`image_generation_call` を tool カードとして扱う
   - `src/sessions/codexFileChangeEvents.ts` は旧 `patch_apply_end` と新 `item_completed` / `FileChange` を共通イベントへ正規化し、成功判定と旧新形式間のboundedな一対一重複排除をSession Viewer、File AI Change History、検索、History Insights、Handoffで共有する
@@ -1662,14 +1700,16 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 ### 5.1 セットアップ
 
-依存関係のインストール、テスト、リリース作業には Node.js 22.12.0 以降を使用する。直接同梱する KaTeX 0.18.5 のCLI用依存 `commander@15` が Node.js 22.12.0 以降を要求するためである。`commander` は開発時だけ導入され、`.vscodeignore` によりVSIXへは含めないため、VS Code拡張の実行環境要件は変更しない。
+依存関係のインストール、テスト、リリース作業には Node.js 22.12.0 以降を使用する。直接同梱する KaTeX 0.18.9 のCLI用依存 `commander@15` が Node.js 22.12.0 以降を要求し、パッケージ作成用の `@vscode/vsce@4.0.0` も Node.js 22 以降を要求するためである。これらの開発用ツールはVSIXへ含めず、VS Code拡張の実行環境要件は変更しない。
+
+TypeScript は `6.0.3` を使用し、`module` / `moduleResolution` は `Node16` とする。package は CommonJS のままであり、拡張の出力形式も維持する。TypeScript 6で非推奨となった旧Node解決方式は使用しない。Compiler APIの互換性を維持するため、安定した同APIを提供しないTypeScript 7への移行は保留する。VS Codeの型定義は対応下限の `1.90.0` に合わせて `~1.90.0` とし、Nodeの型定義は実行環境に合わせて20系を維持する。
 
 ```powershell
 # 依存関係をインストールします
 npm install
 ```
 
-KaTeX は Webview 用の配布物を `media/vendor/katex/` に同梱するため、`package.json` の exact version と同梱物を別々に更新してはならない。2.13.0 の直接同梱版は `katex@0.18.5` とする。KaTeX の version を変更した後は明示的に同期し、第三者コード、CSS、LICENSE、font の差分をレビューする。
+KaTeX は Webview 用の配布物を `media/vendor/katex/` に同梱するため、`package.json` の exact version と同梱物を別々に更新してはならない。2.15.0 の直接同梱版は `katex@0.18.9` とする。KaTeX の version を変更した後は明示的に同期し、第三者コード、CSS、LICENSE、font の差分をレビューする。
 
 ```powershell
 # インストール済みKaTeXと同梱物の一致を確認します
@@ -1681,7 +1721,9 @@ npm run sync:katex
 
 `check:katex` は `package.json`、`package-lock.json`、`node_modules/katex` の version と、JavaScript、CSS、LICENSE、全 woff2 の内容を照合する。`media/vendor/katex/**` は `.gitattributes` で Git の text 変換対象から外し、`core.autocrlf` による byte 差を防ぐ。`THIRD_PARTY_NOTICES.txt` では直接同梱する KaTeX を独立した項目として明示し、既存方針どおり公開 notice には version を重複記載せず exact version は package manifest と lockfile で管理する。`npm audit` は手動同梱物の実体を検査しないため、この確認の代用にはならない。lint と VS Code prepublish は `check:katex` を自動実行し、不一致時はファイルを変更せず失敗する。
 
-配布する Markdown renderer は `markdown-it@14.3.1` とする。14.3.1 は 15.0.1 の linkification に関する二次計算量のセキュリティ修正を v14 へ backport した版であり、Session Viewer で有効な通常 URL の linkification にも必要となる。v15 は package 構成と linkification の既定値を含む破壊的変更があるため 2.13.0 では採用せず、既存の fuzzy email / `mailto:` 自動検出無効化と link validation を維持する。
+配布する Markdown renderer は `markdown-it@14.3.2` とする。14.3.1 の linkification 修正に加え、15.0.2 の smartquotes に関する二次計算量のセキュリティ修正を v14 へ backport した版を使用する。v15 は package 構成と linkification の既定値を含む破壊的変更があるため採用せず、既存の fuzzy email / `mailto:` 自動検出無効化と link validation を維持する。
+
+Session Viewerでは`typographer`を有効にしていないため、smartquotes修正の取り込みと本拡張での攻撃再現は区別する。Mermaid 11.17.2へ同梱するDOMPurifyは3.4.16で、既存のSVG検証と描画制限を維持する。現在の配布依存バージョンと公開向けの説明は`SECURITY.md`、著作権・ライセンスの表記は`THIRD_PARTY_NOTICES.txt`に合わせる。
 
 KaTeX 0.18.0 では一部の内部 CSS class に `katex-` prefix が追加された。Chat Webview の独自 CSS は公開 class の `.katex` と `.katex-display` だけを参照し、内部 API も使用しない。今後も KaTeX が生成する HTML と stylesheet の class を一致させるため、JavaScript と CSS を別versionへ分離せず、同じ package から同時に同期する。内部 class へ依存する独自 selector や HTML 後処理は追加しない。
 
@@ -1716,17 +1758,16 @@ git diff --check
 
 `npm run compile`は`dist/`を削除して再生成するため、生成済みJavaScriptを参照する回帰テストと同時実行しない。compile完了後にテストを開始する。文書だけの変更では、版番号・日付・UI文言・相対リンク・UTF-8（BOMなし）／LF・差分を確認する。
 
+2.15.0の `compile` は最後に `npm run build:zstd` を実行し、CommonJSのportable decoderを同梱する。ライセンスコメントの版数は導入済みパッケージから取得し、manifestのexact pinとの一致を検証する。`watch`だけではdecoderを生成しないため、初回は `compile` を実行する。依存の取得は通常どおり `npm ci` で行う。
+
 ### 5.3 VSIX 作成
 
-```powershell
-# VSIX を作成します
-npm run package
-```
-
+- リリース用 VSIX の生成時は必ず `--out` で出力ファイルを明示する。出力先を指定しない package 処理は禁止し、既存のリリース用 VSIX は上書き・削除・移動・改名しない
+- リリース用 VSIX の生成と外部への公開は、それぞれ明示的に依頼された場合のみ行う。生成時は既存ファイルと衝突しない出力先を指定し、リリース済み VSIX を置換しない
 - `scripts.package` は `vsce package --allow-missing-repository` を実行する。VS Code prepublish は compile より前に `check:katex` を実行し、依存パッケージと同梱物が不一致なら VSIX 作成を中止する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 - README用の `media/screenshot*.png` は配布VSIXへ含めない。README内の画像はpackage時にremote URLへ変換されるため、`.vscodeignore`で除外する
-- ローカル最終確認用の `.root-review-*` は `.gitignore` と `.vscodeignore` の双方で除外する。リリース前は完成したVSIXを展開し、private docs、test、source map、別VSIX、レビュー用一時ファイルが混入していないことを確認する
+- ローカル最終確認用の `.root-review-*` は `.gitignore` と `.vscodeignore` の双方で除外する。リリース前は完成したVSIXを展開し、private docs、source map、別VSIX、レビュー用一時ファイル等の開発専用ファイルが混入していないことを確認する
 - リリース時はREADMEの最新版・What's New・Security、CHANGELOG、SECURITYの推奨版・対策・更新日を照合する。依存の追加・差し替えではTHIRD_PARTY_NOTICESの対象と著作権・ライセンス表記も確認する。DEVELOPMENTの現行cache・解析versionは実装の定数と一致させ、過去版のリリース記録は書き換えない
 - 文書を直した後はVSIXへの収録有無を確認する。README、CHANGELOG、SECURITY、THIRD_PARTY_NOTICES、docs/commands.mdは収録対象、DEVELOPMENTと私的設計書は除外対象である。収録文書を変更した場合は再作成したVSIXのハッシュと差分を改めて確認する
 
@@ -2389,12 +2430,12 @@ npm run package
 - `引き継ぎファイルを削除` 実行後、Status の Handoff 件数 / 容量が更新される
 - `History` の日付 / プロジェクト / ソース / 表示対象 / タグ絞り込みが期待どおり動く
 - `History` の表示モードを `日付別` / `セッション一覧` で切り替えられ、選択中セッションが可能な範囲で新しいツリー上へ追従する
-- `History`のMore Actionsでは、開始日時／最終メッセージ日時の新しい順・古い順、名前の昇順・降順、ファイルサイズの大きい順・小さい順の8項目がフラット表示され、現在値には末尾の`✓`が表示される。表示単位、プロジェクト表示、プロジェクト範囲、ソース、セッションの表示対象は1階層のサブメニューから選択できる。表示単位は`日付別`→`セッション一覧`、プロジェクト範囲は`現在のプロジェクトグループ`→`すべて`の固定順で、選択を変えても位置は変わらない。ファイルサイズ不明のセッションは方向にかかわらず末尾、プロジェクト別表示では表示対象セッションの合計サイズ順になる
+- `History`のMore Actionsでは、開始日時／最終メッセージ日時の新しい順・古い順、名前の昇順・降順、ファイルサイズの大きい順・小さい順の8項目がフラット表示され、現在値には末尾の`✓`が表示される。表示単位、プロジェクト表示、プロジェクト範囲、ソース、セッションの表示対象、圧縮状態は1階層のサブメニューから選択できる。表示単位は`日付別`→`セッション一覧`、プロジェクト範囲は`現在のプロジェクトグループ`→`すべて`、圧縮状態は`圧縮・非圧縮の両方`→`圧縮のみ`→`非圧縮のみ`の固定順で、選択を変えても位置は変わらない。ファイルサイズ不明のセッションは方向にかかわらず末尾、プロジェクト別表示では表示対象セッションの合計サイズ順になる
 - Date Basis と日付系 sort 軸が異なる場合、History / Pinned の session row は sort 軸の日時を表示し、tooltip は Date Basis 側の日時を補足する。`titleOnly` は Date Basis 側のみ、`compact` / `full` は両方の日時を表示する
 - `History` の More Actions では、ソースが 1 種類だけ有効な場合にsource選択が表示されず、ソースが `Claude Code` の場合も表示対象groupは残って `通常のみ` / `非表示のみ` / `すべて` の3状態だけが選択できる
 - `History`のプロジェクト表示を`一覧表示` / `プロジェクト別表示`で切り替えられ、対象範囲を`すべて` / `現在のプロジェクトグループ`で切り替えられる。Reload後も対象範囲のアイコン、More Actionsの現在値、実際の`ProjectSelection`が一致する
 - `History` の `プロジェクト別表示` で、`セッション一覧` と `日付別` の階層がそれぞれ期待どおりになる
-- `History`の絞り込み解除は、対象範囲以外が非絞り込みならdisabled表示になり、日付 / 明示project selection / ソース / 表示対象 / タグを解除して、プロジェクト表示と対象範囲は解除しない。対象範囲がcurrent groupなら裏付けselectionも維持する
+- `History`の絞り込み解除は、対象範囲以外が非絞り込みならdisabled表示になり、日付 / 明示project selection / ソース / 表示対象 / タグ / 圧縮状態を解除して、プロジェクト表示と対象範囲は解除しない。対象範囲がcurrent groupなら裏付けselectionも維持する
 - `Pinned` のプロジェクト表示を `一覧表示` / `プロジェクト別表示` で切り替えられ、対象範囲を `すべて` / `現在のプロジェクトグループ` で切り替えられる。History のプロジェクト表示には影響しない
 - `Pinned` の日付 / プロジェクト / ソース / 表示対象 / タグ絞り込みが期待どおり動き、History / Search 側の絞り込みに影響しない
 - `Pinned` のソース切替を `all` / `codex` / `claude` で切り替えられ、History 側のソース切替に影響しない
@@ -2416,7 +2457,7 @@ npm run package
 - History / Pinned のプロジェクトノード右クリックからプロジェクト関連付けを設定 / 解除でき、関連プロジェクトとしてまとめて表示される
 - プロジェクト関連付けの設定 / 解除を `Undo Last Action` で戻せる
 - 全体検索は History の表示対象範囲、タグ、Codex / Claude Code などの種類、アーカイブ対象、日付に沿って検索される
-- 検索履歴候補と保存済み検索には検索語だけが表示され、検索対象ロールや大文字小文字の扱いは現在設定を使う。項目選択は検索実行、ゴミ箱ボタンは個別削除として動く
+- 検索履歴候補は検索語だけを保存する。保存済み検索では「検索語のみ」と「検索語と絞り込み条件」をそれぞれ保存・再実行し、後者の日付・プロジェクト・source・表示対象・tag・圧縮状態がHistory/Searchへ再適用され、Pinnedは変化しないことを確認する。検索対象ロールや大文字小文字の扱いは現在設定を使い、項目選択は検索実行、ゴミ箱ボタンは個別削除として動く
 - Webview 内検索の候補 dropdown は、非空入力で一致する候補が無くなった場合に閉じ、「検索履歴はありません」を検索結果へ重ねない
 - Search が空の状態で History 側の絞り込みを変更しても Search 結果が復活せず、既存の Search 結果がある場合だけ実効値変更時に再検索される
 - `preview.tooltipMode` を `full` / `compact` / `titleOnly` で切り替えると、ツリー項目ツールチップの表示量が変わる

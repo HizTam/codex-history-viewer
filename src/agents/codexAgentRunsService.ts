@@ -100,7 +100,11 @@ export class CodexAgentRunsService {
     return !current || !graph.parentByChildIdentity.has(current.identityKey);
   }
 
-  public getPresentation(session: SessionSummary, fallbackLabel: string): CodexAgentPresentation {
+  public getPresentation(
+    session: SessionSummary,
+    fallbackLabel: string,
+    guardianLabel: string = fallbackLabel,
+  ): CodexAgentPresentation {
     if (!this.isPresentationEnabled()) {
       return {
         relation: "none",
@@ -124,7 +128,7 @@ export class CodexAgentRunsService {
     );
     return {
       relation,
-      taskLabel: resolveCodexAgentTaskLabel(metadata, fallbackLabel),
+      taskLabel: resolveCodexAgentTaskLabel(metadata, fallbackLabel, guardianLabel),
       directChildCount,
       ...(parentSession ? { parentSession } : {}),
       parentUnavailable,
@@ -141,7 +145,11 @@ export class CodexAgentRunsService {
     return this.getPresentation(session, "").relation !== "none";
   }
 
-  public buildComponent(session: SessionSummary, fallbackLabel: string): CodexAgentComponent {
+  public buildComponent(
+    session: SessionSummary,
+    fallbackLabel: string,
+    guardianLabel: string = fallbackLabel,
+  ): CodexAgentComponent {
     if (!this.isPresentationEnabled()) return emptyComponent();
     const graph = this.graph!;
     const current = graph.sessionByIdentity.get(session.identityKey);
@@ -215,7 +223,7 @@ export class CodexAgentRunsService {
         unavailableParent: false,
         isCurrent: candidate.identityKey === current.identityKey,
         isSubagent: Boolean(metadata),
-        taskLabel: resolveCodexAgentTaskLabel(metadata, fallbackLabel),
+        taskLabel: resolveCodexAgentTaskLabel(metadata, fallbackLabel, guardianLabel),
         agentRole: metadata?.agentRole ?? "",
         directChildCount: graph.childrenByParentIdentity.get(candidate.identityKey)?.length ?? 0,
       });

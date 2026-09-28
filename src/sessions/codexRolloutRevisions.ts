@@ -8,7 +8,7 @@ import { normalizeCodexForkThreadId, sanitizeCachedCodexForkMetadata } from "../
 const sourceLookupByInventory = new WeakMap<readonly SessionSummary[], ReadonlyMap<string, SessionSummary>>();
 const revisionParentsByInventory = new WeakMap<readonly SessionSummary[], ReadonlyMap<string, SessionSummary>>();
 const UUID_PART = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const PHYSICAL_ROLLOUT_PATTERN = new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${UUID_PART})(?:_(${UUID_PART}))?\\.jsonl$`, "iu");
+const PHYSICAL_ROLLOUT_PATTERN = new RegExp(`^rollout-\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-(${UUID_PART})(?:_(${UUID_PART}))?\\.jsonl(?:\\.zst)?$`, "iu");
 
 function canonicalRolloutId(session: SessionSummary): string | undefined {
   const match = PHYSICAL_ROLLOUT_PATTERN.exec(path.basename(session.fsPath));

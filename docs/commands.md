@@ -3,8 +3,11 @@
 This document lists user-facing command IDs and what each command does.
 
 Notes:
+
 - Labels shown in VS Code can appear in English or Japanese based on your `codexHistoryViewer.ui.language` setting.
 - This page focuses on base command IDs (for example, `codexHistoryViewer.search`) and excludes internal UI alias commands (`codexHistoryViewer.ui.*`).
+
+Starting with 2.15.0, the Command Palette groups History and Pinned view options into **Filter...**, **Change Sort Order...**, and **Change Presentation...** commands for each view. Individual sort, layout, project display/scope, source, display-target, tag, and compression choices remain in the pane menus instead of appearing separately in the palette. The existing command IDs listed below remain available for custom keybindings. Clear-filter commands and primary actions such as settings, search, and refresh remain in the palette.
 
 ## Refresh and Maintenance
 
@@ -27,7 +30,12 @@ Notes:
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
-| Filter History... | `codexHistoryViewer.filterHistory` | Opens the History filter picker (date range/projects/source/display target/tags). |
+| Filter History... | `codexHistoryViewer.filterHistory` | Opens the History filter picker (date range/projects/source/display target/tags/compression). |
+| Change History Presentation... | `codexHistoryViewer.configureHistoryView` | Chooses a layout, project display, or project scope option to change while preserving other conditions. |
+| Change Pinned Presentation... | `codexHistoryViewer.configurePinnedView` | Chooses a Pinned project display or scope option to change without affecting History. |
+| History Compression: Compressed + Uncompressed | `codexHistoryViewer.setHistoryCompressionAll` | Clears the compression filter. Available from History's **... > Compression** menu. |
+| History Compression: Compressed Only | `codexHistoryViewer.setHistoryCompressionCompressed` | Shows compressed histories only. If compressed histories are disabled, explains why this option is unavailable and leaves the filters unchanged. |
+| History Compression: Uncompressed Only | `codexHistoryViewer.setHistoryCompressionUncompressed` | Shows uncompressed histories only, combined with the other History filters. |
 | Filter History by Tags... | `codexHistoryViewer.filterHistoryByTag` | Applies a tag-based filter to the History view. |
 | Filter by Current Project | `codexHistoryViewer.filterHistoryCurrentProject` | Switches History to the session-list display and toggles its scope between all projects and the current project group. |
 | Show by Project | `codexHistoryViewer.showHistoryProjectGrouped` | Groups History sessions by project and clears the current-project-group scope. |
@@ -43,7 +51,7 @@ Notes:
 | Toggle Claude Code Source Filter | `codexHistoryViewer.toggleHistorySourceClaude` | Toggles Claude Code in the active source filter. |
 | Cycle Source Filter (Codex + Claude Code -> Codex -> Claude Code) | `codexHistoryViewer.cycleHistorySourceFilter` | Cycles History through all enabled sources, Codex only, and Claude Code only. |
 | Show All Sources | `codexHistoryViewer.clearHistorySourceFilter` | Clears source-only filtering and shows enabled sources. |
-| Clear History Filters | `codexHistoryViewer.clearHistoryFilter` | Resets History date, explicit project, source, display-target, and tag filters. The Current Project Group scope remains active when selected. |
+| Clear History Filters | `codexHistoryViewer.clearHistoryFilter` | Resets History date, explicit project, source, display-target, tag, and compression filters. The Current Project Group scope remains active when selected. |
 | Clear History Tag Filter | `codexHistoryViewer.clearHistoryTagFilter` | Removes the active History tag filter. |
 | Cycle History Display Target | `codexHistoryViewer.filterHistoryDisplayTarget` | Cycles History and its Search scope through the available display targets. With Codex archive support enabled, the order is active only, active + archived, archived only, hidden only, and all. |
 | History Display Target: Active Only | `codexHistoryViewer.setHistoryDisplayTargetActiveVisible` | Shows non-hidden sessions from normal session locations only. |
@@ -69,10 +77,14 @@ Notes:
 
 Archived display targets are unavailable when Codex archived sessions are disabled or a view is limited to Claude Code. In those cases, the cycle contains Active Only, Hidden Only, and All.
 
+Compression choices are also available in **Filter History...**. They affect the History target used by Search and History Insights; Pinned retains its own filters. Reading Codex `.jsonl.zst` files requires the experimental **Include compressed Codex histories** setting, which is disabled by default.
+
 ## Sorting Commands
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
+| Change History Sort Order... | `codexHistoryViewer.changeHistorySortOrder` | Chooses from eight History sort orders, marks the current choice, and leaves it unchanged on cancellation. |
+| Change Pinned Sort Order... | `codexHistoryViewer.changePinnedSortMode` | Chooses from ten Pinned sort orders, marks the current choice, and leaves it unchanged on cancellation. |
 | Sort History by Started Date (Newest First) | `codexHistoryViewer.setHistorySortCreatedDesc` | Sorts History by session start time, newest first. |
 | Sort History by Started Date (Oldest First) | `codexHistoryViewer.setHistorySortCreatedAsc` | Sorts History by session start time, oldest first. |
 | Sort History by Last Activity Date (Newest First) | `codexHistoryViewer.setHistorySortLastActivityDesc` | Sorts History by last activity time, newest first. |
@@ -106,7 +118,9 @@ Archived display targets are unavailable when Codex archived sessions are disabl
 | Clear Project Search History... | `codexHistoryViewer.searchClearHistory` | Clears the current project's stored search history after confirmation. |
 | Manage Search History... | `codexHistoryViewer.searchManageHistory` | Opens the current project's search history for rerunning or deleting individual queries. |
 | Initialize Search Pane | `codexHistoryViewer.searchClearResults` | Clears current Search results and resets the Search root node. |
-| Save Current Search... | `codexHistoryViewer.searchSavePreset` | Saves the current search query as a saved search. |
+| Save Current Search... | `codexHistoryViewer.searchSavePreset` | Saves the displayed search query alone or together with the filters used for its results. |
+
+Starting with 2.15.0, saving a search offers **Query only** or **Query and filters**. Filters include date, project, source, display target, tags, and compression. Running a preset with filters reapplies them to History and Search without changing Pinned. Saved dates keep their captured values; query-only presets use the current History filters. Both types use the current role and case-sensitivity settings. A preset that requires disabled sources, archived sessions, or compressed histories cannot run until those settings are enabled; the extension explains the missing requirement without widening the scope.
 
 ## Archive Actions
 
@@ -121,12 +135,16 @@ Archived display targets are unavailable when Codex archived sessions are disabl
 | --- | --- | --- |
 | Show File AI Change History | `codexHistoryViewer.openFileChangeHistory` | Opens AI-related change history for a selected workspace file. |
 
+The **File AI Change History** icon on Session Viewer diff cards opens the same view at the selected change, initially loading up to 100 nearby changes. Use **Load more** for the remaining history. A row combining multiple changes jumps to its first included change; an unavailable match displays a notice. The icon is available on both collapsed and expanded file rows when the target can be resolved to a file in the current workspace, independently of the optional Explorer context-menu setting.
+
 ## History Insights and Agent Runs
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
 | Show History Insights | `codexHistoryViewer.showHistoryInsights` | Opens an analytics snapshot for the sessions matching the current History conditions. It is available from the History view header and the Command Palette. |
 | Open Parent Session | `codexHistoryViewer.openCodexAgentParent` | Opens the available parent of a selected Codex sub-agent session. When Agent Runs is enabled, this action appears only in the context menu for a sub-agent whose parent can be resolved; it is hidden from the Command Palette. |
+
+Codex automatic approval reviews (Guardian) with explicit parent metadata use the same Agent Runs actions and visibility rules as other Codex agent sessions. Agent Runs remains experimental and disabled by default.
 
 ## Session Actions
 
@@ -208,3 +226,5 @@ Handoff context-menu actions are shown only when `codexHistoryViewer.handoff.ena
 | --- | --- | --- |
 | Export Sessions... | `codexHistoryViewer.exportSessions` | Exports selected original session data with extension metadata, or exports sanitized Markdown. |
 | Import Sessions... | `codexHistoryViewer.importSessions` | Restores Codex or Claude Code session data from a selected directory and restores accompanying metadata when a valid export manifest is available, with selectable restore scope and duplicate-ID handling. |
+
+Original-data export and import support Codex `.jsonl.zst` histories and preserve their compressed format. When overwriting a history stored in the other format, import converts the incoming data to the destination's format before replacing it. Markdown export reads either format and writes a readable transcript.

@@ -6,6 +6,25 @@ inventory tests. Identical MIT license text is reproduced once; later MIT sectio
 refer to that text while retaining their package-specific copyright notices.
 
 ===============================================================================
+Portable Zstandard runtime
+===============================================================================
+
+Packages:
+  @hpcc-js/wasm-zstd
+  Zstandard (embedded WebAssembly)
+Sources:
+  https://github.com/hpcc-systems/hpcc-js-wasm
+  https://github.com/facebook/zstd
+Licenses:
+  @hpcc-js/wasm-zstd: Apache-2.0
+  Zstandard: BSD-3-Clause
+
+The portable runtime is bundled into dist/vendor/zstd.cjs for compressed Codex
+history reading and import format conversion. The WebAssembly payload is included
+in the bundle. Full copyright notices and license texts for both components are
+reproduced in resources/licenses/wasm-zstd.txt.
+
+===============================================================================
 Mermaid and MIT-licensed runtime components
 ===============================================================================
 

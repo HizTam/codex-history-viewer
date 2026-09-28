@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import * as path from "node:path";
+import { isSessionFile, isCompressedSessionFile, uncompressedSessionPath } from "../utils/sessionFileReader";
 import type { SessionArchiveState, SessionRootKind, SessionSource } from "./sessionTypes";
 import type { PerformanceProbe } from "../performance/performanceCounters";
 
@@ -10,6 +11,7 @@ export interface SessionDiscoveryOptions {
   claudeRoot: string;
   includeCodex: boolean;
   includeCodexArchived: boolean;
+  includeCodexCompressed?: boolean;
   includeClaude: boolean;
   performanceProbe?: PerformanceProbe;
 }
@@ -44,6 +46,7 @@ export async function discoverSessionFiles(options: SessionDiscoveryOptions): Pr
   let failureCount = 0;
 
   const pushUnique = (file: DiscoveredSessionFile): void => {
+    if (file.source === "codex" && isCompressedSessionFile(file.fsPath) && options.includeCodexCompressed !== true) return;
     const key = path.normalize(file.fsPath).toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
@@ -144,6 +147,7 @@ async function collectCodexSessionFiles(
       continue;
     }
 
+    const plainNames = new Set(entries.filter(ent => ent.isFile()).map(ent => ent.name));
     for (const ent of entries) {
       const full = path.join(dir, ent.name);
       if (ent.isDirectory()) {
@@ -151,7 +155,8 @@ async function collectCodexSessionFiles(
         continue;
       }
       if (!ent.isFile()) continue;
-      if (!ent.name.startsWith("rollout-") || !ent.name.endsWith(".jsonl")) continue;
+      if (!ent.name.startsWith("rollout-") || !isSessionFile(ent.name)) continue;
+      if (isCompressedSessionFile(ent.name) && plainNames.has(uncompressedSessionPath(ent.name))) continue;
       results.push(full);
     }
   }

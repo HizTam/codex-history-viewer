@@ -9,6 +9,7 @@ import {
   archiveLocationFromHistoryDisplayTarget,
   historyDisplayTargetFromArchiveLocation,
   isHistoryDisplayTarget,
+  isHistoryCompressionFilter,
 } from "../types/historyFilterState";
 
 export interface ResolvedHistoryInsightsSnapshot {
@@ -128,6 +129,7 @@ export function sanitizeHistoryInsightsSnapshot(value: unknown): HistoryInsights
   if (source !== "all" && source !== "codex" && source !== "claude") return null;
   if (archiveLocation !== "activeOnly" && archiveLocation !== "all" && archiveLocation !== "archivedOnly") return null;
   if (displayTarget !== undefined && !isHistoryDisplayTarget(displayTarget)) return null;
+  if (descriptor.compression !== undefined && !isHistoryCompressionFilter(descriptor.compression)) return null;
   if (displayTarget !== undefined && archiveLocationFromHistoryDisplayTarget(displayTarget) !== archiveLocation) return null;
   if (viewMode !== "date" && viewMode !== "latest") return null;
   if (!isHistoryInsightsSortOrder(sortOrder)) return null;
@@ -150,6 +152,7 @@ export function sanitizeHistoryInsightsSnapshot(value: unknown): HistoryInsights
     dateTimeSettingsKey,
     references,
     descriptor: {
+      ...(descriptor.compression ? { compression: descriptor.compression } : {}),
       date,
       dateRange,
       source,

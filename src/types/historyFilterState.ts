@@ -1,6 +1,17 @@
 import type { ArchiveLocationFilter, SessionSourceFilter } from "../sessions/sessionTypes";
 import { parseDateScopeStrict, type DateScope } from "./dateScope";
 import { parseProjectSelection, type ProjectSelection } from "./projectSelection";
+import { isCompressedSessionFile } from "../utils/sessionFileReader";
+
+export type HistoryCompressionFilter = "all" | "compressed" | "uncompressed";
+
+export function isHistoryCompressionFilter(value: unknown): value is HistoryCompressionFilter {
+  return value === "all" || value === "compressed" || value === "uncompressed";
+}
+
+export function matchesHistoryCompression(fsPath: string, filter: HistoryCompressionFilter = "all"): boolean {
+  return filter === "all" || isCompressedSessionFile(fsPath) === (filter === "compressed");
+}
 
 export const HISTORY_FILTER_STATE_V2_KEY = "codexHistoryViewer.historyFilterState.v2";
 export const HISTORY_FILTER_STATE_V3_KEY = "codexHistoryViewer.historyFilterState.v3";
@@ -30,6 +41,7 @@ export interface HistoryFilterStateV3 {
   source: SessionSourceFilter;
   tags: string[];
   displayTarget: HistoryDisplayTarget;
+  compression?: HistoryCompressionFilter;
 }
 
 export function parseHistoryFilterStateV2(value: unknown): HistoryFilterStateV2 | null {
@@ -76,6 +88,7 @@ export function parseHistoryFilterStateV3(value: unknown): HistoryFilterStateV3 
   if (!date || !projects || !tags) return null;
   if (raw.source !== "all" && raw.source !== "codex" && raw.source !== "claude") return null;
   if (!isHistoryDisplayTarget(raw.displayTarget)) return null;
+  if (raw.compression !== undefined && !isHistoryCompressionFilter(raw.compression)) return null;
   return {
     version: 3,
     date,
@@ -83,6 +96,7 @@ export function parseHistoryFilterStateV3(value: unknown): HistoryFilterStateV3 
     source: raw.source,
     tags,
     displayTarget: raw.displayTarget,
+    ...(raw.compression && raw.compression !== "all" ? { compression: raw.compression } : {}),
   };
 }
 
@@ -94,6 +108,7 @@ export function createHistoryFilterStateV3(input: Omit<HistoryFilterStateV3, "ve
     source: input.source,
     tags: input.tags.slice(0, 12),
     displayTarget: input.displayTarget,
+    ...(input.compression && input.compression !== "all" ? { compression: input.compression } : {}),
   };
 }
 

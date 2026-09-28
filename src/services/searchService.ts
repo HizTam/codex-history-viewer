@@ -26,6 +26,8 @@ import {
   historyDisplayTargetFromArchiveLocation,
   matchesSessionDisplayTarget,
   type HistoryDisplayTarget,
+  type HistoryCompressionFilter,
+  matchesHistoryCompression,
 } from "../types/historyFilterState";
 
 type SearchMode = "plain" | "exact" | "regex";
@@ -80,6 +82,7 @@ export interface HistorySearchScopeSnapshot {
   readonly source: SessionSourceFilter;
   readonly tags: readonly string[];
   readonly displayTarget: HistoryDisplayTarget;
+  readonly compression?: HistoryCompressionFilter;
   readonly defaultRoleFilter: readonly IndexedSearchRole[];
   readonly searchHistoryProjectKey: string;
 }
@@ -91,6 +94,7 @@ export function createHistorySearchScopeSnapshot(params: HistorySearchScopeSnaps
     source: sanitizeSessionSourceFilter(params.source),
     tags: Object.freeze(sanitizeTagFilter(params.tags)),
     displayTarget: params.displayTarget,
+    ...(params.compression ? { compression: params.compression } : {}),
     defaultRoleFilter: Object.freeze(Array.from(sanitizeRoleFilter(params.defaultRoleFilter))),
     searchHistoryProjectKey: params.searchHistoryProjectKey,
   });
@@ -142,6 +146,7 @@ export async function runSearchFlow(
     defaultRoleFilter?: readonly IndexedSearchRole[];
     tagFilter?: readonly string[];
     displayTargetFilter?: HistoryDisplayTarget;
+    compressionFilter?: HistoryCompressionFilter;
     archiveLocationFilter?: ArchiveLocationFilter;
     includeArchivedSessions?: boolean;
     projectScopeCwd?: string | null;
@@ -214,6 +219,7 @@ export async function runSearchFlow(
           )
         : matchProjectByCanonicalKey(s.meta?.cwd, { projectKey, projectScopeKey }, options?.getCanonicalProjectKey)) &&
       matchSource(s, effectiveSourceFilter) &&
+      matchesHistoryCompression(s.fsPath, options?.compressionFilter) &&
       matchesSessionDisplayTarget(
         displayTargetFilter,
         s.source === "codex" && s.storage.archiveState === "archived",
@@ -263,6 +269,9 @@ export async function runSearchFlow(
   if (options?.isRequestCurrent && !options.isRequestCurrent()) return null;
 
   const scopeParts: string[] = [];
+  if (options?.compressionFilter && options.compressionFilter !== "all") {
+    scopeParts.push(t(`history.filter.compression.${options.compressionFilter}`));
+  }
   const datePart = effectiveScope.kind === "all" ? t("search.filter.all") : getDateScopeValue(effectiveScope);
   if (datePart) scopeParts.push(datePart);
   if (options?.projectSelection?.kind === "none") scopeParts.push(t("historyInsights.filterProjectsNone"));

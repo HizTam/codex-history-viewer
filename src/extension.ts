@@ -1,5 +1,7 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { getExtensionVersion } from "./extensionVersion";
+import { isCompressedSessionFile } from "./utils/sessionFileReader";
 import { resolveUiLanguage, t } from "./i18n";
 import { getConfig, type CodexHistoryViewerConfig } from "./settings";
 import {
@@ -18,6 +20,7 @@ import {
   type HistoryViewMode,
 } from "./tree/historyTree";
 import { SearchTreeDataProvider } from "./tree/searchTree";
+import { promptHistorySortOrder, promptPinnedSortMode, promptViewPresentation } from "./ui/viewOptionsPicker";
 import { TranscriptContentProvider } from "./transcript/transcriptProvider";
 import { TranscriptDocumentLinkProvider } from "./transcript/transcriptDocumentLinkProvider";
 import { renderResumeContext } from "./transcript/resumeRenderer";
@@ -144,6 +147,8 @@ import {
   parseHistoryFilterStateV3,
   resolveEffectiveHistoryDisplayTarget,
   type HistoryDisplayTarget,
+  type HistoryCompressionFilter,
+  isHistoryCompressionFilter,
   HISTORY_FILTER_STATE_V2_KEY,
   parseHistoryFilterStateV2,
   type HistoryFilterStateV3,
@@ -504,6 +509,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await vscode.commands.executeCommand("codexHistoryViewer.refresh");
     },
     logger,
+    initialAuthoritativeHistoryRefreshSettled.promise,
   );
   const fileChangeHistoryService = new FileChangeHistoryService(projectAssociationStore);
   const fileChangeHistoryPanels = new FileChangeHistoryPanelManager(
@@ -551,6 +557,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     storageStats = await collectStorageStats(context.globalStorageUri);
   };
   let lastSearchRequest: SearchRequest | null = sanitizeSearchRequest(context.workspaceState.get(LAST_SEARCH_REQUEST_KEY));
+  let lastPublishedSearch: { queryInput: string; scope: HistoryFilterStateV3 } | undefined;
   const searchExecution = new SearchExecutionCoordinator();
   const getConfiguredDefaultSearchRoles = (): IndexedSearchRole[] => {
     const raw = vscode.workspace.getConfiguration("codexHistoryViewer").get<unknown>(SEARCH_DEFAULT_ROLES_CONFIG);
@@ -605,6 +612,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     config,
   );
   let historyTagFilter: string[] = sanitizeTagFilter(context.workspaceState.get(HISTORY_TAG_FILTER_KEY));
+  let historyCompressionFilter: HistoryCompressionFilter = "all";
   let pinnedFilter: DateScope = sanitizeDateScope(context.workspaceState.get(PINNED_FILTER_KEY));
   const pinnedSourceFilterRaw = context.workspaceState.get(PINNED_SOURCE_FILTER_KEY);
   let pinnedSourceFilter: SessionSourceFilter = resolveConstrainedHistorySourceFilter(
@@ -678,6 +686,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       projects: historyProjectSelection,
       source: historySourceFilter,
       tags: historyTagFilter,
+      compression: historyCompressionFilter,
       displayTarget: resolveEffectiveHistoryDisplayTarget(
         historyDisplayTarget,
         historySourceFilter,
@@ -729,6 +738,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       historySourceFilter = resolveConstrainedHistorySourceFilter(parsed.source, config);
       historyTagFilter = parsed.tags;
+      historyCompressionFilter = parsed.compression ?? "all";
       historyDisplayTarget = isHistoryDisplayTarget(displayTargetPreferenceRaw)
         ? displayTargetPreferenceRaw
         : parsed.displayTarget;
@@ -752,6 +762,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           projects: historyProjectSelection,
           source: historySourceFilter,
           tags: historyTagFilter,
+          compression: historyCompressionFilter,
           displayTarget: effectiveDisplayTarget,
         });
       }
@@ -912,7 +923,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const nextDisplayTarget = resolveHistoryInsightsDisplayTarget(filters, config.enableCodexArchivedSessions);
         if (!nextDisplayTarget) return null;
         const nextTags = sanitizeTagFilter(filters.tags);
-        const transition = buildHistoryInsightsFilterTransition({ ...filters, tags: nextTags }, nextDisplayTarget);
+        // Preserve the opened snapshot's scope even if History filters changed afterwards.
+        const transition = buildHistoryInsightsFilterTransition({
+          ...filters, tags: nextTags, compression: snapshot.descriptor.compression ?? "all",
+        }, nextDisplayTarget);
         const condition = transition.condition;
         const historyState = transition.historyState;
         const nextSnapshot = historyProvider.createInsightsSnapshot(
@@ -941,6 +955,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       getCurrentProjectCwd: () => resolveCurrentWorkspaceFolder()?.uri.fsPath ?? null,
       showDayInHistory: async (snapshot, ymd) => {
         await applyHistoryFilterState({
+          compression: snapshot.descriptor.compression ?? "all",
           date: { kind: "day", ymd },
           projects: snapshot.descriptor.projects,
           source: snapshot.descriptor.source,
@@ -953,6 +968,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const projectCwd = resolveInsightsProjectCwd(snapshot, projectKey, historyService.getIndex().sessions);
         if (!projectCwd) return;
         await applyHistoryFilterState({
+          compression: snapshot.descriptor.compression ?? "all",
           date: snapshot.descriptor.date,
           projects: projectSelectionFromCwds(projectCwd, null, resolveHistoryProjectGroupKey),
           source: snapshot.descriptor.source,
@@ -965,6 +981,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const projectCwd = resolveInsightsProjectCwd(snapshot, projectKey, historyService.getIndex().sessions);
         if (!projectCwd) return;
         await applyHistoryFilterState({
+          compression: snapshot.descriptor.compression ?? "all",
           date: snapshot.descriptor.date,
           projects: projectSelectionFromCwds(projectCwd, null, resolveHistoryProjectGroupKey),
           source: snapshot.descriptor.source,
@@ -1012,6 +1029,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const syncArchiveLocationFilterToProviders = (): void => {
     historyProvider.setDisplayTarget(resolveEffectiveHistoryDisplayTargetValue());
+    historyProvider.setCompressionFilter(historyCompressionFilter);
     pinnedProvider.setDisplayTarget(resolveEffectivePinnedDisplayTargetValue());
   };
 
@@ -1174,6 +1192,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const displayTargetSummary = buildHistoryDisplayTargetSummary();
     if (displayTargetSummary) parts.push(displayTargetSummary);
     if (historyTagFilter.length > 0) parts.push(`tags: ${historyTagFilter.map((tag) => `#${tag}`).join(", ")}`);
+    if (historyCompressionFilter !== "all") parts.push(t(`history.filter.compression.${historyCompressionFilter}`));
     return parts.join(" / ");
   };
 
@@ -1211,6 +1230,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const isPinVisibleInStatus = (pin: PinEntry, cfg: CodexHistoryViewerConfig): boolean => {
     if (isArchivedPinEntry(pin, cfg) && !cfg.enableCodexArchivedSessions) return false;
+    if (isCompressedSessionFile(pin.fsPath) && !cfg.enableCodexCompressedSessions) return false;
     const source = resolvePinnedEntrySource(pin.fsPath, cfg);
     return isSourceEnabledInConfig(source, cfg);
   };
@@ -1272,7 +1292,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       codexArchivedSessionsRoot: cfg.codexArchivedSessionsRoot,
       claudeSessionsRoot: cfg.claudeSessionsRoot,
       lastRefreshAt: lastHistoryRefreshAt,
-      extensionVersion: resolveExtensionVersion(context),
+      extensionVersion: getExtensionVersion(context.extension.packageJSON),
     };
   });
   // Provide a virtual document for the session transcript.
@@ -1598,6 +1618,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyTagFiltered", historyTagFilter.length > 0);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyViewMode", historyViewMode);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historySortOrder", historySortOrder);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyCompressionFilter", historyCompressionFilter);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.codexCompressedSessionsEnabled", getConfig().enableCodexCompressedSessions === true);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectDisplay", historyProjectDisplay);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectScope", historyProjectScope);
     void vscode.commands.executeCommand(
@@ -1976,6 +1998,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                 projects: nextProjectSelection,
                 source: historySourceFilter,
                 tags: historyTagFilter,
+                compression: historyCompressionFilter,
                 displayTarget: resolveEffectiveHistoryDisplayTargetValue(),
               }),
             }]
@@ -2010,6 +2033,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       historyTagFilter,
       resolveEffectiveHistoryDisplayTargetValue(),
     );
+    historyProvider.setCompressionFilter(historyCompressionFilter);
     historyProvider.setProjectGrouped(historyProjectDisplay === "project");
     syncArchiveLocationFilterToProviders();
     historyProvider.refresh();
@@ -2064,6 +2088,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           tags: readonly string[];
           archiveLocation?: ArchiveLocationFilter;
           displayTarget?: HistoryDisplayTarget;
+          compression?: HistoryCompressionFilter;
         }
       | (() => {
           date: DateScope;
@@ -2072,6 +2097,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           tags: readonly string[];
           archiveLocation?: ArchiveLocationFilter;
           displayTarget?: HistoryDisplayTarget;
+          compression?: HistoryCompressionFilter;
         }),
     opts: { persist: boolean; rerunSearch?: boolean; projectScopePolicy: HistoryProjectScopePolicy },
   ): Promise<boolean> => enqueueHistoryStateTransition(async (rerunAbortEpoch) => {
@@ -2088,6 +2114,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const nextProjectScope = nextProjectState.scope;
     const nextSource = constrainHistorySourceFilter(requested.source);
     const nextTags = sanitizeTagFilter(requested.tags);
+    const nextCompression = requested.compression ?? historyCompressionFilter;
     const requestedDisplayTarget = requested.displayTarget ?? historyDisplayTargetFromArchiveLocation(
       sanitizeArchiveLocationFilter(requested.archiveLocation),
     );
@@ -2102,6 +2129,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       historyProjectScope !== nextProjectScope ||
       historySourceFilter !== nextSource ||
       !isSameTagFilter(historyTagFilter, nextTags) ||
+      historyCompressionFilter !== nextCompression ||
       resolveEffectiveHistoryDisplayTargetValue() !== nextDisplayTarget ||
       historyDisplayTarget !== requestedDisplayTarget;
     const persisted = createHistoryFilterStateV3({
@@ -2109,6 +2137,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       projects: nextProjects,
       source: nextSource,
       tags: nextTags,
+      compression: nextCompression,
       displayTarget: nextDisplayTarget,
     });
     if (!changed) return false;
@@ -2123,6 +2152,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyProjectScope = nextProjectScope;
     historySourceFilter = nextSource;
     historyTagFilter = nextTags;
+    historyCompressionFilter = nextCompression;
     historyDisplayTarget = requestedDisplayTarget;
     archiveLocationFilter = archiveLocationFromHistoryDisplayTarget(historyDisplayTarget);
     if (opts.rerunSearch !== false) scheduleHistoryFilterSearchRerun(rerunAbortEpoch);
@@ -2131,6 +2161,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   type HistoryFilterPatch = {
+    compression?: HistoryCompressionFilter;
     date?: DateScope;
     projects?: ProjectSelection;
     source?: SessionSourceFilter;
@@ -2138,6 +2169,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     displayTarget?: HistoryDisplayTarget;
   };
   type CurrentHistoryFilterState = {
+    compression: HistoryCompressionFilter;
     date: DateScope;
     projects: ProjectSelection;
     source: SessionSourceFilter;
@@ -2152,6 +2184,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const projectScopePolicy = opts.projectScopePolicy ?? "preserve";
     return applyHistoryFilterState(() => {
       const current = {
+        compression: historyCompressionFilter,
         date: historyFilter,
         projects: historyProjectSelection,
         source: historySourceFilter,
@@ -2162,6 +2195,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const nextSource = constrainHistorySourceFilter(requested.source ?? current.source);
       return {
         date: requested.date ?? current.date,
+        compression: requested.compression ?? current.compression,
         projects: projectScopePolicy === "explicitSelection"
           ? requested.projects ?? current.projects
           : current.projects,
@@ -2263,6 +2297,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         e.affectsConfiguration("codexHistoryViewer.codex.archivedSessionsRoot") ||
         e.affectsConfiguration("codexHistoryViewer.codex.archivedSessions.root") ||
         e.affectsConfiguration("codexHistoryViewer.codex.archivedSessions.enabled") ||
+        e.affectsConfiguration("codexHistoryViewer.codex.compressedSessions.enabled") ||
         e.affectsConfiguration("codexHistoryViewer.claude.sessionsRoot") ||
         e.affectsConfiguration("codexHistoryViewer.claudeSessionsRoot");
       const historyDateBasisChanged = e.affectsConfiguration("codexHistoryViewer.history.dateBasis");
@@ -3240,6 +3275,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     left.claudeSessionsRoot === right.claudeSessionsRoot &&
     left.enableCodexSource === right.enableCodexSource &&
     left.enableCodexArchivedSessions === right.enableCodexArchivedSessions &&
+    (left.enableCodexCompressedSessions === true) === (right.enableCodexCompressedSessions === true) &&
     left.enableClaudeSource === right.enableClaudeSource;
 
   const hasSameHistoryIndexConfig = (
@@ -3802,6 +3838,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           projects: nextProjectState.projects,
           source: historySourceFilter,
           tags: historyTagFilter,
+          compression: historyCompressionFilter,
           displayTarget: resolveEffectiveHistoryDisplayTargetValue(),
         });
         await commitHistoryFilterState(
@@ -4057,6 +4094,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const captureCurrentHistorySearchScope = (): HistorySearchScopeSnapshot =>
     createHistorySearchScopeSnapshot({
+      compression: historyCompressionFilter,
       date: historyFilter,
       projects: historyProjectSelection,
       source: historySourceFilter,
@@ -4066,8 +4104,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       searchHistoryProjectKey: resolveSearchHistoryProjectKeyForSearch(),
     });
 
-  const executeSearch = async (request?: SearchRequest): Promise<boolean> => {
-    const searchGeneration = searchExecution.beginSearch();
+  const executeSearch = async (request?: SearchRequest, reservedGeneration?: number): Promise<boolean> => {
+    const searchGeneration = reservedGeneration ?? searchExecution.beginSearch();
+    // Earlier filter intents must commit before this search captures its scope.
+    await historyStateTransitionQueue;
+    if (!searchExecution.isCurrent(searchGeneration)) return false;
     historyFilterSearchRerunHandledRevision = historyFilterSearchRerunRequestRevision;
     const isCurrentSearchGeneration = (): boolean => searchExecution.isCurrent(searchGeneration);
     const config: CodexHistoryViewerConfig = Object.freeze({ ...getConfig() });
@@ -4112,6 +4153,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           defaultRoleFilter: searchScope.defaultRoleFilter,
           tagFilter: searchScope.tags,
           displayTargetFilter: searchScope.displayTarget,
+          compressionFilter: searchScope.compression,
           hiddenSessionStore,
           projectSelection: searchScope.projects,
           getProjectDisplayName: getSearchProjectDisplayName,
@@ -4134,25 +4176,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await persistLastSearchRequest(results.request);
       if (!isCurrentSearchGeneration()) return false;
       searchProvider.setResults(results);
+      lastPublishedSearch = {
+        queryInput: results.request.queryInput,
+        scope: createHistoryFilterStateV3({ ...searchScope, tags: [...searchScope.tags] }),
+      };
       published = true;
       setHasSearchResultsContext(true);
       statusProvider.refresh();
       await searchView.reveal(results.root, { focus: true, expand: true, select: true });
       return true;
     } finally {
-      const ownedAtFinish = searchExecution.isCurrent(searchGeneration);
-      const settlement = searchExecution.finishSearch(searchGeneration, published);
-      if (ownedAtFinish && !published) {
-        historyFilterSearchAbortEpoch += 1;
-        historyFilterSearchRerunHandledRevision = historyFilterSearchRerunRequestRevision;
-      }
-      if (settlement.clearSearch) {
-        clearVisibleSearchResults();
-        statusProvider.refresh();
-      }
-      if (settlement.rerunAutomatically && lastSearchRequest) {
-        scheduleHistoryFilterSearchRerun();
-      }
+      settleSearch(searchGeneration, published);
+    }
+  };
+
+  const settleSearch = (searchGeneration: number, published: boolean): void => {
+    const ownedAtFinish = searchExecution.isCurrent(searchGeneration);
+    const settlement = searchExecution.finishSearch(searchGeneration, published);
+    if (ownedAtFinish && !published) {
+      historyFilterSearchAbortEpoch += 1;
+      historyFilterSearchRerunHandledRevision = historyFilterSearchRerunRequestRevision;
+    }
+    if (settlement.clearSearch) {
+      clearVisibleSearchResults();
+      statusProvider.refresh();
+    }
+    if (settlement.rerunAutomatically && lastSearchRequest) {
+      scheduleHistoryFilterSearchRerun();
     }
   };
 
@@ -4396,6 +4446,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           .filter((preset) => !query || preset.queryInput.toLowerCase().includes(query))
           .map((preset) => ({
             label: preset.queryInput,
+            description: preset.invalidScope ? t("savedSearches.scopeInvalid") :
+              preset.scope ? t("savedSearches.withScope") : t("savedSearches.queryOnly"),
+            detail: preset.scope ? describeSearchPresetScope(preset.scope) : undefined,
             buttons: [deleteButton],
             preset,
           }));
@@ -4434,11 +4487,48 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showErrorMessage(t("app.searchPresetNotFound"));
       return false;
     }
+    if (preset.invalidScope) {
+      void vscode.window.showErrorMessage(t("savedSearches.scopeInvalid"));
+      return false;
+    }
+    if (preset.scope) {
+      const config = getConfig();
+      const scope = preset.scope;
+      if ((scope.compression === "compressed" && !config.enableCodexCompressedSessions) ||
+        (scope.source === "codex" && !config.enableCodexSource && !config.enableCodexArchivedSessions) ||
+        (scope.source === "claude" && !config.enableClaudeSource) ||
+        resolveEffectiveHistoryDisplayTarget(scope.displayTarget, scope.source, config.enableCodexArchivedSessions) !== scope.displayTarget) {
+        void vscode.window.showErrorMessage(t("savedSearches.scopeUnavailable"));
+        return false;
+      }
+      const generation = searchExecution.beginSearch();
+      try {
+        await applyHistoryFilterState({ ...scope, compression: scope.compression ?? "all" }, { persist: true, rerunSearch: false, projectScopePolicy: "explicitSelection" });
+        if (!searchExecution.isCurrent(generation)) return false;
+        return await executeSearch({ queryInput: preset.queryInput, roleFilter: getConfiguredDefaultSearchRoles() }, generation);
+      } catch {
+        void vscode.window.showErrorMessage(t("savedSearches.scopeApplyFailed"));
+        return false;
+      } finally {
+        // A failed scope commit must also settle deferred clear/rerun intents.
+        settleSearch(generation, false);
+      }
+    }
     return executeSearch({
       queryInput: preset.queryInput,
       roleFilter: getConfiguredDefaultSearchRoles(),
     });
   };
+
+  const describeSearchPresetScope = (scope: HistoryFilterStateV3): string => [
+    scope.compression ? t(`history.filter.compression.${scope.compression}`) : undefined,
+    getDateScopeValue(scope.date),
+    buildSourceFilterSummary(scope.source),
+    scope.projects.kind === "none" ? t("historyInsights.filterProjectsNone") :
+      scope.projects.kind === "groups" ? scope.projects.groups.map(group => getProjectDisplayName(group.representativeCwd, 40)).join(", ") : undefined,
+    scope.tags.length ? scope.tags.map(tag => `#${tag}`).join(" ") : undefined,
+    getHistoryDisplayTargetLabel(scope.displayTarget),
+  ].filter(Boolean).join(" · ");
 
   const pushRestoreArchivedUndo = (pairs: Array<{ archivedFsPath: string; activeFsPath: string }>): void => {
     if (pairs.length === 0) return;
@@ -4496,7 +4586,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           if (sessions.length > 1) progress.report({ message: `${i + 1}/${sessions.length}` });
           try {
             const result = await restoreArchivedSessionToActive(session, historyService, latestConfig, {
-              extensionVersion: resolveExtensionVersion(context),
+              extensionVersion: getExtensionVersion(context.extension.packageJSON),
               logger,
             });
             if (!firstActiveFsPath) firstActiveFsPath = result.activeFsPath;
@@ -4590,7 +4680,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           if (sessions.length > 1) progress.report({ message: `${i + 1}/${sessions.length}` });
           try {
             const result = await archiveSessionToArchived(session, latestConfig, {
-              extensionVersion: resolveExtensionVersion(context),
+              extensionVersion: getExtensionVersion(context.extension.packageJSON),
               logger,
             });
             if (!firstArchivedFsPath) firstArchivedFsPath = result.archivedFsPath;
@@ -4728,6 +4818,68 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerPinnedSortCommand("codexHistoryViewer.setPinnedSortTitleDesc", "titleDesc");
   registerPinnedSortCommand("codexHistoryViewer.setPinnedSortFileSizeDesc", "fileSizeDesc");
   registerPinnedSortCommand("codexHistoryViewer.setPinnedSortFileSizeAsc", "fileSizeAsc");
+
+  const registerViewOptionCommand = (commandId: string, action: () => Promise<void>): void => {
+    context.subscriptions.push(vscode.commands.registerCommand(commandId, async () => {
+      try {
+        await action();
+      } catch (error) {
+        logger.debug(`view.options failed error=${sanitizeDebugError(error)}`);
+        void vscode.window.showErrorMessage(t("viewOptions.failed"));
+      }
+    }));
+  };
+
+  registerViewOptionCommand("codexHistoryViewer.changeHistorySortOrder", async () => {
+    const selected = await promptHistorySortOrder(historySortOrder);
+    if (selected) await applyHistorySortOrder(selected, { persist: true });
+  });
+  registerViewOptionCommand("codexHistoryViewer.changePinnedSortMode", async () => {
+    const selected = await promptPinnedSortMode(pinnedSortMode);
+    if (selected) await applyPinnedSortMode(selected, { persist: true });
+  });
+  registerViewOptionCommand("codexHistoryViewer.configureHistoryView", async () => {
+    const selected = await promptViewPresentation("history", {
+      mode: historyViewMode, display: historyProjectDisplay, scope: historyProjectScope,
+    });
+    if (!selected) return;
+    if (selected.kind === "view") {
+      await applyHistoryViewMode(selected.value, { persist: true });
+      return;
+    }
+    if (selected.kind === "scope" && selected.value === "currentGroup" && !resolveCurrentWorkspaceFolder()) {
+      void vscode.window.showInformationMessage(t("history.project.scope.noWorkspace"));
+      return;
+    }
+    await applyHistoryProjectState({ [selected.kind]: selected.value }, { persist: true });
+  });
+  registerViewOptionCommand("codexHistoryViewer.configurePinnedView", async () => {
+    const selected = await promptViewPresentation("pinned", {
+      display: pinnedProjectDisplay, scope: pinnedProjectScope,
+    });
+    if (!selected || selected.kind === "view") return;
+    if (selected.kind === "scope" && selected.value === "currentGroup" && !resolveCurrentWorkspaceFolder()) {
+      void vscode.window.showInformationMessage(t("pinned.project.scope.noWorkspace"));
+      return;
+    }
+    await applyPinnedProjectState({ [selected.kind]: selected.value }, { persist: true });
+  });
+
+  const applyHistoryCompressionFilter = async (compression: HistoryCompressionFilter): Promise<void> => {
+    // Recheck the current setting after a picker closes or a command is invoked directly.
+    if (compression === "compressed" && !getConfig().enableCodexCompressedSessions) {
+      void vscode.window.showInformationMessage(t("history.filter.compression.disabled"));
+      return;
+    }
+    await applyHistoryFilters({ compression }, { persist: true });
+  };
+  for (const [suffix, compression] of [
+    ["All", "all"], ["Compressed", "compressed"], ["Uncompressed", "uncompressed"],
+  ] as const) {
+    registerViewOptionCommand(`codexHistoryViewer.setHistoryCompression${suffix}`, async () => {
+      await applyHistoryCompressionFilter(compression);
+    });
+  }
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.refreshStatusPane", async () => {
@@ -4946,9 +5098,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("codexHistoryViewer.openFileChangeHistory", async (uri?: unknown) => {
+    vscode.commands.registerCommand("codexHistoryViewer.openFileChangeHistory", async (uri?: unknown, origin?: unknown) => {
       const fileUri = uri instanceof vscode.Uri ? uri : undefined;
-      await fileChangeHistoryPanels.openForUri(fileUri);
+      await fileChangeHistoryPanels.openForUri(fileUri, origin);
     }),
   );
 
@@ -5576,10 +5728,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      const saved = await searchPresetStore.save({ queryInput: lastSearchRequest.queryInput });
-      updateHasSearchPresetsContext();
-      statusProvider.refresh();
-      void vscode.window.showInformationMessage(t("savedSearches.saved", saved.queryInput));
+      // Capture the published result before the picker can overlap another search.
+      const published = lastPublishedSearch;
+      const queryInput = published?.queryInput ?? lastSearchRequest.queryInput;
+      const choice = await vscode.window.showQuickPick([
+        { label: t("savedSearches.queryOnly"), withScope: false },
+        ...(published ? [{ label: t("savedSearches.withScope"), detail: describeSearchPresetScope(published.scope), withScope: true }] : []),
+      ], { title: t("savedSearches.save.title") });
+      if (!choice) return;
+      try {
+        const saved = await searchPresetStore.save({ queryInput, ...(choice.withScope && published ? { scope: published.scope } : {}) });
+        updateHasSearchPresetsContext();
+        statusProvider.refresh();
+        void vscode.window.showInformationMessage(t("savedSearches.saved", saved.queryInput));
+      } catch {
+        void vscode.window.showErrorMessage(t("savedSearches.saveFailed"));
+      }
     }),
   );
 
@@ -5670,7 +5834,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
                   pins: pinStore,
                   bookmarks: bookmarkStore,
                   hidden: hiddenSessionStore,
-                }, exportedSessions, resolveExtensionVersion(context)),
+                }, exportedSessions, getExtensionVersion(context.extension.packageJSON)),
             });
       if (!result) return;
 
@@ -7187,6 +7351,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("codexHistoryViewer.filterHistory", async () => {
       const idx = historyService.getIndex();
       const change = await promptHistoryFilter(idx, {
+        compression: historyCompressionFilter,
         date: historyFilter,
         projectSelection: historyProjectSelection,
         source: historySourceFilter,
@@ -7198,6 +7363,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         getCanonicalProjectKey,
       });
       if (!change) return;
+      if (change.kind === "compression") {
+        await applyHistoryCompressionFilter(change.compression);
+        return;
+      }
       if (change.kind === "projectEdit") {
         const projects = await promptHistoryProjectSelection(idx, {
           selection: historyProjectSelection,
@@ -7238,6 +7407,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearHistoryFilter", async () => {
       await applyHistoryFilterState({
+        compression: "all",
         date: { kind: "all" },
         projects: { kind: "all" },
         source: "all",
@@ -8132,6 +8302,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerHistoryMenuAlias("historyMenuSourceAll", "codexHistoryViewer.setHistorySourceFilterAll");
   registerHistoryMenuAlias("historyMenuSourceCodex", "codexHistoryViewer.setHistorySourceFilterCodex");
   registerHistoryMenuAlias("historyMenuSourceClaude", "codexHistoryViewer.setHistorySourceFilterClaude");
+  registerHistoryMenuAlias("historyMenuCompressionAll", "codexHistoryViewer.setHistoryCompressionAll");
+  registerHistoryMenuAlias("historyMenuCompressionCompressed", "codexHistoryViewer.setHistoryCompressionCompressed");
+  registerHistoryMenuAlias("historyMenuCompressionUncompressed", "codexHistoryViewer.setHistoryCompressionUncompressed");
+  for (const command of ["changeHistorySortOrder", "changePinnedSortMode", "configureHistoryView", "configurePinnedView"]) {
+    for (const language of ["ja", "en"]) {
+      registerUiCommandAlias(`codexHistoryViewer.ui.${language}.${command}`, `codexHistoryViewer.${command}`);
+    }
+  }
   const registerPinnedMenuSortAlias = (suffix: string, targetCommand: string): void => {
     for (const lang of ["ja", "en"] as const) {
       registerUiCommandAlias(`codexHistoryViewer.ui.${lang}.${suffix}`, targetCommand);
@@ -8526,6 +8704,7 @@ function isPathInsideRoot(fsPath: string, rootPath: string): boolean {
 }
 
 type HistoryFilterChange =
+  | { kind: "compression"; compression: HistoryCompressionFilter }
   | { kind: "date"; date: DateScope }
   | { kind: "project"; projectCwd: string | null }
   | { kind: "projectEdit" }
@@ -8535,7 +8714,8 @@ type HistoryFilterChange =
   | { kind: "tags"; tags: string[] };
 
 type HistoryFilterPick = vscode.QuickPickItem & {
-  pickKind?: "date" | "project" | "projectEdit" | "source" | "archiveLocation" | "displayTarget" | "tags";
+  pickKind?: "date" | "project" | "projectEdit" | "source" | "archiveLocation" | "displayTarget" | "tags" | "compression";
+  compression?: HistoryCompressionFilter;
   date?: DateScope;
   projectCwd?: string | null;
   source?: SessionSourceFilter;
@@ -8548,6 +8728,7 @@ async function promptHistoryFilter(
   idx: import("./sessions/sessionTypes").HistoryIndex,
   current: {
     date: DateScope;
+    compression?: HistoryCompressionFilter;
     projectCwd?: string | null;
     projectSelection?: ProjectSelection;
     source: SessionSourceFilter;
@@ -8673,12 +8854,20 @@ async function promptHistoryFilter(
     { label: t("history.tags.editFilter"), pickKind: "tags" as const, tags: current.tags },
     { label: t("history.tags.clearFilter"), pickKind: "tags" as const, tags: [] },
   ];
+  const compressionItems: HistoryFilterPick[] = current.compression === undefined ? [] : [
+    { label: t("history.filter.section.compression"), kind: vscode.QuickPickItemKind.Separator },
+    ...(["all", "compressed", "uncompressed"] as const).map(compression => ({
+      label: t(`history.filter.compression.${compression}`), pickKind: "compression" as const, compression,
+      description: compression === current.compression ? t("common.current") : undefined,
+    })),
+  ];
 
   const baseItems: HistoryFilterPick[] = [
     ...dateItemsBase,
     ...projectItemsBase,
     ...sourceItemsBase,
     ...archiveLocationItemsBase,
+    ...compressionItems,
     ...tagItemsBase,
   ];
 
@@ -8716,6 +8905,7 @@ async function promptHistoryFilter(
         ...projectItemsBase,
         ...sourceItemsBase,
         ...archiveLocationItemsBase,
+        ...compressionItems,
         ...tagItemsBase,
       ];
     };
@@ -8732,6 +8922,10 @@ async function promptHistoryFilter(
     qp.onDidAccept(() => {
       const picked = qp.selectedItems[0];
       const pickKind = typeof picked?.pickKind === "string" ? picked.pickKind : "";
+      if (pickKind === "compression" && isHistoryCompressionFilter(picked?.compression)) {
+        finish({ kind: "compression", compression: picked.compression });
+        return;
+      }
       if (pickKind === "date" && picked?.date) {
         finish({ kind: "date", date: picked.date });
         return;
@@ -8904,11 +9098,6 @@ function resolveInsightsProjectCwd(
 // Cleanup hook called by VS Code.
 export function deactivate(): void {
   // Disposables are already registered in context.subscriptions.
-}
-
-function resolveExtensionVersion(context: vscode.ExtensionContext): string {
-  const version = (context.extension.packageJSON as { version?: unknown }).version;
-  return typeof version === "string" && version.trim().length > 0 ? version.trim() : "unknown";
 }
 
 function resolveRevealIndex(element: unknown, pageSearchSeed?: SessionPageSearchSeed): number | undefined {
