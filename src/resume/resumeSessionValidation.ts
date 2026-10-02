@@ -16,7 +16,7 @@ export function resolveExtensionResumeSessionId(
   session: SessionSummary,
   target: ResumeTargetSource,
 ): string | null {
-  if (session.source !== target || session.storage.archiveState !== "active") return null;
+  if (session.source !== target || session.storage.archiveState !== "active" || session.meta.claudeAgent) return null;
   const id = typeof session.meta.id === "string" ? session.meta.id.trim() : "";
   if (!id) return null;
   if (target === "codex") return CODEX_EXTENSION_SESSION_ID_PATTERN.test(id) ? id : null;

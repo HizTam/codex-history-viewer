@@ -142,6 +142,7 @@ export function isCodexProtocolContextStartText(value: unknown): boolean {
   const text = String(value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trimStart();
   if (!text) return false;
   const lower = text.toLowerCase();
+  if (lower.startsWith("<external_codex_apps_open_page>")) return isCodexProtocolContextText(text);
   if (CODEX_SESSION_START_CONTEXT_TAGS.some((tagName) => lower.startsWith(`<${tagName}>`))) return true;
   return /^# AGENTS\.md instructions(?:[^\n]*)?(?:\n|$)/iu.test(text);
 }
@@ -206,6 +207,26 @@ function consumeCodexSessionStartContextBlock(
   lower: string,
   cursor: number,
 ): { end: number; isSessionStartMarker: boolean } | null {
+  const pageTag = "external_codex_apps_open_page";
+  const pageOpen = `<${pageTag}>`;
+  if (lower.startsWith(pageOpen, cursor)) {
+    const contentStart = cursor + pageOpen.length;
+    const closeTag = `</${pageTag}>`;
+    const closeIndex = lower.indexOf(closeTag, contentStart);
+    if (closeIndex < 0 || closeIndex - contentStart > 4_096) return null;
+    try {
+      const payload: unknown = JSON.parse(text.slice(contentStart, closeIndex));
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+      const keys = Object.keys(payload);
+      if (keys.length !== 1 || keys[0] !== "page_id") return null;
+      const id = (payload as { page_id: unknown }).page_id;
+      if (id !== null && (typeof id !== "string" || !id.trim() || id.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(id))) return null;
+      return { end: closeIndex + closeTag.length, isSessionStartMarker: false };
+    } catch {
+      // Invalid or incomplete protocol data remains visible as ordinary input.
+      return null;
+    }
+  }
   const xmlBlock = consumeKnownCodexContextXmlBlock(lower, cursor);
   if (xmlBlock) {
     return {

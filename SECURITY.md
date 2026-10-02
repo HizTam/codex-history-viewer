@@ -17,7 +17,9 @@ Use the latest published release of Codex History Viewer whenever possible. Olde
 | 1.2.2 through 2.7.x | Does not include all current Markdown and KaTeX dependency security updates; upgrade to 2.15.0 or later. |
 | 1.2.1 and earlier | Do not install or redistribute historical VSIX files. |
 
-## Dependencies Shipped in 2.15.0
+## Dependencies Shipped in 2.16.0
+
+Version 2.16.0 retains the dependency versions shipped in 2.15.0.
 
 | Component | Bundled version | Use |
 | --- | --- | --- |

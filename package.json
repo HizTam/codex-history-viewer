@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.15.0",
+  "version": "2.16.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -5287,12 +5287,12 @@
       "view/item/context": [
         {
           "command": "codexHistoryViewer.ui.ja.openCodexAgentParent",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex\\.codexAgentChild(?:\\.codexAgentParent)?\\.codexAgentParentAvailable/ && codexHistoryViewer.uiLang == 'ja' && config.codexHistoryViewer.agentRuns.enabled == true",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)\\.codexAgentChild(?:\\.codexAgentParent)?\\.codexAgentParentAvailable/ && codexHistoryViewer.uiLang == 'ja' && config.codexHistoryViewer.agentRuns.enabled == true",
           "group": "navigation@0.75"
         },
         {
           "command": "codexHistoryViewer.ui.en.openCodexAgentParent",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.codex\\.codexAgentChild(?:\\.codexAgentParent)?\\.codexAgentParentAvailable/ && codexHistoryViewer.uiLang != 'ja' && config.codexHistoryViewer.agentRuns.enabled == true",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)\\.codexAgentChild(?:\\.codexAgentParent)?\\.codexAgentParentAvailable/ && codexHistoryViewer.uiLang != 'ja' && config.codexHistoryViewer.agentRuns.enabled == true",
           "group": "navigation@0.75"
         },
         {

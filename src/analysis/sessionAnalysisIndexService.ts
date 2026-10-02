@@ -1,3 +1,4 @@
+import { getClaudeAgentDependencyStamp } from "../sessions/claudeAgentHistory";
 import * as fs from "node:fs/promises";
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig } from "../settings";
@@ -386,7 +387,8 @@ export class SessionAnalysisIndexService {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const stat = await statSessionFile(session.fsPath);
         const historyPlan = await resolveHistoryPlan(session, historyInventory);
-        const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
+        const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan)
+          : session.source === "claude" ? await getClaudeAgentDependencyStamp(session.fsPath, session.storage.rootPath) : undefined;
         this.pruneCancelledSharedBuildConsumers(job);
         if (!hasActiveSharedBuildConsumer(job)) throw new SessionAnalysisCancelledError();
         if (!isSharedBuildCacheKeyRequested(job, cacheKey)) break;
@@ -626,7 +628,8 @@ export class SessionAnalysisIndexService {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const stat = await statSessionFile(session.fsPath);
         const historyPlan = await resolveHistoryPlan(session, historyInventory);
-        const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
+        const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan)
+          : session.source === "claude" ? await getClaudeAgentDependencyStamp(session.fsPath, session.storage.rootPath) : undefined;
         const cached = cache.entries[session.cacheKey];
         if (cached && stat && isEntryFresh(
           cached,
@@ -791,7 +794,7 @@ export class SessionAnalysisIndexService {
     const existing = this.inFlightByCacheKey.get(inFlightKey);
     if (existing) {
       const entry = await existing;
-      if (!await isAnalysisInputStable(session, stat, historyPlan)) {
+      if (!await isAnalysisInputStable(session, stat, historyPlan, historySignature)) {
         throw new SessionAnalysisInputChangedError();
       }
       return entry;
@@ -822,7 +825,7 @@ export class SessionAnalysisIndexService {
     this.inFlightByCacheKey.set(inFlightKey, build);
     try {
       const entry = await build;
-      if (!await isAnalysisInputStable(session, stat, historyPlan)) {
+      if (!await isAnalysisInputStable(session, stat, historyPlan, historySignature)) {
         throw new SessionAnalysisInputChangedError();
       }
       return entry;
@@ -1402,7 +1405,9 @@ async function isAnalysisInputStable(
   session: SessionSummary,
   initialStat: { mtimeMs: number; size: number } | null,
   historyPlan: CodexLogicalHistoryPlan | undefined,
+  historySignature: string | undefined,
 ): Promise<boolean> {
+  if (session.source === "claude" && historySignature !== await getClaudeAgentDependencyStamp(session.fsPath, session.storage.rootPath)) return false;
   if (!historyPlan) {
     return areSameAnalysisFileStamp(initialStat, await statSessionFile(session.fsPath));
   }

@@ -635,7 +635,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const annotation = this.annotationStore.get(session.fsPath);
     const projectDisplayCwd = this.getProjectDisplayCwd(getSessionCwd(session));
     const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
-    const agentPresentation = config.agentRunsEnabled && session.source === "codex"
+    const agentPresentation = config.agentRunsEnabled
       ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent"), t("codexAgentRuns.guardian"))
       : undefined;
     const hidden = this.hiddenSessionStore.isHidden(session);

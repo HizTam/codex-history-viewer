@@ -96,6 +96,7 @@ export class TranscriptContentProvider implements vscode.TextDocumentContentProv
     const displayCwd =
       typeof session.meta?.cwd === "string" ? this.projectAssociationStore.getDisplayCwd(session.meta.cwd) : null;
     return renderTranscript(session.fsPath, {
+      claudeSessionsRoot: session.source === "claude" ? session.storage.rootPath : undefined,
       timeZone,
       locationLabel:
         session.storage.archiveState === "archived" ? t("session.location.archived") : t("session.location.active"),

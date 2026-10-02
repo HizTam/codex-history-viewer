@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { claudeAgentIdentity, parseClaudeAgentPath } from "../agents/claudeAgentMetadata";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import type { SessionMetadataMutationCoordinator } from "./sessionMetadataMutationCoordinator";
@@ -131,6 +132,10 @@ export function getMaxCustomTitleLength(): number {
 
 export function resolveTitleOverrideKey(session: SessionSummary): string | null {
   const source = session.source === "claude" ? "claude" : "codex";
+  if (source === "claude") {
+    const agent = session.meta.claudeAgent ?? parseClaudeAgentPath(session.fsPath, session.storage.rootPath);
+    if (agent) return claudeAgentIdentity(agent);
+  }
   const sessionId = normalizeSessionId(session.meta?.id);
   if (sessionId) return `${source}:id:${sessionId}`;
 

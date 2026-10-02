@@ -1,3 +1,5 @@
+import { isClaudeTaskNotificationRecord, projectClaudeTaskNotification } from "../chat/claudeTaskNotification";
+import { extractClaudeSystemReminder } from "../chat/claudeSystemReminder";
 import * as path from "node:path";
 import { t } from "../i18n";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
@@ -38,6 +40,7 @@ interface CodexTranscriptState {
 export async function renderTranscript(
   fsPath: string,
   options: {
+    claudeSessionsRoot?: string;
     timeZone: string;
     annotation?: { tags?: readonly string[]; note?: string };
     locationLabel?: string;
@@ -85,6 +88,7 @@ export async function renderTranscript(
   };
 
   for await (const record of readSessionJsonlRecords(fsPath, historySource, {
+    claudeSessionsRoot: options.claudeSessionsRoot,
     applyCodexRollbacks: true,
     sessionInventory: options.sessionInventory,
   })) {
@@ -328,6 +332,26 @@ async function renderClaudeRecord(
     appendPlainTextCodeBlock(lines, crossSessionMessage.body);
     lastToolCallId = undefined;
     return { handled: true, msgIndex, lastToolCallId };
+  }
+
+  if (isClaudeTaskNotificationRecord(obj)) {
+    msgIndex += 1;
+    messageLineMap.set(msgIndex, lines.length + 1);
+    lines.push(`## [#${msgIndex}] ${t("chat.notification.task.title")}`, "");
+    const notification = projectClaudeTaskNotification(obj);
+    appendPlainTextCodeBlock(lines, notification.body);
+    if (notification.truncated) lines.push(t("chat.crossSession.truncated"), "");
+    return { handled: true, msgIndex, lastToolCallId: undefined };
+  }
+
+  const reminder = extractClaudeSystemReminder(obj);
+  if (reminder) {
+    msgIndex += 1;
+    messageLineMap.set(msgIndex, lines.length + 1);
+    lines.push(`## [#${msgIndex}] ${t("chat.systemReminder.title")}`, "");
+    appendPlainTextCodeBlock(lines, reminder.body);
+    if (reminder.truncated) lines.push(t("chat.crossSession.truncated"), "");
+    return { handled: true, msgIndex, lastToolCallId: undefined };
   }
 
   const rawContent = getClaudeMessageContent(obj);

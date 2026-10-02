@@ -1,3 +1,4 @@
+import { claudeSessionRelationKey, claudeRelationKey } from "./claudeAgentMetadata";
 import { createHash } from "node:crypto";
 import type { HistoryService } from "../services/historyService";
 import type { DebugLogger } from "../services/logger";
@@ -153,7 +154,7 @@ export class CodexAgentRunsService {
     if (!this.isPresentationEnabled()) return emptyComponent();
     const graph = this.graph!;
     const current = graph.sessionByIdentity.get(session.identityKey);
-    if (!current || current.source !== "codex") return emptyComponent();
+    if (!current) return emptyComponent();
 
     const fullComponent = collectAgentComponent(graph, current, null);
     const displayComponent = collectAgentComponent(graph, current, MAX_TRAVERSAL_DEPTH);
@@ -163,7 +164,7 @@ export class CodexAgentRunsService {
       included.size < fullComponent.sessionIds.size ||
       syntheticParentIds.size < fullComponent.syntheticParentIds.size;
     for (const identityKey of fullComponent.sessionIds) {
-      if (graph.droppedEdgeChildren.has(identityKey)) {
+      if (graph.droppedEdgeChildren.has(identityKey) || (graph.sessionByIdentity.get(identityKey)?.meta.claudeAgent?.metadataState ?? "valid") !== "valid") {
         relationPartial = true;
         break;
       }
@@ -336,19 +337,34 @@ function buildAgentGraph(
   logger?: DebugLogger,
 ): AgentGraph {
   const codexSessions = index.sessions
-    .filter((session) => session.source === "codex")
     .slice()
     .sort((left, right) => compareOrdinal(left.identityKey, right.identityKey));
   const sessionByIdentity = new Map(codexSessions.map((session) => [session.identityKey, session]));
   const sessionByThreadId = new Map<string, SessionSummary>();
   const agentMetadataByIdentity = new Map<string, CodexAgentMetadata>();
+  const ambiguousClaudeKeys = new Set<string>();
   for (const session of codexSessions) {
     const threadId = resolveSessionThreadId(session);
     if (threadId && !sessionByThreadId.has(threadId)) sessionByThreadId.set(threadId, session);
+    if (session.source === "claude") {
+      if (threadId && sessionByThreadId.get(threadId) !== session) ambiguousClaudeKeys.add(threadId);
+      const metadata = session.meta.claudeAgent;
+      if (metadata) agentMetadataByIdentity.set(session.identityKey, {
+        parentThreadId: metadata.metadataState === "valid"
+          ? claudeRelationKey(metadata.project, metadata.ownerSessionId, metadata.parentAgentId)
+          : `claude:unknown:${session.identityKey}`,
+        agentNickname: metadata.name || metadata.description,
+        agentRole: metadata.agentType,
+        recordedDepth: metadata.spawnDepth,
+      });
+      continue;
+    }
     if (!isAgentMetadataVerified(session)) continue;
     const metadata = sanitizeCachedCodexAgentMetadata(session.meta.codexAgent).value;
     if (metadata) agentMetadataByIdentity.set(session.identityKey, metadata);
   }
+
+  for (const key of ambiguousClaudeKeys) sessionByThreadId.delete(key);
 
   const candidateParentByChild = new Map<string, SessionSummary>();
   const candidateChildrenByParent = new Map<string, SessionSummary[]>();
@@ -358,6 +374,10 @@ function buildAgentGraph(
   for (const child of codexSessions) {
     const metadata = agentMetadataByIdentity.get(child.identityKey);
     if (!metadata) continue;
+    if (ambiguousClaudeKeys.has(metadata.parentThreadId) || ambiguousClaudeKeys.has(resolveSessionThreadId(child))) {
+      droppedEdgeChildren.add(child.identityKey);
+      continue;
+    }
     const parent = sessionByThreadId.get(metadata.parentThreadId);
     if (!parent) {
       appendMapArray(unavailableChildrenByParentThreadId, metadata.parentThreadId, child);
@@ -434,6 +454,7 @@ function buildAgentGraph(
 }
 
 function resolveSessionThreadId(session: SessionSummary): string {
+  if (session.source === "claude") return claudeSessionRelationKey(session);
   const metadataThreadId = normalizeCodexThreadId(session.meta.id);
   if (metadataThreadId) return metadataThreadId;
   const match = /^codex:(?:id|rollout):(.+)$/u.exec(session.identityKey);

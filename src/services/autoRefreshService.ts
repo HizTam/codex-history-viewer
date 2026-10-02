@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { parseClaudeAgentPath } from "../agents/claudeAgentMetadata";
 import { isSessionFile, isCompressedSessionFile } from "../utils/sessionFileReader";
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig } from "../settings";
@@ -141,9 +142,9 @@ export class AutoRefreshService implements vscode.Disposable {
     for (const root of roots) {
       const pattern = new vscode.RelativePattern(vscode.Uri.file(root.root), root.pattern);
       const watcher = vscode.workspace.createFileSystemWatcher(pattern, false, false, false);
-      watcher.onDidCreate((uri) => this.onFileEvent("create", uri));
-      watcher.onDidChange((uri) => this.onFileEvent("change", uri));
-      watcher.onDidDelete((uri) => this.onFileEvent("delete", uri));
+      watcher.onDidCreate((uri) => this.onFileEvent("create", uri, root));
+      watcher.onDidChange((uri) => this.onFileEvent("change", uri, root));
+      watcher.onDidDelete((uri) => this.onFileEvent("delete", uri, root));
       this.watchers.push(watcher);
       this.logger?.debug(`autoRefresh watch source=${root.source} pattern=${root.pattern}`);
     }
@@ -159,12 +160,18 @@ export class AutoRefreshService implements vscode.Disposable {
     }
   }
 
-  private onFileEvent(kind: "create" | "change" | "delete", uri: vscode.Uri): void {
+  private onFileEvent(kind: "create" | "change" | "delete", uri: vscode.Uri, root?: WatchRoot): void {
     if (this.disposed || !this.enabled) return;
-    if (!isJsonlFileUri(uri)) return;
+    if (uri.scheme !== "file") return;
+    // A sidecar event invalidates its transcript, including deletion of metadata alone.
+    const fsPath = root?.source === "claude" && uri.fsPath.endsWith(".meta.json")
+      ? uri.fsPath.replace(/\.meta\.json$/u, ".jsonl") : uri.fsPath;
+    if (!isSessionFile(fsPath)) return;
+    if (root?.source === "claude" && (fsPath !== uri.fsPath || path.relative(root.root, fsPath).split(path.sep).length !== 2) &&
+      !parseClaudeAgentPath(fsPath, root.root)) return;
 
-    this.markPendingFsPath(uri.fsPath);
-    this.logger?.debug(`autoRefresh event kind=${kind} file=${path.basename(uri.fsPath)}`);
+    this.markPendingFsPath(fsPath);
+    this.logger?.debug(`autoRefresh event kind=${kind}`);
 
     if (!this.canRun()) {
       this.clearTimer();
@@ -389,6 +396,7 @@ async function resolveWatchRoots(config: CodexHistoryViewerConfig): Promise<Watc
   }
   if (config.enableClaudeSource) {
     candidates.push({ source: "claude", rootKind: "claudeSessions", root: config.claudeSessionsRoot, pattern: "*/*.jsonl" });
+    candidates.push({ source: "claude", rootKind: "claudeSessions", root: config.claudeSessionsRoot, pattern: "*/*/subagents/**/agent-*.{jsonl,meta.json}" });
   }
 
   const out: WatchRoot[] = [];
@@ -409,10 +417,6 @@ function buildRootSignature(roots: readonly WatchRoot[]): string {
     .map((root) => `${root.rootKind}:${normalizeCacheKey(root.root)}:${root.pattern}`)
     .sort()
     .join("|");
-}
-
-function isJsonlFileUri(uri: vscode.Uri): boolean {
-  return uri.scheme === "file" && isSessionFile(uri.fsPath);
 }
 
 function formatError(error: unknown): string {

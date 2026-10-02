@@ -1,3 +1,4 @@
+import { readClaudeAgentMetadata, parseClaudeAgentPath } from "../agents/claudeAgentMetadata";
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig, HistoryDateBasis } from "../settings";
 import { discoverSessionFiles, type DiscoveredSessionFile } from "../sessions/sessionDiscovery";
@@ -49,7 +50,7 @@ interface HistoryInputStamp {
   readonly size: number;
 }
 
-const SUMMARY_CACHE_ALGO_VERSION = 24;
+const SUMMARY_CACHE_ALGO_VERSION = 27;
 const HISTORY_REFRESH_CONCURRENCY = 4;
 
 interface CacheFileV9 {
@@ -1313,7 +1314,9 @@ export class HistoryService {
     }
 
     const cached = cachedEntries[key];
-    if (cached && cached.summary.fsPath === fsPath && cached.mtimeMs === inputStamp.mtimeMs && cached.size === inputStamp.size) {
+    const claudeAgent = file.source === "claude" ? await readClaudeAgentMetadata(fsPath, file.rootPath) : undefined;
+    const sameClaudeAgent = JSON.stringify(cached?.summary.meta.claudeAgent) === JSON.stringify(claudeAgent);
+    if (cached && sameClaudeAgent && cached.summary.fsPath === fsPath && cached.mtimeMs === inputStamp.mtimeMs && cached.size === inputStamp.size) {
       performanceProbe?.add("cacheHitCount");
       const sizedSummary = cached.summary.fileSizeBytes === inputStamp.size
         ? cached.summary
@@ -1363,6 +1366,7 @@ export class HistoryService {
 
       throwIfHistoryRebuildCancelled(token);
       const verifiedStamp = await readHistoryInputStamp(fsPath, "postScan", performanceProbe);
+      const verifiedClaudeAgent = file.source === "claude" ? await readClaudeAgentMetadata(fsPath, file.rootPath) : undefined;
       throwIfHistoryRebuildCancelled(token);
       if (!verifiedStamp) {
         performanceProbe?.setOutcome("partial");
@@ -1375,7 +1379,8 @@ export class HistoryService {
           incomplete: true,
         });
       }
-      if (!areSameHistoryInputStamp(inputStamp, verifiedStamp)) {
+      if (!areSameHistoryInputStamp(inputStamp, verifiedStamp) ||
+        JSON.stringify(builtSummary?.meta.claudeAgent) !== JSON.stringify(verifiedClaudeAgent)) {
         observedUnstable = true;
         if (attempt === 0) {
           inputStamp = verifiedStamp;
@@ -1810,6 +1815,7 @@ function buildSessionSummaryFingerprint(
       summary.meta.source,
       summary.meta.historySource,
       projectCodexAgent(summary.meta.codexAgent),
+      summary.meta.claudeAgent,
       projectCodexFork(summary.meta.codexFork),
       projectCodexHistoryBase(summary.meta.codexHistoryBase),
       summary.meta.codexStandaloneHistory,
@@ -1984,6 +1990,8 @@ function normalizeCachedEntry(value: unknown, storageKey: string): CacheEntryV1 
   const summary = normalizeCachedSummary(value.summary, storageKey);
   if (!summary) return null;
   if (summary.source !== "codex") {
+    // Child relationships must be revalidated from the adjacent sidecar, never trusted from disk cache.
+    if (parseClaudeAgentPath(summary.fsPath, summary.storage.rootPath) || summary.meta.claudeAgent !== undefined) return null;
     const meta = { ...summary.meta };
     delete meta.codexAgent;
     delete meta.codexFork;

@@ -142,11 +142,21 @@ The **File AI Change History** icon on Session Viewer diff cards opens the same 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
 | Show History Insights | `codexHistoryViewer.showHistoryInsights` | Opens an analytics snapshot for the sessions matching the current History conditions. It is available from the History view header and the Command Palette. |
-| Open Parent Session | `codexHistoryViewer.openCodexAgentParent` | Opens the available parent of a selected Codex sub-agent session. When Agent Runs is enabled, this action appears only in the context menu for a sub-agent whose parent can be resolved; it is hidden from the Command Palette. |
+| Open Parent Session | `codexHistoryViewer.openCodexAgentParent` | Opens the available parent of a selected Codex or Claude Code agent session. When Agent Runs is enabled, this action appears only in the context menu for an agent whose parent can be resolved; it is hidden from the Command Palette. |
 
-Codex automatic approval reviews (Guardian) with explicit parent metadata use the same Agent Runs actions and visibility rules as other Codex agent sessions. Agent Runs remains experimental and disabled by default.
+Codex automatic approval reviews (Guardian) with explicit parent metadata use the same Agent Runs actions and visibility rules as other Codex agent sessions. Agent Runs remains experimental. Codex and Claude Code share the existing `codexHistoryViewer.agentRuns.enabled` setting, so an enabled setting also applies to Claude Code.
+
+Codex and Claude Code sub-agent histories are included in Search, History Insights, and File AI Change History whether Agent Runs is enabled or disabled, subject to each feature's filters. Disabling Agent Runs hides the relationship controls while keeping these histories available.
+
+Claude Code Agent Runs includes child agents, descendants, and delegated worker forks. Child histories have independent pins, titles, and annotations.
+
+Use **Open Parent Session** to open a sub-agent's parent session.
+
+Use the open icon on an Agent Runs node to open that history. An already open target keeps its tab mode. A new target opens in a separate tab with the source viewer's dedicated or temporary mode; the source viewer and other temporary tabs keep their contents.
 
 ## Session Actions
+
+The toggle immediately to the right of **Custom Title** switches the current viewer between a dedicated tab and a temporary tab. Its tooltip shows the current state: **Dedicated tab** or **Temporary tab**. It preserves the displayed history and its scroll, selection, search, and expanded cards. Other temporary tabs remain unchanged. Selecting a new history reuses the most recently active temporary tab; an already open dedicated tab for that history takes precedence. Multiple temporary tabs survive window restoration when **Restore Webview Tabs After Reload** is enabled, and changing tab mode preserves Branch Navigation. This header control has no Command Palette command and is independent of pinning.
 
 When editing the last prompt in Codex changes the session file for the same conversation, the open Session Viewer keeps displaying its current JSONL file. Auto-refresh and manual reload continue to use that file. When a newer main history is detected, a notice below the header offers **Go to main history**, and the resume button is replaced by the same action. This also covers a first-prompt edit that creates a standalone JSONL without an inherited history reference. This switches the history displayed inside the viewer. Use the usual resume button after switching to resume through the Codex extension or CLI. The notice is available even when Branch Navigation is disabled; switching to the main history has no Command Palette command.
 

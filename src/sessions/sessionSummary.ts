@@ -1,3 +1,5 @@
+import { readClaudeAgentMetadata, claudeAgentIdentity, parseClaudeAgentPath } from "../agents/claudeAgentMetadata";
+import { resolveClaudeAgentHistory } from "./claudeAgentHistory";
 import { createSessionReadStream } from "../utils/sessionFileReader";
 import * as path from "node:path";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
@@ -24,7 +26,7 @@ import {
   createClaudePastedPromptResolver,
   type ClaudePastedPromptResolver,
 } from "../chat/claudePastedPrompt";
-import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
+import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
 import type { ChatAttachment } from "../chat/chatTypes";
 import type {
   PreviewMessage,
@@ -310,7 +312,7 @@ async function appendPreviewMessage(
   }
 
   const role = detectClaudeMessageRole(obj);
-  if (!role || isClaudeCrossSessionInboundRecord(obj)) return;
+  if (!role || isClaudeInternalUserRecord(obj)) return;
 
   const rawContent = getClaudeMessageContent(obj);
   const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
@@ -345,6 +347,7 @@ async function scanPhysicalSessionSummary(
   performanceProbe?: PerformanceProbe,
   token?: SessionJsonlReadOptions["token"],
   cancellationErrorFactory?: SessionJsonlReadOptions["cancellationErrorFactory"],
+  claudeSessionsRoot?: string,
 ): Promise<PhysicalSessionSummaryScan> {
   throwIfSummaryScanCancelled(token, cancellationErrorFactory);
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
@@ -367,6 +370,7 @@ async function scanPhysicalSessionSummary(
 
   performanceProbe?.add("segmentCount");
   performanceProbe?.add("streamOpenCount");
+  const agentProjection = await resolveClaudeAgentHistory(fsPath, { token, cancellationErrorFactory, performanceProbe, claudeSessionsRoot });
   const stream = createSessionReadStream(fsPath, { token });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   try {
@@ -391,6 +395,8 @@ async function scanPhysicalSessionSummary(
         }
         continue;
       }
+
+      if (agentProjection && !agentProjection.ownLines.has(physicalLineIndex)) continue;
 
       if (!metaScanComplete) {
         metaScannedLineCount += 1;
@@ -545,6 +551,7 @@ export async function buildSessionSummary(params: {
     params.performanceProbe,
     params.token,
     params.cancellationErrorFactory,
+    sourceRoot,
   );
   const readMeta = scan.meta ?? {};
   const source = detectSessionSource(readMeta, fsPath);
@@ -561,8 +568,9 @@ export async function buildSessionSummary(params: {
     (source === "claude"
       ? { rootKind: "claudeSessions", archiveState: "active", rootPath: sourceRoot }
       : { rootKind: "codexSessions", archiveState: "active", rootPath: sourceRoot });
-  const meta: SessionMetaInfo = { ...readMeta, historySource: source };
-  const identityKey = resolveSessionIdentityKey(source, meta, fsPath, cacheKey);
+  const claudeAgent = source === "claude" ? await readClaudeAgentMetadata(fsPath, sourceRoot) : undefined;
+  const meta: SessionMetaInfo = { ...readMeta, historySource: source, ...(claudeAgent ? { claudeAgent } : {}) };
+  const identityKey = resolveSessionIdentityKey(source, meta, fsPath, cacheKey, sourceRoot);
   const lastActivityIso = source === "claude"
     ? scan.claudeLastActivityTimestampIso
     : scan.codexLastActivityTimestampIso;
@@ -571,7 +579,7 @@ export async function buildSessionSummary(params: {
   const startValid = parseTimestampDate(meta.timestampIso);
   const lastActivityValid = parseTimestampDate(lastActivityIso);
 
-  if (source === "claude" && !startValid && !lastActivityValid) return null;
+  if (source === "claude" && !claudeAgent && !startValid && !lastActivityValid) return null;
 
   const statDate = new Date(stat.mtimeMs);
   const startedLocalDate = startValid
@@ -654,7 +662,13 @@ export function resolveSessionIdentityKey(
   meta: SessionMetaInfo,
   fsPath: string,
   cacheKey: string,
+  sourceRoot?: string,
 ): string {
+  if (source === "claude") {
+    // An explicit destination root takes precedence over metadata from an import source.
+    const agent = sourceRoot ? parseClaudeAgentPath(fsPath, sourceRoot) : meta.claudeAgent ?? parseClaudeAgentPath(fsPath);
+    if (agent) return claudeAgentIdentity(agent);
+  }
   const sessionId = normalizeIdentityPart(meta.id);
   if (sessionId) return boundSessionIdentityKey(source, `${source}:id:${sessionId}`);
 

@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-09-28
-- 対象バージョン: 2.15.0
+- 最終更新: 2026-10-02
+- 対象バージョン: 2.16.0
 
 ## 1. 概要
 
@@ -9,7 +9,7 @@
 - 対象データ:
   - Codex: `~/.codex/sessions` 配下の `rollout-*.jsonl`（圧縮履歴設定ONなら `.jsonl.zst` も対象）
   - Codex archived: `~/.codex/archived_sessions` 配下の同形式ファイル（任意）
-  - Claude Code: `~/.claude/projects/<project>/<session>.jsonl`
+  - Claude Code: `~/.claude/projects/<project>/<session>.jsonl` と `<project>/<owner>/subagents/**/agent-<agentId>.jsonl`
 - 通信: ネットワーク通信は行わない。ローカルファイルと VS Code のストレージだけを扱う
 - 対応ソース: `codexHistoryViewer.sources.enabled` で `codex` / `claude` を切り替える。Codex archived sessions は `codex` source が有効な場合だけ使える追加保存場所として扱う
 
@@ -386,7 +386,7 @@
   - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v2.json`
-  - 内部 file version: 27
+  - 内部 file version: 30
   - 用途: 繰り返し検索を高速化する増分インデックス
   - `search-index.v2.json` が破損して JSON parse error になった場合は、破損内容を退避せず削除し、次回検索時に再構築する
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
@@ -415,7 +415,7 @@
   - 用途: History Insights の統計と Claude Code Branch Navigation の構造化 occurrence を共用する差分解析キャッシュ。履歴キャッシュや検索インデックスの代替にはしない
   - History Insights、Claude Code Branch Navigation、または `Rebuild Cache` を要求したときだけ lazy load / lazy build し、拡張機能の起動や通常の History / Search 表示を待たせない
   - セッションごとの `cacheKey`、source、`mtime`、`size`、parser version と、sessions root / 有効ソースを含む cache context を検証し、変更された entry だけを再解析する
-  - 現行source parser versionはCodex `16` / Claude Code `13`とする。Claudeの編集結果とBash差分を反映しないversion 12 entryは再解析する。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析する
+  - 現行source parser versionはCodex `17` / Claude Code `16`とする。Claudeの編集結果とBash差分を反映しないversion 12 entryは再解析する。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析する
   - 既存 Chat model builder と同じ抽出結果を使って message index、turn、usage、file change、ツール名別呼び出し回数を集計し、解析側で独自の message index を採番しない
   - 同一セッションの重複解析を共有し、全体の更新、保存、clear は直列化する。進捗通知とキャンセルに対応する
   - 破損 JSON は削除して次回要求時に再生成し、権限エラーなどの read error では既存ファイルを削除しない
@@ -533,6 +533,8 @@
 - Claude Code の `<ide_opened_file>` / `<ide_selection>` は本文から除去し、file reference / selection reference card として表示する
 - Claude Code の `<task-notification>` は user message の通常本文ではなく task notification attachment として扱う。`summary` / `result` / `usage` はカード、検索、Markdown transcript、Resume / Handoff の用途別 policy に従って使い、`taskId` / `toolUseId` / `outputFile` / system preamble / 定型 `note` は通常表示や Webview model へ出さない
 - Claude Codeの`isMeta === true`かつ`origin.kind === "peer"`、または`origin.kind === "task-notification"`かつ`origin.subkind === "peer-send-message"`のmaterialized user recordは、利用者入力ではなくクロスセッション受信として扱う。検証済み`origin.body`またはwrapper本文だけを専用timeline cardへ表示し、session preview、Resume、Handoff、Session Analysisのhuman candidateから除外する。malformedな分類済みrecordを通常user messageへ戻さない
+- Claude Codeのmaterialized user recordで`isMeta === true`、`origin.kind === "task-notification"`、`origin.producer === "session-task"`が一致するものは内部タスク通知カードにする。peer / coordinatorの分類を優先し、通常user件数、preview、横断検索、Resume / Handoff候補から除外する。messageIndexを維持し、Markdownには通知として残す。型が不正な本文もuserへ戻さず、64,000文字までの診断表示を折りたたむ。本文はplain textとして表示し、パスやHTMLを実行しない
+- Claude Codeのmaterialized user recordで`isMeta === true`、originなし、text-onlyの完全な単独`<system-reminder>` wrapperを持つものは「内部リマインダー」カードにする。子のSubagentHandback案内もこの分類を使う。検証済みwrapperだけを外し、本文を最大64,000文字のplain textで保持する。入力上限は1Mi文字／128 text block。通常userの引用、余剰自然文、入れ子・破損wrapper、未知origin、画像やtool結果との混在は再分類しない。messageIndexとMarkdown出力を保持し、通常user件数、preview、検索、Resume / Handoff、Branchの人間発言候補から除外する。旧分類はHistory summary algorithm `27`、Search file version `30`、Claude Analysis parser `16`で再計算する
 - Claude Code の assistant message に raw text として残る `<invoke name="...">` は tool invocation attachment として扱う。Markdown の fenced code / inline code / blockquote 内に引用された `<invoke>` は抽出せず、壊れた block や境界が曖昧な block は raw text として残す
 - `<task-notification>` / `<invoke>` の共通 scanner は open / close 候補を tag 種別ごとに一度だけ列挙し、close 欠落や malformed open が大量にある履歴でも open ごとに EOF まで再走査しない
 - Claude Code の `queue-operation` / `attachment.type = "queued_command"` に含まれる task notification / invoke 風 text は、メッセージとして materialize された user / assistant item ではないためカード化しない
@@ -583,6 +585,7 @@
 - Codexの`realtime_item`、`new_context`、`context_compacted`、`ContextCompaction`は既知recordとして型分類するが、現時点では会話本文、検索、メッセージ・tool統計へ投影しない。正しいJSONを破損行とは数えず、未知・巨大・不正な入れ子payloadもboundedに無視する
 - `realtime_item`の可視化は、本家機能が既定有効となり永続形式と順序・重複規則を実ログで確定できた時点で再設計する。context管理の可視化は、history notesと利用者本文の境界、Search / Resume / Handoffへの含有規則、機密情報の扱いを確定できた時点で再設計する。再開時はUI、ローカライズ、アクセシビリティ、cache/parser versionを同時に更新する
 - Codex の最初の通常会話より前にある text-only protocol bundle は、既知の完全 block だけで構成され、開始 marker を持つ場合に限って専用 `protocolContext` item へ変換する。通常 user message とは分離し、既定で閉じた `Codex 実行コンテキスト` カードとして通常表示・詳細表示の両方に出す
+- 単独の`external_codex_apps_open_page`も既知の制御コンテキストとして分類する。JSONは`page_id`だけを持つobjectで、値はnullまたは制御文字のない1〜1,024文字の非空文字列、JSON本文は4,096文字以内とする。Page単独では開始markerにせず、途中出現でも通常userとして表示・検索・集計しない。採番は維持し、通常文・コード例・添付との混在、不正JSONや未知fieldは元の本文として残す
 - protocol context 判定は可変の本文、件数、path、hash ではなく raw content の block 構造で行う。未知 content type、raw 添付、閉じ tag 欠落、余剰の自然文があれば通常 user message へ fail-open し、単独の environment / user instructions は従来どおり詳細表示用 context とする。strict 判定後に本文から file reference attachment が派生しても、raw 判定を覆さず context のまま扱う
 - 専用 context card は raw message index を消費して後続番号を維持するが、user 件数、sticky user、user 前後移動、role filter、branch anchor、全体 Search、ページ内検索、Resume / Handoff の通常依頼には含めない。展開本文は `textContent` で描画し、同一セッション自動更新では開閉状態を維持する
 - セッションタブの自動更新ボタンは、履歴の自動更新設定が有効なときだけ表示し、`off` / `preserve` / `follow` をクリックで循環する
@@ -638,10 +641,14 @@
   - 復元対象の本文メッセージが描画されていない場合は、直前の描画済み本文メッセージへフォールバックし、直前もなければ先頭へ戻す
   - 復元フォールバックでは直後の本文メッセージへは進めない
   - archived Codex セッションビューから `Move to Codex History` を実行する場合は、ボタン押下時に現在見えている本文メッセージ index を保存し、復元後の active セッションパネルで同じ本文メッセージを明示的に reveal する
-- ツリー選択で開くセッションビューは再利用タブとして扱い、次のツリー選択で中身を差し替える
+- ツリー選択で開くセッションビューは一時タブとして扱う。同じ履歴が開いていれば専用タブを優先してrevealし、未表示の履歴は最後にアクティブだった一時タブを再利用する
 - メニューから開くセッションビューはセッションタブとして扱い、別セッションを開いても差し替えない
 - 再利用タブに表示中の同じセッションをメニューから開いた場合、そのタブをセッションタブへ昇格する
 - ツリー選択 / メニュー操作のどちらでも、同じセッションを表示するタブが既に開いていれば既存タブをアクティブにする
+- ヘッダーのカスタムタイトルの右にあるトグルで、操作中のタブを専用／一時へ切り替える。Pinとは独立し、ほかの一時タブは閉じず、内容・保持方法・UI状態を変えない。複数の一時タブを共存させ、復元時にも破棄しない
+- タブ切替のツールチップは、現在の状態を「専用タブ」／「一時タブ」と表示する。切替要求後はHostの確定通知に合わせて更新し、`aria-label`には操作内容、`aria-pressed`には現在状態を設定する
+- Agent Runsのopen要求は最初のファイル確認前に保持状態のrevisionを捕捉し、確定まで照合する。専用／一時を往復して同じmodeへ戻った場合も古い要求を取り消し、同じmodeへの冪等な要求は維持する。
+- 保持方法`tabMode`とBranch Navigationの`kind = branch`を別管理し、branchの経路をトグルで解除しない。Hostは現在パスとrevisionを検証して小さな状態通知だけを返し、本文を再描画しない。非同期読込中の古い保持状態を上書きせず、旧復元データはkindから保持方法を補う。Claude子の復元は初回inventoryと保存identityの検証後に行う
 - Reload とセッションタブの自動更新は、表示位置、選択メッセージ、詳細表示、展開カード、展開 diff、diff 折り返し、検索サイドバー状態を維持する
 - 再利用タブで別セッションへ切り替わる場合は、検索状態、検索リサイズ状態、画像プレビュー、画像データキャッシュ、画像保存先 CWD、patch entry 詳細の pending 要求などのセッション依存 UI / panel-side 状態をリセットする
 - grouped diff カードの最大幅状態は、再読み込みでカードの並び順が変わっても維持しやすいように安定キーで管理する
@@ -742,7 +749,7 @@
 - 共通設定 `codexHistoryViewer.branchNavigation.enabled` が `true` のときだけ有効になる実験的機能で、既定は無効とする。公開前の旧 `claudeBranches.enabled` と開発途中の `codexForks.enabled` は残さず、aliasやmigrationも設けない
 - Codexの通常のForkは、ローカルFork操作が先頭`session_meta.payload.forked_from_id`に保存したdirect parent IDだけを関係の正本とする。Codex アプリの `ローカルにフォークする` と Codex 拡張機能の `新しいタスクで続ける` のどちらも対象とし、本文の類似、開始時刻、同じ `cwd` だけを根拠に Fork を推定しない
 - 同じ会話IDの指示編集による物理履歴の分岐は、同じ保存root・archive状態内で既存`history_base`規則が一意に解決した親、または3.0.2の検証済み自己完結編集の関係から構成する。選択肢に「編集前」「編集後」を表示し、通常の「Fork」と区別して前後の履歴へ移動できる。先頭質問の編集は存在しない共通メッセージを作らず、連続編集と通常Forkの混在も現在component内で扱う
-- 旧履歴の経路identityはナビゲーションsnapshot内だけで物理cacheKeyのhashから作り、会話identityや永続metadataを変更しない。通常Forkの親IDは、`history_base`が一意に参照する物理履歴の会話IDと一致し、その履歴が経路候補にある場合、その物理履歴へ解決する。それ以外は代表sessionへの従来の解決を維持し、nested Forkの祖先参照を直接の親と取り違えない。agent除外・同一absolute `cwd`・cycle・実ファイル境界の検証を適用する。Codex Branch Navigation algorithmは`6`とし、旧snapshotを再利用しない。legacyの取り消し・自己完結編集・追加入力候補・Claude端末出力の分類を反映した現行cacheはHistory summary `24`、Search index `26`、分析parser Codex `16` / Claude `12`を使う
+- 旧履歴の経路identityはナビゲーションsnapshot内だけで物理cacheKeyのhashから作り、会話identityや永続metadataを変更しない。通常Forkの親IDは、`history_base`が一意に参照する物理履歴の会話IDと一致し、その履歴が経路候補にある場合、その物理履歴へ解決する。それ以外は代表sessionへの従来の解決を維持し、nested Forkの祖先参照を直接の親と取り違えない。agent除外・同一absolute `cwd`・cycle・実ファイル境界の検証を適用する。Codex Branch Navigation algorithmは`6`とし、旧snapshotを再利用しない。後続のPage分類、Claude子の所有範囲と内部通知への対応を含む現行cacheはHistory summary `27`、Search index `30`、分析parser Codex `17` / Claude `16`を使う
 - Codex subagent も `forked_from_id` を持つため、検証済みの `session_meta.payload.source.subagent.thread_spawn`、または明示的な親ID付き Guardian を Fork metadata より優先する。`codexAgent` と `codexFork` の両方を持つ session は Agent Runs の対象とし、Branch Navigation の node / edge に含めない
 - Agent Runs の設定に依存せず、Codex Branch Navigation の load 前に未確認 agent metadata を補完する。一部を確認できない場合は未確認 session を Fork と推測せず除外し、確認済みの関係だけを partial として扱う
 - parent / child の正規化済み absolute `cwd` が同一の場合だけ local Fork の resolved edge とする。`新しい Worktree にフォークする`、異なる `cwd`、relative path、比較不能な `cwd` は 2.8.0 の対象外とし、通常の Fork 経路へ混在させない
@@ -774,18 +781,22 @@
 - 関係解析は raw メッセージ本文を ID やログへ保存せず、確定できない関係を内容類似だけで推測しない。部分的な関係しか保証できない場合は、確認できた分岐だけを表示して warning を出す
 - 無効化しても Session Analysis Index、現在のセッションビュー、bookmark、annotation、元の Claude Code JSONL を変更しない
 
-### 3.6.5 Agent Runs（Codex 対応）
+### 3.6.5 Agent Runs（Codex / Claude Code 対応）
 
-- `codexHistoryViewer.agentRuns.enabled` が `true` のときだけ有効になる実験的機能で、既定は無効とする。現在は Codex セッションのみに対応する。設定が有効なら Codex のセッションビューのヘッダーへ常に操作アイコンを表示し、関連する実行がない場合は toast で通知する
+- `codexHistoryViewer.agentRuns.enabled` が `true` のときだけ関係表示が有効になる実験的機能で、未設定時の既定は無効とする。Codex / Claude Codeで既存の同じ設定を共有し、更新時に値をリセットしない。Codex向けに有効化済みならClaudeにもそのまま適用する。両ソースのセッションビューのヘッダーに操作アイコンを表示し、関連する実行がない場合はtoastで通知する。OFFでも子履歴の識別と検索・集計範囲は変えない
+- Claude子はproject、owner、子の相対パスの組で独立したidentityを持ち、rawのsessionIdは変更しない。隣接する`.meta.json`を64 KiBまで型検証し、parentAgentIdは同じproject / owner内だけで解決する。metadata欠落・破損、重複ID、循環、親欠落では直接の親を推測せず部分表示とする。mtime / sizeの変化とsidecar単独の変更も再検証する。探索・設定で確認したrootをChat、Search、Analysis、File History、Transcript、Resume / Handoffへ渡し、入れ子のsubagentsをowner境界と取り違えない。rootがない単独読み取りでは曖昧な階層をpartialとし、projection cacheもroot別に保持する
+- Claude子の最新のUUID連鎖とagentId / isSidechain / ownerから子自身の記録を確定する。同じ所有範囲のmessage.idで並列assistant blockを補完し、parentUuid / sourceToolAssistantUUIDとtool use ID、または一意なtool use IDで対応する結果を補完する。別のowner・agent、継承行、未選択turnは混ぜず、不一致UUID・曖昧な結果はpartialとして扱う。継承文脈は折りたたみカードに分離し、Search / Insights / AIファイル変更履歴は子自身だけを対象とする。`fork-context-ref`はroot内の検証済みowner履歴から復元し、欠損・不一致・循環・上限超過はpartialとする。走査は64 MiB / 250,000行、表示文脈は64,000文字までとし、ownerの更新・消失も解析cacheを無効化する。worker forkはAgent Runsへ所属し、Claude Branch Navigationのprimary候補に含めない
+- Claude子のResumeはowner IDを直接渡さず、ヘッダーの「親セッションを開く」からownerを表示して再開する。この操作と子専用source iconはAgent Runsの設定に依存しない。子の注釈・Pin・タイトルは親と独立し、raw export / importは選択したJSONLと子の相対階層を保持する。付随する本家metadataや親・兄弟をexport / 削除へ暗黙追加しない。metadataなしでimportされた子は親不明として扱う
 - Codex JSONL の `session_meta.payload.source.subagent.thread_spawn`、または `source.subagent.other === "guardian"` と同じ payload の `parent_thread_id` の組を親子関係の正本とする。通常agentの親ID・depth・nickname・role・task pathと、Guardianの親IDをboundedに検証し、Guardianはlanguage-neutralな `codexAgent.kind: "guardian"` で保持する。未知のsourceや不正・欠落した親IDは接続せず、本文・時刻・CWD・`thread_source`だけから推測しない
 - Guardianは既存のAgent Runs設定に従い、task labelを「自動承認レビュー（Guardian）」として表示する。既知の審査入力冒頭をAgent Runsの自動タイトルとして表示せず、カスタムタイトルと保存済みsummary・本文は保持する。新設定やコマンドは追加しない
-- Agent metadataのentry / file markerはversion 2。旧version 1のsummary cacheは再利用し、関係表示の準備時だけ未確認entryの先頭メタデータを限定再走査する。全成功後は再走査を省略し、部分失敗・キャンセル・世代変更は既存の再試行とstale commit防止に従う。summary / search / analysis cacheのversionは変更しない。圧縮履歴が有効な場合はJSONL.zstも同じreaderで扱う
+- Codex agent metadataのentry / file markerはversion 2。旧version 1のsummary cacheは再利用し、関係表示の準備時だけ未確認entryの先頭メタデータを限定再走査する。全成功後は再走査を省略し、部分失敗・キャンセル・世代変更は既存の再試行とstale commit防止に従う。このmetadata backfill自体はsummary / search / analysis cacheを再構築しない。履歴形式・分類の変更に伴うcache無効化は別に管理する。圧縮履歴が有効な場合はJSONL.zstも同じreaderで扱う
 - relation presentation の準備完了後は、利用可能な親を解決できたサブエージェントだけを History から抑制する。親不明、削除済み親、cycle / self-parent、未確認 metadata のサブエージェントは fail-open で History に残す。Pinned / Search では全サブエージェントを専用アイコン、説明、tooltip で区別して独立表示し、検索・集計の対象集合は変更しない
 - セッションビューの右側ペインは、現在セッションを含む component の root、ancestor、sibling、descendant を縦方向の pre-order tree で表示する。主見出しは利用可能な root session title、副見出しは機能名と関連 agent 件数とする
+- Agent Runs の通常セッションアイコンは表示中の履歴ソースに合わせ、Codex は C、Claude Code は A とする。同一 component は同じソースに限定されるため、親・子のどちらから開いてもこの判定を使う。ClaudeのAだけは履歴一覧と同じdark / lightのオレンジにし、tooltipとaccessible nameもClaude Codeにする。CodexのC、子の共通エージェントアイコン、経路色、枠幅は既存表示を維持する
 - node card は task label、設定されている場合の agent role、必要な場合の session title、開始日時、最終アクティビティ、bookmark / tag / note、直接の子件数を表示する。固定の最小高さを設けず、情報を省略しない範囲で compact にする
 - current node と root から current までの経路は青、他の agent 経路はオレンジで表示する。connector は parent ごとの共有幹線と短い枝線で描き、通常 depth では parent 下辺から同じ X 座標へ真下に伸ばす。視覚インデント上限で card を避ける必要がある場合だけ短い折れを許可する
 - card 本体は静的な treeitem とし、利用可能な別 node の header 右端にある `セッションを開く` アイコンだけを移動操作にする。hover / focus-within では card と icon を強調し、icon の active 中は押下状態を示す。current、missing parent、省略 node は移動可能に見せない
-- 移動先のセッションタブが開いていれば reveal し、未 open なら通常の固定 session panel を開く。元 panel の session、scroll、search、details state を別 session へ置き換えない
+- 移動先のセッションタブが開いていれば保持状態を維持して reveal する。未 open なら開き元が一時の場合は独立した新しい一時タブ、専用の場合は新しい専用タブを開く。Codex／Claude、通常／branchのどちらも保持状態を使う。元 panel や他の一時タブの session、scroll、search、details state を置き換えない。非同期確認中の元タブの保持状態変更では古いopenを確定しない
 - ペイン幅はドラッグで変更して Webview state に保存するが、ペインの open 状態は Reload Window 後に復元しない。Branch Navigation overlay、page search と同時には開かない
 - Webview では表示 node 500 件、depth 64、parent ごとの child 200 件を上限とし、current path を優先して省略件数を表示する。partial relation、missing parent、stale navigation target は確認できた範囲だけを表示し、元の JSONL や注釈を変更しない
 
@@ -899,7 +910,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - Codex は `rollout-*.jsonl` を再帰走査で収集し、圧縮履歴設定ONなら `.jsonl.zst` も含める。同名両形式は非圧縮を優先する
   - Codex source と Codex archived sessions が有効な場合は archived root も同じ再帰走査対象にする
   - 収集結果には `rootKind` / `rootPath` を付与し、通常 Codex と archived Codex を区別する
-  - Claude Code は `.claude/projects/<project>/<session>.jsonl` の 2 階層構造のみを対象にする
+  - Claude Code は通常の2階層JSONLに加え、`<project>/<owner>/subagents/**/agent-<agentId>.jsonl`を対象にする。agent ID、各path要素、root内のrealpathを検証し、symlink / junctionはたどらない。ディレクトリ深さ35を超える探索はpartialとして報告する
   - 有効rootまたは再帰走査中のsubtreeを読み取れなかった場合は失敗scope数を返し、空inventoryと区別する。root自体のFileNotFoundだけは存在しないsource rootとして扱う
 
 ### 4.2 セッション要約
@@ -971,7 +982,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 - `src/services/autoRefreshService.ts`
   - 履歴の自動更新設定 (`codexHistoryViewer.autoRefresh.enabled`) が `true` のときだけ FileSystemWatcher を作成する
-  - Codex は `**/rollout-*.jsonl`（圧縮履歴設定ONなら `**/rollout-*.jsonl{,.zst}`）、Claude Code は `*/*.jsonl` を監視する
+  - Codex は `**/rollout-*.jsonl`（圧縮履歴設定ONなら `**/rollout-*.jsonl{,.zst}`）、Claude Code は `*/*.jsonl` と `*/*/subagents/**/agent-*.{jsonl,meta.json}` を監視する。子のsidecar作成・変更・削除は同じscopeのJSONLへの更新通知に変換する
   - Codex source と Codex archived sessions が有効な場合は archived root にも同じpatternのwatcherを作成する
   - watcher root signature には `rootKind` を含め、通常 Codex と archived Codex の root を区別する
   - watcher イベントは即 refresh せず、変更された `fsPath` を pending 集合に入れて debounce / min interval を適用する
@@ -1192,21 +1203,24 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 共通設定はCodex / Claude Codeの両navigationを一括で切り替え、公開前のsource別設定には互換aliasやmigrationを設けない
   - 設定変更、History generation更新、bookmark / annotation変更、cache再作成で開いているCodex sessionのFork modelを再取得する
 
-### 4.6.2 Agent Runs（Codex）実装
+### 4.6.2 Agent Runs（Codex / Claude Code）実装
 
 - `src/agents/codexAgentMetadata.ts` / `src/agents/codexAgentRunsTypes.ts`
   - `thread_spawn` の外部入力を検証し、親 rollout ID、recorded depth、task path、nickname、role を bounded metadata として保持する。Guardianは明示的なsourceとトップレベルの親IDを検証し、kindと親IDだけを保持する
   - Guardianのkindもsummaryのpresentation / durable cache fingerprintに含め、種別だけの訂正でもIndexと表示を更新する。task labelの翻訳はTree / ChatのUI境界で行い、永続metadataには表示文字列を保存しない
   - raw prompt、response、tool output、absolute session path は relation ID や表示名として使用しない
+- `src/agents/claudeAgentMetadata.ts` / `src/sessions/claudeAgentHistory.ts`
+  - 設定されたClaude root内のowner / subagents階層と隣接metadataを検証し、project / owner / 子相対パスに束縛したidentityを使う。親子で共有されるraw sessionIdを子の識別に流用せず、異なるsourceやownerの親子関係を結ばない
+  - 確認済みrootとownerを保ち、子自身のUUID連鎖、agentId、isSidechain、`fork-context-ref`から所有範囲を分離する。同じmessage.idと明示的なtool useの関係で並列blockと結果を補完し、共通readerへ子自身のレコードを物理行順で渡す。継承文脈は表示用に分離し、欠損・不一致・上限超過はpartialとする。sidecar単独変更と参照ownerの更新・消失も再評価する
 - `src/services/historyService.ts` / `src/sessions/sessionSummary.ts`
-  - 新規・更新 Codex session の通常 summary 作成時に agent metadata を同時抽出する
-  - 既存 `cache.v9.json` は設定無効時もそのまま利用し、有効化時だけ未確認 entry の `session_meta` を bounded scan して metadata marker version 2 を補完する。旧version 1も未確認として扱い、成功済み entry は再走査せず、全 Codex entry を確認できた場合だけ file marker を付ける
+  - 新規・更新 Codex session の通常 summary 作成時に agent metadata を同時抽出する。Claude子のsummaryは独立identityと検証済みmetadataを持ち、previewには子自身の通常発言だけを使う
+  - 互換性のある既存 `cache.v9.json` は設定無効時も利用し、有効化時だけ未確認のCodex entryの `session_meta` を bounded scan して metadata marker version 2 を補完する。旧version 1も未確認として扱い、成功済み entry は再走査せず、全 Codex entry を確認できた場合だけ file marker を付ける
   - metadata backfill は通常の History summary、mtime、size、Search Index、Session Analysis Index を再生成しない。read / save の部分失敗では確認済み結果を利用しつつ、未確認 entry を次回再試行できる状態にする
   - process-local の Index / cache snapshot は構築時の History config key と generation に結び付ける。現在設定、要求設定、Index構築時設定、cacheのtime zone keyが一致する場合だけcurrentと判定し、date basis / title source変更後の旧IndexをAgent Runsへ流用しない
 - `src/agents/codexAgentRunsService.ts`
-  - History Index から rollout identity と明示的な parent edge を解決し、cycle / self-parent を除外した component、presentation、opaque navigation target を process-local に構築する
+  - History Index からsourceごとのidentityと明示的なparent edgeを解決し、cycle / self-parentを除外したcomponent、presentation、opaque navigation targetをprocess-localに構築する。Codexはrollout metadata、Claudeは子のmetadataとownerを使い、componentはsourceをまたがない
   - root / ancestor / sibling / descendant の順序、missing parent placeholder、current path、node / child 上限を決定的に解決する。annotation や project alias は topology へ混ぜず表示時に反映する
-- `src/ui/sessionIconResolver.ts` / `resources/icons/*/source-codex-subagent.svg`
+- `src/ui/sessionIconResolver.ts` / `resources/icons/*/source-codex-subagent.svg` / `resources/icons/*/source-claude-subagent.svg`
   - History で fail-open により残るサブエージェントと、Pinned / Search に残す全サブエージェントについて、source icon と subagent icon を一元的に解決し、Light / Dark theme 用 asset を使い分ける
 - `src/tree/historyTree.ts` / `src/tree/pinnedTree.ts` / `src/tree/searchTree.ts`
   - 設定有効かつ relation presentation の準備完了後、History では利用可能な親を持つサブエージェントだけを抑制し、親セッションの直接の agent 件数と、History に残す orphan / 不正 edge の presentation を構築する。Pinned / Search では全サブエージェントの専用アイコン、description、tooltipと、利用可能な子セッション用の`親セッションを開く` context値を構築する。`Agent Runs を表示` context値は作らない
@@ -1215,10 +1229,11 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 通常の filter、sort、session count、Search hit、archive、bookmark、annotation の意味は変更しない
 - `src/chat/chatPanelManager.ts` / `media/chatView.js` / `media/chatView.css`
   - Branch Navigation とは独立した generation、snapshot、opaque target、右側ペインを管理し、stale target や別 panel の message を fail closed にする
+  - 対象が未openの場合だけ、開き元の保持状態から専用または独立した新しい一時タブを選ぶ。既存対象は保持状態のままrevealし、親や他の一時タブを置換しない。非同期のファイル確認後にもsource、identity、パス、世代、最新requestId、開き元の保持状態を検証する
   - root title を panel heading、機能名と件数を副見出しにし、compact card、agent role 補助ラベル、共有幹線、青い current path、オレンジの他経路、header 右端の移動 icon、hover / focus / active stateを描画する
   - resize、scroll、focus、Escape、相互排他 overlay の状態を明示的に破棄・復元し、一時 listener、古い DOM、旧 session の model を残さない。`ChatPanelManager` 自体も extension subscription として dispose し、store listener と進行中の分岐解析を解放する
 - `src/extension.ts` / `src/settings.ts`
-  - application scope の実験的設定を監視し、有効化時だけ metadata backfill と presentation refresh を開始する。無効化時は実行中 generation を無効化し、relation 表示を消すが履歴 cache や元 JSONL は削除しない
+  - application scopeの共通設定を監視し、有効化時だけCodex metadata backfillと両ソースのpresentation refreshを開始する。Claude子の探索・識別・検索・集計はこの設定と独立して行う。無効化時は実行中generationを無効化し、relation表示を消すが履歴cacheや元JSONLは削除しない
   - History関連設定変更とAgent Runs有効化が同時に発生した場合、またはAgent Runs ON中にHistory関連設定が変わった場合は旧snapshotとopaque targetを破棄してloadingかつfail-openを維持し、新設定のHistory refreshがcurrent Indexをcommitした後だけrelationを有効化する。replacement refreshが失敗しても旧ready表示へ戻さず、設定変更のない通常refreshでは既存overlayを維持する
   - `preview.openOnSelection`変更もTree表示設定の変更として監視し、History / Pinned / Searchをrefreshしてprovider内の設定snapshotとTreeItem commandを更新する
 
@@ -1578,8 +1593,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - HTMLはnonce付きCSPとローカルCSS/JavaScriptだけを許可する。Webview側は表示文字列を`textContent`で構築し、設定値をHTMLとして解釈しない。
 - 左ナビゲーションはicon付きで展開／折りたたみでき、状態をWebview stateへ保持する。狭幅ではheaderから開くdrawerへ切り替え、開いたまま760pxを超えた場合はmodal状態を解除して非表示buttonへfocusを残さない。headerは拡張機能icon、title、version metadataで構成し、通常は製品名を含むtitleとversion／license／copyrightを表示する。wide headerは上padding 14px、row gap 4px、下margin 10px、icon 38px、title 24pxとする。760px以下ではmenu、34px icon、row gap 8px、header下margin 10pxとし、設定対象select直下を詰める。タイトル短縮は760pxのlayout breakpointと分離し、完全title／metadataの実測幅へ8pxのguardを加えた値がtitle blockの利用可能幅を超える場合だけ、localizedな「設定」／`Settings`と`v{version}`へ切り替える。ResizeObserver、window resize、再描画時の同期測定で拡縮、Zoom、言語変更へ追従し、幅が戻れば完全表示へ戻す。空のglobal status行は全幅で配置せず、設定対象の切替中またはrequestへ関連付けられないWebview error時だけmin-height 18pxの行を表示する。エクスポート、インポート、resetなど保守操作の成功／失敗はVS Code標準のinformation／error通知へ出し、cancelは通知しない。保守操作中はbuttonと設定対象selectorを無効化し、header高を変えない。「拡張機能情報」のcontent見出しは置かず、3tabのバージョン情報には同じcurrentColor iconを表示するため、compact headerで隠したlicense／copyrightも情報pageでは確認できる。折りたたみnavigation列は52pxとし、icon色は`foreground`へ追従する。High Contrastは`vscode-high-contrast`／`vscode-high-contrast-light` body classと`forced-colors`の双方でborder、選択outline、switchを補強する。
 - 複数選択はcheckboxの横並びやcomma区切り文字列ではなく、履歴インサイトの絞り込みと同系統のpill chipとpopoverで表示する。個別resetとfolder pickerはtooltip・`aria-label`付きicon buttonとし、操作領域の幅を揃える。
-- 設定label、description、option labelは、セッションビュー、履歴ビュー、コマンドパレット、右クリックメニューで使われる機能名と対応させ、manifest設定の説明とも実際の適用範囲、無効時に残る操作、実験機能の制約を一致させる。例として「セッションを専用タブで開く」「ファイルの AI 更新履歴」「通常表示／軽量表示」「Codex で再開」を説明内でも同じ表記にし、英語UIも`Normal View`／`Lightweight View`へ統一する。非同期復元の遅延／重複、Agent RunsのCodex限定、Branch NavigationのWorktree非対応、CLI再開時のEnter操作、削除設定がHistory／Pinned／Search／コマンドパレットへ適用され、無効時は完全削除になることを明示する。保存keyとenumは変更しない。
-- セッション表示では初期表示位置、sticky user prompt、performance、tool表示、長文folding、turn timelineを「セッションビュー」cardへ統合し、card内のlabelは「パフォーマンスモード」「ツール表示」と簡潔にする。1種類の履歴ソースだけに適用される設定はcatalogの`sourceBadge`を正本として`Codex`／`Claude Code` badgeを表示し、Agent Runsでは`実験的`と併記する。Branch Navigationは両履歴ソース対応のため限定badgeを付けない。
+- 設定label、description、option labelは、セッションビュー、履歴ビュー、コマンドパレット、右クリックメニューで使われる機能名と対応させ、manifest設定の説明とも実際の適用範囲、無効時に残る操作、実験機能の制約を一致させる。例として「セッションを専用タブで開く」「ファイルの AI 更新履歴」「通常表示／軽量表示」「Codex で再開」を説明内でも同じ表記にし、英語UIも`Normal View`／`Lightweight View`へ統一する。非同期復元の遅延／重複、Agent RunsのCodex・Claude Code対応、Branch NavigationのWorktree非対応、CLI再開時のEnter操作、削除設定がHistory／Pinned／Search／コマンドパレットへ適用され、無効時は完全削除になることを明示する。保存keyとenumは変更しない。
+- セッション表示では初期表示位置、sticky user prompt、performance、tool表示、長文folding、turn timelineを「セッションビュー」cardへ統合し、card内のlabelは「パフォーマンスモード」「ツール表示」と簡潔にする。1種類の履歴ソースだけに適用される設定はcatalogの`sourceBadge`を正本として`Codex`／`Claude Code` badgeを表示する。Agent RunsとBranch Navigationは両履歴ソース対応のため限定badgeを付けず、`実験的` badgeとリソース使用量iconを維持する。
 - CPU、memory、disk accessなどの使用量へ影響する14設定はcatalogの`resourceImpact`を正本とし、label横へtheme追従のgauge iconを表示する。icon wrapperはlocalized tooltipと`role=img`／`aria-label`を持ち、外部assetやicon fontには依存しない。自動更新3設定、最大検索結果数、検索index内容も対象に含める。
 - OSのファイル管理アプリと区別するため、`fileChangeHistory.explorerContextMenu.enabled` は「VS Code のファイル一覧」と表示する。wide表示は最大1440px、左右24pxの外側padding、約210pxの左navigationとし、header下の左navigationと右contentを独立してscrollさせる。navigation group見出しは11pxとする。同一pageの再描画ではfocusをスクロールさせず左右それぞれのscroll座標を維持し、navigationによるpage切替時だけ右contentを新しいpageの先頭へ移動する。狭幅ではbody scrollとdrawer表示へ戻す。
 - header metadataは全pageで`v{version} · {license} · Copyright (c) {years} HizTam`を表示する。copyrightは2026年を開始年とし、2027年以降はextension hostの現在年までの範囲へ自動更新する。「拡張機能情報」はcontent見出しを表示せず、「バージョン情報」「ライセンス」「サードパーティライセンス」の3tabで構成する。3つの`tabpanel`は対応するtabの`aria-controls`先としてDOMへ常設し、非選択panelを`hidden`にする。wide表示ではtab panelだけ、狭幅ではbodyだけをscrollさせ、ライセンス文書の二重scrollを避ける。UIのtab labelは日本語／英語へ統一し、法的文書本文は原文を維持する。
@@ -1790,6 +1805,7 @@ git diff --check
 - メタデータ復元は絶対パスを使用せず、検証済みmanifest対応表から一意に照合できたセッションだけを対象にする。上書き対象のタグ、メモ、カスタムタイトル、非表示、ピン留め、ブックマークは復元元と同じ状態へ完全置換し、復元元にない値は削除または解除する
 - Raw exportでメタデータsidecarまたはV2 manifestを付属できなかった場合は、セッションの成功 / 失敗 / スキップ件数と分けて警告する
 - Raw importはセッションデータ（現行実装ではJSONL）とメタデータへの全書き込み前にmodal表示し、セッションデータの新規 / 上書き / 変更不要 / スキップ / 読込不能件数、メタデータ対象のCodex／Claude Code別件数、復元元ディレクトリ、追加 / 上書き / 削除 / 解除 / 復元不可を示す。`すべて復元` / `セッションデータのみ` / 既存重複対象がある場合の`メタデータのみ`を選択でき、キャンセル時はどちらも変更しない。初期2.11.0形式の `rootKind` がないV2 manifestも、有効なsidecarから一意に保存場所を特定できる場合はアーカイブ状態を復元する
+- Claudeの取り込み確認では、相対layoutと実パスが一致し、選択した取り込みフォルダー内にあるrootで本文・しおりを読む。投影のstorage・cacheKey・子identityは取り込み先パスとrootから確定する。検証済みの読み取り元rootは確認用対応表だけで共有し、復元後の対応表や保存形式へ残さない。確認後のplanFingerprint比較は維持する
 - File AI Change History は非表示状態に左右されず、従来どおり対象セッションを表示する
 - Session Viewerへ同梱するMermaidを11.16.1、DOMPurifyを3.4.13へ更新し、該当するupstream security advisoryへ対応した
 
@@ -2240,7 +2256,7 @@ git diff --check
 - History Insights の解析をキャンセルしても既存表示を stale として安全に保持し、panel を閉じて開き直した場合に旧 panel の進捗、エラー、model、VS Code通知が新しい panel へ混入しない。2秒未満のloadでは通知が出ず、2秒を超える初回load／model保持refreshでは通知からキャンセルできる。完了済みcancel後の新しいopen／条件適用はloadを開始し、snapshot保存中の最後の意図がcancelなら自動loadを抑止、cancel後にretryした場合は再開する
 - 新規 storage では `session-analysis-index.v1.json` は History Insights / Claude Code Branch Navigation / `Rebuild Cache` の初回解析要求まで作成されず、通常の History / Search / Pinned / セッションタイムライン表示を待たせない
 - Session Analysis Index は cache context が一致する限り未変更セッションを再利用し、mtime / size または parser version が変わった entry だけを再解析する。root / source context が変わった場合は新しい context で対象 entry を構築する
-- Session Analysis のsource parser versionはCodex `16` / Claude Code `12`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、`history_base`論理履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`を集計しないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析される
+- Session Analysis のsource parser versionはCodex `17` / Claude Code `16`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、`history_base`論理履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`を集計しないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析される
 - 破損した `session-analysis-index.v1.json` は次の解析要求で安全に再生成され、read error では既存ファイルを削除しない
 - `Rebuild Cache` は確認後に履歴キャッシュ、検索インデックス、Session Analysis Index を同じ履歴集合から順番に再作成し、進捗とキャンセルが機能する。独立した Session Analysis 再構築コマンドは公開しない
 - `Rebuild Cache` をSession Analysis Index削除前にキャンセルした場合は既存indexが残り、削除後のキャンセルでは不完全なindexが保存されない。削除 / 保存失敗時は成功通知が出ない
@@ -2267,16 +2283,16 @@ git diff --check
 - Codex Fork overlayはdirect / nested componentのlandmarkだけをbounded表示し、`新しい Worktree にフォークする`、別`cwd`、無関係なCodex session、通常タイムラインの全messageを混在させない
 - bookmark / tag / note変更後はevidenceを再parseせずFork presentationだけを更新し、同一sessionの手動reloadと自動更新`preserve` / `follow`ではoverlay open、tree scroll、stable focusを可能な範囲で維持する
 - 同一セッションのBranch Navigation再確認では、検証済みpresentationを結果確定まで保持してpending表示へ戻さず、Host側のgeneration / History generation検証で古い操作を拒否する。別セッション、identity変更、無効化、再確認失敗では保持しない。最終通知のinline分岐表示が同一ならセッションタイムライン、Webview内検索、スクロール位置を再描画せず、表示値が変わったtoolbar / controlと開いているoverlayだけを更新する。実差分がある場合はactive検索結果をsemantic anchorで復元し、消失時は近傍へfallbackしつつ閲覧中anchorを可能な範囲で維持する
-- `codexHistoryViewer.agentRuns.enabled = false` のときは History / Pinned / Search の通常 Codex アイコンとセッションタイムライン表示が従来どおり動く。`true` へ変更すると再起動なしで metadata を準備し、利用可能な親を持つサブエージェントだけを History から抑制する一方、Pinned / Search では全サブエージェントの専用表示を維持し、セッションビューのヘッダー操作へ反映する。2.8.0 では Codex セッションだけを対象とし、Claude Code の表示と履歴には影響しない
+- `codexHistoryViewer.agentRuns.enabled = false`でもCodex / Claude Codeの子履歴を表示・検索できる。`true`へ変更すると再起動なしで関係表示を準備し、利用可能な親を持つ子だけをHistoryから抑制する。Pinned / Searchでは子を独立表示する。Claude子のsource iconとownerを開くヘッダー操作はOFFでも利用できる
 - Search 結果を開いたまま Agent Runs を有効化または metadata 更新しても、保持中の古い summary ではなく最新 relation presentation に従って session row の subagent アイコンが更新される
-- 設定有効時は通常の Codex セッションビューで Agent Runs アイコンが常に表示され、関係がない session では押下時に toast が出る。親、子、孫、sibling がある session では右側ペインへ同じ component だけが表示される
+- 設定有効時はCodex / Claude CodeのセッションビューでAgent Runsアイコンが表示され、関係がないsessionでは押下時にtoastが出る。親、子、孫、siblingがあるsessionでは右側ペインへ同じsourceのcomponentだけが表示される
 - Agent Runs の主見出しは利用可能な root session title、副見出しは機能名と件数になり、task、設定済みの agent role、session title、開始日時、最終アクティビティ、bookmark / tag / note、直接の子件数が欠落せず表示される
 - root から current までの connector / card accent は青、他経路はオレンジになり、通常 depth の parent 出口は共有幹線へ真下に接続する。sibling と孫が混在しても幹線が card 内部や別 card の裏へ入り込まず、深い階層でだけ card 回避の短い折れが出る
 - available card の hover / focus-within で枠、背景、影と移動 icon が強調され、icon の pointer active 中は押下状態が分かる。card 本体の click では移動せず、current、missing parent、省略 node は移動可能に見えない
-- 別 node の header 右端にある移動 icon から親、sibling、子、孫のセッションを開くと、既存 panel は reveal、未 open session は固定セッションタブとして開き、元 panel の scroll、検索、details state は変わらない。削除済み target、古い generation、未知 target は元 panel を閉じず、ローカライズしたエラーを表示する
+- 別 node の header 右端にある移動 icon から親、sibling、子、孫を開くと、既存 panel は保持状態のまま reveal、未 open session は開き元と同じ一時／専用状態の新しいタブで開く。元 panel と他の一時タブの scroll、検索、details state は変わらない。削除済み target、古い generation、未知 target は元 panel を閉じず、ローカライズしたエラーを表示する
 - Agent Runs ペインの幅変更は閉じて開き直しても維持され、Reload Window 後はペイン自体を自動で開かない。同一セッションの手動 reload と自動更新 `preserve` / `follow` では開いたペイン、tree scroll、focus nodeを可能な範囲で維持し、セッション切り替えや非 ready 状態では閉じる。Branch Navigation overlay、page search、session 再描画との切り替えで古い DOM、focus、resize stateが残らない
 - Codex / Claude Code の Branch Navigation overlay は同一セッションの手動 reload と自動更新 `preserve` / `follow` では開いた状態を維持し、最新 generation を current node 基準で再描画する。overlay 内の別セッションへの切り替え成功後は閉じ、後続navigationで勝手に再表示しない
-- History / Pinned / Searchのセッション右クリックとCommand Paletteに`Branch Navigationを表示`／`Agent Runsを表示`が出ず、現在のセッションビューのヘッダー／タイムライン操作は従来どおり利用できる。Codexサブエージェントの`親セッションを開く`は利用可能な場合だけ表示される
+- History / Pinned / Searchのセッション右クリックとCommand Paletteに`Branch Navigationを表示`／`Agent Runsを表示`が出ず、現在のセッションビューのヘッダー／タイムライン操作は従来どおり利用できる。Codex / Claude Codeの子の`親セッションを開く`は利用可能な場合だけ表示される
 - Claude Code user recordが短い単独`<local-command-stdout>`の場合は既定で閉じた出力カードになり、先頭以外に現れても通常user message番号、検索結果、preview、Resume、Handoff、Session Analysisのhuman messageへ混入しない。属性付き、複数block、通常文との混在、4,096文字超は通常textとして残る
 - Claude Codeのoriginを持たないuser record全体が`<bash-stdout>`と任意の`<bash-stderr>`・数値`<bash-exit-code>`、または単独`<bash-stderr>`に一致する場合は、`terminalOutput`の閉じたカードとして表示する。本文は標準出力・標準エラー・終了コードに分け、外側の記法を表示・コピー・検索へ含めない。本家の3種類のentityは一度だけ復号し、`persisted-output`内は再復号せず外側のみ除去する。stdout/stderrは各64,000文字まで、Unicodeの組を分断せず省略を明示する。本文はplain textとして扱い、外部ファイルを読まない
 - 端末出力は従来の1つのmessageIndexを保持して後続の検索・しおり・patch anchorを維持するが、user/assistantメッセージ・新たなhuman turn・依頼数・preview・Resume・Handoffには含めない。検索は`role:tool/source:toolOutput`としてツール出力の検索設定に従い、検索結果からはカードを展開する。Markdownには専用見出しと安全なcode blockで出力する。出力中のpatch風テキストはAIファイル変更として扱わない

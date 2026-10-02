@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.16.0] - 2026-10-02
+
+### Added
+
+- Added Agent Runs support for Claude Code, with relationship views and navigation for child and descendant agents and delegated worker forks.
+- Added a button in the Session Viewer header to switch between dedicated and temporary tabs. Its tooltip shows the current state.
+
+### Changed
+
+- Added Claude Code child histories to Search, History Insights, and File AI Change History, including when Agent Runs is disabled.
+
+### Fixed
+
+- Fixed Codex page-selection context being displayed, indexed, and counted as ordinary user messages.
+- Fixed Claude Code internal task notifications and reminders being treated as ordinary user messages. Their contents now appear in notification cards and are excluded from ordinary user-message search and statistics, and from request extraction for Resume and Handoff.
+
 ## [2.15.0] - 2026-09-28
 
 ### Added

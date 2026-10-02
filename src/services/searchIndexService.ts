@@ -1,3 +1,4 @@
+import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { extractClaudeTerminalOutput, getClaudeTerminalOutputText } from "../chat/claudeTerminalOutput";
@@ -55,7 +56,7 @@ import {
   readCodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
 
-const SEARCH_INDEX_FILE_VERSION = 27;
+const SEARCH_INDEX_FILE_VERSION = 30;
 const SEARCH_STAT_CONCURRENCY = 8;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
@@ -331,6 +332,7 @@ export class SearchIndexService {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const buildStartedAt = nowMs();
         const indexed = await buildIndexedSession(session.fsPath, {
+          claudeSessionsRoot: session.source === "claude" ? session.storage.rootPath : undefined,
           indexToolContent: context.indexToolContent,
           token,
           source: session.source,
@@ -837,6 +839,7 @@ function buildHistoryPlanSignature(plan: CodexLogicalHistoryPlan): string {
 async function buildIndexedSession(
   fsPath: string,
   options: {
+    claudeSessionsRoot?: string;
     indexToolContent: SearchIndexToolContent;
     token?: vscode.CancellationToken;
     source?: "codex" | "claude";
@@ -861,6 +864,7 @@ async function buildIndexedSession(
 
   const source = options.source ?? (path.basename(fsPath).toLowerCase().startsWith("rollout-") ? "codex" : "claude");
   for await (const record of readSessionJsonlRecords(fsPath, source, {
+    claudeSessionsRoot: options.claudeSessionsRoot,
     applyCodexRollbacks: true,
     sessionInventory: options.sessionInventory,
     plan: options.historyPlan,
@@ -1122,6 +1126,11 @@ async function indexClaudeRecord(obj: any, state: BuildState): Promise<boolean> 
         });
       }
     }
+    return true;
+  }
+
+  if (isClaudeInternalUserRecord(obj)) {
+    state.messageIndex += 1;
     return true;
   }
 

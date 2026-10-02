@@ -352,7 +352,6 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
   ),
   definition("agentRuns.enabled", "session", "session.navigation", "switch", "application", false, {
     experimental: true,
-    sourceBadge: "codex",
     resourceImpact: true
   }),
   definition(

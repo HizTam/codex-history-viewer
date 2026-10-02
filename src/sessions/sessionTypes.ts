@@ -29,9 +29,26 @@ export interface SessionMetaInfo {
   source?: string;
   historySource?: SessionSource;
   codexAgent?: CodexAgentMetadata;
+  claudeAgent?: ClaudeAgentMetadata;
   codexFork?: CodexForkMetadata;
   codexHistoryBase?: CodexHistoryBaseMetadata;
   codexStandaloneHistory?: true; // Paginated ordinal-zero metadata with no declared history base.
+}
+
+export interface ClaudeAgentMetadata {
+  project: string;
+  ownerSessionId: string;
+  relativePath: string;
+  agentId: string;
+  metadataState: "valid" | "missing" | "invalid";
+  metadataStamp: string;
+  parentAgentId?: string;
+  toolUseId?: string;
+  agentType?: string;
+  description?: string;
+  name?: string;
+  isFork?: boolean;
+  spawnDepth?: number;
 }
 
 export interface CodexAgentMetadata {

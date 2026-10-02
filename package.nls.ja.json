@@ -247,7 +247,7 @@
   "cmd.pinnedSortFileSizeAsc": "ピン留めをファイルサイズの小さい順で並び替え",
   "cmd.showHistoryInsights": "履歴インサイトを表示",
   "cmd.openCodexAgentParent": "親セッションを開く",
-  "cfg.agentRunsEnabled": "実験的な設定です。Codex セッションで Agent Runs を有効にします。親子関係の解析後は、親が見つかったサブエージェントセッションを履歴一覧から省き、親セッション内に表示します。既定ではオフです。",
+  "cfg.agentRunsEnabled": "実験的な設定です。Codex と Claude Code で Agent Runs を有効にします。検証済みの親を開ける子履歴は、履歴一覧の代わりに Agent Runs から表示します。子自身のレコードは、この設定に関係なく検索・集計の対象です。既定ではオフです。",
   "cfg.resumeCodexMethod": "Codex セッションの再開操作を選択します。CLI は新しい統合ターミナルへコマンドを入力するだけなので、実行には Enter キーが必要です。「拡張機能と CLI」では最後に成功した方式が主ボタンになります。",
   "cfg.resumeClaudeMethod": "Claude Code セッションの再開操作を選択します。CLI は新しい統合ターミナルへコマンドを入力するだけなので、実行には Enter キーが必要です。「拡張機能と CLI」では最後に成功した方式が主ボタンになります。",
   "cfg.resumeMethod.labelExtension": "拡張機能",

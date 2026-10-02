@@ -15,7 +15,7 @@ import {
 } from "../chat/chatAttachments";
 import type { ChatAttachment } from "../chat/chatTypes";
 import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
-import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
+import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "./projectPathMapper";
 import { normalizeProjectKey } from "../utils/fsUtils";
 import { readSessionJsonlLines } from "../sessions/codexHistoryBase";
@@ -328,6 +328,7 @@ async function parseSessionForHandoff(
   let totalLines = 0;
 
   for await (const record of readSessionJsonlLines(session.fsPath, session.source, {
+    claudeSessionsRoot: session.source === "claude" ? session.storage.rootPath : undefined,
     applyCodexRollbacks: true,
     sessionInventory,
   })) {
@@ -400,7 +401,7 @@ async function collectClaudeMessage(
 ): Promise<boolean> {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
-  if (isClaudeCrossSessionInboundRecord(obj)) return true;
+  if (isClaudeInternalUserRecord(obj)) return true;
 
   const rawContent = getClaudeMessageContent(obj);
   const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
@@ -446,7 +447,7 @@ function collectCodexDiffBlocks(
 
 function collectClaudeDiffBlocks(obj: any, diffBlocks: HandoffDiffBlock[]): void {
   if (diffBlocks.length >= MAX_DIFF_BLOCKS) return;
-  if (isClaudeCrossSessionInboundRecord(obj)) return;
+  if (isClaudeInternalUserRecord(obj)) return;
   if (!detectClaudeMessageRole(obj)) return;
 
   const toolCalls = extractClaudeToolCalls(getClaudeMessageContent(obj));

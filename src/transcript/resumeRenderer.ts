@@ -17,7 +17,7 @@ import {
   selectClaudeControlContent,
 } from "../chat/chatAttachments";
 import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
-import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
+import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
 import {
   readCodexAsyncQuestionMessage,
   readCodexRolloutRecordKind,
@@ -32,6 +32,7 @@ interface ResumeMessage {
 }
 
 export interface ResumeRenderOptions {
+  claudeSessionsRoot?: string;
   timeZone: string;
   maxMessages?: number;
   maxChars?: number;
@@ -58,6 +59,7 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
   };
 
   for await (const record of readSessionJsonlRecords(fsPath, historySource, {
+    claudeSessionsRoot: options.claudeSessionsRoot,
     applyCodexRollbacks: true,
     sessionInventory: options.sessionInventory,
   })) {
@@ -233,7 +235,7 @@ async function collectClaudeResumeMessage(
 ): Promise<boolean> {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
-  if (isClaudeCrossSessionInboundRecord(obj)) return true;
+  if (isClaudeInternalUserRecord(obj)) return true;
 
   const rawContent = getClaudeMessageContent(obj);
   const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;

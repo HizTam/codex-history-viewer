@@ -24,7 +24,7 @@ import type {
 } from "../chat/chatTypes";
 import { extractChatTokenUsage } from "../chat/tokenUsage";
 import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
-import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
+import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import {
   readCodexCompactedTokenUsageRecord,
@@ -97,6 +97,7 @@ interface JsonlScanResult {
   claudeRecords: RawClaudeRecord[];
   claudeGraphRecordsTruncated: boolean;
   claudeGraphIdentifierInvalid: boolean;
+  claudeAgentPartial?: boolean;
   claudeSidechainState: ClaudeSidechainState;
 }
 
@@ -201,6 +202,7 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
   const warnings: string[] = [];
   try {
     const { model, scan } = await runAnalysisRecordPipeline(input);
+    if (scan.claudeAgentPartial) warnings.push("claudeAgentOwnershipPartial");
     if (scan.malformedLineCount > 0) warnings.push(`malformedLines:${scan.malformedLineCount}`);
     if (input.historyPlan && !input.historyPlan.complete) {
       warnings.push(`historyBase:${input.historyPlan.issue ?? "unresolved"}`);
@@ -209,7 +211,7 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
     if (scan.claudeGraphIdentifierInvalid) warnings.push("graphIdentifierInvalid");
 
     const availability: AnalysisAvailability =
-      scan.malformedLineCount > 0 || (input.historyPlan !== undefined && !input.historyPlan.complete)
+      scan.claudeAgentPartial || scan.malformedLineCount > 0 || (input.historyPlan !== undefined && !input.historyPlan.complete)
         ? "partial"
         : "available";
     const usageResult = buildUsageStats(
@@ -262,6 +264,7 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
       warnings.push(`toolUsageLimit:${MAX_TOOL_USAGE}`);
     }
     const completeness =
+      scan.claudeAgentPartial ||
       scan.malformedLineCount > 0 ||
       scan.claudeGraphRecordsTruncated ||
       scan.claudeGraphIdentifierInvalid ||
@@ -310,7 +313,7 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
               session.fsPath,
               input.claudeSessionsRoot,
             ),
-            claudeIsSidechain: scan.claudeSidechainState,
+            claudeIsSidechain: session.meta.claudeAgent ? true : scan.claudeSidechainState,
           }
         : {}),
       warnings: warnings.slice(0, MAX_WARNINGS),
@@ -824,8 +827,11 @@ async function runAnalysisRecordPipeline(
     : undefined;
   throwIfAnalysisCancelled(input);
 
+  let claudeAgentPartial = false;
   for await (const envelope of readAnalysisRecordEnvelopes(session.fsPath, session.source, {
+    claudeSessionsRoot: input.claudeSessionsRoot,
     applyCodexRollbacks: true,
+    onClaudeAgentPartial: () => { claudeAgentPartial = true; },
     sessionInventory: input.sessionInventory,
     plan: input.historyPlan,
     token: input.token,
@@ -863,6 +869,7 @@ async function runAnalysisRecordPipeline(
     model,
     scan: {
       ...integrity.finalize(),
+      claudeAgentPartial,
       ...(claudeGraph?.finalize() ?? emptyClaudeGraphScanResult()),
     },
   };
@@ -1002,7 +1009,7 @@ async function buildRawClaudeRecord(
 ): Promise<RawClaudeRecordBuildResult> {
   const role = detectClaudeMaterializedMessageRole(obj);
   const rawContent = getClaudeMessageContent(obj);
-  const isCrossSessionInbound = isClaudeCrossSessionInboundRecord(obj);
+  const isCrossSessionInbound = isClaudeInternalUserRecord(obj);
   const pastedPrompt = role === "user" && !isCrossSessionInbound
     ? await pastedPromptResolver?.resolve(obj, rawContent)
     : undefined;

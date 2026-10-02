@@ -2740,6 +2740,16 @@ body.vscode-high-contrast-light .agentRunsTreeViewport {
   color: var(--agent-runs-route-current);
 }
 
+/* Match the Claude tree icon without changing current/alternate route colors. */
+.agentRunsTreeNode .agentRunsTreeNodeMarker.source-claude {
+  color: #ffb078;
+}
+
+body.vscode-light .agentRunsTreeNode .agentRunsTreeNodeMarker.source-claude,
+body.vscode-high-contrast-light .agentRunsTreeNode .agentRunsTreeNodeMarker.source-claude {
+  color: #b84b00;
+}
+
 .agentRunsTreeNodeRole {
   min-width: 0;
   max-width: 42%;
@@ -6548,4 +6558,12 @@ body.vscode-high-contrast-light #mermaidPaneRoot {
     width: 100%;
     justify-content: flex-start;
   }
+}
+#toolbar #btnTabMode[aria-pressed="true"] {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+
+#btnClaudeOwner[hidden] {
+  display: none !important;
 }

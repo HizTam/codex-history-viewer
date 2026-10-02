@@ -8,6 +8,8 @@ export type SessionIconVariant = "default" | "dedicated";
 export class SessionIconResolver {
   private readonly codexIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly codexSubagentIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly claudeSubagentIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly claudeSubagentDedicatedIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudeIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly codexDedicatedIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly codexSubagentDedicatedIconPath: { light: vscode.Uri; dark: vscode.Uri };
@@ -16,6 +18,8 @@ export class SessionIconResolver {
   constructor(extensionUri: vscode.Uri) {
     this.codexIconPath = buildIconPath(extensionUri, "source-codex.svg");
     this.codexSubagentIconPath = buildIconPath(extensionUri, "source-codex-subagent.svg");
+    this.claudeSubagentIconPath = buildIconPath(extensionUri, "source-claude-subagent.svg");
+    this.claudeSubagentDedicatedIconPath = buildIconPath(extensionUri, "source-claude-subagent-dedicated.svg");
     this.claudeIconPath = buildIconPath(extensionUri, "source-claude.svg");
     this.codexDedicatedIconPath = buildIconPath(extensionUri, "source-codex-dedicated.svg");
     this.codexSubagentDedicatedIconPath = buildIconPath(
@@ -33,6 +37,7 @@ export class SessionIconResolver {
   ): { light: vscode.Uri; dark: vscode.Uri } {
     const dedicated = variant === "dedicated";
     if (session.source === "claude") {
+      if (session.meta.claudeAgent) return dedicated ? this.claudeSubagentDedicatedIconPath : this.claudeSubagentIconPath;
       return dedicated ? this.claudeDedicatedIconPath : this.claudeIconPath;
     }
     if (!agentRunsEnabled) {

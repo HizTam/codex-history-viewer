@@ -30,6 +30,8 @@ export interface ChatSessionLocation {
 export type ChatTimelineItem =
   | ChatMessageItem
   | ChatCrossSessionMessageItem
+  | ChatTaskNotificationItem
+  | ChatSystemReminderItem
   | ChatProtocolContextItem
   | ChatToolItem
   | ChatSystemEventItem
@@ -236,10 +238,31 @@ export interface ChatCrossSessionMessageItem {
   truncated?: boolean;
 }
 
+export interface ChatTaskNotificationItem {
+  type: "taskNotification";
+  source: "claude";
+  messageIndex: number;
+  timestampIso?: string;
+  body: string;
+  truncated?: boolean;
+  invalidContent?: boolean;
+}
+
+export interface ChatSystemReminderItem {
+  type: "systemReminder";
+  source: "claude";
+  messageIndex: number;
+  timestampIso?: string;
+  body: string;
+  truncated?: boolean;
+}
+
 export interface ChatProtocolContextItem {
   type: "protocolContext";
-  source: "codex";
-  kind: "sessionStart";
+  source: "codex" | "claude";
+  kind: "sessionStart" | "agentInherited";
+  partial?: boolean;
+  truncated?: boolean;
   messageIndex: number;
   timestampIso?: string;
   text: string;
@@ -428,6 +451,7 @@ export interface ChatNoteItem {
 }
 
 export interface ChatSessionModel {
+  identityKey?: string;
   compressed?: boolean;
   codexHasRollback?: boolean;
   fsPath: string;

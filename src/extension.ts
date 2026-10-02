@@ -5124,7 +5124,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const session = isSessionNode(element)
         ? element.session
         : resolveSessionFromElementOrFsPath(historyService, element);
-      if (!session || session.source !== "codex") return;
+      if (!session) return;
       await chatPanels.openCodexAgentParent(session);
     }),
   );
@@ -5271,6 +5271,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       try {
         const { timeZone } = resolveDateTimeSettings();
         const excerpt = await renderResumeContext(session.fsPath, {
+          claudeSessionsRoot: session.source === "claude" ? session.storage.rootPath : undefined,
           timeZone,
           maxMessages: RESUME_MAX_MESSAGES,
           maxChars: RESUME_MAX_CHARS,

@@ -1,4 +1,6 @@
 import * as path from "node:path";
+import { hasClaudeAgentPathShape } from "../agents/claudeAgentMetadata";
+import { isBoundedSessionIdentityKey } from "../sessions/sessionIdentity";
 import * as vscode from "vscode";
 import { isCompressedSessionFile, resolveSessionFilePath } from "../utils/sessionFileReader";
 import type { HistoryService } from "../services/historyService";
@@ -143,6 +145,7 @@ type ChatBookmarkState = {
 };
 
 type MissingSessionHandler = (fsPath: string) => Promise<void> | void;
+type ChatTabMode = "temporary" | "dedicated";
 export type ChatPanelKind = "reusable" | "session" | "branch";
 export type ChatWebviewAutoRefreshMode = "off" | "preserve" | "follow";
 type ChatPanelState = {
@@ -174,7 +177,7 @@ type ResumePresentationCheckpoint = {
 };
 type SessionInfoAction = "copySessionId" | "copySessionFilePath" | "revealSessionFile";
 type SearchHistoryWebviewCandidate = SearchHistoryEntry & { key: string };
-type ExistingChatPanel = { panel: vscode.WebviewPanel; kind: "reusable" | "session" };
+type ExistingChatPanel = { panel: vscode.WebviewPanel; kind: ChatPanelKind };
 type SessionPanelOpenOptions = {
   revealMessageIndex?: number;
   revealTarget?: FileChangeHistoryRevealTarget;
@@ -185,6 +188,8 @@ type SessionPanelOpenOptions = {
 };
 type ChatPanelRestoreState = {
   version: 1;
+  tabMode: ChatTabMode;
+  identityKey?: string;
   kind: ChatPanelKind;
   fsPath: string;
   revealMessageIndex?: number;
@@ -303,6 +308,11 @@ export class ChatPanelManager implements vscode.Disposable {
   private searchHistoryPeerRefresh: (() => void) | undefined;
 
   private reusablePanel: vscode.WebviewPanel | null = null;
+  private readonly reusablePanels = new Set<vscode.WebviewPanel>();
+  private readonly retentionByPanel = new WeakMap<vscode.WebviewPanel, { mode: ChatTabMode; revision: number }>();
+  private readonly panelActivityOrder = new WeakMap<vscode.WebviewPanel, number>();
+  private panelActivitySequence = 0;
+  private readonly retentionCleanupRegistered = new WeakSet<vscode.WebviewPanel>();
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
   private readonly allSessionPanels = new Set<vscode.WebviewPanel>();
   private readonly branchPanels = new Set<vscode.WebviewPanel>();
@@ -858,7 +868,7 @@ export class ChatPanelManager implements vscode.Disposable {
   public async openSessionPreferExisting(
     session: SessionSummary,
     options: SessionPanelOpenOptions & {
-      fallbackKind: "reusable" | "session";
+      fallbackKind: "reusable" | "session" | "newTemporary";
       promoteReusable?: boolean;
     },
   ): Promise<void> {
@@ -886,7 +896,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const key = normalizeCacheKey(session.fsPath);
     const existing = this.findExistingSessionPanel(session.fsPath);
     let panel: vscode.WebviewPanel;
-    let kind: "reusable" | "session";
+    let kind: ChatPanelKind;
 
     if (existing) {
       const state = this.stateByPanel.get(existing.panel);
@@ -907,10 +917,16 @@ export class ChatPanelManager implements vscode.Disposable {
           this.reusableOpenGeneration += 1;
         }
       }
+    } else if (options.fallbackKind === "newTemporary") {
+      // Agent Runs preserves every existing temporary tab, including the caller.
+      panel = this.createPanel({ kind: "reusable" });
+      this.registerReusablePanel(panel);
+      kind = "reusable";
     } else if (options.fallbackKind === "reusable") {
+      this.selectReusablePanel();
       if (this.reusablePanel) {
         const reusableState = this.stateByPanel.get(this.reusablePanel);
-        if (!reusableState || reusableState.kind !== "reusable") return;
+        if (!reusableState || this.getTabMode(this.reusablePanel) !== "temporary") return;
         panel = this.reusablePanel;
       } else {
         panel = this.getOrCreateReusablePanel();
@@ -973,6 +989,7 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private getOrCreateReusablePanel(): vscode.WebviewPanel {
+    this.selectReusablePanel();
     if (this.reusablePanel) return this.reusablePanel;
     const panel = this.createPanel({ kind: "reusable" });
     this.registerReusablePanel(panel);
@@ -995,21 +1012,21 @@ export class ChatPanelManager implements vscode.Disposable {
 
   private findExistingSessionPanel(fsPath: string): ExistingChatPanel | null {
     const key = normalizeCacheKey(fsPath);
-    const sessionPanel = this.panelsByKey.get(key);
-    if (sessionPanel) return { panel: sessionPanel, kind: "session" };
-    for (const panel of this.allSessionPanels) {
+    const registered = this.panelsByKey.get(key);
+    const registeredState = registered ? this.stateByPanel.get(registered) : undefined;
+    if (registered && (!registeredState || registeredState.kind !== "session" || normalizeCacheKey(registeredState.fsPath) !== key)) {
+      // Let the caller reject an inconsistent registration instead of opening a second panel.
+      return { panel: registered, kind: "session" };
+    }
+    const panels = this.getOpenPanels().filter(panel => {
       const state = this.stateByPanel.get(panel);
-      if (state?.kind === "session" && normalizeCacheKey(state.fsPath) === key) {
-        return { panel, kind: "session" };
-      }
-    }
-
-    if (this.reusablePanel) {
-      const state = this.stateByPanel.get(this.reusablePanel);
-      if (state && normalizeCacheKey(state.fsPath) === key) return { panel: this.reusablePanel, kind: "reusable" };
-    }
-
-    return null;
+      return state && normalizeCacheKey(state.fsPath) === key;
+    });
+    panels.sort((left, right) =>
+      Number(this.getTabMode(right) === "dedicated") - Number(this.getTabMode(left) === "dedicated") ||
+      (this.panelActivityOrder.get(right) ?? 0) - (this.panelActivityOrder.get(left) ?? 0));
+    const panel = panels[0];
+    return panel ? { panel, kind: this.stateByPanel.get(panel)!.kind } : null;
   }
 
   private commitSessionPanel(
@@ -1039,7 +1056,10 @@ export class ChatPanelManager implements vscode.Disposable {
       pathModeEnabled: isSameSession ? prevState.pathModeEnabled : undefined,
       pendingAutoRefresh: false,
     };
+    if (prevState?.kind === "branch" && options.kind !== "branch") this.branchPanels.delete(panel);
     this.stateByPanel.set(panel, nextState);
+    const retention = this.retentionByPanel.get(panel);
+    this.retentionByPanel.set(panel, { mode: retention?.mode ?? (options.kind === "reusable" ? "temporary" : "dedicated"), revision: (retention?.revision ?? 0) + 1 });
     this.pruneLiveSessionObservations();
     this.applyPanelPresentation(panel, session, nextState.kind);
     panel.reveal(
@@ -1051,6 +1071,8 @@ export class ChatPanelManager implements vscode.Disposable {
 
   private registerBranchPanel(panel: vscode.WebviewPanel): void {
     this.branchPanels.add(panel);
+    if (!this.retentionByPanel.has(panel)) this.retentionByPanel.set(panel, { mode: "dedicated", revision: 0 });
+    this.registerRetentionCleanup(panel);
     if (this.branchPanelRegistration.has(panel)) return;
     this.branchPanelRegistration.add(panel);
     panel.onDidDispose(() => {
@@ -1061,10 +1083,8 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private transitionPanelToBranch(panel: vscode.WebviewPanel, previousFsPath?: string): void {
-    if (this.reusablePanel === panel) {
-      this.reusablePanel = null;
-      this.reusableOpenGeneration += 1;
-    }
+    // Existing retention survives a branch move; the route registry has a separate lifetime.
+    this.reusableOpenGeneration += 1;
     if (previousFsPath) {
       const key = normalizeCacheKey(previousFsPath);
       if (this.panelsByKey.get(key) === panel) this.panelsByKey.delete(key);
@@ -1093,20 +1113,77 @@ export class ChatPanelManager implements vscode.Disposable {
     this.codexAgentRunPinRevisionByPanel.delete(panel);
   }
 
-  private promoteReusablePanelToSession(panel: vscode.WebviewPanel, fsPath: string): void {
-    if (this.reusablePanel === panel) {
-      this.reusablePanel = null;
-      this.reusableOpenGeneration += 1;
-    }
-    const key = normalizeCacheKey(fsPath);
-    this.panelsByKey.set(key, panel);
-    this.allSessionPanels.add(panel);
+  private promoteReusablePanelToSession(panel: vscode.WebviewPanel, _fsPath: string): void {
+    this.setTabMode(panel, "dedicated");
+  }
+
+  private getTabMode(panel: vscode.WebviewPanel): ChatTabMode {
+    return this.retentionByPanel.get(panel)?.mode ?? (this.stateByPanel.get(panel)?.kind === "reusable" ? "temporary" : "dedicated");
+  }
+
+  private selectReusablePanel(): void {
+    const previous = this.reusablePanel;
+    const candidates = Array.from(this.reusablePanels);
+    // Preserve compatibility with panels registered before the multi-preview registry existed.
+    if (previous && !candidates.includes(previous)) candidates.push(previous);
+    candidates.sort((left, right) => (this.panelActivityOrder.get(right) ?? 0) - (this.panelActivityOrder.get(left) ?? 0));
+    this.reusablePanel = candidates.find(panel => this.getTabMode(panel) === "temporary") ?? null;
+  }
+
+  private markPanelActive(panel: vscode.WebviewPanel): void {
+    if (!panel.active) return;
+    this.panelActivityOrder.set(panel, ++this.panelActivitySequence);
+    const previous = this.reusablePanel;
+    this.selectReusablePanel();
+    if (previous !== this.reusablePanel) this.reusableOpenGeneration += 1;
+  }
+
+  private registerRetentionCleanup(panel: vscode.WebviewPanel): void {
+    if (this.retentionCleanupRegistered.has(panel)) return;
+    this.retentionCleanupRegistered.add(panel);
     panel.onDidDispose(() => {
+      this.reusablePanels.delete(panel);
+      this.retentionByPanel.delete(panel);
+      this.panelActivityOrder.delete(panel);
       this.removeSessionPanelRegistrations(panel);
-      this.imageDataByPanel.delete(panel);
-      this.documentDataByPanel.delete(panel);
-      this.fileHistoryTargetsByPanel.delete(panel);
+      if (this.reusablePanel === panel) { this.reusablePanel = null; this.reusableOpenGeneration += 1; }
+      this.selectReusablePanel();
     });
+  }
+
+  private setTabMode(panel: vscode.WebviewPanel, mode: ChatTabMode): void {
+    const state = this.stateByPanel.get(panel);
+    if (!state) return;
+    if (this.getTabMode(panel) === mode) { this.publishTabMode(panel); return; }
+    const retention = this.retentionByPanel.get(panel);
+    this.retentionByPanel.set(panel, { mode, revision: (retention?.revision ?? 0) + 1 });
+    this.reusableOpenGeneration += 1;
+    this.removeSessionPanelRegistrations(panel);
+    this.reusablePanels.delete(panel);
+    if (this.reusablePanel === panel) this.reusablePanel = null;
+    if (state.kind !== "branch") state.kind = mode === "temporary" ? "reusable" : "session";
+    if (mode === "temporary") this.registerReusablePanel(panel);
+    else if (state.kind !== "branch") this.registerSessionPanel(normalizeCacheKey(state.fsPath), panel);
+    this.markPanelActive(panel);
+    this.selectReusablePanel();
+    const session = this.findPanelSessionByFsPath(state.fsPath);
+    if (session) this.applyPanelPresentation(panel, session, state.kind);
+    this.publishTabMode(panel);
+  }
+
+  private buildTabModeState(panel: vscode.WebviewPanel): { mode: ChatTabMode; revision: number; fsPath?: string; kind?: ChatPanelKind } {
+    const state = this.stateByPanel.get(panel);
+    return { mode: this.getTabMode(panel), revision: this.retentionByPanel.get(panel)?.revision ?? 0, fsPath: state?.fsPath, kind: state?.kind };
+  }
+
+  private publishTabMode(panel: vscode.WebviewPanel): void {
+    try {
+      void Promise.resolve(panel.webview.postMessage({ type: "tabModeState", ...this.buildTabModeState(panel) })).catch(() => {
+        this.logger?.debug("chat.tabMode delivery failed");
+      });
+    } catch {
+      this.logger?.debug("chat.tabMode delivery failed");
+    }
   }
 
   private createPanel(params: { kind: ChatPanelKind }): vscode.WebviewPanel {
@@ -1149,6 +1226,7 @@ export class ChatPanelManager implements vscode.Disposable {
       });
     });
     panel.onDidChangeViewState(() => {
+      this.markPanelActive(panel);
       this.publishViewState(panel);
       const state = this.stateByPanel.get(panel);
       if (
@@ -1192,25 +1270,20 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private registerReusablePanel(panel: vscode.WebviewPanel): void {
-    this.reusablePanel = panel;
-    panel.onDidDispose(() => {
-      if (this.reusablePanel === panel) {
-        this.reusablePanel = null;
-        this.reusableOpenGeneration += 1;
-      }
-    });
+    this.reusablePanels.add(panel);
+    if (!this.retentionByPanel.has(panel)) this.retentionByPanel.set(panel, { mode: "temporary", revision: 0 });
+    if (!this.reusablePanel) this.reusablePanel = panel;
+    this.registerRetentionCleanup(panel);
+    this.markPanelActive(panel);
+    this.selectReusablePanel();
   }
 
   private registerSessionPanel(key: string, panel: vscode.WebviewPanel): void {
     this.panelsByKey.set(key, panel);
     this.allSessionPanels.add(panel);
-    panel.onDidDispose(() => {
-      this.removeSessionPanelRegistrations(panel);
-      this.imageDataByPanel.delete(panel);
-      this.documentDataByPanel.delete(panel);
-      this.fileHistoryTargetsByPanel.delete(panel);
-      this.patchEntryDetailRequestsByPanel.delete(panel);
-    });
+    if (!this.retentionByPanel.has(panel)) this.retentionByPanel.set(panel, { mode: "dedicated", revision: 0 });
+    this.registerRetentionCleanup(panel);
+    this.markPanelActive(panel);
   }
 
   private removeSessionPanelRegistrations(panel: vscode.WebviewPanel): void {
@@ -1226,28 +1299,22 @@ export class ChatPanelManager implements vscode.Disposable {
       this.disposePanel(panel);
       return;
     }
+    await this.initialHistoryReady;
+    const restoredSession = this.historyService.findByFsPath(restored.fsPath);
+    if ((hasClaudeAgentPathShape(restored.fsPath, getConfig().claudeSessionsRoot) && !restoredSession?.meta.claudeAgent) ||
+        (restored.identityKey && restoredSession?.identityKey !== restored.identityKey)) {
+      await this.handleMissingSession(panel, restored.fsPath);
+      return;
+    }
     if (!(await this.ensureSessionFileAvailable(restored.fsPath))) {
       await this.handleMissingSession(panel, restored.fsPath);
       return;
     }
 
-    if (restored.kind === "reusable") {
-      if (this.reusablePanel && this.reusablePanel !== panel) {
-        this.disposePanel(panel);
-        return;
-      }
-      this.registerReusablePanel(panel);
-    } else if (restored.kind === "session") {
-      const key = normalizeCacheKey(restored.fsPath);
-      const existing = this.panelsByKey.get(key);
-      if (existing && existing !== panel) {
-        this.disposePanel(panel);
-        return;
-      }
-      this.registerSessionPanel(key, panel);
-    } else {
-      this.registerBranchPanel(panel);
-    }
+    this.retentionByPanel.set(panel, { mode: restored.tabMode, revision: 0 });
+    if (restored.kind === "branch") this.registerBranchPanel(panel);
+    if (restored.tabMode === "temporary") this.registerReusablePanel(panel);
+    else if (restored.kind !== "branch") this.registerSessionPanel(normalizeCacheKey(restored.fsPath), panel);
 
     this.initializePanel(panel);
     const session = this.historyService.findByFsPath(restored.fsPath);
@@ -1329,6 +1396,7 @@ export class ChatPanelManager implements vscode.Disposable {
     </div>
     <button id="btnPinToggle" type="button" class="toolbarIconBtn"></button>
     <button id="btnCustomTitle" type="button" class="toolbarIconBtn"></button>
+    <button id="btnTabMode" type="button" class="toolbarIconBtn" aria-pressed="false"></button>
     <div id="toolbarSpacer"></div>
     <button id="btnMarkdown" type="button" class="toolbarIconBtn"></button>
     <button id="btnCopyResume" type="button" class="toolbarIconBtn"></button>
@@ -1339,6 +1407,7 @@ export class ChatPanelManager implements vscode.Disposable {
     <button id="btnPageSearch" type="button" class="toolbarIconBtn"></button>
     <button id="btnPerformanceMode" type="button" class="toolbarIconBtn"></button>
     <button id="btnAutoRefresh" type="button" class="toolbarIconBtn" hidden></button>
+    <button id="btnClaudeOwner" type="button" hidden></button>
     <button id="btnAgentRuns" type="button" class="toolbarIconBtn" hidden></button>
     <button id="btnBranchMap" type="button" class="toolbarIconBtn" hidden></button>
     <button id="btnReload" type="button" class="toolbarIconBtn"></button>
@@ -1387,6 +1456,14 @@ export class ChatPanelManager implements vscode.Disposable {
     if (!state) return;
 
     const type = typeof msg?.type === "string" ? msg.type : "";
+    if (type === "setTabMode") {
+      const mode = msg.mode;
+      const retention = this.buildTabModeState(panel);
+      if ((mode === "temporary" || mode === "dedicated") && msg.fsPath === state.fsPath &&
+          Number.isSafeInteger(msg.revision) && msg.revision === retention.revision) this.setTabMode(panel, mode);
+      else this.publishTabMode(panel);
+      return;
+    }
     const requestSequence = sanitizePositiveSequence(msg?.requestId);
     const resumeMethod: ResumeActionMethod | undefined =
       type === "resumeInSource"
@@ -1444,6 +1521,10 @@ export class ChatPanelManager implements vscode.Disposable {
     }
 
     switch (type) {
+      case "openClaudeOwner": {
+        await this.openClaudeOwner(panel, msg);
+        return;
+      }
       case "ready": {
         if (msg?.capabilities?.sessionModelReuse === 1) {
           this.sessionModelReuseCapablePanels.add(panel);
@@ -1459,6 +1540,7 @@ export class ChatPanelManager implements vscode.Disposable {
         this.readyByPanel.set(panel, true);
         // Earlier visibility messages may have preceded the Webview listener.
         this.publishViewState(panel);
+        this.publishTabMode(panel);
         const detailMode = normalizeChatSessionDetailMode(msg?.detailMode);
         const restoreState = this.stateByPanel.get(panel);
         const shouldRestorePosition =
@@ -2095,7 +2177,7 @@ export class ChatPanelManager implements vscode.Disposable {
       void vscode.window.showInformationMessage(t("codexAgentRuns.disabled"));
       return;
     }
-    const parent = session.source === "codex" ? this.codexAgentRuns.getParentSession(session) : undefined;
+    const parent = this.codexAgentRuns.getParentSession(session);
     if (!parent) {
       void vscode.window.showInformationMessage(t("codexAgentRuns.parentUnavailable"));
       return;
@@ -2106,11 +2188,25 @@ export class ChatPanelManager implements vscode.Disposable {
     });
   }
 
+  private async openClaudeOwner(panel: vscode.WebviewPanel, msg: any): Promise<void> {
+    const state = this.stateByPanel.get(panel);
+    if (!state || msg.fsPath !== state.fsPath) return;
+    const session = this.findPanelSessionByFsPath(state.fsPath);
+    const agent = session?.meta.claudeAgent;
+    if (!agent || !session) return;
+    const owner = this.historyService.findByFsPath(path.join(session.storage.rootPath, agent.project, `${agent.ownerSessionId}.jsonl`));
+    if (!owner || owner.source !== "claude" || owner.meta.claudeAgent || owner.meta.id !== agent.ownerSessionId) {
+      void vscode.window.showInformationMessage(t("codexAgentRuns.parentUnavailable"));
+      return;
+    }
+    await this.openSessionPreferExisting(owner, { fallbackKind: "session", preserveFocus: false });
+  }
+
   private publishCodexAgentRuns(panel: vscode.WebviewPanel): void {
     const state = this.stateByPanel.get(panel);
     const session = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
     const config = getConfig();
-    if (!config.agentRunsEnabled || !session || session.source !== "codex") {
+    if (!config.agentRunsEnabled || !session) {
       const generation = this.nextCodexAgentRunsGeneration(panel);
       this.codexAgentRunsSnapshotByPanel.delete(panel);
       this.codexAgentRunPinSequenceByPanel.delete(panel);
@@ -2312,7 +2408,7 @@ export class ChatPanelManager implements vscode.Disposable {
       return;
     }
     const session = snapshot.targets.get(target);
-    if (!session || session.source !== "codex" || session.identityKey === snapshot.currentIdentityKey) {
+    if (!session || session.identityKey === snapshot.currentIdentityKey) {
       void vscode.window.showErrorMessage(t("codexAgentRuns.navigationUnavailable"));
       return;
     }
@@ -2329,19 +2425,16 @@ export class ChatPanelManager implements vscode.Disposable {
         void vscode.window.showErrorMessage(t("codexAgentRuns.navigationUnavailable"));
       }
     };
+    const retention = this.buildTabModeState(panel);
+    const isRequestCurrent = () =>
+      this.buildTabModeState(panel).revision === retention.revision &&
+      this.getTabMode(panel) === retention.mode &&
+      this.isCurrentCodexAgentRunNavigation(panel, state, snapshot, generation, target, session, requestSequence);
     const [sourceFileAvailable, sessionFileAvailable] = await Promise.all([
       this.ensureSessionFileAvailable(state.fsPath),
       this.ensureSessionFileAvailable(session.fsPath),
     ]);
-    if (!this.isCurrentCodexAgentRunNavigation(
-      panel,
-      state,
-      snapshot,
-      generation,
-      target,
-      session,
-      requestSequence,
-    )) {
+    if (!isRequestCurrent()) {
       showUnavailableIfLatest();
       return;
     }
@@ -2358,18 +2451,8 @@ export class ChatPanelManager implements vscode.Disposable {
       }
       return;
     }
-    const isRequestCurrent = () =>
-      this.isCurrentCodexAgentRunNavigation(
-        panel,
-        state,
-        snapshot,
-        generation,
-        target,
-        session,
-        requestSequence,
-      );
     await this.openSessionPreferExisting(session, {
-      fallbackKind: "session",
+      fallbackKind: retention.mode === "temporary" ? "newTemporary" : "session",
       preserveFocus: false,
       isRequestCurrent,
     });
@@ -2392,7 +2475,6 @@ export class ChatPanelManager implements vscode.Disposable {
       !snapshot ||
       !state ||
       !session ||
-      session.source !== "codex" ||
       !Number.isSafeInteger(generation) ||
       generation !== snapshot.generation ||
       desiredPinned === undefined ||
@@ -3576,6 +3658,7 @@ export class ChatPanelManager implements vscode.Disposable {
         ? await resolveCodexLogicalHistoryPlan(state.fsPath, inventory, { verifyLeafHeader: true }) : undefined;
       if (!isCurrent()) return false;
       const buildOptions = {
+        claudeSessionsRoot: config.claudeSessionsRoot,
         images: config.images,
         includeDetails: detailMode === "full",
         turnTimelineMode: config.chatTurnTimelineMode,
@@ -3670,7 +3753,11 @@ export class ChatPanelManager implements vscode.Disposable {
     if (!isCurrent()) return false;
     if (currentState && normalizeCacheKey(currentState.fsPath) !== normalizeCacheKey(nextState.fsPath)) {
       this.clearSessionBoundPanelData(panel);
+      const retention = this.retentionByPanel.get(panel);
+      if (retention) this.retentionByPanel.set(panel, { ...retention, revision: retention.revision + 1 });
     }
+    // An async read must not restore retention captured before a header toggle.
+    if (nextState.kind !== "branch") nextState.kind = this.getTabMode(panel) === "temporary" ? "reusable" : "session";
     const committedState = nextState.pageSearchSeed
       ? { ...nextState, pageSearchSeed: undefined }
       : nextState;
@@ -3736,6 +3823,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const cliResume = this.buildCliResumeSnapshot(panel, resumeRevision);
     const sessionDataModel: ChatSessionModel = {
       ...webviewModel,
+      ...(summary ? { identityKey: summary.identityKey } : {}),
       annotation: {
         tags: annotation?.tags ? [...annotation.tags] : [],
         note: annotation?.note ?? "",
@@ -3764,6 +3852,8 @@ export class ChatPanelManager implements vscode.Disposable {
       allowUnchangedRenderReuse: options?.allowUnchangedRenderReuse === true,
       ...(options?.rolloutReplaced ? { rolloutReplaced: true } : {}),
       rolloutNotice: this.buildCodexRolloutNotice(committedState),
+      claudeAgent: Boolean(summary?.meta.claudeAgent),
+      tabState: this.buildTabModeState(panel),
       panelKind: nextState.kind,
       isPreview: nextState.kind === "reusable",
       isPinned: (() => {
@@ -4381,7 +4471,7 @@ export class ChatPanelManager implements vscode.Disposable {
   ): ChatResumeActionSnapshot {
     if (!session || session.source !== target) return { available: false, reason: "wrongSource" };
     if (session.storage.archiveState !== "active") return { available: false, reason: "archived" };
-    if (!validateCliResumeSessionId(session.meta.id, target)) {
+    if (session.meta.claudeAgent || !validateCliResumeSessionId(session.meta.id, target)) {
       return { available: false, reason: "invalidSessionId" };
     }
     if (!vscode.workspace.isTrusted) return { available: false, reason: "workspaceUntrusted" };
@@ -4584,6 +4674,16 @@ export class ChatPanelManager implements vscode.Disposable {
       systemEventDetailDuration: t("chat.systemEvent.detail.duration"),
       systemEventDetailTurnId: t("chat.systemEvent.detail.turnId"),
       systemEventDetailRolledBackTurns: t("chat.systemEvent.detail.rolledBackTurns"),
+      claudeAgentContext: t("chat.claudeAgent.context"),
+      claudeAgentContextDescription: t("chat.claudeAgent.contextDescription"),
+      claudeAgentPartial: t("chat.claudeAgent.partial"),
+      claudeAgentOwner: t("chat.claudeAgent.openOwner"),
+      useDedicatedTab: t("chat.tabMode.dedicated"),
+      useTemporaryTab: t("chat.tabMode.temporary"),
+      dedicatedTabState: t("chat.tabMode.state.dedicated"),
+      temporaryTabState: t("chat.tabMode.state.temporary"),
+      taskNotificationInvalid: t("chat.taskNotification.invalid"),
+      systemReminderTitle: t("chat.systemReminder.title"),
       crossSessionMessageBadge: t("chat.crossSession.badge"),
       crossSessionMessageTitle: t("chat.crossSession.title"),
       crossSessionMessageFrom: t("chat.crossSession.from"),
@@ -4787,6 +4887,8 @@ export class ChatPanelManager implements vscode.Disposable {
       agentRunsNone: t("codexAgentRuns.none"),
       agentRunsRelatedCount: t("codexAgentRuns.relatedCount"),
       agentRunsSubagent: t("codexAgentRuns.subagent"),
+      agentRunsSourceCodex: t("history.filter.source.codex"),
+      agentRunsSourceClaude: t("history.filter.source.claude"),
       agentRunsCurrent: t("codexAgentRuns.current"),
       agentRunsStarted: t("codexAgentRuns.started"),
       agentRunsLastActivity: t("codexAgentRuns.lastActivity"),
@@ -5060,10 +5162,14 @@ export class ChatPanelManager implements vscode.Disposable {
     const existingSummary = this.historyService.isCurrentIndexForConfig(config)
       ? this.findPanelSessionByFsPath(state.fsPath)
       : undefined;
+    const sourceRoot = state.historySource === "claude" ||
+      (state.historySource === undefined && isPathInsideRoot(state.fsPath, config.claudeSessionsRoot))
+      ? config.claudeSessionsRoot : config.sessionsRoot;
     const summary =
       existingSummary ??
       (await buildSessionSummary({
         sessionsRoot: config.sessionsRoot,
+        sourceRoot,
         fsPath: state.fsPath,
         previewMaxMessages: config.previewMaxMessages,
         timeZone: this.buildDateTime().timeZone,
@@ -5171,6 +5277,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private getOpenPanels(): vscode.WebviewPanel[] {
     const panels = new Set<vscode.WebviewPanel>();
     if (this.reusablePanel) panels.add(this.reusablePanel);
+    for (const panel of this.reusablePanels) panels.add(panel);
     for (const panel of this.panelsByKey.values()) panels.add(panel);
     for (const panel of this.allSessionPanels) panels.add(panel);
     for (const panel of this.branchPanels) panels.add(panel);
@@ -5191,7 +5298,7 @@ export class ChatPanelManager implements vscode.Disposable {
   ): { light: vscode.Uri; dark: vscode.Uri } {
     const agentPresentationEnabled =
       getConfig().agentRunsEnabled && this.codexAgentRuns.isPresentationEnabled();
-    const agentRelation = agentPresentationEnabled && session.source === "codex"
+    const agentRelation = agentPresentationEnabled
       ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent"), t("codexAgentRuns.guardian")).relation
       : undefined;
     return this.sessionIconResolver.resolve(
@@ -5212,7 +5319,7 @@ export class ChatPanelManager implements vscode.Disposable {
       panel.title = title;
       this.panelTitlePresentationByPanel.set(panel, title);
     }
-    this.applyPanelIconPath(panel, this.resolveSessionIconPath(session, kind));
+    this.applyPanelIconPath(panel, this.resolveSessionIconPath(session, this.retentionByPanel.has(panel) ? (this.getTabMode(panel) === "dedicated" ? "session" : "reusable") : kind));
   }
 
   private applyPanelIconPath(
@@ -5341,7 +5448,8 @@ function isSameCodexAgentRunTarget(
 ): boolean {
   return Boolean(
     current &&
-    current.source === "codex" &&
+    (current.source === "codex" || current.source === "claude") &&
+    current.source === requested.source &&
     current.identityKey === requested.identityKey &&
     normalizeCacheKey(current.fsPath) === normalizeCacheKey(requested.fsPath),
   );
@@ -5575,7 +5683,9 @@ function sanitizeChatPanelRestoreState(value: unknown): ChatPanelRestoreState | 
   const fsPath = typeof restore.fsPath === "string" ? restore.fsPath.trim() : "";
   if (!fsPath || fsPath.length > 4096) return null;
   if (restore.kind !== "session" && restore.kind !== "reusable" && restore.kind !== "branch") return null;
-  const kind: ChatPanelKind = restore.kind;
+  const tabMode: ChatTabMode = restore.tabMode === "temporary" || restore.tabMode === "dedicated"
+    ? restore.tabMode : restore.kind === "reusable" ? "temporary" : "dedicated";
+  const kind: ChatPanelKind = restore.kind === "branch" ? "branch" : tabMode === "temporary" ? "reusable" : "session";
   const revealMessageIndex =
     typeof restore.revealMessageIndex === "number" && Number.isFinite(restore.revealMessageIndex)
       ? Math.max(0, Math.floor(restore.revealMessageIndex))
@@ -5595,7 +5705,9 @@ function sanitizeChatPanelRestoreState(value: unknown): ChatPanelRestoreState | 
   return {
     version: 1,
     kind,
+    tabMode,
     fsPath,
+    ...(isBoundedSessionIdentityKey(restore.identityKey) ? { identityKey: restore.identityKey } : {}),
     ...(revealMessageIndex !== undefined ? { revealMessageIndex } : {}),
     ...(revealTarget ? { revealTarget } : {}),
     ...(scrollY !== undefined ? { scrollY } : {}),
@@ -5815,7 +5927,7 @@ async function buildChatPerformanceStats(fsPath: string, model: ChatSessionModel
       stats.messageChars += (item.stdout?.length ?? 0) + (item.stderr?.length ?? 0);
       continue;
     }
-    if (item.type === "crossSessionMessage") {
+    if (item.type === "crossSessionMessage" || item.type === "taskNotification" || item.type === "systemReminder") {
       stats.messageChars += typeof item.body === "string" ? item.body.length : 0;
       continue;
     }

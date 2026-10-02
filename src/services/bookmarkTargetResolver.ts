@@ -55,6 +55,7 @@ export async function scanSessionBookmarkTargets(
       includeDetails: false,
       sessionInventory,
       historyPlan,
+      claudeSessionsRoot: session.source === "claude" ? session.storage.rootPath : undefined,
     });
     const after = await statSafe(session.fsPath);
     if (!after || before.size !== after.size || before.mtimeMs !== after.mtimeMs) {

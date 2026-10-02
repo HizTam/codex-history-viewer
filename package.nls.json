@@ -247,7 +247,7 @@
   "cmd.pinnedSortFileSizeAsc": "Sort Pinned by File Size (Smallest First)",
   "cmd.showHistoryInsights": "Show History Insights",
   "cmd.openCodexAgentParent": "Open Parent Session",
-  "cfg.agentRunsEnabled": "Experimental setting. Enable Agent Runs for Codex sessions. After parent-child analysis, sub-agent sessions with a known parent are omitted from History and shown inside the parent session. Off by default.",
+  "cfg.agentRunsEnabled": "Experimental setting. Enable Agent Runs for Codex and Claude Code sessions. Sub-agent sessions with a verified, available parent are shown through Agent Runs instead of the History list. Search and statistics include their own records regardless of this setting. Off by default.",
   "cfg.resumeCodexMethod": "Choose the resume actions for Codex sessions. CLI only enters a command in a new integrated terminal, so press Enter to run it. With Extension and CLI, the last successful method becomes the main button.",
   "cfg.resumeClaudeMethod": "Choose the resume actions for Claude Code sessions. CLI only enters a command in a new integrated terminal, so press Enter to run it. With Extension and CLI, the last successful method becomes the main button.",
   "cfg.resumeMethod.labelExtension": "Extension",

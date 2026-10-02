@@ -1,3 +1,6 @@
+import { resolveClaudeAgentHistory } from "../sessions/claudeAgentHistory";
+import { isClaudeInternalUserRecord, isClaudeTaskNotificationRecord, projectClaudeTaskNotification } from "./claudeTaskNotification";
+import { extractClaudeSystemReminder } from "./claudeSystemReminder";
 import * as path from "node:path";
 import { extractClaudeTerminalOutput } from "./claudeTerminalOutput";
 import type {
@@ -99,6 +102,7 @@ const CODEX_USAGE_PAIR_WINDOW_LINES = 64;
 const MAX_PENDING_CODEX_USAGE_PAIRS = 64;
 
 export interface ChatSessionModelBuildOptions {
+  claudeSessionsRoot?: string;
   images?: ImagesConfig;
   includeDetails?: boolean;
   turnTimelineMode?: ChatTurnTimelineMode;
@@ -172,6 +176,13 @@ async function buildChatSessionModelInternal(
     options,
     collectActivityEvidence,
   );
+  const agentHistory = meta.historySource === "claude" ? await resolveClaudeAgentHistory(fsPath, options) : undefined;
+  if (agentHistory && (agentHistory.context || agentHistory.partial)) {
+    timeline.items.unshift({
+      type: "protocolContext", source: "claude", kind: "agentInherited", messageIndex: 0,
+      text: agentHistory.context, partial: agentHistory.partial, truncated: agentHistory.contextTruncated,
+    });
+  }
   const model: ChatSessionModel = {
     fsPath,
     meta,
@@ -241,6 +252,7 @@ async function readTimelineItems(
   );
   let codexHasRollback = false;
   for await (const record of readSessionJsonlRecords(fsPath, source, {
+    claudeSessionsRoot: options.claudeSessionsRoot,
     applyCodexRollbacks: true,
     onCodexRollback: () => { codexHasRollback = true; },
     sessionInventory: options.sessionInventory,
@@ -521,7 +533,7 @@ async function readPatchEntryDetails(
 
     const role = detectClaudeMessageRole(obj);
     if (!role) continue;
-    if (isClaudeCrossSessionInboundRecord(obj)) {
+    if (isClaudeInternalUserRecord(obj)) {
       messageIndex += 1;
       continue;
     }
@@ -1051,6 +1063,29 @@ async function indexClaudeTimelineRecord(
         ...(projected.truncated ? { truncated: true } : {}),
       });
     }
+    return true;
+  }
+
+  if (isClaudeTaskNotificationRecord(obj)) {
+    items.push({
+      type: "taskNotification",
+      source: "claude",
+      messageIndex: nextMessageIndex(),
+      timestampIso: readTimestampIso(obj),
+      ...projectClaudeTaskNotification(obj),
+    });
+    return true;
+  }
+
+  const reminder = extractClaudeSystemReminder(obj);
+  if (reminder) {
+    items.push({
+      type: "systemReminder",
+      source: "claude",
+      messageIndex: nextMessageIndex(),
+      timestampIso: readTimestampIso(obj),
+      ...reminder,
+    });
     return true;
   }
 

@@ -36,6 +36,8 @@ export type AnalysisRecordEnvelope =
     });
 
 export interface AnalysisRecordPipelineOptions {
+  readonly claudeSessionsRoot?: string;
+  readonly onClaudeAgentPartial?: () => void;
   readonly applyCodexRollbacks?: boolean;
   readonly sessionInventory?: readonly SessionSummary[];
   readonly plan?: CodexLogicalHistoryPlan;

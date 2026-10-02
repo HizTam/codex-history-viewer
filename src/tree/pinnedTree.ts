@@ -412,7 +412,7 @@ export class PinnedTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     const projectAlias = this.projectAliasStore.getAliasByCwd(projectDisplayCwd);
     const dateAxis = getSessionDateAxisForPinnedSortMode(this.sortMode);
     const config = this.getConfigSnapshot();
-    const agentPresentation = config.agentRunsEnabled && session.source === "codex"
+    const agentPresentation = config.agentRunsEnabled
       ? this.codexAgentRuns.getPresentation(session, t("codexAgentRuns.subagent"), t("codexAgentRuns.guardian"))
       : undefined;
     const hidden = this.hiddenSessionStore.isHidden(session);

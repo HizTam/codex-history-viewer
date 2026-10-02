@@ -27,12 +27,13 @@ export function validateCliResumeSessionId(
 }
 
 export function hasValidCliResumeSessionId(session: SessionSummary): boolean {
-  return validateCliResumeSessionId(session.meta.id, session.source) !== null;
+  return !session.meta.claudeAgent && validateCliResumeSessionId(session.meta.id, session.source) !== null;
 }
 
 export function isCliResumeSessionEligible(session: SessionSummary, target: CliResumeTarget): boolean {
   return (
     session.source === target &&
+    !session.meta.claudeAgent &&
     session.storage.archiveState === "active" &&
     validateCliResumeSessionId(session.meta.id, target) !== null
   );

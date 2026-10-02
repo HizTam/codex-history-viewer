@@ -1,3 +1,4 @@
+import { isClaudePathPart, parseClaudeAgentPath, isSafeClaudeFile } from "../agents/claudeAgentMetadata";
 import * as fs from "node:fs/promises";
 import type { Dirent } from "node:fs";
 import * as path from "node:path";
@@ -188,16 +189,29 @@ async function collectClaudeSessionFiles(
 
     for (const ent of entries) {
       const full = path.join(dir, ent.name);
+      if (!isClaudePathPart(ent.name)) continue;
       if (ent.isDirectory()) {
+        const parts = path.relative(claudeRoot, full).split(path.sep);
+        if (parts.length > 2 && parts[2] !== "subagents") continue;
+        if (parts.length > 35) {
+          failureCount += 1;
+          observeDiscoveryFailure(performanceProbe);
+          continue;
+        }
         stack.push(full);
         continue;
       }
       if (!ent.isFile()) continue;
       if (!ent.name.endsWith(".jsonl")) continue;
 
-      // Only include primary session files under `.claude/projects/<project>/<session>.jsonl`.
+      // Recognize both primary transcripts and explicitly scoped child transcripts.
       const relParts = path.relative(claudeRoot, full).split(path.sep).filter((part) => part.length > 0);
-      if (relParts.length !== 2) continue;
+      if (relParts.length !== 2 && !parseClaudeAgentPath(full, claudeRoot)) continue;
+      if (!await isSafeClaudeFile(full, claudeRoot)) {
+        failureCount += 1;
+        observeDiscoveryFailure(performanceProbe);
+        continue;
+      }
       results.push(full);
     }
   }

@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { claudeAgentIdentity, isClaudePathPart, parseClaudeAgentPath, resolveClaudeRootFromRelativePath } from "../agents/claudeAgentMetadata";
 import { isSessionFile, isCompressedSessionFile, importSessionWithDestinationFormat } from "../utils/sessionFileReader";
 import * as fs from "node:fs/promises";
 import * as vscode from "vscode";
@@ -42,6 +43,8 @@ export interface SessionMetadataImportMapping {
   destinationPath: string;
   operation: "imported" | "overwritten";
   sourcePath?: string;
+  // Transient confirmation authority; never exported or returned after the import.
+  sourceRoot?: string;
 }
 
 export type DuplicateSessionIdMode = "skip" | "overwrite";
@@ -97,6 +100,7 @@ interface ExportManifestFileEntryV1 {
 
 interface ImportFileCandidate {
   srcPath: string;
+  sourceRoot?: string;
   sourceHint?: SessionSource;
   rootKindHint?: SessionRootKind;
   relativeHint?: string;
@@ -274,6 +278,7 @@ export async function exportMaskedTranscripts(params: {
     const outPath = await ensureUniquePath(path.join(destinationDir, `${fileBase}.md`));
     try {
       const rendered = await renderTranscript(s.fsPath, {
+        claudeSessionsRoot: s.source === "claude" ? s.storage.rootPath : undefined,
         timeZone,
         locationLabel: s.storage.archiveState === "archived" ? t("session.location.archived") : t("session.location.active"),
         sessionInventory: params.sessionInventory,
@@ -376,7 +381,20 @@ export async function importSessions(params: {
     const srcMeta = await tryReadSessionMeta(src);
     const sessionId = normalizeSessionId(srcMeta?.id);
     const source = file.sourceHint ?? srcMeta?.historySource ?? inferSourceFromFileName(path.basename(src)) ?? "codex";
-    const sourceAndSessionId = sessionId ? `${source}\0${sessionId}` : "";
+    if (source === "claude" && file.manifestLocator) {
+      const sourceRoot = resolveClaudeRootFromRelativePath(src, file.manifestLocator.relativePathFromSourceRoot);
+      if (sourceRoot && isPathContainedOrEqual(sourceDir, sourceRoot) && await isRealPathContainedOrEqual(sourceDir, sourceRoot)) {
+        file.sourceRoot = sourceRoot;
+      }
+    }
+    const sourceAgentPath = source === "claude" ? tryBuildDestinationBySourceLayout({
+      source, rootKind: "claudeSessions", root: claudeSessionsRoot,
+      relativeHint: file.relativeHint, fileName: path.basename(src),
+    }) : null;
+    const sourceAgent = sourceAgentPath ? parseClaudeAgentPath(sourceAgentPath, claudeSessionsRoot) : undefined;
+    const sourceAndSessionId = sourceAgent ? claudeAgentIdentity(sourceAgent)
+      : source === "claude" && /^agent-[A-Za-z0-9_-]+\.jsonl$/u.test(path.basename(src)) ? ""
+      : sessionId ? `${source}\0${sessionId}` : "";
     const existingPathById = sourceAndSessionId ? existingPathBySessionId.get(sourceAndSessionId) : undefined;
     if (existingPathById === null) {
       skipped += 1;
@@ -741,13 +759,14 @@ function appendMetadataImportMapping(
     destinationPath: path.resolve(destinationPath),
     operation,
     ...(sourcePath && path.isAbsolute(sourcePath) ? { sourcePath: path.resolve(sourcePath) } : {}),
+    ...(sourcePath && file.sourceRoot ? { sourceRoot: file.sourceRoot } : {}),
   });
 }
 
 function stripMappingSourcePaths(
   mappings: readonly SessionMetadataImportMapping[],
 ): SessionMetadataImportMapping[] {
-  return mappings.map(({ sourcePath: _sourcePath, ...mapping }) => mapping);
+  return mappings.map(({ sourcePath: _sourcePath, sourceRoot: _sourceRoot, ...mapping }) => mapping);
 }
 
 async function buildProjectedImportSessions(
@@ -771,12 +790,16 @@ async function buildProjectedImportSessions(
       continue;
     }
     const storage = resolveProjectedStorage(operation, roots);
+    // Reading authority belongs to the export folder, not to the future destination.
+    const sourceRoot = storage.rootKind === "claudeSessions"
+      ? operation.file.sourceRoot
+      : storage.rootPath;
+    if (!sourceRoot) continue;
     let summary: SessionSummary | null = null;
     try {
       summary = await buildSessionSummary({
-        sessionsRoot: storage.rootPath,
-        sourceRoot: storage.rootPath,
-        storage,
+        sessionsRoot: sourceRoot,
+        sourceRoot,
         fsPath: operation.sourcePath,
         previewMaxMessages: 3,
         timeZone,
@@ -785,11 +808,21 @@ async function buildProjectedImportSessions(
       summary = null;
     }
     if (!summary) continue;
+    const meta = { ...summary.meta };
+    if (summary.source === "claude") {
+      const destinationAgent = parseClaudeAgentPath(operation.destinationPath, storage.rootPath);
+      delete meta.claudeAgent;
+      if (destinationAgent) {
+        const { rootPath: _root, ...location } = destinationAgent;
+        meta.claudeAgent = { ...location, metadataState: "missing", metadataStamp: "missing" };
+      }
+    }
     projectedByPath.set(destinationKey, {
       ...summary,
+      meta,
       fsPath: operation.destinationPath,
       cacheKey: destinationKey,
-      identityKey: resolveSessionIdentityKey(summary.source, summary.meta, operation.destinationPath, destinationKey),
+      identityKey: resolveSessionIdentityKey(summary.source, meta, operation.destinationPath, destinationKey, storage.rootPath),
       storage,
     });
   }
@@ -917,6 +950,10 @@ function tryBuildDestinationBySourceLayout(params: {
     if (ymdPath) return path.join(params.root, ...ymdPath);
     return null;
   }
+
+  // Retain the owner and child scope instead of flattening an agent into a primary transcript.
+  const childDestination = path.join(params.root, ...parts);
+  if (parts.every(isClaudePathPart) && parseClaudeAgentPath(childDestination, params.root)) return childDestination;
 
   if (parts.length >= 2) {
     const projectDir = parts[parts.length - 2]!;
@@ -1068,7 +1105,8 @@ function buildExistingPathBySourceAndSessionId(sessions: readonly SessionSummary
   const out = new Map<string, string | null>();
   for (const session of sessions) {
     const id = normalizeSessionId(session.meta?.id);
-    const key = id ? `${session.source}\0${id}` : "";
+    const agent = session.source === "claude" ? session.meta.claudeAgent ?? parseClaudeAgentPath(session.fsPath, session.storage.rootPath) : undefined;
+    const key = agent ? claudeAgentIdentity(agent) : id ? `${session.source}\0${id}` : "";
     if (!key) continue;
     const existing = out.get(key);
     if (existing === undefined) out.set(key, session.fsPath);

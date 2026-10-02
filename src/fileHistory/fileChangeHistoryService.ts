@@ -1,3 +1,4 @@
+import { resolveClaudeAgentHistory } from "../sessions/claudeAgentHistory";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
@@ -24,7 +25,7 @@ import {
   selectClaudeControlContent,
 } from "../chat/chatAttachments";
 import { createClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
-import { isClaudeCrossSessionInboundRecord } from "../chat/claudeCrossSessionMessage";
+import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
 import { extractCodexToolOutputText } from "../chat/codexResponseItems";
 import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/projectPathMapper";
@@ -417,6 +418,7 @@ async function parseClaudeSession(
   throwIfCancelled(token);
   const pastedPromptResolver = await createClaudePastedPromptResolver(session.fsPath);
   throwIfCancelled(token);
+  const agentProjection = await resolveClaudeAgentHistory(session.fsPath, { token, claudeSessionsRoot: session.storage.rootPath });
   const stream = fs.createReadStream(session.fsPath, { encoding: "utf8" });
   const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
   let messageIndex = 0;
@@ -426,13 +428,14 @@ async function parseClaudeSession(
     for await (const line of rl) {
       throwIfCancelled(token);
       lineIndex += 1;
+      if (agentProjection && !agentProjection.ownLines.has(lineIndex)) continue;
       if (!line) continue;
 
       const obj = parseJsonLine(line);
       if (!obj) continue;
       const role = detectClaudeMessageRole(obj);
       if (!role) continue;
-      if (isClaudeCrossSessionInboundRecord(obj)) {
+      if (isClaudeInternalUserRecord(obj)) {
         messageIndex += 1;
         continue;
       }

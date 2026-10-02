@@ -1,3 +1,4 @@
+import { resolveClaudeAgentHistory } from "./claudeAgentHistory";
 import { open, stat, type FileHandle } from "node:fs/promises";
 import * as path from "node:path";
 import * as readline from "node:readline";
@@ -64,6 +65,8 @@ export interface SessionJsonlLine {
 }
 
 export interface SessionJsonlReadOptions {
+  readonly claudeSessionsRoot?: string;
+  readonly onClaudeAgentPartial?: () => void;
   readonly applyCodexRollbacks?: boolean;
   readonly onCodexRollback?: () => void;
   readonly sessionInventory?: readonly SessionSummary[];
@@ -265,6 +268,8 @@ async function* readSessionJsonlEntries(
   parseRecords: boolean,
 ): AsyncGenerator<SessionJsonlLine | SessionJsonlRecord> {
   const performanceProbe = options.performanceProbe;
+  const claudeProjection = source === "claude" ? await resolveClaudeAgentHistory(fsPath, options) : undefined;
+  if (claudeProjection?.partial) options.onClaudeAgentPartial?.();
   throwIfCancelled(options.token, options.cancellationErrorFactory);
   const providedPlan = options.plan &&
     normalizeCacheKey(options.plan.leafFsPath) === normalizeCacheKey(fsPath)
@@ -315,6 +320,7 @@ async function* readSessionJsonlEntries(
           rangeIndex += 1;
         }
         if (projection?.ranges[rangeIndex] && projection.ranges[rangeIndex]!.startLineIndex <= lineIndex) continue;
+        if (claudeProjection && !claudeProjection.ownLines.has(physicalLineIndex)) continue;
         if (parseRecords) {
           // Count every physical line before skipping empty or malformed records.
           if (!line) continue;

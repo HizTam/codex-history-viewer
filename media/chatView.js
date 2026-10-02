@@ -11,6 +11,7 @@
   const btnResumeInCodex = document.getElementById("btnResumeInCodex");
   const btnResumeMenu = document.getElementById("btnResumeMenu");
   const btnPinToggle = document.getElementById("btnPinToggle");
+  const btnTabMode = document.getElementById("btnTabMode");
   const btnCustomTitle = document.getElementById("btnCustomTitle");
   const btnMarkdown = document.getElementById("btnMarkdown");
   const btnCopyResume = document.getElementById("btnCopyResume");
@@ -22,6 +23,7 @@
   const btnPerformanceMode = document.getElementById("btnPerformanceMode");
   const btnAutoRefresh = document.getElementById("btnAutoRefresh");
   const btnBranchMap = document.getElementById("btnBranchMap");
+  const btnClaudeOwner = document.getElementById("btnClaudeOwner");
   const btnAgentRuns = document.getElementById("btnAgentRuns");
   const btnReload = document.getElementById("btnReload");
   const rolloutNoticeEl = document.getElementById("rolloutNotice");
@@ -121,6 +123,8 @@
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><g fill="none"><circle cx="5" cy="3" r="1.5"/><circle cx="11.5" cy="8" r="1.5"/><circle cx="11.5" cy="13" r="1.5"/><path d="M5 4.5v5A3.5 3.5 0 0 0 8.5 13H10M5 7.9h3A3.5 3.5 0 0 1 11.5 8"/></g></svg>';
   const CODEX_SOURCE_ICON_SVG =
     '<svg class="agentRunsSourceIcon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle class="agentRunsSourceIconDisc" cx="8" cy="8" r="7"/><path class="agentRunsSourceIconGlyph" d="M10.2 4.9C9.6 4.4 8.9 4.1 8.1 4.1C6.1 4.1 4.5 5.8 4.5 7.8C4.5 9.8 6.1 11.5 8.1 11.5C8.9 11.5 9.6 11.2 10.2 10.7" stroke-width="1.5"/></svg>';
+  const CLAUDE_SOURCE_ICON_SVG =
+    '<svg class="agentRunsSourceIcon" viewBox="0 0 16 16" aria-hidden="true" focusable="false"><circle class="agentRunsSourceIconDisc" cx="8" cy="8" r="7"/><path class="agentRunsSourceIconGlyph" d="M5.2 10.7L7.8 5.1L10.8 10.7M6.1 8.8H9.9" stroke-width="1.4"/></svg>';
   const BRANCH_ZOOM_OUT_ICON_SVG =
     '<svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2.75 7.25h10.5a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5Z"/></svg>';
   const BRANCH_ZOOM_IN_ICON_SVG =
@@ -398,7 +402,10 @@
   let stickyUserPromptEnabled = true;
   let turnTimelineMode = "off";
   let imageSettings = { thumbnailSize: "medium" };
+  let isClaudeAgent = false;
   let panelKind = "session";
+  let tabMode = "dedicated";
+  let tabModeRevision = -1;
   let chatOpenPosition = "top";
   let configuredPerformanceMode = "auto";
   let temporaryPerformanceMode = null;
@@ -714,6 +721,10 @@
       showResumeMethodMenu();
     });
   }
+  btnTabMode?.addEventListener("click", () => {
+    if (!model?.fsPath || tabModeRevision < 0) return;
+    vscode.postMessage({ type: "setTabMode", fsPath: model.fsPath, revision: tabModeRevision, mode: tabMode === "dedicated" ? "temporary" : "dedicated" });
+  });
   btnPinToggle.addEventListener("click", () => {
     vscode.postMessage({ type: "togglePin" });
   });
@@ -761,6 +772,7 @@
   if (btnBranchMap instanceof HTMLElement) {
     btnBranchMap.addEventListener("click", () => openBranchOverlay(btnBranchMap));
   }
+  btnClaudeOwner?.addEventListener("click", () => vscode.postMessage({ type: "openClaudeOwner", fsPath: model?.fsPath }));
   if (btnAgentRuns instanceof HTMLElement) {
     btnAgentRuns.addEventListener("click", () => openAgentRunsOverlay(btnAgentRuns));
   }
@@ -1040,6 +1052,10 @@
     }
     if (msg.type === "codexAgentRunPinResult") {
       handleCodexAgentRunPinResultMessage(msg);
+      return;
+    }
+    if (msg.type === "tabModeState") {
+      applyTabModeState(msg);
       return;
     }
     if (msg.type === "pinState") {
@@ -1341,7 +1357,12 @@
       applyRolloutNotice(msg.rolloutNotice);
       applyResumeSnapshotSafely(msg.cliResume, { fromSessionData: true, update: false });
       dateTime = msg.dateTime || {};
-      panelKind = normalizePanelKind(msg.panelKind, msg.isPreview);
+      isClaudeAgent = msg.claudeAgent === true;
+      if (msg.tabState) applyTabModeState(msg.tabState, true);
+      else if (tabModeRevision < 0) {
+        panelKind = normalizePanelKind(msg.panelKind, msg.isPreview);
+        tabMode = panelKind === "reusable" ? "temporary" : "dedicated";
+      }
       chatOpenPosition = normalizeChatOpenPosition(msg.chatOpenPosition);
       autoRefreshAvailable = msg.autoRefreshAvailable === true;
       autoRefreshMode = normalizeAutoRefreshMode(msg.autoRefreshMode);
@@ -1733,6 +1754,7 @@
       : "";
     const rawId = meta && typeof meta.id === "string" ? meta.id.trim() : "";
     const id = rawId.slice(0, 512);
+    if (historySource === "claude" && fsPath) return "path:claude:" + fsPath;
     if (historySource && id) return "id:" + historySource + ":" + id;
     if (historySource && fsPath) return "path:" + historySource + ":" + fsPath;
     return fsPath ? "path:" + fsPath : "";
@@ -2310,7 +2332,33 @@
     if (branchChoiceMenuEl?.dataset.menuKind === "resume") closeBranchOccurrenceMenu();
   }
 
+  function applyTabModeState(state, fromModel = false) {
+    if (!state || (state.mode !== "temporary" && state.mode !== "dedicated") ||
+        !Number.isSafeInteger(state.revision) || state.revision < tabModeRevision ||
+        (!fromModel && model?.fsPath && state.fsPath !== model.fsPath)) return;
+    tabMode = state.mode;
+    tabModeRevision = state.revision;
+    panelKind = normalizePanelKind(state.kind, tabMode === "temporary");
+    // Persist only retention here; selection, scroll, and open overlays are untouched.
+    if (webviewState?.restore?.fsPath === state.fsPath) {
+      webviewState = { ...webviewState, restore: { ...webviewState.restore, kind: panelKind, tabMode } };
+      vscode.setState(webviewState);
+    }
+    updateTabModeButton();
+  }
+
+  function updateTabModeButton() {
+    if (!(btnTabMode instanceof HTMLButtonElement)) return;
+    const dedicated = tabMode === "dedicated";
+    // Describe the current state in the tooltip while keeping the accessible action label.
+    setToolbarIconButton(btnTabMode, '<svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5" fill="none" stroke="currentColor"/><path d="M2 6h12M5 4.2h3" fill="none" stroke="currentColor"/></svg>', dedicated ? i18n.dedicatedTabState : i18n.temporaryTabState, dedicated ? i18n.useTemporaryTab : i18n.useDedicatedTab);
+    btnTabMode.setAttribute("aria-pressed", String(dedicated));
+    btnTabMode.classList.toggle("isActive", dedicated);
+    btnTabMode.disabled = !model?.fsPath || tabModeRevision < 0;
+  }
+
   function updateToolbar() {
+    updateTabModeButton();
     applyRolloutNotice({ token: rolloutNoticeToken });
     const isClaudeSession = !!(model && model.meta && model.meta.historySource === "claude");
     const isCodexSession = !!(model && model.meta && model.meta.historySource === "codex");
@@ -2357,7 +2405,7 @@
         groupCount,
         Boolean(branchNavigation) && !branchNavigationPending && groupCount > 0,
       );
-      btnBranchMap.hidden = !(isClaudeSession || isCodexSession) || !branchFeatureEnabled;
+      btnBranchMap.hidden = isClaudeAgent || !(isClaudeSession || isCodexSession) || !branchFeatureEnabled;
       btnBranchMap.disabled = branchSwitchPending || branchNavigationPending || !branchNavigation;
       btnBranchMap.setAttribute("aria-disabled", noBranches ? "true" : "false");
       btnBranchMap.setAttribute(
@@ -2366,6 +2414,10 @@
       );
       btnBranchMap.dataset.pending = branchNavigationPending ? "true" : "false";
       btnBranchMap.dataset.unavailable = noBranches ? "true" : "false";
+    }
+    if (btnClaudeOwner instanceof HTMLButtonElement) {
+      btnClaudeOwner.hidden = !isClaudeAgent;
+      btnClaudeOwner.textContent = i18n.claudeAgentOwner;
     }
     if (btnAgentRuns instanceof HTMLButtonElement) {
       const ready = agentRunsState === "ready" && agentRunsModel;
@@ -2380,7 +2432,7 @@
           );
       setToolbarIconButton(btnAgentRuns, AGENT_RUNS_ICON_SVG, label);
       setToolbarCountBadge(btnAgentRuns, agentCount, Boolean(ready) && agentCount > 0);
-      btnAgentRuns.hidden = !isCodexSession || agentRunsState === "disabled";
+      btnAgentRuns.hidden = !(isCodexSession || isClaudeSession) || agentRunsState === "disabled";
       btnAgentRuns.disabled = agentRunsState === "loading";
       btnAgentRuns.setAttribute("aria-disabled", agentRunsState === "empty" ? "true" : "false");
       btnAgentRuns.setAttribute("aria-expanded", agentRunsOverlayOpen ? "true" : "false");
@@ -2450,9 +2502,10 @@
     toolbarContentKeyByElement.set(button, contentKey);
   }
 
-  function setToolbarIconButton(button, iconSvg, tooltip) {
+  function setToolbarIconButton(button, iconSvg, tooltip, accessibleLabel = tooltip) {
     if (!(button instanceof HTMLElement)) return;
     const safeTooltip = typeof tooltip === "string" && tooltip.trim() ? tooltip.trim() : "";
+    const safeAccessibleLabel = typeof accessibleLabel === "string" && accessibleLabel.trim() ? accessibleLabel.trim() : safeTooltip;
     const contentKey = `icon:${String(iconSvg)}`;
     if (toolbarContentKeyByElement.get(button) !== contentKey) {
       button.innerHTML = iconSvg;
@@ -2460,9 +2513,9 @@
     }
     if (safeTooltip) {
       if (button.title !== safeTooltip) button.title = safeTooltip;
-      if (button.getAttribute("aria-label") !== safeTooltip) {
-        button.setAttribute("aria-label", safeTooltip);
-      }
+    }
+    if (safeAccessibleLabel && button.getAttribute("aria-label") !== safeAccessibleLabel) {
+      button.setAttribute("aria-label", safeAccessibleLabel);
     }
   }
 
@@ -3911,13 +3964,19 @@
     const primaryText = node.isSubagent
       ? node.taskLabel || getSafeUiText(i18n.agentRunsSubagent, "Sub-agent")
       : node.title || fallbackTitle;
-    const kindText = node.isSubagent ? getSafeUiText(i18n.agentRunsSubagent, "Sub-agent") : "Codex";
+    const isClaudeSource = model?.meta?.historySource === "claude";
+    const sourceLabel = getSafeUiText(isClaudeSource ? i18n.agentRunsSourceClaude : i18n.agentRunsSourceCodex, "");
+    const kindText = node.isSubagent ? getSafeUiText(i18n.agentRunsSubagent, "Sub-agent") : sourceLabel;
     const top = el("span", { className: "agentRunsTreeNodeTop" });
     const marker = el("span", {
       className: node.isSubagent ? "agentRunsTreeNodeMarker subagent" : "agentRunsTreeNodeMarker",
     });
-    marker.innerHTML = node.isSubagent ? AGENT_RUNS_ICON_SVG : CODEX_SOURCE_ICON_SVG;
+    if (!node.isSubagent && isClaudeSource) marker.classList.add("source-claude");
+    // Verified Agent Runs components contain only the displayed session's history source.
+    const sourceIcon = isClaudeSource ? CLAUDE_SOURCE_ICON_SVG : CODEX_SOURCE_ICON_SVG;
+    marker.innerHTML = node.isSubagent ? AGENT_RUNS_ICON_SVG : sourceIcon;
     marker.setAttribute("aria-hidden", "true");
+    if (!node.isSubagent) marker.title = sourceLabel;
     const primaryTitle = el("span", { className: "agentRunsTreeNodeTitle" });
     primaryTitle.textContent = primaryText;
     primaryTitle.title = primaryText;
@@ -6984,7 +7043,9 @@
     const restore = {
       version: 1,
       kind: panelKind === "reusable" ? "reusable" : panelKind === "branch" ? "branch" : "session",
+      tabMode,
       fsPath: model.fsPath,
+      ...(typeof model.identityKey === "string" ? { identityKey: model.identityKey } : {}),
       autoRefreshMode: normalizeAutoRefreshMode(autoRefreshMode),
       detailMode: showDetails ? "full" : "summary",
       pathMode: getEffectivePathMode(),
@@ -10657,7 +10718,7 @@
     const itemType = item && typeof item.type === "string" ? item.type : "note";
     let rendered = null;
     if (item.type === "message") rendered = renderMessage(item, cardKey, itemIndex);
-    else if (item.type === "crossSessionMessage") rendered = renderCrossSessionMessage(item, cardKey);
+    else if (item.type === "crossSessionMessage" || item.type === "taskNotification" || item.type === "systemReminder") rendered = renderCrossSessionMessage(item, cardKey);
     else if (item.type === "protocolContext") rendered = renderProtocolContext(item, cardKey);
     else if (item.type === "patchGroup") rendered = renderPatchGroup(item, itemIndex, cardKey);
     else if (item.type === "tool") rendered = shouldRenderToolCard(item) ? renderTool(item, cardKey) : null;
@@ -10838,9 +10899,9 @@
       const baseTitle = [role, messageIndex].filter(Boolean).join(" ");
       return attachmentSummary ? `${baseTitle} (${attachmentSummary})` : baseTitle;
     }
-    if (item.type === "crossSessionMessage") {
+    if (item.type === "crossSessionMessage" || item.type === "taskNotification" || item.type === "systemReminder") {
       const messageIndex = typeof item.messageIndex === "number" ? `#${item.messageIndex}` : "";
-      return [getSafeUiText(i18n.crossSessionMessageTitle, "Cross-session message"), messageIndex]
+      return [getInternalMessageTitle(item), messageIndex]
         .filter(Boolean)
         .join(" ");
     }
@@ -10859,6 +10920,12 @@
     return `${getSafeUiText(i18n.roleMessage, "Message")} #${itemIndex + 1}`;
   }
 
+  function getInternalMessageTitle(item) {
+    if (item.type === "taskNotification") return i18n.taskNotificationTitle;
+    if (item.type === "systemReminder") return i18n.systemReminderTitle;
+    return getSafeUiText(i18n.crossSessionMessageTitle, "Cross-session message");
+  }
+
   function renderCrossSessionMessage(item, cardKey) {
     if (!item || typeof item.body !== "string") return null;
     const bodyText = item.body.slice(0, MAX_CROSS_SESSION_MESSAGE_CHARS);
@@ -10866,7 +10933,7 @@
     const bodyTruncated = item.truncated === true || item.body.length > MAX_CROSS_SESSION_MESSAGE_CHARS;
     const messageIndex = Number.isSafeInteger(item.messageIndex) && item.messageIndex > 0 ? item.messageIndex : null;
     const row = el("div", { className: "row crossSessionMessage" });
-    const titleText = getSafeUiText(i18n.crossSessionMessageTitle, "Cross-session message");
+    const titleText = getInternalMessageTitle(item);
     const card = el("div", {
       className: "crossSessionMessageCard",
       role: "group",
@@ -10889,10 +10956,10 @@
     summary.appendChild(
       el("span", {
         className: "crossSessionMessageBadge",
-        textContent: getSafeUiText(i18n.crossSessionMessageBadge, "Other session"),
+        textContent: item.type === "crossSessionMessage" ? getSafeUiText(i18n.crossSessionMessageBadge, "Other session") : titleText,
       }),
     );
-    summary.appendChild(el("span", { className: "crossSessionMessageTitle", textContent: titleText }));
+    if (item.type === "crossSessionMessage") summary.appendChild(el("span", { className: "crossSessionMessageTitle", textContent: titleText }));
     if (typeof messageIndex === "number") {
       summary.appendChild(
         el("span", {
@@ -10936,7 +11003,15 @@
         }),
       );
     }
-    card.appendChild(el("pre", { className: "crossSessionMessageBody", textContent: bodyText }));
+    const body = el("pre", { className: "crossSessionMessageBody", textContent: bodyText });
+    if (item.type === "taskNotification" && item.invalidContent === true) {
+      const details = el("details", {});
+      details.appendChild(el("summary", { textContent: i18n.taskNotificationInvalid }));
+      details.appendChild(body);
+      card.appendChild(details);
+    } else {
+      card.appendChild(body);
+    }
     if (bodyTruncated) {
       card.appendChild(
         el("div", {
@@ -11126,10 +11201,9 @@
   function renderProtocolContext(item, cardKey) {
     if (
       !item ||
-      item.source !== "codex" ||
-      item.kind !== "sessionStart" ||
+      !((item.source === "codex" && item.kind === "sessionStart") || (item.source === "claude" && item.kind === "agentInherited")) ||
       typeof item.text !== "string" ||
-      !item.text.trim() ||
+      (!item.text.trim() && item.partial !== true) ||
       typeof item.messageIndex !== "number" ||
       !Number.isFinite(item.messageIndex)
     ) {
@@ -11153,9 +11227,9 @@
     const summary = el("summary", { className: "protocolContextSummary" });
     const summaryText = el("span", { className: "protocolContextSummaryText" });
     const title = el("span", { className: "protocolContextTitle" });
-    title.textContent = getSafeUiText(i18n.sessionStartContextSummary, "Codex runtime context");
+    title.textContent = item.kind === "agentInherited" ? i18n.claudeAgentContext : getSafeUiText(i18n.sessionStartContextSummary, "Codex runtime context");
     const description = el("span", { className: "protocolContextDescription" });
-    description.textContent = getSafeUiText(
+    description.textContent = item.kind === "agentInherited" ? (item.partial ? i18n.claudeAgentPartial : i18n.claudeAgentContextDescription) : getSafeUiText(
       i18n.sessionStartContextDescription,
       "Instructions and environment supplied to Codex when this session started",
     );
@@ -11164,7 +11238,7 @@
     details.appendChild(summary);
 
     const body = el("pre", { className: "protocolContextBody" });
-    body.textContent = item.text;
+    body.textContent = item.text + (item.truncated ? "\n" + i18n.crossSessionMessageTruncated : "");
     details.appendChild(body);
     card.appendChild(details);
 
@@ -14654,7 +14728,7 @@
     const type = item && typeof item.type === "string" && item.type.trim() ? item.type.trim() : "item";
     const safeIndex = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex : 0;
     if (type === "message" && item && typeof item.messageIndex === "number") return `message:${item.messageIndex}`;
-    if (type === "crossSessionMessage" && item && typeof item.messageIndex === "number") {
+    if ((type === "crossSessionMessage" || type === "taskNotification") && item && typeof item.messageIndex === "number") {
       return `cross-session-message:${Math.max(0, Math.floor(item.messageIndex))}`;
     }
     if (type === "protocolContext" && item && typeof item.messageIndex === "number") {

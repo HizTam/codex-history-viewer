@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { claudeAgentIdentity, parseClaudeAgentPath, resolveClaudeRootFromRelativePath } from "../agents/claudeAgentMetadata";
 import { createHash } from "node:crypto";
 import * as vscode from "vscode";
 import { getExtensionVersion, isBoundedExtensionVersion } from "../extensionVersion";
@@ -134,6 +135,7 @@ interface ResolvedRestoreEntry {
   entry: SessionMetadataBackupEntry;
   session: SessionSummary;
   bookmarkSourcePath?: string;
+  bookmarkSourceRoot?: string;
   bookmarks: BookmarkEntry[];
   bookmarksComplete: boolean;
 }
@@ -984,7 +986,9 @@ async function resolveRestoreEntries(
   for (const session of index.sessions) {
     appendMapValue(byIdentityKey, session.identityKey, session);
     const sessionId = normalizePortableSessionId(session.meta.id);
-    if (sessionId) appendMapValue(bySourceAndId, `${session.source}\0${sessionId}`, session);
+    if (sessionId && !(session.source === "claude" && parseClaudeAgentPath(session.fsPath, session.storage.rootPath))) {
+      appendMapValue(bySourceAndId, `${session.source}\0${sessionId}`, session);
+    }
     const relativePath = toPortableRelativePath(session.storage.rootPath, session.fsPath);
     if (relativePath) appendMapValue(byRootAndRelativePath, `${session.storage.rootKind}\0${relativePath}`, session);
   }
@@ -996,8 +1000,10 @@ async function resolveRestoreEntries(
   for (const entry of backup.sessions) {
     if (options?.token?.isCancellationRequested) throw new vscode.CancellationError();
     const locator = entry.locator;
+    const isClaudeChild = locator.source === "claude" && (locator.identityKey?.startsWith("claude:agent:") === true ||
+      !!(locator.relativePath && parseClaudeAgentPath(path.resolve("claude-backup-scope", locator.relativePath), path.resolve("claude-backup-scope"))));
     let candidates = locator.identityKey ? byIdentityKey.get(locator.identityKey) ?? [] : [];
-    if (candidates.length === 0 && locator.sessionId) {
+    if (candidates.length === 0 && locator.sessionId && !isClaudeChild) {
       candidates = bySourceAndId.get(`${locator.source}\0${locator.sessionId}`) ?? [];
     }
     if (candidates.length === 0 && locator.relativePath) {
@@ -1007,7 +1013,7 @@ async function resolveRestoreEntries(
       const mappedPaths = options.importMappings
         .filter((mapping) =>
           mapping.source === locator.source &&
-          ((locator.sessionId && mapping.sessionId === locator.sessionId) ||
+          ((!isClaudeChild && locator.sessionId && mapping.sessionId === locator.sessionId) ||
             (locator.relativePath && mapping.relativePathFromSourceRoot === locator.relativePath))
         )
         .map((mapping) => normalizeCacheKey(mapping.destinationPath));
@@ -1120,6 +1126,7 @@ async function resolveImportReplaceEntries(
       entry,
       session: plan.session,
       ...(plan.mapping.sourcePath ? { bookmarkSourcePath: plan.mapping.sourcePath } : {}),
+      ...(plan.mapping.sourceRoot ? { bookmarkSourceRoot: plan.mapping.sourceRoot } : {}),
       bookmarks: [],
       bookmarksComplete: true,
     });
@@ -1138,8 +1145,11 @@ function sanitizeSessionMetadataImportMapping(value: unknown): SessionMetadataIm
   const relativePathFromSourceRoot = sanitizeRelativePath(raw.relativePathFromSourceRoot);
   const destinationPath = typeof raw.destinationPath === "string" ? raw.destinationPath.trim() : "";
   const sourcePath = typeof raw.sourcePath === "string" ? raw.sourcePath.trim() : "";
+  const sourceRoot = typeof raw.sourceRoot === "string" ? raw.sourceRoot.trim() : "";
   if (!relativePathFromSourceRoot || !destinationPath || !path.isAbsolute(destinationPath)) return null;
   if (sourcePath && !path.isAbsolute(sourcePath)) return null;
+  if (raw.sourceRoot !== undefined && (!sourceRoot || !path.isAbsolute(sourceRoot) || raw.source !== "claude" ||
+    !sourcePath || resolveClaudeRootFromRelativePath(sourcePath, relativePathFromSourceRoot) !== sourceRoot)) return null;
   return {
     source: raw.source,
     ...(sessionId ? { sessionId } : {}),
@@ -1147,6 +1157,7 @@ function sanitizeSessionMetadataImportMapping(value: unknown): SessionMetadataIm
     destinationPath: path.resolve(destinationPath),
     operation: raw.operation,
     ...(sourcePath ? { sourcePath: path.resolve(sourcePath) } : {}),
+    ...(sourceRoot ? { sourceRoot } : {}),
   };
 }
 
@@ -1256,6 +1267,10 @@ function toBookmarkScanSession(resolved: ResolvedRestoreEntry): SessionSummary {
     ...resolved.session,
     fsPath: resolved.bookmarkSourcePath,
     cacheKey: normalizeCacheKey(resolved.bookmarkSourcePath),
+    // The temporary scan reads source bytes; restored bookmark keys still use the destination.
+    storage: resolved.bookmarkSourceRoot
+      ? { ...resolved.session.storage, rootPath: resolved.bookmarkSourceRoot }
+      : resolved.session.storage,
   };
 }
 
@@ -1395,6 +1410,15 @@ function hasPortableStableIdentity(session: SessionSummary): boolean {
 }
 
 function isPortableStableIdentityKey(source: SessionSource, identityKey: string): boolean {
+  if (source === "claude" && identityKey.startsWith("claude:agent:")) {
+    try {
+      const scope: unknown = JSON.parse(identityKey.slice("claude:agent:".length));
+      if (!Array.isArray(scope) || scope.length !== 3 || !scope.every(value => typeof value === "string")) return false;
+      const root = path.resolve("claude-backup-scope");
+      const location = parseClaudeAgentPath(path.join(root, scope[0], scope[1], "subagents", scope[2]), root);
+      return !!location && claudeAgentIdentity(location) === identityKey;
+    } catch { return false; }
+  }
   const idPrefix = `${source}:id:`;
   if (identityKey.startsWith(idPrefix)) {
     const sessionId = identityKey.slice(idPrefix.length);

@@ -1598,7 +1598,7 @@
   "settingsPanel.setting.chat.turnTimeline.mode.label": "ターンタイムライン",
   "settingsPanel.setting.chat.turnTimeline.mode.description": "Codex / Claude Code セッションのターン表示を選択します。「基本」はターン境界、所要時間、件数・トークン集計、完了ターンの折りたたみを表示します。「ライブ」は実行中ターン、経過時間の更新、更新時の視覚効果、実行位置への固定表示も有効にします。",
   "settingsPanel.setting.agentRuns.enabled.label": "Agent Runs",
-  "settingsPanel.setting.agentRuns.enabled.description": "Codex セッションで Agent Runs を有効にします。親子関係の解析後は、親が見つかったサブエージェントセッションを履歴一覧から省き、親セッション内に表示します。既定ではオフです。",
+  "settingsPanel.setting.agentRuns.enabled.description": "Codex と Claude Code で Agent Runs を有効にします。検証済みの親を開ける子履歴は、履歴一覧の代わりに Agent Runs から表示します。オフでも子自身のレコードは検索・集計の対象です。既定ではオフです。",
   "settingsPanel.setting.branchNavigation.enabled.label": "Branch Navigation",
   "settingsPanel.setting.branchNavigation.enabled.description": "Codex のローカル Fork 履歴と Claude Code の「Fork conversation」で Branch Navigation を有効にします。Codex の「新しい Worktree にフォークする」は対象外です。既定ではオフです。",
   "settingsPanel.setting.images.enabled.label": "画像を表示",
@@ -1729,5 +1729,15 @@
   "viewOptions.display.project": "プロジェクト別表示",
   "viewOptions.scope.currentGroup": "現在のプロジェクトグループ",
   "viewOptions.scope.all": "全てのプロジェクトグループ",
-  "history.filter.compression.disabled": "圧縮された履歴だけを表示するには、設定の「履歴ソース」で「Codexの圧縮履歴を対象に含める」をオンにしてください。"
+  "history.filter.compression.disabled": "圧縮された履歴だけを表示するには、設定の「履歴ソース」で「Codexの圧縮履歴を対象に含める」をオンにしてください。",
+  "chat.tabMode.dedicated": "専用タブにする",
+  "chat.tabMode.temporary": "一時タブに戻す",
+  "chat.tabMode.state.dedicated": "専用タブ",
+  "chat.tabMode.state.temporary": "一時タブ",
+  "chat.claudeAgent.context": "エージェントが継承した文脈",
+  "chat.claudeAgent.contextDescription": "参照用の文脈です。このエージェントの検索・集計には含めません。",
+  "chat.claudeAgent.partial": "文脈またはレコードの所有範囲の一部を確認できませんでした。集計は部分的な値です。",
+  "chat.claudeAgent.openOwner": "親セッションを開く",
+  "chat.taskNotification.invalid": "通知の詳細（未対応の内容形式）",
+  "chat.systemReminder.title": "内部リマインダー"
 }
