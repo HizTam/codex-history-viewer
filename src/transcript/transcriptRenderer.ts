@@ -1,5 +1,7 @@
 import { isClaudeTaskNotificationRecord, projectClaudeTaskNotification } from "../chat/claudeTaskNotification";
 import { extractClaudeSystemReminder } from "../chat/claudeSystemReminder";
+import { extractClaudeProgress } from "../chat/claudeProgress";
+import { ClaudeQueuedInputTracker } from "../chat/claudeQueuedInput";
 import * as path from "node:path";
 import { t } from "../i18n";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
@@ -82,6 +84,9 @@ export async function renderTranscript(
 
   let msgIndex = 0;
   let lastToolCallId: string | undefined;
+  const claudeThinkingState: { durationMs?: number } = {};
+  const queuedInputs = new ClaudeQueuedInputTracker();
+  const queuedChunks = new Map<number, string>();
   const codexState: CodexTranscriptState = {
     seenAsyncQuestionIds: new Set(),
     suppressedControlCallIds: new Set(),
@@ -93,6 +98,17 @@ export async function renderTranscript(
     sessionInventory: options.sessionInventory,
   })) {
     const obj = record.value;
+    if (historySource === "claude") {
+      const input = queuedInputs.accept(obj, record.lineIndex);
+      if (input) {
+        claudeThinkingState.durationMs = undefined;
+        queuedChunks.set(lines.length, input.inputId);
+        const timestamp = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+        lines.push(`## ${t("chat.claudeQueuedInput")}${timestamp ? ` (${formatIsoToLocal(timestamp, timeZone, { withSeconds: true })})` : ""}\n\n${input.body}\n`);
+        continue;
+      }
+    }
+    if (obj?.type === "system") claudeThinkingState.durationMs = undefined;
 
     const codexResult = await renderCodexRecord(lines, messageLineMap, {
       obj,
@@ -109,6 +125,8 @@ export async function renderTranscript(
 
     const claudeResult = await renderClaudeRecord(lines, messageLineMap, {
       obj,
+      lineIndex: record.lineIndex,
+      thinkingState: claudeThinkingState,
       timeZone,
       msgIndex,
       lastToolCallId,
@@ -120,12 +138,26 @@ export async function renderTranscript(
     }
   }
 
-  if (msgIndex === 0) {
+  if (msgIndex === 0 && !Array.from(queuedChunks.values()).some((id) => queuedInputs.isVisible(id))) {
     lines.push(`(no user/assistant messages)`);
     lines.push(``);
   }
 
-  return { content: lines.join("\n"), messageLineMap };
+  // Bodies, progress and tool arguments can contain embedded newlines inside one array entry.
+  // Translate recorded chunk positions to actual Markdown lines in one linear pass.
+  const messageByChunk = new Map(Array.from(messageLineMap, ([messageIndex, chunkLine]) => [chunkLine - 1, messageIndex]));
+  let renderedLine = 1;
+  const visibleLines: string[] = [];
+  for (const [chunkIndex, chunk] of lines.entries()) {
+    const inputId = queuedChunks.get(chunkIndex);
+    if (inputId && !queuedInputs.isVisible(inputId)) continue;
+    visibleLines.push(chunk);
+    const messageIndex = messageByChunk.get(chunkIndex);
+    if (messageIndex !== undefined) messageLineMap.set(messageIndex, renderedLine);
+    renderedLine += 1;
+    for (let offset = chunk.indexOf("\n"); offset >= 0; offset = chunk.indexOf("\n", offset + 1)) renderedLine += 1;
+  }
+  return { content: visibleLines.join("\n"), messageLineMap };
 }
 
 async function renderCodexRecord(
@@ -304,6 +336,8 @@ async function renderClaudeRecord(
   messageLineMap: Map<number, number>,
   params: {
     obj: any;
+    lineIndex: number;
+    thinkingState: { durationMs?: number };
     timeZone: string;
     msgIndex: number;
     lastToolCallId?: string;
@@ -315,6 +349,8 @@ async function renderClaudeRecord(
 
   const role = detectClaudeMessageRole(obj);
   if (!role) return { handled: false, msgIndex, lastToolCallId };
+
+  if (role === "user") params.thinkingState.durationMs = undefined;
 
   if (isClaudeCrossSessionInboundRecord(obj)) {
     msgIndex += 1;
@@ -377,19 +413,58 @@ async function renderClaudeRecord(
   const text = normalizeWhitespace(extracted.text);
   const attachmentLines = buildAttachmentSummaryLines(extracted.attachments);
   const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+  const progress = extractClaudeProgress(obj, params.lineIndex);
+  let progressCursor = 0;
+  const addThinkingDuration = (duration: number | undefined): void => {
+    if (duration === undefined) return;
+    const total = (params.thinkingState.durationMs ?? 0) + duration;
+    if (Number.isFinite(total) && total <= Number.MAX_SAFE_INTEGER) params.thinkingState.durationMs = total;
+  };
+  const appendThinkingDuration = (duration?: number): void => {
+    addThinkingDuration(duration);
+    if (params.thinkingState.durationMs === undefined) return;
+    lines.push(t("chat.claudeProgress.duration", String(Math.round(params.thinkingState.durationMs / 1000))), "");
+    params.thinkingState.durationMs = undefined;
+  };
+  // Preserve block order and carry empty thinking time to the next exported output once.
+  const appendProgressThrough = (blockIndex: number): void => {
+    while (progressCursor < progress.length && progress[progressCursor]!.blockIndex <= blockIndex) {
+      const entry = progress[progressCursor++]!;
+      if (entry.kind === "thinking" && !entry.body) {
+        addThinkingDuration(entry.durationMs);
+        continue;
+      }
+      lines.push(`## ${t(`chat.claudeProgress.${entry.kind}`)}`, "");
+      if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``, "");
+      appendThinkingDuration(entry.durationMs);
+      if (entry.body) appendMessageBodyLines(lines, [], entry.body);
+      lastToolCallId = undefined;
+    }
+  };
+  const firstTextBlock = progress.length > 0 && Array.isArray(rawContent)
+    ? rawContent.findIndex((block: any) => typeof block?.text === "string" && block.text.trim()) : -1;
+  const toolBlockIndexes = Array.isArray(rawContent)
+    ? rawContent.flatMap((block: any, index: number) => block?.type === "tool_use" ? [index] : []) : [];
 
-  if (text || attachmentLines.length > 0) {
+  let messagePending = !!text || attachmentLines.length > 0;
+  const appendMessageThrough = (blockIndex: number): void => {
+    if (!messagePending || firstTextBlock > blockIndex) return;
+    messagePending = false;
+    appendProgressThrough(firstTextBlock);
     const ctx = role !== "assistant" && isBoilerplateUserMessage(text) ? " (context)" : "";
     msgIndex += 1;
     messageLineMap.set(msgIndex, lines.length + 1);
     lines.push(`## [#${msgIndex}] ${capitalize(role)}${ctx}`);
     if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``);
     lines.push(``);
+    appendThinkingDuration();
     appendMessageBodyLines(lines, attachmentLines, text);
     lastToolCallId = undefined;
-  }
+  };
 
-  for (const toolCall of parsed.toolCalls) {
+  for (const [toolCallIndex, toolCall] of parsed.toolCalls.entries()) {
+    appendMessageThrough(toolBlockIndexes[toolCallIndex] ?? Number.POSITIVE_INFINITY);
+    appendProgressThrough(toolBlockIndexes[toolCallIndex] ?? Number.POSITIVE_INFINITY);
     const name = normalizeWhitespace(toolCall.name ?? "") || "tool_use";
     const callId = toolCall.callId;
     const args = formatJsonIfPossible(toolCall.argumentsText ?? "") ?? (toolCall.argumentsText ?? "");
@@ -398,6 +473,7 @@ async function renderClaudeRecord(
     if (callId) lines.push(`- Call ID: \`${callId}\``);
     if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``);
     lines.push(``);
+    appendThinkingDuration();
     if (args) {
       const blockKind = looksLikeJson(args) ? "json" : "";
       lines.push(`### Arguments`);
@@ -408,6 +484,9 @@ async function renderClaudeRecord(
     }
     lastToolCallId = callId;
   }
+
+  appendMessageThrough(Number.POSITIVE_INFINITY);
+  appendProgressThrough(Number.POSITIVE_INFINITY);
 
   for (const toolResult of parsed.toolResults) {
     const callId = toolResult.callId;

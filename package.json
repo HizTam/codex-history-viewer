@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.16.0",
+  "version": "2.17.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -6584,6 +6584,12 @@
           "default": false,
           "scope": "application",
           "description": "%config.codexCompressedSessionsEnabled%"
+        },
+        "codexHistoryViewer.claude.nativeBookmarks.enabled": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "description": "%cfg.claudeNativeBookmarksEnabled%"
         }
       }
     }

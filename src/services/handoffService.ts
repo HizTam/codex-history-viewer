@@ -1,4 +1,5 @@
 import * as crypto from "node:crypto";
+import { ClaudeQueuedInputTracker } from "../chat/claudeQueuedInput";
 import * as path from "node:path";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import * as vscode from "vscode";
@@ -92,6 +93,7 @@ export interface HandoffPathRewriteMetadata {
 type HandoffRole = "user" | "assistant" | "developer";
 
 interface HandoffMessage {
+  inputId?: string;
   role: HandoffRole;
   text: string;
 }
@@ -321,6 +323,7 @@ async function parseSessionForHandoff(
 ): Promise<ParsedSessionContext> {
   const pastedPromptResolver = await createClaudePastedPromptResolver(session.fsPath);
   const messages: HandoffMessage[] = [];
+  const queuedInputs = new ClaudeQueuedInputTracker();
   const diffBlocks: HandoffDiffBlock[] = [];
   const seenCodexAsyncQuestionIds = new Set<string>();
   const fileChangeDeduper = new CodexFileChangeEventDeduper();
@@ -344,6 +347,13 @@ async function parseSessionForHandoff(
       continue;
     }
 
+    if (session.source === "claude") {
+      const input = queuedInputs.accept(obj, record.lineIndex);
+      if (input) {
+        messages.push({ role: "user", text: sanitizeMessageText(input.body), inputId: input.inputId });
+        continue;
+      }
+    }
     if (await collectCodexMessage(obj, messages, seenCodexAsyncQuestionIds)) {
       collectCodexDiffBlocks(obj, diffBlocks, fileChangeDeduper);
       continue;
@@ -353,7 +363,8 @@ async function parseSessionForHandoff(
     collectCodexDiffBlocks(obj, diffBlocks, fileChangeDeduper);
   }
 
-  return { messages, diffBlocks, invalidJsonLines, totalLines };
+  return { messages: messages.filter((message) => !message.inputId || queuedInputs.isVisible(message.inputId)),
+    diffBlocks, invalidJsonLines, totalLines };
 }
 
 async function collectCodexMessage(

@@ -32,6 +32,8 @@ export type ChatTimelineItem =
   | ChatCrossSessionMessageItem
   | ChatTaskNotificationItem
   | ChatSystemReminderItem
+  | ChatClaudeProgressItem
+  | ChatClaudeQueuedInputItem
   | ChatProtocolContextItem
   | ChatToolItem
   | ChatSystemEventItem
@@ -208,6 +210,8 @@ export interface ChatQuestionReply {
 export interface ChatMessageItem {
   type: "message";
   role: ChatRole;
+  // Native Claude record identity is kept in the host and stripped before delivery.
+  claudeMessageUuid?: string;
   // 1-based display order for user/assistant (used for search jump). developer is undefined.
   messageIndex?: number;
   turnId?: string;
@@ -255,6 +259,33 @@ export interface ChatSystemReminderItem {
   timestampIso?: string;
   body: string;
   truncated?: boolean;
+}
+
+export interface ChatClaudeProgressItem {
+  type: "claudeProgress";
+  source: "claude";
+  kind: "narration" | "thinking" | "redactedThinking";
+  progressId: string;
+  body: string;
+  // Empty thinking with a duration is hidden timing metadata, not a card or bookmark target.
+  durationMs?: number;
+  timestampIso?: string;
+  turnId?: string;
+  // Native identity is host-only, just as it is for ordinary assistant messages.
+  claudeMessageUuid?: string;
+  bookmarkKey?: string;
+  isBookmarked?: boolean;
+}
+
+export interface ChatClaudeQueuedInputItem {
+  type: "claudeQueuedInput";
+  source: "claude";
+  inputId: string;
+  body: string;
+  timestampIso?: string;
+  turnId?: string;
+  bookmarkKey?: string;
+  isBookmarked?: boolean;
 }
 
 export interface ChatProtocolContextItem {

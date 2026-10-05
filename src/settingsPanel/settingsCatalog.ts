@@ -172,6 +172,13 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
     dependency: CLAUDE_SOURCE,
     sourceBadge: "claude"
   }),
+  definition("claude.nativeBookmarks.enabled", "sources", "sources.claude", "switch", "application", false, {
+    dependency: {
+      reasonKey: "settingsPanel.disabled.nativeBookmarks",
+      isSatisfied: (values) => CLAUDE_SOURCE.isSatisfied(values) && values.get("ui.timeGuide.enabled") === true
+    },
+    sourceBadge: "claude"
+  }),
 
   definition("preview.openOnSelection", "history", "history.behavior", "switch", "application", true),
   definition("history.dateBasis", "history", "history.behavior", "select", "application", "started", {

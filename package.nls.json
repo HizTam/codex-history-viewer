@@ -285,5 +285,6 @@
   "cmd.ui.en.historyMenuCompressionUncompressedChecked": "Uncompressed Only ✓",
   "cmd.ui.en.historyMenuCompressionUncompressed": "Uncompressed Only",
   "menu.historyCompression.ja": "圧縮状態",
-  "menu.historyCompression.en": "Compression State"
+  "menu.historyCompression.en": "Compression State",
+  "cfg.claudeNativeBookmarksEnabled": "Automatically display bookmarks created in the Claude Code extension as read-only marks. Original files are not modified. Requires the Claude Code source and date guide/bookmark display to be enabled."
 }

@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.17.0] - 2026-10-05
+
+### Added
+
+- Added **Display Claude Code bookmarks** (disabled by default). Bookmarks created in the Claude Code extension are automatically displayed as read-only marks in a different color from this extension's own bookmarks.
+- Added support for displaying progress updates and thinking text saved in Claude Code histories. Progress updates are shown directly, while thinking text is expandable. Both support search, bookmarks, copying, and Markdown export.
+
+### Fixed
+
+- Fixed user messages sent while Claude Code was running being missing from the Session Viewer. Saved additional input now supports search, bookmarks, copying, Markdown export, and generated Resume and Handoff context.
+- Fixed message navigation in Markdown output pointing to incorrect lines when message bodies, tool arguments, or tool outputs contain multiple lines.
+
 ## [2.16.0] - 2026-10-02
 
 ### Added

@@ -285,5 +285,6 @@
   "cmd.ui.en.historyMenuCompressionUncompressedChecked": "Uncompressed Only ✓",
   "cmd.ui.en.historyMenuCompressionUncompressed": "Uncompressed Only",
   "menu.historyCompression.ja": "圧縮状態",
-  "menu.historyCompression.en": "Compression State"
+  "menu.historyCompression.en": "Compression State",
+  "cfg.claudeNativeBookmarksEnabled": "Claude Code 拡張機能で付けたしおりを読み取り専用で自動反映します。オリジナルファイルは変更しません。Claude Code の読み込みと「日付ガイドとしおりを表示」が有効な場合に表示します。"
 }

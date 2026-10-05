@@ -505,3 +505,17 @@ body.dateGuideScrolling .dateGuideHoverRail {
     max-width: min(260px, calc(100vw - 80px));
   }
 }
+
+/* Native read-only marks use a square; dual marks keep the local yellow dot. */
+.dateGuideTick-nativeBookmark:not(.dateGuideTick-bookmark) .dateGuideDot,
+.dateGuideLensItem-nativeBookmark:not(.dateGuideLensItem-bookmark) .dateGuideLensDot {
+  width: 9px; height: 9px; border-radius: 1px;
+  background: var(--vscode-textLink-foreground, #3794ff);
+  border: 1px solid var(--chv-fg);
+}
+.dateGuideTick-nativeBookmark.dateGuideTick-bookmark .dateGuideDot::after,
+.dateGuideLensItem-nativeBookmark.dateGuideLensItem-bookmark .dateGuideLensDot::after {
+  content: ""; position: absolute; width: 7px; height: 7px;
+  margin-left: 11px; margin-top: -1px; border-radius: 1px;
+  background: var(--vscode-textLink-foreground, #3794ff); border: 1px solid var(--chv-fg);
+}

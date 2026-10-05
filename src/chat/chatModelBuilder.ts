@@ -1,6 +1,9 @@
 import { resolveClaudeAgentHistory } from "../sessions/claudeAgentHistory";
+import { readClaudeMessageUuid } from "../services/claudeNativeBookmarkReader";
 import { isClaudeInternalUserRecord, isClaudeTaskNotificationRecord, projectClaudeTaskNotification } from "./claudeTaskNotification";
 import { extractClaudeSystemReminder } from "./claudeSystemReminder";
+import { extractClaudeProgress } from "./claudeProgress";
+import { ClaudeQueuedInputTracker } from "./claudeQueuedInput";
 import * as path from "node:path";
 import { extractClaudeTerminalOutput } from "./claudeTerminalOutput";
 import type {
@@ -290,6 +293,7 @@ export async function createChatTimelineRecordAccumulator(
   const turnState: TurnBuildState | undefined = shouldBuildTurnTimeline(options) ? createTurnBuildState() : undefined;
   const claudeTurnState = source === "claude" && turnState ? createClaudeTurnBuildState(turnState) : undefined;
   const activityEvidence = collectActivityEvidence ? createChatSourceActivityEvidence() : undefined;
+  const queuedInputs = new ClaudeQueuedInputTracker();
   let messageIndex = 0;
   let finalizedResult: ChatTimelineBuildResult | undefined;
 
@@ -403,6 +407,12 @@ export async function createChatTimelineRecordAccumulator(
       return;
     }
     if (source !== "claude") return;
+    const queuedInput = queuedInputs.accept(obj, lineIndex);
+    if (queuedInput) {
+      items.push({ type: "claudeQueuedInput", source: "claude", ...queuedInput,
+        timestampIso: readTimestampIso(obj), turnId: resolveClaudeControlTurnId(claudeTurnState) });
+      return;
+    }
     const claudeRole = detectClaudeMessageRole(obj);
     if (!claudeRole) return;
     return indexClaudeTimelineRecord(
@@ -436,6 +446,7 @@ export async function createChatTimelineRecordAccumulator(
       // Failed and staged edits must not leave empty change cards behind.
       for (let i = items.length - 1; i >= 0; i--) {
         const item = items[i]!;
+        if (item.type === "claudeQueuedInput" && !queuedInputs.isVisible(item.inputId)) items.splice(i, 1);
         if (item.type === "patchGroup" && !item.entries.length && !item.incomplete) items.splice(i, 1);
       }
     }
@@ -1172,14 +1183,40 @@ async function indexClaudeTimelineRecord(
     );
   }
 
+  // Progress has independent anchors; it must never renumber existing messages or diffs.
+  const progress = role === "assistant" ? extractClaudeProgress(obj, lineIndex) : [];
+  const firstVisibleProgress = progress.findIndex((entry) => entry.body || entry.kind === "redactedThinking");
+  const appendProgress = (entry: (typeof progress)[number], index: number): void => {
+    const uuid = !text && attachments.length === 0 && index === firstVisibleProgress ? readClaudeMessageUuid(obj?.uuid) : undefined;
+    items.push({ type: "claudeProgress", source: "claude", kind: entry.kind,
+      progressId: entry.progressId, body: entry.body,
+      ...(entry.durationMs !== undefined ? { durationMs: entry.durationMs } : {}),
+      ...(ts ? { timestampIso: ts } : {}), ...(turnId ? { turnId } : {}),
+      ...(uuid ? { claudeMessageUuid: uuid } : {}),
+    });
+    observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
+  };
+  const firstTextBlock = progress.length > 0 && Array.isArray(rawContent)
+    ? rawContent.findIndex((block: any) => typeof block?.text === "string" && block.text.trim()) : -1;
+  const toolBlockIndexes = Array.isArray(rawContent)
+    ? rawContent.flatMap((block: any, index: number) => block?.type === "tool_use" ? [index] : []) : [];
+  let progressCursor = 0;
+  const appendProgressThrough = (blockIndex: number): void => {
+    while (progressCursor < progress.length && progress[progressCursor]!.blockIndex <= blockIndex) {
+      appendProgress(progress[progressCursor]!, progressCursor++);
+    }
+  };
+
+  let pendingMessage: ChatMessageItem | undefined;
   if (text || attachments.length > 0) {
     const requestText = role === "user" ? compactUserText ?? text : undefined;
     const isContext = role === "user" ? !compactUserText && attachments.length === 0 : false;
     const idx = nextMessageIndex();
     assignAttachmentIds(attachments, `m${idx}`);
     const modelMeta = role === "assistant" ? extractClaudeMessageModelMeta(obj) : {};
+    const claudeMessageUuid = role === "assistant" ? readClaudeMessageUuid(obj?.uuid) : undefined;
 
-    items.push({
+    pendingMessage = {
       type: "message",
       role,
       messageIndex: idx,
@@ -1188,16 +1225,26 @@ async function indexClaudeTimelineRecord(
       ...modelMeta,
       text,
       requestText,
+      ...(claudeMessageUuid ? { claudeMessageUuid } : {}),
       ...(extracted.isTerminalInput === true ? { isTerminalInput: true as const } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       isContext,
-    });
-    observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
+    };
   }
+  // Allocate the legacy message number first, but interleave progress-bearing records by block order.
+  const appendMessageThrough = (blockIndex: number): void => {
+    if (!pendingMessage || firstTextBlock > blockIndex) return;
+    appendProgressThrough(firstTextBlock);
+    items.push(pendingMessage);
+    pendingMessage = undefined;
+    observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
+  };
 
   const includeDetails = shouldIncludeDetails(options);
   const normalizedResults = claudeChanges.acceptResults(obj);
   for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
+    appendMessageThrough(toolBlockIndexes[toolCallIndex] ?? Number.POSITIVE_INFINITY);
+    appendProgressThrough(toolBlockIndexes[toolCallIndex] ?? Number.POSITIVE_INFINITY);
     const toolCall = parsed.toolCalls[toolCallIndex]!;
     const name = normalizeText(toolCall.name ?? "") || "tool_use";
     const callId = toolCall.callId;
@@ -1244,6 +1291,8 @@ async function indexClaudeTimelineRecord(
     }
   }
 
+  appendMessageThrough(Number.POSITIVE_INFINITY);
+
   for (const toolResult of parsed.toolResults) {
     const outputText = normalizeText(toolResult.outputText ?? "");
     const execution = buildClaudeToolExecution(obj, toolResult.isError, normalizedResults.find(result => result.callId === toolResult.callId));
@@ -1259,6 +1308,8 @@ async function indexClaudeTimelineRecord(
     });
     observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
   }
+
+  appendProgressThrough(Number.POSITIVE_INFINITY);
 
   if (role === "assistant") {
     const usageItem = buildClaudeUsageItem(obj, currentMessageIndex(), ts, turnId);
@@ -2012,6 +2063,7 @@ function isMeaningfulTurnTimelineItem(item: ChatTimelineItem | undefined): boole
   if (!item || typeof item !== "object") return false;
   return (
     item.type === "message" ||
+    item.type === "claudeProgress" ||
     item.type === "tool" ||
     item.type === "patchGroup" ||
     item.type === "usage" ||

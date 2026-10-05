@@ -1,4 +1,5 @@
 import * as path from "path";
+import { ClaudeQueuedInputTracker } from "../chat/claudeQueuedInput";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
@@ -26,6 +27,7 @@ import {
 type ResumeRole = "user" | "assistant";
 
 interface ResumeMessage {
+  inputId?: string;
   role: ResumeRole;
   timestampIso?: string;
   text: string;
@@ -53,6 +55,7 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
 
   let taskText: string | null = null;
   const recent: ResumeMessage[] = [];
+  const queuedInputs = new ClaudeQueuedInputTracker();
   const seenCodexAsyncQuestionIds = new Set<string>();
   const setTaskIfEmpty = (nextTask: string): void => {
     if (!taskText) taskText = nextTask;
@@ -64,6 +67,14 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
     sessionInventory: options.sessionInventory,
   })) {
     const obj = record.value;
+    if (historySource === "claude") {
+      const input = queuedInputs.accept(obj, record.lineIndex);
+      if (input) {
+        pushRecent(recent, { role: "user", text: input.body, inputId: input.inputId,
+          timestampIso: typeof obj?.timestamp === "string" ? obj.timestamp : undefined }, maxMessages + queuedInputs.size);
+        continue;
+      }
+    }
 
     if (await collectCodexResumeMessage(
       obj,
@@ -75,12 +86,13 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
     )) {
       continue;
     }
-    await collectClaudeResumeMessage(obj, includeContext, recent, maxMessages, setTaskIfEmpty, pastedPromptResolver);
+    await collectClaudeResumeMessage(obj, includeContext, recent, maxMessages + queuedInputs.size, setTaskIfEmpty, pastedPromptResolver);
   }
 
-  const taskCandidate = (taskText ?? "").trim();
+  const visibleRecent = recent.filter((message) => !message.inputId || queuedInputs.isVisible(message.inputId));
+  const taskCandidate = (taskText ?? visibleRecent.find((message) => message.role === "user")?.text ?? "").trim();
   const safeTask = taskCandidate.length > 0 ? taskCandidate : "(task not found)";
-  let recentTrimmed = recent.slice();
+  let recentTrimmed = visibleRecent.slice(-maxMessages);
   let out = buildMarkdown({ fsPath, meta, historySource, timeZone, task: safeTask, recent: recentTrimmed });
 
   while (out.length > maxChars && recentTrimmed.length > 4) {

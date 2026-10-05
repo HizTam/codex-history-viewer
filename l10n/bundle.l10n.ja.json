@@ -1,4 +1,5 @@
 {
+  "chat.claudeQueuedInput": "追加入力",
   "chat.terminalInput.badge": "端末入力",
   "chat.terminalOutput.title": "端末出力",
   "chat.terminalOutput.stdout": "標準出力",
@@ -1739,5 +1740,14 @@
   "chat.claudeAgent.partial": "文脈またはレコードの所有範囲の一部を確認できませんでした。集計は部分的な値です。",
   "chat.claudeAgent.openOwner": "親セッションを開く",
   "chat.taskNotification.invalid": "通知の詳細（未対応の内容形式）",
-  "chat.systemReminder.title": "内部リマインダー"
+  "chat.systemReminder.title": "内部リマインダー",
+  "chat.tooltip.nativeBookmark": "Claude Code のしおり（読み取り専用）",
+  "chat.nativeBookmarks.unavailable": "Claude Code のしおりを読み取れませんでした。最後に確認できた表示を維持して再試行します。",
+  "settingsPanel.setting.claude.nativeBookmarks.enabled.label": "Claude Code のしおりを反映",
+  "settingsPanel.setting.claude.nativeBookmarks.enabled.description": "Claude Code 拡張機能で付けたしおりを読み取り専用で自動反映します。オリジナルファイルは変更しません。Claude Code の読み込みと「日付ガイドとしおりを表示」が有効な場合に表示します。",
+  "settingsPanel.disabled.nativeBookmarks": "Claude Code の読み込みと「日付ガイドとしおりを表示」を有効にすると設定できます。",
+  "chat.claudeProgress.narration": "進捗",
+  "chat.claudeProgress.thinking": "思考",
+  "chat.claudeProgress.redactedThinking": "思考内容は非公開です",
+  "chat.claudeProgress.duration": "思考時間: 約{0}秒"
 }

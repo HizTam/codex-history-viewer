@@ -304,10 +304,14 @@ export async function runSearchFlow(
   });
   const sessionNodes = results.sessions.map((s) => {
     const preferredMessageIndex = resolveFirstPageSearchMessageIndex(s.hits);
+    const preferredProgressId = s.hits.find((hit) => hit.role === "user" || hit.role === "assistant")?.progressId;
+    const preferredInputId = s.hits.find((hit) => hit.role === "user" || hit.role === "assistant")?.inputId;
     return new SearchSessionNode(s.session, s.hits, {
       ...rootPageSearchSeed,
       autoOpen: false,
       ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
+      ...(preferredProgressId ? { preferredProgressId } : {}),
+      ...(preferredInputId ? { preferredInputId } : {}),
     });
   });
   return {
@@ -355,7 +359,8 @@ function freezeDateScope(scope: DateScope): DateScope {
 }
 
 function resolveFirstPageSearchMessageIndex(hits: readonly SearchHit[]): number | undefined {
-  return hits.find((hit) => hit.role === "user" || hit.role === "assistant")?.messageIndex;
+  const first = hits.find((hit) => hit.role === "user" || hit.role === "assistant");
+  return first?.progressId || first?.inputId ? undefined : first?.messageIndex;
 }
 
 function sanitizeRoleFilter(input: readonly IndexedSearchRole[]): Set<IndexedSearchRole> {
@@ -448,6 +453,8 @@ async function searchSessions(params: {
             messageIndex: m.messageIndex,
             role: m.role,
             source: m.source,
+            ...(m.progressId ? { progressId: m.progressId, progressKind: m.progressKind } : {}),
+            ...(m.inputId ? { inputId: m.inputId } : {}),
             snippet,
           });
           totalHits += 1;

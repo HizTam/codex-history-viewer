@@ -1,4 +1,6 @@
 import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
+import { extractClaudeProgress, isClaudeProgressId } from "../chat/claudeProgress";
+import { ClaudeQueuedInputTracker, isClaudeQueuedInputId } from "../chat/claudeQueuedInput";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { extractClaudeTerminalOutput, getClaudeTerminalOutputText } from "../chat/claudeTerminalOutput";
@@ -56,7 +58,7 @@ import {
   readCodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
 
-const SEARCH_INDEX_FILE_VERSION = 30;
+const SEARCH_INDEX_FILE_VERSION = 33;
 const SEARCH_STAT_CONCURRENCY = 8;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
@@ -64,6 +66,9 @@ const MAX_RECURSIVE_META_DEPTH = 5;
 export type IndexedSearchRole = "user" | "assistant" | "developer" | "tool";
 
 export interface IndexedSearchMessage {
+  readonly inputId?: string;
+  readonly progressId?: string;
+  readonly progressKind?: "narration" | "thinking";
   readonly messageIndex: number;
   readonly role: IndexedSearchRole;
   readonly source: "message" | "toolArguments" | "toolOutput";
@@ -750,7 +755,8 @@ function areIndexedSearchMessagesEqual(
     return candidate?.messageIndex === message.messageIndex &&
       candidate.role === message.role &&
       candidate.source === message.source &&
-      candidate.text === message.text;
+      candidate.text === message.text && candidate.inputId === message.inputId && candidate.progressId === message.progressId &&
+      candidate.progressKind === message.progressKind;
   });
 }
 
@@ -792,6 +798,8 @@ function freezeSearchIndexEntry(entry: SearchIndexEntryV1): SearchIndexEntryV1 {
         role: message.role,
         source: message.source,
         text: message.text,
+        ...(message.inputId ? { inputId: message.inputId } : {}),
+        ...(message.progressId ? { progressId: message.progressId, progressKind: message.progressKind } : {}),
       }),
     ),
   );
@@ -863,6 +871,7 @@ async function buildIndexedSession(
   };
 
   const source = options.source ?? (path.basename(fsPath).toLowerCase().startsWith("rollout-") ? "codex" : "claude");
+  const queuedInputs = new ClaudeQueuedInputTracker();
   for await (const record of readSessionJsonlRecords(fsPath, source, {
     claudeSessionsRoot: options.claudeSessionsRoot,
     applyCodexRollbacks: true,
@@ -874,12 +883,20 @@ async function buildIndexedSession(
   })) {
     throwIfCancelled(options.token);
     const obj = record.value;
+    if (source === "claude") {
+      const input = queuedInputs.accept(obj, record.lineIndex);
+      if (input) {
+        state.messages.push({ messageIndex: Math.max(1, state.messageIndex), role: "user", source: "message",
+          text: normalizeWhitespace(input.body), inputId: input.inputId });
+        continue;
+      }
+    }
     if (await indexCodexRecord(obj, state)) continue;
-    if (await indexClaudeRecord(obj, state)) continue;
+    if (await indexClaudeRecord(obj, state, record.lineIndex)) continue;
   }
 
   return {
-    messages: state.messages,
+    messages: state.messages.filter((message) => !message.inputId || queuedInputs.isVisible(message.inputId)),
     fileChangeHints: dedupeFileChangeHints(state.fileChangeHints),
   };
 }
@@ -1104,7 +1121,7 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
   return true;
 }
 
-async function indexClaudeRecord(obj: any, state: BuildState): Promise<boolean> {
+async function indexClaudeRecord(obj: any, state: BuildState, lineIndex: number): Promise<boolean> {
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
@@ -1134,6 +1151,12 @@ async function indexClaudeRecord(obj: any, state: BuildState): Promise<boolean> 
     return true;
   }
 
+  for (const progress of extractClaudeProgress(obj, lineIndex)) {
+    if (progress.body && progress.kind !== "redactedThinking") state.messages.push({
+      messageIndex: Math.max(1, state.messageIndex), role: "assistant", source: "message",
+      text: normalizeWhitespace(progress.body), progressId: progress.progressId, progressKind: progress.kind,
+    });
+  }
   const rawContent = getClaudeMessageContent(obj);
   const pastedPrompt = role === "user" ? await state.pastedPromptResolver?.resolve(obj, rawContent) : undefined;
   const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
@@ -1791,6 +1814,15 @@ function isValidCacheEntry(value: unknown): value is SearchIndexEntryV1 {
     const source = (m as any).source;
     if (source !== "message" && source !== "toolArguments" && source !== "toolOutput") return false;
     if (typeof (m as any).text !== "string") return false;
+    const progressId = (m as any).progressId;
+    const progressKind = (m as any).progressKind;
+    const inputId = (m as any).inputId;
+    if (inputId !== undefined && (!isClaudeQueuedInputId(inputId) || role !== "user" || source !== "message" ||
+        progressId !== undefined || progressKind !== undefined)) return false;
+    if (progressId !== undefined) {
+      if (!isClaudeProgressId(progressId) || (progressKind !== "narration" && progressKind !== "thinking") ||
+        role !== "assistant" || source !== "message") return false;
+    } else if (progressKind !== undefined) return false;
   }
   if (obj.fileChangeHints !== undefined) {
     if (!Array.isArray(obj.fileChangeHints)) return false;

@@ -10,7 +10,7 @@ import {
 import { areCodexRolloutRevisionsRelated, compareCodexRolloutCreation, findCodexRolloutRevisionParent } from "../sessions/codexRolloutRevisions";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { stableTextSha256 } from "../utils/stableTextHash";
-import { buildTimelineBookmarkTarget } from "./bookmarkTargetResolver";
+import { createTimelineBookmarkTargetBuilder } from "./bookmarkTargetResolver";
 import {
   buildBookmarkKeyFromTargetFingerprint,
   getBookmarkTargetFingerprint,
@@ -302,9 +302,10 @@ async function scanTimeline(session: SessionSummary, plan: CodexLogicalHistoryPl
   const model = await buildChatSessionModel(session.fsPath, { includeDetails: true, historyPlan: plan });
   const targets = new Map<string, TargetEvidence | null>();
   const messages = new Map<number, string | null>();
+  const buildTarget = createTimelineBookmarkTargetBuilder(session.fsPath, session.cacheKey, model.items);
   model.items.forEach((item, index) => {
     const signature = stableTextSha256(JSON.stringify(item));
-    const target = buildTimelineBookmarkTarget(session.fsPath, session.cacheKey, item, index);
+    const target = buildTarget(item);
     if (target) targets.set(target.key, targets.has(target.key) ? null : { target, signature });
     if (item.type === "message" && item.messageIndex !== undefined) {
       messages.set(item.messageIndex, messages.has(item.messageIndex) ? null : signature);

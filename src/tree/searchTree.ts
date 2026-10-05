@@ -226,7 +226,7 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
     if (element instanceof SearchSessionNode) {
       return element.hits.map((h) => {
         const preferredMessageIndex =
-          h.role === "user" || h.role === "assistant" ? h.messageIndex : undefined;
+          !h.progressId && !h.inputId && (h.role === "user" || h.role === "assistant") ? h.messageIndex : undefined;
         const baseSeed = element.pageSearchSeed ?? {
           queryInput: this.rootNode?.query ?? "",
           caseSensitive: false,
@@ -235,6 +235,8 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
           queryInput: baseSeed.queryInput,
           caseSensitive: baseSeed.caseSensitive,
           autoOpen: false,
+          ...(h.progressId ? { preferredProgressId: h.progressId } : {}),
+          ...(h.inputId ? { preferredInputId: h.inputId } : {}),
           ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
         });
       });
@@ -425,9 +427,14 @@ function formatRoleLabel(
 }
 
 function formatLocationLabel(hit: {
+  inputId?: string;
+  progressId?: string;
+  progressKind?: SearchHit["progressKind"];
   messageIndex: number;
   source?: SearchHit["source"];
 }): string {
+  if (hit.inputId) return `[${t("chat.claudeQueuedInput")}]`;
+  if (hit.progressId) return `[${t(hit.progressKind === "thinking" ? "chat.claudeProgress.thinking" : "chat.claudeProgress.narration")}]`;
   if (
     hit.source === "annotationTag" ||
     hit.source === "annotationNote" ||
@@ -442,19 +449,26 @@ function formatLocationLabel(hit: {
 
 function isSameSearchHit(
   a: {
+    inputId?: string;
+    progressId?: string;
+    progressKind?: SearchHit["progressKind"];
     messageIndex: number;
     role: "user" | "assistant" | "developer" | "tool";
     source?: SearchHit["source"];
     snippet: string;
   },
   b: {
+    inputId?: string;
+    progressId?: string;
+    progressKind?: SearchHit["progressKind"];
     messageIndex: number;
     role: "user" | "assistant" | "developer" | "tool";
     source?: SearchHit["source"];
     snippet: string;
   },
 ): boolean {
-  return a.messageIndex === b.messageIndex && a.role === b.role && a.source === b.source && a.snippet === b.snippet;
+  return a.messageIndex === b.messageIndex && a.role === b.role && a.source === b.source && a.snippet === b.snippet &&
+    a.progressId === b.progressId && a.progressKind === b.progressKind && a.inputId === b.inputId;
 }
 
 function sourceName(source: SessionSource): string {

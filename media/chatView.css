@@ -1,3 +1,23 @@
+/* Progress stays distinct from final answers without depending on color alone. */
+.bubble.claudeProgressCard {
+  border-inline-start: 3px solid var(--vscode-descriptionForeground);
+}
+.claudeProgressTag {
+  font-weight: 600;
+}
+.claudeProgressBody {
+  overflow-wrap: anywhere;
+}
+.claudeThinking > summary {
+  cursor: pointer;
+  padding-block: 4px;
+  color: var(--vscode-descriptionForeground);
+}
+.claudeThinking > summary:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
 /*
   Styles for the Codex History Viewer chat-like webview.
   Uses VS Code theme variables whenever possible.
@@ -4617,6 +4637,29 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
     0 0 0 1px color-mix(in srgb, var(--vscode-charts-yellow, #cca700) 18%, transparent);
 }
 
+/* Keep native, read-only marks visually independent of editable yellow bookmarks. */
+.nativeBookmarkMark {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 5px;
+  color: var(--vscode-textLink-foreground, #3794ff);
+  border: 1px dashed currentColor;
+  border-radius: 3px;
+  cursor: default;
+}
+
+.nativeBookmarkMark svg { width: 12px; height: 12px; fill: currentColor; }
+.nativeBookmarkMark:focus-visible { outline: 2px solid var(--vscode-focusBorder, #007fd4); outline-offset: 2px; }
+
+.bubble.nativeBookmarked:not(.bookmarked) {
+  border-color: var(--vscode-textLink-foreground, #3794ff);
+  box-shadow: inset 4px 0 0 var(--vscode-textLink-foreground, #3794ff);
+}
+
+.bubble.bookmarked.nativeBookmarked {
+  box-shadow: inset 4px 0 0 var(--vscode-charts-yellow, #cca700), inset 8px 0 0 var(--vscode-textLink-foreground, #3794ff);
+}
+
 .textBlock {
   white-space: pre-wrap;
 }
@@ -4677,6 +4720,11 @@ body.vscode-high-contrast-light .patchDiffCode.shiki span {
 .messageBody {
   position: relative;
   min-width: 0;
+}
+
+.claudeQueuedInputBody {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .messageAttachments + .messageBodyContent {

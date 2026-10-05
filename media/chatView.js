@@ -432,6 +432,7 @@
   let patchGroupNavMap = new Map();
   let currentTurnSummaryById = new Map();
   let expandedMessageIndexes = new Set();
+  let expandedClaudeProgressIds = new Set();
   let expandedStickyUserKeys = new Set();
   let collapsedTurnIds = new Set();
   let pageSearchTemporaryTurnExpansionActive = false;
@@ -461,6 +462,8 @@
   let wrappedPatchHunkKeys = new Set();
   let isPinned = false;
   let bookmarkedKeys = new Set();
+  let nativeBookmarkedKeys = new Set();
+  let nativeBookmarkToken = 0;
   let branchNavigation = null;
   let branchFeatureEnabled = false;
   let branchGroupByAnchor = new Map();
@@ -586,6 +589,8 @@
   const patchEntryDetailsFailed = new Map();
   const deferredPatchBodyRequests = new WeakMap();
   let webviewState = typeof vscode.getState === "function" ? vscode.getState() || {} : {};
+  expandedClaudeProgressIds = new Set(Array.isArray(webviewState.claudeProgressExpanded)
+    ? webviewState.claudeProgressExpanded.filter((id) => normalizeClaudeProgressId(id)).slice(0, 1000) : []);
   branchOverlayOpen = webviewState && webviewState.branchOverlayOpen === true;
   branchOverlayWidth = normalizeBranchOverlayWidth(webviewState.branchOverlayWidth);
   branchTreeScale = normalizeBranchTreeScale(webviewState.branchTreeScale);
@@ -846,7 +851,7 @@
     if (pageSearchShowingSuggestions) {
       updatePageSearchSuggestionsAfterInput();
     }
-    schedulePageSearchRefresh({ reveal: false, keepSuggestions: true });
+    schedulePageSearchRefresh({ reveal: false, expandThinking: true, keepSuggestions: true });
   });
   pageSearchInputEl.addEventListener("focus", () => {
     if (suppressNextPageSearchFocusSuggestions) {
@@ -876,8 +881,8 @@
         return;
       }
       commitCurrentPageSearchQuery();
-      if (!flushPageSearchRefresh({ preserveIndex: true, reveal: false })) {
-        refreshPageSearchResults({ preserveIndex: true, reveal: false });
+      if (!flushPageSearchRefresh({ preserveIndex: true, reveal: false, expandThinking: true })) {
+        refreshPageSearchResults({ preserveIndex: true, reveal: false, expandThinking: true });
       }
       return;
     }
@@ -1386,6 +1391,8 @@
       imageSettings = normalizeImageSettings(msg.imageSettings);
       isPinned = !!msg.isPinned;
       bookmarkedKeys = normalizeBookmarkKeys(msg.bookmarks);
+      nativeBookmarkedKeys = normalizeBookmarkKeys(msg.nativeBookmarks);
+      nativeBookmarkToken = Number.isSafeInteger(msg.nativeBookmarkToken) ? msg.nativeBookmarkToken : 0;
       detailsLoaded = msg.detailsLoaded === true || msg.detailMode === "full";
       detailReloadPending = false;
       updateEffectivePerformanceMode({ showAutoToast: true });
@@ -1419,6 +1426,8 @@
             ? revealTarget.messageIndex
           : null;
       expandedMessageIndexes = shouldPreserveUiState ? prevExpandedMessageIndexes : new Set();
+      const validProgressIds = new Set(model.items.filter((item) => item.type === "claudeProgress").map((item) => item.progressId));
+      expandedClaudeProgressIds = new Set([...expandedClaudeProgressIds].filter((id) => validProgressIds.has(id)));
       expandedStickyUserKeys = shouldPreserveUiState ? prevExpandedStickyUserKeys : new Set();
       collapsedTurnIds = shouldPreserveUiState && isTurnTimelineEnabled() ? prevCollapsedTurnIds : new Set();
       if (!reusedSessionDataRender) {
@@ -1482,6 +1491,8 @@
       const applyPendingPageSearchSeed = () => {
         if (pageSearchSeedApplied || !pageSearchSeed) return;
         pageSearchSeedApplied = true;
+        if (pageSearchSeed.preferredProgressId) revealClaudeProgress(pageSearchSeed.preferredProgressId);
+        if (pageSearchSeed.preferredInputId) revealClaudeQueuedInput(pageSearchSeed.preferredInputId);
         if (pageSearchSeed.autoOpen === false && !isPageSearchOpen()) {
           pendingPageSearchSeed = pageSearchSeed;
           return;
@@ -1604,6 +1615,13 @@
     }
     if (msg.type === "bookmarkState") {
       bookmarkedKeys = normalizeBookmarkKeys(msg.keys);
+      applyBookmarkStateToDom();
+      updateTimeGuide({ afterPaint: true, rebuildItems: true });
+      return;
+    }
+    if (msg.type === "nativeBookmarkState") {
+      if (nativeBookmarkToken <= 0 || msg.token !== nativeBookmarkToken) return;
+      nativeBookmarkedKeys = normalizeBookmarkKeys(msg.keys);
       applyBookmarkStateToDom();
       updateTimeGuide({ afterPaint: true, rebuildItems: true });
       return;
@@ -7057,6 +7075,7 @@
     webviewState = {
       ...(webviewState && typeof webviewState === "object" ? webviewState : {}),
       restore,
+      claudeProgressExpanded: [...expandedClaudeProgressIds].slice(-1000),
     };
     vscode.setState(webviewState);
   }
@@ -7154,6 +7173,7 @@
     resetStickyUserSuppression();
     temporaryPerformanceMode = null;
     pendingDetailScrollAnchor = null;
+    expandedClaudeProgressIds = new Set();
     expandedStickyUserKeys = new Set();
     collapsedTurnIds = new Set();
     clearAllPageSearchTemporaryExpansions();
@@ -7222,7 +7242,7 @@
       if (!pageSearchInputEl.value && selectedText && !/\s*\n\s*/u.test(selectedText)) {
         pageSearchInputEl.value = selectedText;
       }
-      if (pageSearchInputEl.value) refreshPageSearchResults({ preserveIndex: true, reveal: false });
+      if (pageSearchInputEl.value) refreshPageSearchResults({ preserveIndex: true, reveal: false, expandThinking: true });
       else {
         renderPageSearchResults();
         updatePageSearchStatus();
@@ -7307,6 +7327,7 @@
     return {
       preserveIndex: source.preserveIndex === true,
       reveal: source.reveal !== false,
+      expandThinking: source.expandThinking === true,
       keepSuggestions: source.keepSuggestions === true,
       fallbackToNearest: source.fallbackToNearest === true,
       focusResult: source.focusResult === true,
@@ -7318,6 +7339,8 @@
       ...(typeof source.roleFilterKey === "string" ? { roleFilterKey: source.roleFilterKey } : {}),
       ...(typeof contentRevision === "number" ? { contentRevision } : {}),
       ...(anchor ? { anchor } : {}),
+      ...(normalizeClaudeProgressId(source.preferredProgressId) ? { preferredProgressId: source.preferredProgressId } : {}),
+      ...(normalizeClaudeQueuedInputId(source.preferredInputId) ? { preferredInputId: source.preferredInputId } : {}),
     };
   }
 
@@ -7612,6 +7635,14 @@
         if ((role === "user" || role === "assistant") && canRenderMessage(item)) roles.add(role);
         continue;
       }
+      if (item.type === "claudeProgress" && item.body) {
+        roles.add("assistant");
+        continue;
+      }
+      if (item.type === "claudeQueuedInput" && item.body) {
+        roles.add("user");
+        continue;
+      }
       if (item.type === "tool") {
         if (shouldRenderToolCard(item)) roles.add("tool");
         continue;
@@ -7715,6 +7746,7 @@
       refreshPageSearchResults({
         preserveIndex: false,
         reveal: false,
+        expandThinking: true,
         fallbackToNearest: true,
         ...(activeResult && typeof activeResult.messageIndex === "number"
           ? { preferredMessageIndex: activeResult.messageIndex }
@@ -7827,7 +7859,7 @@
     }
 
     const nextIndex = resolvePageSearchActivationIndex(refreshOptions, previousIndex, query);
-    activatePageSearchResult(nextIndex, { reveal, focusResult: refreshOptions.focusResult });
+    activatePageSearchResult(nextIndex, { reveal, expandThinking: refreshOptions.expandThinking, focusResult: refreshOptions.focusResult });
   }
 
   function resolvePageSearchActivationIndex(refreshOptions, previousIndex, query) {
@@ -7843,6 +7875,16 @@
 
     const anchorIndex = findPageSearchResultIndexForAnchor(refreshOptions.anchor);
     if (anchorIndex >= 0) return anchorIndex;
+    if (refreshOptions.preferredProgressId) {
+      const progressIndex = pageSearchResults.findIndex((result) =>
+        getPageSearchResultTargetElement(result)?.closest("[data-progress-id]")?.dataset.progressId === refreshOptions.preferredProgressId);
+      if (progressIndex >= 0) return progressIndex;
+    }
+    if (refreshOptions.preferredInputId) {
+      const inputIndex = pageSearchResults.findIndex((result) =>
+        getPageSearchResultTargetElement(result)?.closest("[data-input-id]")?.dataset.inputId === refreshOptions.preferredInputId);
+      if (inputIndex >= 0) return inputIndex;
+    }
 
     if (contentStale && typeof refreshOptions.preferredMessageIndex === "number") {
       const preferredIndex = findPageSearchResultIndexForMessageIndex(refreshOptions.preferredMessageIndex);
@@ -7970,6 +8012,7 @@
 
     // Terminal output remains searchable while its disclosure is closed.
     if (element.closest(".terminalOutputCard .systemEventOutput")) return true;
+    if (element.closest(".claudeProgressBody")) return true;
 
     const closedDetails = element.closest("details:not([open])");
     if (closedDetails) {
@@ -8179,6 +8222,9 @@
     const activeResult = pageSearchResults[safeIndex];
     const activeTarget = getPageSearchResultTargetElement(activeResult);
     if (activeTarget instanceof HTMLElement) {
+      const thinking = activeTarget.closest("details.claudeThinking");
+      // Search input/navigation can expand without scrolling; background refreshes must respect a manual close.
+      if (reveal || options.expandThinking === true || options.focusResult === true) setClaudeThinkingExpanded(thinking, true);
       if (activeResult.kind === "mermaid") {
         activeTarget.classList.add("pageSearchMermaidMatch-active");
       } else {
@@ -8768,7 +8814,7 @@
     if (!entry || !(pageSearchInputEl instanceof HTMLInputElement)) return false;
     pageSearchInputEl.value = String(entry.queryInput || "");
     hidePageSearchSuggestions();
-    refreshPageSearchResults({ preserveIndex: false, reveal: false });
+    refreshPageSearchResults({ preserveIndex: false, reveal: false, expandThinking: true });
     commitCurrentPageSearchQuery();
     suppressNextPageSearchFocusSuggestions = true;
     pageSearchInputEl.focus();
@@ -9103,11 +9149,32 @@
     resetRunningTurnIndicators({ keepFallback: turnTimelineLive });
     const useStickyUserPrompt = stickyUserPromptEnabled === true;
     const renderedEntries = [];
+    let pendingThinkingMs = null;
+    let pendingThinkingTurnId = "";
     for (const [itemIndex, item] of items.entries()) {
       if (!item || typeof item !== "object") continue;
+      const rawTurnId = getTimelineItemTurnId(item);
+      const thinkingTurnId = normalizeTurnId(item.turnId);
+      // Recompute per render, stopping at request and turn boundaries even in details mode.
+      if ((pendingThinkingTurnId && thinkingTurnId && pendingThinkingTurnId !== thinkingTurnId) ||
+          (item.type === "message" && item.role !== "assistant") ||
+          item.type === "claudeQueuedInput" || item.type === "crossSessionMessage" || item.type === "taskNotification" ||
+          item.type === "protocolContext" || (item.type === "systemEvent" && item.kind === "requestInterrupted")) {
+        pendingThinkingMs = null;
+        pendingThinkingTurnId = "";
+      }
+      if (item.type === "claudeProgress") {
+        pendingThinkingMs = addClaudeThinkingDuration(pendingThinkingMs, item.durationMs);
+        if (thinkingTurnId) pendingThinkingTurnId = thinkingTurnId;
+      }
       const rendered = renderItem(item, itemIndex);
       if (!rendered) continue;
-      const rawTurnId = getTimelineItemTurnId(item);
+      if (pendingThinkingMs !== null && (item.type === "claudeProgress" ||
+          (item.type === "message" && item.role === "assistant") || item.type === "tool" || item.type === "patchGroup")) {
+        appendClaudeThinkingDuration(rendered, pendingThinkingMs);
+        pendingThinkingMs = null;
+        pendingThinkingTurnId = "";
+      }
       const turn = rawTurnId ? turnSummaryById.get(rawTurnId) : null;
       const emptyActiveCandidate = isBasicModeEmptyActiveTurnCandidate(turn, rawTurnId);
       const turnId = turn && !emptyActiveCandidate ? rawTurnId : "";
@@ -10718,6 +10785,8 @@
     const itemType = item && typeof item.type === "string" ? item.type : "note";
     let rendered = null;
     if (item.type === "message") rendered = renderMessage(item, cardKey, itemIndex);
+    else if (item.type === "claudeProgress") rendered = renderClaudeProgress(item, cardKey, itemIndex);
+    else if (item.type === "claudeQueuedInput") rendered = renderClaudeQueuedInput(item, cardKey);
     else if (item.type === "crossSessionMessage" || item.type === "taskNotification" || item.type === "systemReminder") rendered = renderCrossSessionMessage(item, cardKey);
     else if (item.type === "protocolContext") rendered = renderProtocolContext(item, cardKey);
     else if (item.type === "patchGroup") rendered = renderPatchGroup(item, itemIndex, cardKey);
@@ -10769,10 +10838,12 @@
           key: element.dataset.cardKey || `timeline-${index}`,
           itemIndex: Number.isFinite(itemIndex) ? itemIndex : index,
           timestampIso,
-          title: buildTimeGuideItemTitle(item, Number.isFinite(itemIndex) ? itemIndex : index),
-          role: item && item.type === "message" ? getMessageRole(item) : "",
+          title: [buildTimeGuideItemTitle(item, Number.isFinite(itemIndex) ? itemIndex : index),
+            nativeBookmarkedKeys.has(getItemBookmarkKey(item)) ? getSafeUiText(i18n.nativeBookmarkTooltip, "") : ""].filter(Boolean).join(" · "),
+          role: item?.type === "claudeQueuedInput" ? "user" : item && item.type === "message" ? getMessageRole(item) : "",
           attachmentKind: item && item.type === "message" ? getTimeGuideAttachmentKind(getMessageAttachments(item)) : "",
           bookmarked: isItemBookmarked(item),
+          nativeBookmarked: nativeBookmarkedKeys.has(getItemBookmarkKey(item)),
           element: target,
         };
       })
@@ -10892,6 +10963,8 @@
 
   function buildTimeGuideItemTitle(item, itemIndex) {
     if (!item || typeof item !== "object") return "";
+    if (item.type === "claudeProgress") return getClaudeProgressTitle(item);
+    if (item.type === "claudeQueuedInput") return i18n.claudeQueuedInput;
     if (item.type === "message") {
       const role = item.role === "user" || item.role === "assistant" || item.role === "developer" ? item.role : "message";
       const messageIndex = typeof item.messageIndex === "number" ? `#${item.messageIndex}` : "";
@@ -10924,6 +10997,165 @@
     if (item.type === "taskNotification") return i18n.taskNotificationTitle;
     if (item.type === "systemReminder") return i18n.systemReminderTitle;
     return getSafeUiText(i18n.crossSessionMessageTitle, "Cross-session message");
+  }
+
+  function normalizeClaudeProgressId(value) {
+    return typeof value === "string" && /^cp-[a-f0-9]{32}$/.test(value) ? value : "";
+  }
+
+  function getClaudeProgressTitle(item) {
+    return item.kind === "narration" ? i18n.claudeProgressNarration
+      : item.kind === "redactedThinking" ? i18n.claudeProgressRedacted : i18n.claudeProgressThinking;
+  }
+
+  function addClaudeThinkingDuration(total, duration) {
+    if (typeof duration !== "number" || !Number.isFinite(duration) || duration < 0 || duration > Number.MAX_SAFE_INTEGER) return total;
+    const sum = (total ?? 0) + duration;
+    return Number.isFinite(sum) && sum <= Number.MAX_SAFE_INTEGER ? sum : total;
+  }
+
+  function appendClaudeThinkingDuration(row, duration) {
+    const header = row.querySelector(".metaTags, .toolCardMetaTags, .toolCardTitleWrap");
+    if (!header) return;
+    const tag = el("span", { className: "tag claudeThinkingDuration",
+      textContent: formatTemplate(i18n.claudeProgressDuration, Math.round(duration / 1000)) });
+    tag.dataset.pageSearchIgnore = "true";
+    tag.dataset.thinkingDurationMs = String(duration);
+    header.appendChild(tag);
+  }
+
+  function normalizeClaudeQueuedInputId(value) {
+    return typeof value === "string" && /^ci-[a-f0-9]{32}$/.test(value) ? value : "";
+  }
+
+  function renderClaudeQueuedInput(item, cardKey) {
+    if (!normalizeClaudeQueuedInputId(item.inputId) || typeof item.body !== "string" || !item.body.trim()) return null;
+    const row = el("div", { className: "row user claudeQueuedInput" });
+    const card = el("div", { className: "bubble user claudeQueuedInputCard", role: "group" });
+    card.dataset.inputId = item.inputId;
+    card.setAttribute("aria-label", i18n.claudeQueuedInput);
+    applyTimelineCardWidthState(card, cardKey);
+    applyBookmarkMetadata(card, item);
+    const header = el("div", { className: "metaLine" });
+    const tags = el("div", { className: "metaTags" });
+    tags.dataset.pageSearchIgnore = "true";
+    tags.appendChild(el("span", { className: "tag", textContent: i18n.claudeQueuedInput }));
+    if (item.timestampIso) tags.appendChild(el("span", { className: "tag", textContent: formatIsoYmdHms(item.timestampIso) }));
+    header.appendChild(tags);
+    const actions = el("div", { className: "cardHeaderActions" });
+    appendBookmarkButton(actions, item);
+    const copy = el("button", { type: "button", className: "iconBtn", title: i18n.copyMessageTooltip });
+    copy.setAttribute("aria-label", i18n.copyMessageTooltip);
+    copy.innerHTML = COPY_ICON_SVG;
+    copy.addEventListener("click", () => vscode.postMessage({ type: "copy", text: item.body }));
+    actions.appendChild(copy);
+    actions.appendChild(createTimelineCardWidthButton(cardKey, card));
+    header.appendChild(actions);
+    card.appendChild(header);
+    // Human input is plain text; saved XML wrappers or HTML must never become markup.
+    card.appendChild(el("div", { className: "messageBodyContent claudeQueuedInputBody", textContent: item.body }));
+    row.appendChild(card);
+    return row;
+  }
+
+  function revealClaudeQueuedInput(inputId) {
+    if (!normalizeClaudeQueuedInputId(inputId) || !model) return;
+    const index = model.items.findIndex((item) => item.type === "claudeQueuedInput" && item.inputId === inputId);
+    if (index < 0) return;
+    ensureTurnExpandedForReveal(getTurnIdForItemIndex(index), { render: false });
+    render();
+    const card = timelineEl.querySelector(`[data-input-id="${inputId}"]`);
+    if (card) {
+      clearHighlights();
+      card.classList.add("highlight");
+      card.scrollIntoView({ block: "center" });
+      persistRestoreState();
+    }
+  }
+
+  function setClaudeThinkingExpanded(details, expanded) {
+    // Detached disclosures can still deliver queued toggle events after a render.
+    if (!(details instanceof HTMLDetailsElement) || !timelineEl.contains(details)) return false;
+    const progressId = normalizeClaudeProgressId(details.closest(".claudeProgressCard")?.dataset.progressId);
+    if (!progressId) return false;
+    details.open = expanded;
+    if (expandedClaudeProgressIds.has(progressId) === expanded) return false;
+    if (expanded) expandedClaudeProgressIds.add(progressId);
+    else expandedClaudeProgressIds.delete(progressId);
+    persistRestoreState();
+    return true;
+  }
+
+  function renderClaudeProgress(item, cardKey, itemIndex) {
+    if (!normalizeClaudeProgressId(item.progressId) || typeof item.body !== "string") return null;
+    // Also reject empty progress from older models retained by an existing panel.
+    if (item.kind !== "redactedThinking" && !item.body.trim()) return null;
+    const row = el("div", { className: "row assistant claudeProgress" });
+    const card = el("div", { className: "bubble assistant claudeProgressCard", role: "group" });
+    const title = getClaudeProgressTitle(item);
+    card.dataset.progressId = item.progressId;
+    card.setAttribute("aria-label", title);
+    applyTimelineCardWidthState(card, cardKey);
+    applyBookmarkMetadata(card, item);
+    const header = el("div", { className: "metaLine" });
+    const tags = el("div", { className: "metaTags" });
+    tags.dataset.pageSearchIgnore = "true";
+    // Thinking already has an accessible disclosure title in its summary.
+    if (item.kind !== "thinking") tags.appendChild(el("span", { className: "tag claudeProgressTag", textContent: title }));
+    if (item.timestampIso) tags.appendChild(el("span", { className: "tag", textContent: formatIsoYmdHms(item.timestampIso) }));
+    header.appendChild(tags);
+    const actions = el("div", { className: "cardHeaderActions" });
+    appendBookmarkButton(actions, item);
+    if (item.body) {
+      const copy = el("button", { type: "button", className: "iconBtn", title: i18n.copyMessageTooltip });
+      copy.setAttribute("aria-label", i18n.copyMessageTooltip);
+      copy.innerHTML = COPY_ICON_SVG;
+      copy.addEventListener("click", () => vscode.postMessage({ type: "copy", text: item.body }));
+      actions.appendChild(copy);
+    }
+    actions.appendChild(createTimelineCardWidthButton(cardKey, card));
+    header.appendChild(actions);
+    card.appendChild(header);
+    const body = el("div", { className: "messageBodyContent markdown claudeProgressBody" });
+    if (item.body) renderAssistantMarkdownInto(body, item.body, { cardKey, cardNumber: itemIndex + 1 });
+    if (item.kind === "thinking" && item.body) {
+      const details = el("details", { className: "claudeThinking" });
+      details.open = expandedClaudeProgressIds.has(item.progressId);
+      const summary = el("summary", { textContent: title });
+      const updateExpanded = (expanded) => {
+        if (setClaudeThinkingExpanded(details, expanded)) {
+          schedulePageSearchRefresh({ preserveIndex: true, reveal: false });
+        }
+      };
+      summary.addEventListener("click", (event) => {
+        if (event.defaultPrevented) return;
+        // Commit mouse and native keyboard activation before any synchronous redraw.
+        event.preventDefault();
+        updateExpanded(!details.open);
+      });
+      details.appendChild(summary);
+      details.appendChild(body);
+      details.addEventListener("toggle", () => updateExpanded(details.open));
+      card.appendChild(details);
+    } else if (item.body) card.appendChild(body);
+    row.appendChild(card);
+    return row;
+  }
+
+  function revealClaudeProgress(progressId) {
+    if (!normalizeClaudeProgressId(progressId) || !model) return;
+    const index = model.items.findIndex((item) => item.type === "claudeProgress" && item.progressId === progressId);
+    if (index < 0) return;
+    expandedClaudeProgressIds.add(progressId);
+    ensureTurnExpandedForReveal(getTurnIdForItemIndex(index), { render: false });
+    render();
+    const card = timelineEl.querySelector(`[data-progress-id="${progressId}"]`);
+    if (card) {
+      clearHighlights();
+      card.classList.add("highlight");
+      card.scrollIntoView({ block: "center" });
+      persistRestoreState();
+    }
   }
 
   function renderCrossSessionMessage(item, cardKey) {
@@ -14727,6 +14959,8 @@
   function buildTimelineCardKey(item, itemIndex) {
     const type = item && typeof item.type === "string" && item.type.trim() ? item.type.trim() : "item";
     const safeIndex = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex : 0;
+    if (type === "claudeProgress" && normalizeClaudeProgressId(item.progressId)) return `claude-progress:${item.progressId}`;
+    if (type === "claudeQueuedInput" && normalizeClaudeQueuedInputId(item.inputId)) return `claude-input:${item.inputId}`;
     if (type === "message" && item && typeof item.messageIndex === "number") return `message:${item.messageIndex}`;
     if ((type === "crossSessionMessage" || type === "taskNotification") && item && typeof item.messageIndex === "number") {
       return `cross-session-message:${Math.max(0, Math.floor(item.messageIndex))}`;
@@ -14890,7 +15124,7 @@
     if (!isBookmarkUiEnabled()) {
       delete element.dataset.bookmarked;
       delete element.dataset.bookmarkKey;
-      element.classList.remove("bookmarked");
+      element.classList.remove("bookmarked", "nativeBookmarked");
       return;
     }
     const key = getItemBookmarkKey(item);
@@ -14899,8 +15133,10 @@
     const bookmarked = isItemBookmarked(item);
     element.dataset.bookmarked = bookmarked ? "true" : "false";
     if (item && item.type === "message") element.dataset.timeGuideRole = getMessageRole(item);
+    else if (item?.type === "claudeQueuedInput") element.dataset.timeGuideRole = "user";
     else delete element.dataset.timeGuideRole;
     element.classList.toggle("bookmarked", bookmarked);
+    element.classList.toggle("nativeBookmarked", nativeBookmarkedKeys.has(key));
   }
 
   function appendBookmarkButton(container, item) {
@@ -14909,6 +15145,26 @@
     const key = getItemBookmarkKey(item);
     if (!key) return;
     container.appendChild(createBookmarkButton(key));
+    syncNativeBookmarkMark(container, key);
+  }
+
+  function syncNativeBookmarkMark(container, key) {
+    let mark = container.querySelector(".nativeBookmarkMark");
+    if (!nativeBookmarkedKeys.has(key)) {
+      mark?.remove();
+      return;
+    }
+    if (!mark) {
+      // This is an accessible status indicator, never a bookmark toggle button.
+      mark = el("span", { className: "nativeBookmarkMark", role: "img", tabIndex: 0 });
+      mark.innerHTML = BOOKMARK_ICON_SVG;
+      const localButton = container.querySelector(".bookmarkBtn");
+      if (localButton) localButton.insertAdjacentElement("afterend", mark);
+      else container.appendChild(mark);
+    }
+    const label = getSafeUiText(i18n.nativeBookmarkTooltip, "");
+    mark.title = label;
+    mark.setAttribute("aria-label", label);
   }
 
   function createBookmarkButton(bookmarkKey) {
@@ -14936,12 +15192,14 @@
     for (const button of document.querySelectorAll(".bookmarkBtn[data-bookmark-key]")) {
       if (!(button instanceof HTMLButtonElement)) continue;
       syncBookmarkButton(button, bookmarkedKeys.has(button.dataset.bookmarkKey || ""));
+      if (button.parentElement) syncNativeBookmarkMark(button.parentElement, button.dataset.bookmarkKey || "");
     }
     for (const element of document.querySelectorAll("[data-bookmark-key]")) {
       if (!(element instanceof HTMLElement)) continue;
       const bookmarked = bookmarkedKeys.has(element.dataset.bookmarkKey || "");
       element.dataset.bookmarked = bookmarked ? "true" : "false";
       element.classList.toggle("bookmarked", bookmarked);
+      element.classList.toggle("nativeBookmarked", nativeBookmarkedKeys.has(element.dataset.bookmarkKey || ""));
     }
   }
 
@@ -15252,7 +15510,10 @@
     refreshPageSearchResults({
       preserveIndex: false,
       reveal: false,
+      expandThinking: true,
       fallbackToNearest: options.fallbackToNearest === true,
+      ...(seed.preferredProgressId ? { preferredProgressId: seed.preferredProgressId } : {}),
+      ...(seed.preferredInputId ? { preferredInputId: seed.preferredInputId } : {}),
       ...(typeof seed.preferredMessageIndex === "number"
         ? { preferredMessageIndex: seed.preferredMessageIndex }
         : {}),
@@ -15761,6 +16022,8 @@
       caseSensitive: value.caseSensitive === true,
       ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
       ...(value.autoOpen === false ? { autoOpen: false } : {}),
+      ...(normalizeClaudeProgressId(value.preferredProgressId) ? { preferredProgressId: value.preferredProgressId } : {}),
+      ...(normalizeClaudeQueuedInputId(value.preferredInputId) ? { preferredInputId: value.preferredInputId } : {}),
     };
   }
 

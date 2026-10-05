@@ -250,6 +250,9 @@ export class PinnedDropHintNode {
 }
 
 export interface SearchHit {
+  progressId?: string;
+  inputId?: string;
+  progressKind?: "narration" | "thinking";
   messageIndex: number; // 1-based (display order for user/assistant)
   role: "user" | "assistant" | "developer" | "tool";
   source?: "message" | "toolArguments" | "toolOutput" | "annotationTag" | "annotationNote" | "customTitle" | "originalTitle";
@@ -257,6 +260,8 @@ export interface SearchHit {
 }
 
 export interface SessionPageSearchSeed {
+  preferredProgressId?: string;
+  preferredInputId?: string;
   queryInput: string;
   caseSensitive: boolean;
   preferredMessageIndex?: number;

@@ -4,6 +4,36 @@ import { buildChatSessionModel } from "../chat/chatModelBuilder";
 import type { ChatTimelineItem } from "../chat/chatTypes";
 import { statSafe } from "../utils/fsUtils";
 import { buildBookmarkKey, type BookmarkTarget, type BookmarkTargetKind } from "./bookmarkStore";
+import { t } from "../i18n";
+
+// New progress cards must not shift the fallback identities of existing bookmark targets.
+export function createTimelineBookmarkTargetBuilder(
+  sessionFsPath: string,
+  sessionCacheKey: string,
+  items: readonly ChatTimelineItem[],
+): (item: ChatTimelineItem) => BookmarkTarget | null {
+  const messagesByIndex = new Map<number, ChatTimelineItem>();
+  if (items.some((item) => item.type === "claudeProgress")) {
+    for (const item of items) {
+      if (item.type === "message" && item.role === "assistant" && item.messageIndex !== undefined) {
+        messagesByIndex.set(item.messageIndex, item);
+      }
+    }
+  }
+  // Legacy Claude records placed merged text before their tools, even when blocks were interleaved.
+  const legacyIndexes = new Map<ChatTimelineItem, number>();
+  let legacyIndex = 0;
+  const remember = (item: ChatTimelineItem): void => {
+    if (!legacyIndexes.has(item)) legacyIndexes.set(item, legacyIndex++);
+  };
+  for (const item of items) {
+    if (item.type === "claudeProgress" || item.type === "claudeQueuedInput") continue;
+    const message = "messageIndex" in item && item.messageIndex !== undefined ? messagesByIndex.get(item.messageIndex) : undefined;
+    if (message) remember(message);
+    remember(item);
+  }
+  return (item) => buildTimelineBookmarkTarget(sessionFsPath, sessionCacheKey, item, legacyIndexes.get(item) ?? 0);
+}
 
 export interface SessionBookmarkTargetScan {
   targets: BookmarkTarget[];
@@ -17,6 +47,8 @@ export function buildTimelineBookmarkTarget(
   itemIndex: number,
 ): BookmarkTarget | null {
   if (!item || typeof item !== "object") return null;
+  // Timing-only thinking must not create invisible bookmark targets.
+  if (item.type === "claudeProgress" && item.kind === "thinking" && !item.body.trim()) return null;
   const kind = getBookmarkTargetKind(item);
   if (!kind) return null;
   const timestampIso = typeof item.timestampIso === "string" ? item.timestampIso.trim() : "";
@@ -69,7 +101,7 @@ export async function scanSessionBookmarkTargets(
     }
     return {
       targets: model.items
-        .map((item, index) => buildTimelineBookmarkTarget(session.fsPath, session.cacheKey, item, index))
+        .map(createTimelineBookmarkTargetBuilder(session.fsPath, session.cacheKey, model.items))
         .filter((target): target is BookmarkTarget => target !== null),
       stable: true,
     };
@@ -79,6 +111,8 @@ export async function scanSessionBookmarkTargets(
 }
 
 function getBookmarkTargetKind(item: ChatTimelineItem): BookmarkTargetKind | "" {
+  if (item.type === "claudeQueuedInput") return "note";
+  if (item.type === "claudeProgress") return "note";
   if (item.type === "message") return "message";
   if (item.type === "patchGroup") return "patchGroup";
   if (item.type === "tool") return "tool";
@@ -89,6 +123,8 @@ function getBookmarkTargetKind(item: ChatTimelineItem): BookmarkTargetKind | "" 
 }
 
 function getBookmarkFallbackId(item: ChatTimelineItem, itemIndex: number): string {
+  if (item.type === "claudeQueuedInput") return item.inputId;
+  if (item.type === "claudeProgress") return item.progressId;
   if (item.type === "patchGroup") {
     const turnId = typeof item.turnId === "string" ? item.turnId.trim() : "";
     if (turnId) return turnId;
@@ -113,6 +149,8 @@ function getBookmarkGroupId(item: ChatTimelineItem): string | undefined {
 }
 
 function getBookmarkTitle(item: ChatTimelineItem, itemIndex: number): string {
+  if (item.type === "claudeQueuedInput") return t("chat.claudeQueuedInput");
+  if (item.type === "claudeProgress") return t(`chat.claudeProgress.${item.kind}`);
   if (item.type === "message") {
     const role = item.role === "user" || item.role === "assistant" || item.role === "developer" ? item.role : "message";
     return typeof item.messageIndex === "number" ? `${role} #${item.messageIndex}` : role;

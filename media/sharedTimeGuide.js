@@ -333,6 +333,7 @@
           position,
           tooltip: formatDateGuidePeriodTooltip(formatDateGuideTitle(entry.key, scale), ordinalSummary),
           bookmarked: entry.items.some((item) => item.bookmarked === true || isGuideTargetBookmarked(item.element)),
+          nativeBookmarked: entry.items.some((item) => item.nativeBookmarked === true),
           role: resolveGuideTargetRole(targetElement, entry.item.role),
           attachmentKind: normalizeAttachmentGuideKind(entry.item.attachmentKind),
           targetElement,
@@ -365,6 +366,7 @@
         position: this.resolvePosition(entry, entry.itemIndex, timeItems.length),
         tooltip: formatTimelineTooltip(entry, timeZone),
         bookmarked: entry.bookmarked === true || isGuideTargetBookmarked(entry.element),
+        nativeBookmarked: entry.nativeBookmarked === true,
         role: resolveGuideTargetRole(entry.element, entry.role),
         attachmentKind: normalizeAttachmentGuideKind(entry.attachmentKind),
         targetElement: entry.element,
@@ -416,6 +418,7 @@
           `dateGuideTick-${period.scale || "item"}`,
           period.major ? "dateGuideTick-major" : "dateGuideTick-minor",
           period.bookmarked ? "dateGuideTick-bookmark" : "",
+          period.nativeBookmarked ? "dateGuideTick-nativeBookmark" : "",
           period.role === "user" ? "dateGuideTick-user" : "",
           period.attachmentKind ? "dateGuideTick-attachment" : "",
           period.attachmentKind === "image" ? "dateGuideTick-attachmentImage" : "",
@@ -793,6 +796,7 @@
         button.className = [
           "dateGuideLensItem",
           period.bookmarked ? "dateGuideLensItem-bookmark" : "",
+          period.nativeBookmarked ? "dateGuideLensItem-nativeBookmark" : "",
           period.role === "user" ? "dateGuideLensItem-user" : "",
           period.attachmentKind ? "dateGuideLensItem-attachment" : "",
           period.attachmentKind === "image" ? "dateGuideLensItem-attachmentImage" : "",
@@ -897,7 +901,7 @@
 
   function isImportantLensPeriod(period, activeKey) {
     if (!period || typeof period !== "object") return false;
-    if (period.bookmarked === true) return true;
+    if (period.bookmarked === true || period.nativeBookmarked === true) return true;
     return !!(activeKey && period.key === activeKey);
   }
 
@@ -985,6 +989,7 @@
       tooltipOverride: typeof item.tooltipOverride === "string" ? item.tooltipOverride.trim() : "",
       attachmentKind: normalizeAttachmentGuideKind(item.attachmentKind),
       bookmarked: item.bookmarked === true,
+      nativeBookmarked: item.nativeBookmarked === true,
       role: typeof item.role === "string" ? item.role.trim() : "",
       ordinal: normalizeGuideOrdinal(item.ordinal),
       ordinalLabel: typeof item.ordinalLabel === "string" ? item.ordinalLabel.trim() : "",

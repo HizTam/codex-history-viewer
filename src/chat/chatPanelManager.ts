@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { hasClaudeAgentPathShape } from "../agents/claudeAgentMetadata";
+import { hasClaudeAgentPathShape, isClaudePathPart } from "../agents/claudeAgentMetadata";
 import { isBoundedSessionIdentityKey } from "../sessions/sessionIdentity";
 import * as vscode from "vscode";
 import { isCompressedSessionFile, resolveSessionFilePath } from "../utils/sessionFileReader";
@@ -15,7 +15,10 @@ import {
   type SearchHistoryStore,
 } from "../services/searchHistoryStore";
 import { type BookmarkStore, type BookmarkTarget } from "../services/bookmarkStore";
-import { buildTimelineBookmarkTarget } from "../services/bookmarkTargetResolver";
+import { createTimelineBookmarkTargetBuilder } from "../services/bookmarkTargetResolver";
+import { isClaudeProgressId } from "./claudeProgress";
+import { isClaudeQueuedInputId } from "./claudeQueuedInput";
+import { ClaudeNativeBookmarkReader, isClaudeBookmarkSessionId } from "../services/claudeNativeBookmarkReader";
 import type { ChatOpenPositionStore } from "../services/chatOpenPositionStore";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { buildSessionSummary } from "../sessions/sessionSummary";
@@ -142,6 +145,17 @@ type ChatPerformanceStats = {
 type ChatBookmarkState = {
   model: ChatSessionModel;
   bookmarkKeys: string[];
+};
+
+type NativeBookmarkPanelState = {
+  token: number;
+  fsPath: string;
+  sessionId: string;
+  keysByUuid: Map<string, string>;
+  keys: string[];
+  missingReads: number;
+  unavailableReads: number;
+  warned: boolean;
 };
 
 type MissingSessionHandler = (fsPath: string) => Promise<void> | void;
@@ -284,6 +298,12 @@ const DEFAULT_CHAT_SESSION_DETAIL_MODE: ChatSessionDetailMode = "summary";
 
 // Manages chat-like WebviewPanels opened in the editor area.
 export class ChatPanelManager implements vscode.Disposable {
+  private readonly nativeBookmarkTargetsByPanel = new WeakMap<vscode.WebviewPanel, NativeBookmarkPanelState>();
+  private nativeBookmarkToken = 0;
+  private nativeBookmarkGeneration = 0;
+  private nativeBookmarkTimer?: ReturnType<typeof setTimeout>;
+  private nativeBookmarkPolling = false;
+  private nativeBookmarkDisposed = false;
   private readonly extensionUri: vscode.Uri;
   private readonly historyService: HistoryService;
   private readonly annotationStore: SessionAnnotationStore;
@@ -384,6 +404,7 @@ export class ChatPanelManager implements vscode.Disposable {
     onMissingSession?: MissingSessionHandler,
     logger?: DebugLogger,
     initialHistoryReady?: Promise<void>,
+    private readonly nativeBookmarkReader?: ClaudeNativeBookmarkReader,
   ) {
     this.extensionUri = extensionUri;
     this.historyService = historyService;
@@ -421,6 +442,9 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   public dispose(): void {
+    this.nativeBookmarkDisposed = true;
+    this.nativeBookmarkGeneration += 1;
+    if (this.nativeBookmarkTimer) clearTimeout(this.nativeBookmarkTimer);
     for (const panel of this.getOpenPanels()) {
       this.cancelBranchNavigation(panel);
       this.cancelLiveRunningExpiry(panel);
@@ -487,6 +511,124 @@ export class ChatPanelManager implements vscode.Disposable {
       void this.sendBookmarkState(panel);
     };
     for (const panel of this.getOpenPanels()) send(panel);
+  }
+
+  public refreshNativeBookmarks(): void {
+    if (!this.nativeBookmarkReader || this.nativeBookmarkDisposed) return;
+    this.nativeBookmarkGeneration += 1;
+    if (this.nativeBookmarkTimer) clearTimeout(this.nativeBookmarkTimer);
+    this.nativeBookmarkTimer = undefined;
+    if (!this.nativeBookmarksEnabled()) {
+      for (const panel of this.getOpenPanels()) {
+        const target = this.nativeBookmarkTargetsByPanel.get(panel);
+        if (!target) continue;
+        target.keys = [];
+        target.missingReads = 0;
+        target.unavailableReads = 0;
+        target.warned = false;
+        void panel.webview.postMessage({ type: "nativeBookmarkState", token: target.token, keys: [] });
+      }
+      return;
+    }
+    void this.pollNativeBookmarks();
+  }
+
+  private nativeBookmarksEnabled(): boolean {
+    const config = getConfig();
+    return config.claudeNativeBookmarksEnabled === true && config.enableClaudeSource && config.timeGuideEnabled;
+  }
+
+  private async pollNativeBookmarks(): Promise<void> {
+    if (!this.nativeBookmarkReader || this.nativeBookmarkDisposed || this.nativeBookmarkPolling || !this.nativeBookmarksEnabled()) return;
+    const generation = this.nativeBookmarkGeneration;
+    this.nativeBookmarkPolling = true;
+    try {
+      const reads = new Map<string, ReturnType<ClaudeNativeBookmarkReader["read"]>>();
+      for (const panel of this.getOpenPanels()) {
+        const target = this.nativeBookmarkTargetsByPanel.get(panel);
+        if (!target || !this.readyByPanel.get(panel)) continue;
+        let pending = reads.get(target.sessionId);
+        if (!pending) {
+          pending = this.nativeBookmarkReader.read(target.sessionId);
+          reads.set(target.sessionId, pending);
+        }
+        const result = await pending;
+        if (generation !== this.nativeBookmarkGeneration || this.nativeBookmarkDisposed ||
+          this.nativeBookmarkTargetsByPanel.get(panel) !== target || !this.getOpenPanels().includes(panel)) continue;
+        if (result.status === "unavailable") {
+          target.missingReads = 0;
+          // Atomic replacement and zero-byte placeholders can fail a single observation.
+          target.unavailableReads = Math.min(target.unavailableReads + 1, 3);
+          if (target.unavailableReads === 3 && !target.warned) {
+            target.warned = true;
+            void vscode.window.showWarningMessage(t("chat.nativeBookmarks.unavailable"));
+          }
+          continue;
+        }
+        target.unavailableReads = 0;
+        target.warned = false;
+        // Native writes can replace the file atomically; confirm absence on a later poll.
+        if (result.status === "missing" && ++target.missingReads < 2) continue;
+        if (result.status === "ok") target.missingReads = 0;
+        const keys = result.status === "ok"
+          ? [...new Set(result.uuids.map((uuid) => target.keysByUuid.get(uuid)).filter((key): key is string => !!key))].sort()
+          : [];
+        if (JSON.stringify(keys) === JSON.stringify(target.keys)) continue;
+        target.keys = keys;
+        await panel.webview.postMessage({ type: "nativeBookmarkState", token: target.token, keys });
+      }
+    } catch {
+      this.logger?.debug("Claude native bookmark refresh failed");
+    } finally {
+      this.nativeBookmarkPolling = false;
+      if (!this.nativeBookmarkDisposed && this.nativeBookmarksEnabled() &&
+        this.getOpenPanels().some((panel) => this.nativeBookmarkTargetsByPanel.has(panel))) {
+        this.nativeBookmarkTimer = setTimeout(() => {
+          this.nativeBookmarkTimer = undefined;
+          void this.pollNativeBookmarks();
+        }, generation === this.nativeBookmarkGeneration ? 2000 : 0);
+        this.nativeBookmarkTimer.unref();
+      }
+    }
+  }
+
+  private registerNativeBookmarkTargets(
+    model: ChatSessionModel,
+    panel: vscode.WebviewPanel,
+    claudeSessionsRoot: string,
+  ): NativeBookmarkPanelState | undefined {
+    if (!this.nativeBookmarkReader) return undefined;
+    const previous = this.nativeBookmarkTargetsByPanel.get(panel);
+    this.nativeBookmarkTargetsByPanel.delete(panel);
+    const sessionId = model.meta.id;
+    if (model.meta.historySource !== "claude" || !isClaudeBookmarkSessionId(sessionId) ||
+      !path.isAbsolute(model.fsPath) || !path.isAbsolute(claudeSessionsRoot) ||
+      path.basename(model.fsPath).toLowerCase() !== `${sessionId}.jsonl`.toLowerCase()) return undefined;
+    // Match discovery's main-session layout; ancestor and project names do not identify child sessions.
+    const relativeParts = path.relative(claudeSessionsRoot, model.fsPath).split(path.sep);
+    if (relativeParts.length !== 2 || !relativeParts.every(isClaudePathPart)) return undefined;
+    const keysByUuid = new Map<string, string>();
+    const ambiguous = new Set<string>();
+    const buildTarget = createTimelineBookmarkTargetBuilder(model.fsPath, normalizeCacheKey(model.fsPath), model.items);
+    model.items.forEach((item) => {
+      const target = buildTarget(item);
+      if ((item.type !== "claudeProgress" && (item.type !== "message" || item.role !== "assistant")) || !item.claudeMessageUuid) return;
+      const uuid = item.claudeMessageUuid;
+      if (keysByUuid.has(uuid)) ambiguous.add(uuid);
+      if (target) keysByUuid.set(uuid, target.key);
+    });
+    for (const uuid of ambiguous) keysByUuid.delete(uuid);
+    if (keysByUuid.size === 0) return undefined;
+    const validKeys = new Set(keysByUuid.values());
+    const keys = this.nativeBookmarksEnabled() && previous?.fsPath === model.fsPath
+      ? previous.keys.filter((key) => validKeys.has(key)) : [];
+    const target: NativeBookmarkPanelState = {
+      token: ++this.nativeBookmarkToken, sessionId, fsPath: model.fsPath, keysByUuid, keys,
+      missingReads: 0, warned: previous?.fsPath === model.fsPath && previous.warned,
+      unavailableReads: previous?.fsPath === model.fsPath ? previous.unavailableReads : 0,
+    };
+    this.nativeBookmarkTargetsByPanel.set(panel, target);
+    return target;
   }
 
   private async sendBookmarkState(panel: vscode.WebviewPanel): Promise<void> {
@@ -1102,6 +1244,7 @@ export class ChatPanelManager implements vscode.Disposable {
     this.fileHistoryTargetsByPanel.delete(panel);
     this.patchEntryDetailRequestsByPanel.delete(panel);
     this.bookmarkTargetsByPanel.delete(panel);
+    this.nativeBookmarkTargetsByPanel?.delete(panel);
     this.userMessageIndexesByPanel.delete(panel);
     this.branchSnapshotByPanel.delete(panel);
     this.branchPresentationSessionKeyByPanel.delete(panel);
@@ -3795,6 +3938,7 @@ export class ChatPanelManager implements vscode.Disposable {
       `chatOpenPosition send session=${debugSessionName(nextState.fsPath)} mode=${config.chatOpenPosition} panelKind=${nextState.kind} saved=${savedOpenMessageIndex ?? "none"}`,
     );
     const bookmarkState = this.withBookmarkState(toWebviewChatSessionModel(model, detailMode), nextState.fsPath, panel);
+    const nativeBookmarkState = this.registerNativeBookmarkTargets(model, panel, summary?.storage.rootPath ?? config.claudeSessionsRoot);
     const webviewModel: ChatSessionModel = {
       ...bookmarkState.model,
       meta: {
@@ -3868,6 +4012,8 @@ export class ChatPanelManager implements vscode.Disposable {
       },
       cliResume,
       bookmarks: bookmarkState.bookmarkKeys,
+      nativeBookmarkToken: nativeBookmarkState?.token ?? 0,
+      nativeBookmarks: nativeBookmarkState?.keys ?? [],
       i18n: this.buildI18n(),
       mermaidPreferences: this.mermaidPreferenceStore.get(),
       dateTime,
@@ -3894,6 +4040,7 @@ export class ChatPanelManager implements vscode.Disposable {
       transitionDirection: options?.transitionDirection,
       codexAgentRunsGenerationBoundary: this.codexAgentRunsGenerationByPanel.get(panel) ?? 0,
     });
+    this.refreshNativeBookmarks();
     this.logger?.debug(
       formatDebugFields("chatSession send done", {
         session: safeDebugBasename(nextState.fsPath),
@@ -4026,10 +4173,11 @@ export class ChatPanelManager implements vscode.Disposable {
     const sessionCacheKey = normalizeCacheKey(sessionFsPath);
     const targets = new Map<string, BookmarkTarget>();
     const itemTargets = new Map<number, BookmarkTarget>();
+    const buildTarget = createTimelineBookmarkTargetBuilder(sessionFsPath, sessionCacheKey, model.items);
 
     const items = Array.isArray(model.items)
       ? model.items.map((item, itemIndex) => {
-          const target = buildTimelineBookmarkTarget(sessionFsPath, sessionCacheKey, item, itemIndex);
+          const target = buildTarget(item);
           if (!target) return item;
           targets.set(target.key, target);
           itemTargets.set(itemIndex, target);
@@ -4528,6 +4676,7 @@ export class ChatPanelManager implements vscode.Disposable {
       unpinTooltip: t("chat.tooltip.unpin"),
       bookmarkAddTooltip: t("chat.tooltip.bookmarkAdd"),
       bookmarkRemoveTooltip: t("chat.tooltip.bookmarkRemove"),
+      nativeBookmarkTooltip: t("chat.tooltip.nativeBookmark"),
       customTitle: t("chat.button.customTitle"),
       customTitleTooltip: t("chat.tooltip.customTitle"),
       markdown: t("chat.button.markdown"),
@@ -4684,6 +4833,11 @@ export class ChatPanelManager implements vscode.Disposable {
       temporaryTabState: t("chat.tabMode.state.temporary"),
       taskNotificationInvalid: t("chat.taskNotification.invalid"),
       systemReminderTitle: t("chat.systemReminder.title"),
+      claudeProgressNarration: t("chat.claudeProgress.narration"),
+      claudeProgressThinking: t("chat.claudeProgress.thinking"),
+      claudeProgressRedacted: t("chat.claudeProgress.redactedThinking"),
+      claudeProgressDuration: t("chat.claudeProgress.duration"),
+      claudeQueuedInput: t("chat.claudeQueuedInput"),
       crossSessionMessageBadge: t("chat.crossSession.badge"),
       crossSessionMessageTitle: t("chat.crossSession.title"),
       crossSessionMessageFrom: t("chat.crossSession.from"),
@@ -5649,6 +5803,8 @@ function sanitizePageSearchSeed(value: unknown): SessionPageSearchSeed | undefin
     caseSensitive: source.caseSensitive === true,
     ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
     ...(source.autoOpen === false ? { autoOpen: false } : {}),
+    ...(isClaudeProgressId(source.preferredProgressId) ? { preferredProgressId: source.preferredProgressId } : {}),
+    ...(isClaudeQueuedInputId(source.preferredInputId) ? { preferredInputId: source.preferredInputId } : {}),
   };
 }
 
@@ -5792,6 +5948,10 @@ function toFullWebviewChatSessionModel(model: ChatSessionModel): ChatSessionMode
 }
 
 function toFullWebviewTimelineItem(item: ChatTimelineItem): ChatTimelineItem {
+  if (item.type === "claudeProgress") {
+    const { claudeMessageUuid: _nativeUuid, ...publicItem } = item;
+    return publicItem;
+  }
   if (item.type === "message") return toWebviewMessageItem(item);
   if (item.type === "tool") return toFullToolItem(item);
   if (item.type === "patchGroup") return toFullPatchGroupItem(item);
@@ -5806,6 +5966,7 @@ function toSummaryChatSessionModel(model: ChatSessionModel): ChatSessionModel {
 }
 
 function toSummaryTimelineItem(item: ChatTimelineItem): ChatTimelineItem {
+  if (item.type === "claudeProgress") return toFullWebviewTimelineItem(item);
   if (item.type === "tool") return toSummaryToolItem(item);
   if (item.type === "patchGroup") return toSummaryPatchGroupItem(item);
   if (item.type === "message") return toWebviewMessageItem(item);
@@ -5813,8 +5974,9 @@ function toSummaryTimelineItem(item: ChatTimelineItem): ChatTimelineItem {
 }
 
 function toWebviewMessageItem(item: ChatMessageItem): ChatMessageItem {
+  const { claudeMessageUuid: _nativeUuid, ...publicItem } = item;
   return {
-    ...item,
+    ...publicItem,
     attachments: item.attachments?.map((attachment) => toWebviewAttachment(attachment)),
   };
 }
@@ -5927,7 +6089,7 @@ async function buildChatPerformanceStats(fsPath: string, model: ChatSessionModel
       stats.messageChars += (item.stdout?.length ?? 0) + (item.stderr?.length ?? 0);
       continue;
     }
-    if (item.type === "crossSessionMessage" || item.type === "taskNotification" || item.type === "systemReminder") {
+    if (item.type === "crossSessionMessage" || item.type === "taskNotification" || item.type === "systemReminder" || item.type === "claudeProgress" || item.type === "claudeQueuedInput") {
       stats.messageChars += typeof item.body === "string" ? item.body.length : 0;
       continue;
     }

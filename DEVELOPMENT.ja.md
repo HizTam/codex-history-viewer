@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-10-02
-- 対象バージョン: 2.16.0
+- 最終更新: 2026-10-05
+- 対象バージョン: 2.17.0
 
 ## 1. 概要
 
@@ -305,6 +305,7 @@
 - Handoff ファイル (`handoff.md`) の本文ラベルは token 節約のため英語で固定する
 - Handoff ファイルには、末尾優先の transcript 抜粋、直近のユーザー依頼、復元可能なファイル変更、`Source session file` を含める
 - Handoff ファイルには tool call と tool output を含めない
+- Claude Code の `thinking` / `redacted_thinking` ブロックは進捗表示・思考表示に使うが、Handoff の transcript 抜粋には含めない。通常の assistant 本文 (`text`) として保存された進捗報告は、従来どおり末尾優先・文字数上限の範囲で抜粋対象になる
 
 ### 3.3 検索
 
@@ -345,14 +346,14 @@
 
 ### 3.4 キャッシュ / インデックス / 保守
 
-2.15.0の現行値は次のとおり。各機能の導入時の更新番号と区別し、計算規則を更新した場合は実装の定数とこの表を合わせる。
+現行値は次のとおり。各機能の導入時の更新番号と区別し、計算規則を更新した場合は実装の定数とこの表を合わせる。
 
 | 対象 | 実装の定数 | 現行値 |
 | --- | --- | ---: |
-| History summary | `SUMMARY_CACHE_ALGO_VERSION` | 24 |
-| Search index | `SEARCH_INDEX_FILE_VERSION` | 27 |
-| Codex Analysis | `SESSION_ANALYSIS_CODEX_PARSER_VERSION` | 16 |
-| Claude Code Analysis | `SESSION_ANALYSIS_CLAUDE_PARSER_VERSION` | 13 |
+| History summary | `SUMMARY_CACHE_ALGO_VERSION` | 27 |
+| Search index | `SEARCH_INDEX_FILE_VERSION` | 32 |
+| Codex Analysis | `SESSION_ANALYSIS_CODEX_PARSER_VERSION` | 17 |
+| Claude Code Analysis | `SESSION_ANALYSIS_CLAUDE_PARSER_VERSION` | 16 |
 | Codex Branch Navigation | `CODEX_FORK_NAVIGATION_ALGORITHM_VERSION` | 6 |
 
 - 履歴キャッシュ:
@@ -715,6 +716,36 @@
   - Claude Code tool use 由来の patch は `tool_use.id` を優先し、欠如時は JSONL 行番号と同一行内の tool call index へフォールバックする
   - 旧しおりキーの互換読み取りは行わない。キー生成規則変更前のしおりは付け直しを前提とする
   - セッション削除時は該当セッションのしおりも削除し、Undo では削除前のしおりを復元する
+- Claude Code 拡張機能のしおり:
+  - `codexHistoryViewer.claude.nativeBookmarks.enabled`（既定 OFF）で読み取り専用の自動反映を有効にする。Claude Code ソースと `ui.timeGuide.enabled` が有効な場合に表示する
+  - 設定画面の「履歴ソース」→「Claude Code」→「Claude Code のしおりを反映」で切り替える。英語表示は「History Sources」→「Claude Code」→「Display Claude Code bookmarks」。UI には「本家」や保存先に関する補足を表示しない
+  - 現在の extension host / VS Code プロファイルで、本拡張の `globalStorageUri` と同じ親ディレクトリにある `anthropic.claude-code/session-bookmarks/<sessionId>.json` を参照する。別プロファイルや別マシンの保存先を探索しない
+  - 開いている Claude 主会話の session ID と回答レコード UUID を照合し、本文カードと日付ガイドに青系の読み取り専用マークを表示する。本拡張の黄色いしおりと独立して併記する
+  - 主会話の判定は、索引にある対象セッションの保存ルート（索引にない場合は読み込みリクエストの `claudeSessionsRoot`）からの相対配置 `<project>/<sessionId>.jsonl` に基づく。ルートより上位・ルート自体・プロジェクトの名前が `subagents` でも除外しない。子会話の配置、ルート外・相対パス・不正なパス要素は照合対象にしない
+  - Claude Code のマークは削除不可。Claude Code のファイル・状態保存領域への書き込みは行わず、本拡張の `BookmarkStore` にも取り込まない。Claude Code 側の解除や設定 OFF は本拡張のしおりに影響しない。メタデータのエクスポート・インポートの対象にも含めない
+  - 約 2 秒間隔で開いた会話のしおりだけを確認する。本体履歴の再解析は不要。設定 OFF または対象パネルがなくなると確認処理を停止する
+  - 読み取り失敗時は最後の正常値を維持して再試行し、3回連続の失敗で一度だけ警告する。正常読取・不存在・設定OFF・会話切替で失敗回数と通知状態をリセットし、同じ会話のモデル再配信では保持する。ファイル不存在は2回連続確認後に解除として反映する。設定変更・会話切替・パネル破棄をまたぐ遅延結果は破棄する
+  - `src/services/claudeNativeBookmarkReader.ts` は通常ファイル・保存先・1 MiB 上限・UTF-8・保存形式・読み取り前後の同一性を検証する。上位フォルダーのリンクを許容し、保存ディレクトリの実パス直下のファイルだけを開く。保存ディレクトリ自体と対象ファイルのリンク、読み取り中の保存先やファイルの交換を拒否する。識別子・本文・完全パスをエラーメッセージへ出力しない
+  - subagent や File AI Change History のツール差分へ Claude Code の回答しおりは転写しない。既存のしおりキー・永続形式は変更しない
+- Claude Code の進捗表示:
+  - assistant の `thinking` / `redacted_thinking` を `claudeProgress` として読み込み、詳細表示の ON/OFF にかかわらずカードを表示する
+  - 本家と同じ signature metadata（protobuf field 2 / 1 / 8）で `narration` と判定された本文は「進捗」として全文表示する。通常の思考本文は展開式。空文字・空白のみの思考は通常・詳細ともにカード化せず、保存時間がある場合だけ非表示の時間メタデータとして保持する。秘匿本文は状態だけを表示する
+  - 思考の種類名は折りたたみ見出しに一度だけ表示する。非公開状態の文言はカードの見出しタグだけに表示し、Markdownも見出しだけとする。日時・時間・しおり・展開状態は維持する
+  - 思考の開閉はマウス・Enter・Spaceによる操作時に同期的に保存し、再描画直後も最新の状態を維持する。取り外されたカードの遅延イベントは無視する。同じ会話の更新では開閉状態を維持し、別の会話へ切り替えた場合はリセットする。初回復元には既存の保存状態を使う。検索条件の入力・変更や検索箇所の選択では思考を展開・保存し、背景での検索結果再計算では明示的に閉じた状態を維持する
+  - `thinkingDurationMs` を次に表示される進捗・assistant 本文・ツール・diff カードまで合計し、見出しに概算秒数を一度だけ表示する。user 発言・割り込み・ターン変更等でリセットし、描画時に再計算して重複加算を防ぐ。ツールの表示設定に合わせて付与先も変わる。空の思考は検索・しおり・日付ガイドの対象にせず、Markdown でも次の出力に時間だけを添える
+  - `src/chat/claudeProgress.ts` が bounded な signature 解析、外部値検証、進捗 ID を共通化する。signature と秘匿 data は Webview・検索・出力へ渡さない
+  - 進捗は通常メッセージを採番せず、人間の依頼数・最終回答候補・Resume / Handoff へ混ぜない。ターン内の時系列には含める
+  - 横断検索では assistant を選ぶと本文を検索でき、進捗 ID を検索結果から Webview へ伝えて正しいカードを開く。`progressKind` を索引・cache・検索ヒットに保持し、行とtooltipで「進捗」「思考」を区別する。ページ内検索は閉じた思考本文も対象にし、ヒット時に展開する
+  - Markdown 出力、コピー、日付ガイド、独自しおり、本家しおりに対応する。progress-only の本家 UUID は最初の可視進捗カードへ、同じレコードに通常本文もある場合は通常本文へ照合する。非表示の時間メタデータには照合しない
+  - 同じ保存レコードに進捗・ツール・本文が混在する場合は元のブロック順に配置し、通常本文の集約と既存番号は維持する。Markdown の移動先は本文内の改行を含む実際の行数から計算する
+  - 既存カードのしおり fallback index は進捗を除き、同じ回答番号の集約本文がツールに先行する旧順序で計算して既存キーを保つ。進捗のしおりは既存 note 種別と進捗 ID を使う
+  - 進捗内の diff 風文字列はファイル変更の証拠にしない。差分カード・詳細・File AI Change History は引き続き実際のツール記録を使う
+  - 検索 cache は `SEARCH_INDEX_FILE_VERSION = 33`。追加入力対応前の旧cacheを再生成し、進捗ID・種類・assistant/messageの組合せも検証する
+- Claude Code 実行中の追加入力:
+  - `attachment.type = queued_command` で人の来歴（`origin.kind = human`）が明示された非metaのpromptテキストを、通常・詳細の両方に表示する。内部通知・転送・来歴不明・queue-operation・`rendered`のsystem-reminderは本文へ取り込まない
+  - `claudeQueuedInput.ts` の共通抽出と重複判定を使用し、source UUID・delivery IDによる再配信を除外する。同じsource UUIDの通常user記録が前後にあれば通常記録を優先する。同文の別発言は残す。元ファイルは変更しない
+  - 独立した `inputId` を持つuser色のカードとして表示し、通常のメッセージ番号・既存しおりキー・diff識別子を維持する。現在のターンへの追加入力として扱い、新規ターンや依頼数を増やさない
+  - 本文のコピー、本拡張のしおり、日付ガイド、userとしての検索・正確な移動、Markdown、Resume/Handoffに対応する。Markdownの後続メッセージ行番号を再計算し、引き継ぎの既存上限を維持する。prompt内の非テキスト添付の新規復元は行わない
 - しおり UI:
   - `codexHistoryViewer.ui.timeGuide.enabled = true` のときだけ、カード上のしおりボタンを表示する
   - `codexHistoryViewer.ui.timeGuide.enabled = false` のときは、日付ガイドとカード上のしおり UI をどちらも表示しない
@@ -749,7 +780,7 @@
 - 共通設定 `codexHistoryViewer.branchNavigation.enabled` が `true` のときだけ有効になる実験的機能で、既定は無効とする。公開前の旧 `claudeBranches.enabled` と開発途中の `codexForks.enabled` は残さず、aliasやmigrationも設けない
 - Codexの通常のForkは、ローカルFork操作が先頭`session_meta.payload.forked_from_id`に保存したdirect parent IDだけを関係の正本とする。Codex アプリの `ローカルにフォークする` と Codex 拡張機能の `新しいタスクで続ける` のどちらも対象とし、本文の類似、開始時刻、同じ `cwd` だけを根拠に Fork を推定しない
 - 同じ会話IDの指示編集による物理履歴の分岐は、同じ保存root・archive状態内で既存`history_base`規則が一意に解決した親、または3.0.2の検証済み自己完結編集の関係から構成する。選択肢に「編集前」「編集後」を表示し、通常の「Fork」と区別して前後の履歴へ移動できる。先頭質問の編集は存在しない共通メッセージを作らず、連続編集と通常Forkの混在も現在component内で扱う
-- 旧履歴の経路identityはナビゲーションsnapshot内だけで物理cacheKeyのhashから作り、会話identityや永続metadataを変更しない。通常Forkの親IDは、`history_base`が一意に参照する物理履歴の会話IDと一致し、その履歴が経路候補にある場合、その物理履歴へ解決する。それ以外は代表sessionへの従来の解決を維持し、nested Forkの祖先参照を直接の親と取り違えない。agent除外・同一absolute `cwd`・cycle・実ファイル境界の検証を適用する。Codex Branch Navigation algorithmは`6`とし、旧snapshotを再利用しない。後続のPage分類、Claude子の所有範囲と内部通知への対応を含む現行cacheはHistory summary `27`、Search index `30`、分析parser Codex `17` / Claude `16`を使う
+- 旧履歴の経路identityはナビゲーションsnapshot内だけで物理cacheKeyのhashから作り、会話identityや永続metadataを変更しない。通常Forkの親IDは、`history_base`が一意に参照する物理履歴の会話IDと一致し、その履歴が経路候補にある場合、その物理履歴へ解決する。それ以外は代表sessionへの従来の解決を維持し、nested Forkの祖先参照を直接の親と取り違えない。agent除外・同一absolute `cwd`・cycle・実ファイル境界の検証を適用する。Codex Branch Navigation algorithmは`6`とし、旧snapshotを再利用しない。後続のPage分類、Claude子の所有範囲と内部通知への対応を含む現行cacheはHistory summary `27`、Search index `32`、分析parser Codex `17` / Claude `16`を使う
 - Codex subagent も `forked_from_id` を持つため、検証済みの `session_meta.payload.source.subagent.thread_spawn`、または明示的な親ID付き Guardian を Fork metadata より優先する。`codexAgent` と `codexFork` の両方を持つ session は Agent Runs の対象とし、Branch Navigation の node / edge に含めない
 - Agent Runs の設定に依存せず、Codex Branch Navigation の load 前に未確認 agent metadata を補完する。一部を確認できない場合は未確認 session を Fork と推測せず除外し、確認済みの関係だけを partial として扱う
 - parent / child の正規化済み absolute `cwd` が同一の場合だけ local Fork の resolved edge とする。`新しい Worktree にフォークする`、異なる `cwd`、relative path、比較不能な `cwd` は 2.8.0 の対象外とし、通常の Fork 経路へ混在させない
@@ -1446,7 +1477,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 同一 turn 内でも別々の tool output として記録された画像は、中間生成画像と変換・確認後画像を推測で統合または除外せず、履歴順に個別表示する。本家 UI の正規化済み `ImageView` 限定表示は模倣せず、JSONL に保存された履歴の確認可能性を優先する
   - `transcriptRenderer.ts` は同じCodex tool output / standalone response item投影を使ってtextと画像metadataだけをMarkdown化し、生成画像やtool画像のBase64/data URIは出力しない
   - `chatAttachments.ts` は画像、Claude Code document、Claude Code IDE tag、Codex `Files mentioned by the user` block を統合して抽出する
-  - `chatAttachments.ts` は Claude Code の materialized message 判定を `detectClaudeMaterializedMessageRole()` に集約し、`queue-operation` と `attachment.type = "queued_command"` を chat / search / transcript / resume / handoff の本文化対象から除外する
+  - `chatAttachments.ts` は Claude Code の materialized message 判定を `detectClaudeMaterializedMessageRole()` に集約し、`queue-operation` と `attachment.type = "queued_command"` を通常メッセージの本文化対象から除外する。明示的な人の途中入力は `claudeQueuedInput.ts` の独立した経路で chat / search / transcript / resume / handoff に反映する
   - `chatAttachments.ts` は Claude Code task notification / invoke を共通の bounded block scanner と Markdown safe-context map で抽出する。fenced code、inline code、blockquote 内の引用例は抽出せず、外側閉じタグや parameter / result 境界が曖昧な block は raw text として残す
   - bounded block scanner は open / close 候補を candidate 配列として先に列挙し、各 open は次の同種 open までの window だけを見る。close 欠落や malformed open が大量にある場合でも close 探索を EOF まで反復せず、検索インデックス構築や transcript / resume / handoff 生成を二乗時間にしない
   - `chatAttachments.ts` は task notification の `summary` / `result` / `usage` を top-level parser で読み、`<result>` 内の `<status>` / `<usage>` 風 text を top-level field として誤抽出しない。`usage` の数値は 10 進整数だけを受理する
@@ -1724,7 +1755,7 @@ TypeScript は `6.0.3` を使用し、`module` / `moduleResolution` は `Node16`
 npm install
 ```
 
-KaTeX は Webview 用の配布物を `media/vendor/katex/` に同梱するため、`package.json` の exact version と同梱物を別々に更新してはならない。2.15.0 の直接同梱版は `katex@0.18.9` とする。KaTeX の version を変更した後は明示的に同期し、第三者コード、CSS、LICENSE、font の差分をレビューする。
+KaTeX は Webview 用の配布物を `media/vendor/katex/` に同梱するため、`package.json` の exact version と同梱物を別々に更新してはならない。現在の直接同梱版は `katex@0.18.9` とする。KaTeX の version を変更した後は明示的に同期し、第三者コード、CSS、LICENSE、font の差分をレビューする。
 
 ```powershell
 # インストール済みKaTeXと同梱物の一致を確認します
@@ -1773,7 +1804,7 @@ git diff --check
 
 `npm run compile`は`dist/`を削除して再生成するため、生成済みJavaScriptを参照する回帰テストと同時実行しない。compile完了後にテストを開始する。文書だけの変更では、版番号・日付・UI文言・相対リンク・UTF-8（BOMなし）／LF・差分を確認する。
 
-2.15.0の `compile` は最後に `npm run build:zstd` を実行し、CommonJSのportable decoderを同梱する。ライセンスコメントの版数は導入済みパッケージから取得し、manifestのexact pinとの一致を検証する。`watch`だけではdecoderを生成しないため、初回は `compile` を実行する。依存の取得は通常どおり `npm ci` で行う。
+`compile` は最後に `npm run build:zstd` を実行し、CommonJSのportable decoderを同梱する。ライセンスコメントの版数は導入済みパッケージから取得し、manifestのexact pinとの一致を検証する。`watch`だけではdecoderを生成しないため、初回は `compile` を実行する。依存の取得は通常どおり `npm ci` で行う。
 
 ### 5.3 VSIX 作成
 

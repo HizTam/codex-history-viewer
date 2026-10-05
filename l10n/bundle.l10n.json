@@ -1,4 +1,5 @@
 {
+  "chat.claudeQueuedInput": "Additional user input",
   "chat.terminalInput.badge": "Terminal input",
   "chat.terminalOutput.title": "Terminal output",
   "chat.terminalOutput.stdout": "Standard output",
@@ -1739,5 +1740,14 @@
   "chat.claudeAgent.partial": "Some context or record ownership could not be verified. Statistics are partial.",
   "chat.claudeAgent.openOwner": "Open parent session",
   "chat.taskNotification.invalid": "Notification details (unrecognized content)",
-  "chat.systemReminder.title": "Internal reminder"
+  "chat.systemReminder.title": "Internal reminder",
+  "chat.tooltip.nativeBookmark": "Claude Code bookmark (read-only)",
+  "chat.nativeBookmarks.unavailable": "Claude Code bookmarks could not be read. Keeping the last confirmed display and retrying.",
+  "settingsPanel.setting.claude.nativeBookmarks.enabled.label": "Display Claude Code bookmarks",
+  "settingsPanel.setting.claude.nativeBookmarks.enabled.description": "Automatically display bookmarks created in the Claude Code extension as read-only marks. Original files are not modified. Requires the Claude Code source and date guide/bookmark display to be enabled.",
+  "settingsPanel.disabled.nativeBookmarks": "Enable the Claude Code source and date guide/bookmark display to configure this setting.",
+  "chat.claudeProgress.narration": "Progress",
+  "chat.claudeProgress.thinking": "Thinking",
+  "chat.claudeProgress.redactedThinking": "Thinking content is not available",
+  "chat.claudeProgress.duration": "Thought for ~{0}s"
 }

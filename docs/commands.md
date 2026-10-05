@@ -120,6 +120,10 @@ Compression choices are also available in **Filter History...**. They affect the
 | Initialize Search Pane | `codexHistoryViewer.searchClearResults` | Clears current Search results and resets the Search root node. |
 | Save Current Search... | `codexHistoryViewer.searchSavePreset` | Saves the displayed search query alone or together with the filters used for its results. |
 
+Saved Claude Code progress updates and thinking text are searchable with the Assistant role. Selecting a matching result opens the corresponding card and expands thinking text when needed. In-page search also includes collapsed thinking text. Existing answer numbers and diff navigation targets are preserved.
+
+Saved Claude Code additional user input is searchable with the User role. Selecting a matching result opens its **Additional user input** card.
+
 Starting with 2.15.0, saving a search offers **Query only** or **Query and filters**. Filters include date, project, source, display target, tags, and compression. Running a preset with filters reapplies them to History and Search without changing Pinned. Saved dates keep their captured values; query-only presets use the current History filters. Both types use the current role and case-sensitivity settings. A preset that requires disabled sources, archived sessions, or compressed histories cannot run until those settings are enabled; the extension explains the missing requirement without widening the scope.
 
 ## Archive Actions
@@ -170,6 +174,12 @@ Commands entered in Claude Code's shell mode appear as user messages with a **Te
 
 For history search, commands use the User role. Terminal output uses the Tool role and is included only when `codexHistoryViewer.search.indexToolContent` is set to **Messages + Tool Calls + Results** (`toolCallsAndOutputs`). History Insights counts commands as user requests, excluding their output. **Open Session as Markdown** includes the displayed output, while generated resume excerpts and handoff files omit terminal output. These display and extraction rules leave the original session files unchanged.
 
+Saved Claude Code progress updates are displayed directly, while thinking text is expandable. Both support search, bookmarks, copying, and **Open Session as Markdown** without enabling **Show details**. Progress text does not change the tool records used for diff cards or File AI Change History.
+
+User text sent while Claude Code was running appears as **Additional user input** when its human origin is recorded. These cards also support search, bookmarks, copying, and **Open Session as Markdown** without enabling **Show details**. Repeated delivery records and matching ordinary user messages appear only once, and existing message numbers and bookmarks are preserved.
+
+Use **Open Settings > History Sources > Claude Code > Display Claude Code bookmarks** to automatically display bookmarks from the Claude Code extension. This option is disabled by default and requires the Claude Code source and **Show date guide and bookmarks**. In main Claude Code session histories, matching cards and date-guide markers show blue read-only marks separately from this extension's yellow bookmarks. To remove a Claude Code mark, remove the bookmark in the Claude Code extension; changes are reflected automatically. This setting does not add a Command Palette command.
+
 Tree context-menu targets follow these rules:
 
 | Scope | Commands | Behavior |
@@ -208,6 +218,12 @@ Opening multiple sessions requires confirmation and opens at most the first 10 u
 
 Handoff context-menu actions are shown only when `codexHistoryViewer.handoff.enabled` is enabled. `Delete Handoff Files` remains available from the Control view even when handoff context-menu actions are hidden.
 
+Handoff files omit the saved text used for Claude Code progress and thinking cards. Progress reports recorded as ordinary assistant messages remain eligible for the transcript excerpt, subject to its length limit.
+
+**Copy Quick Prompt** and Handoff generation include saved Claude Code additional user input as user context, subject to their excerpt limits. Internal queue notifications remain excluded.
+
+Recreate an existing handoff file to include this input; reusing a previously generated file keeps its saved content.
+
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
 | Handoff to Claude Code | `codexHistoryViewer.handoffToClaude` | Creates or reuses a Codex session handoff file, then opens Claude Code with a prompt that points to it. |
@@ -238,3 +254,5 @@ Handoff context-menu actions are shown only when `codexHistoryViewer.handoff.ena
 | Import Sessions... | `codexHistoryViewer.importSessions` | Restores Codex or Claude Code session data from a selected directory and restores accompanying metadata when a valid export manifest is available, with selectable restore scope and duplicate-ID handling. |
 
 Original-data export and import support Codex `.jsonl.zst` histories and preserve their compressed format. When overwriting a history stored in the other format, import converts the incoming data to the destination's format before replacing it. Markdown export reads either format and writes a readable transcript.
+
+Markdown output includes saved Claude Code progress updates, thinking text, and additional user input. Read-only marks from the Claude Code extension are not part of this extension's bookmark metadata and are not included in metadata exports or restored by **Import Sessions**.

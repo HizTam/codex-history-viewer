@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-09-28
+Last updated: 2026-10-05
 
 ## Supported Versions
 
@@ -17,9 +17,9 @@ Use the latest published release of Codex History Viewer whenever possible. Olde
 | 1.2.2 through 2.7.x | Does not include all current Markdown and KaTeX dependency security updates; upgrade to 2.15.0 or later. |
 | 1.2.1 and earlier | Do not install or redistribute historical VSIX files. |
 
-## Dependencies Shipped in 2.16.0
+## Dependencies Shipped in 2.17.0
 
-Version 2.16.0 retains the dependency versions shipped in 2.15.0.
+Version 2.17.0 retains the dependency versions shipped in 2.15.0 and 2.16.0.
 
 | Component | Bundled version | Use |
 | --- | --- | --- |
@@ -55,7 +55,7 @@ Codex History Viewer v2.10.0 introduced fenced Mermaid rendering in the Session 
 
 Mermaid source from session files is treated as untrusted input. Rendering uses fixed security settings, disables HTML labels, and removes frontmatter configuration overrides, initialization directives, and click directives before the source reaches Mermaid. These controls reduce exposure to unsafe diagram content but do not replace dependency updates.
 
-Generated SVG is parsed and validated before it is inserted into the webview. Executable or externally loaded content, event-handler attributes, unsafe URLs, and unsafe CSS are rejected. XML Base attributes are removed so that internal fragment references cannot be resolved as external resources. SVG export is independently validated again by the extension host, which rejects XML Base attributes and link elements without trusting the webview sanitizer. PNG export is bounded by dimension and pixel-count limits, and files are written only to a location selected through the VS Code save dialog.
+Generated SVG is parsed and validated before it is inserted into the Session Viewer. Executable or externally loaded content, event-handler attributes, unsafe URLs, and unsafe CSS are rejected. XML Base attributes are removed so that internal fragment references cannot be resolved as external resources. SVG export is independently validated again by the extension host, which rejects XML Base attributes and link elements without trusting the Session Viewer's sanitizer. PNG export is bounded by dimension and pixel-count limits, and files are written only to a location selected through the VS Code save dialog.
 
 Rendering and export also enforce limits on Mermaid source length, diagrams per message, graph edges, generated SVG structure, and exported image size. Inputs that exceed rendering limits fall back to source display or a bounded error state instead of bypassing these checks.
 
@@ -65,13 +65,13 @@ Mermaid 11.17.2 embeds `js-yaml@4.3.0` in its distributed JavaScript. This embed
 
 js-yaml 4.3.0 is within the affected ranges for the [empty merge-source CPU limit bypass (GHSA-2883-xcg3-v3hh)](https://github.com/advisories/GHSA-2883-xcg3-v3hh), fixed in 4.3.2, and [quadratic CPU consumption while resolving ordered maps (GHSA-5p4m-2wfm-xmqj)](https://github.com/advisories/GHSA-5p4m-2wfm-xmqj), fixed in 4.3.1. These are upstream YAML parsing denial-of-service issues. The Session Viewer's configuration filtering, input limits, and Mermaid's use of `JSON_SCHEMA` restrict exposure; the affected dependency version alone does not establish that either advisory's payload is reachable through the viewer.
 
-Codex History Viewer v2.14.2 replaces Mermaid's embedded copy with `js-yaml@4.3.2` when building the webview bundle, retaining Mermaid 11.17.2 and the existing rendering safeguards. The build validates pinned package versions and source hashes and fails if the expected replacement is not applied. Release verification checks the emitted bundle itself, including that the patched parser is present and the old embedded implementation is absent.
+Codex History Viewer v2.14.2 replaces Mermaid's embedded copy with `js-yaml@4.3.2` when building the Session Viewer bundle, retaining Mermaid 11.17.2 and the existing rendering safeguards. The build validates pinned package versions and source hashes and fails if the expected replacement is not applied. Release verification checks the emitted bundle itself, including that the patched parser is present and the old embedded implementation is absent.
 
 Users of v2.14.1 or earlier should upgrade to v2.15.0 or later to receive the current dependency fixes. Existing rendering safeguards remain enabled and are not a substitute for dependency updates.
 
 ### markdown-it GHSA-38c4-r59v-3vqw / CVE-2026-2327
 
-Codex History Viewer uses `markdown-it` to render Markdown content in the chat webview.
+Codex History Viewer uses `markdown-it` to render Markdown content in the Session Viewer.
 
 The `markdown-it` ReDoS advisory GHSA-38c4-r59v-3vqw / CVE-2026-2327 affects `markdown-it` versions `>=13.0.0 <14.1.1`. Codex History Viewer v1.2.2 and later bundle `markdown-it@14.1.1` or newer, which includes the upstream fix.
 
@@ -104,6 +104,14 @@ Support for `.jsonl.zst` histories is experimental and disabled by default. When
 The reader processes compressed input incrementally, enforces a 1 GiB decoded-data limit per file read, and uses the bundled decoder's default 128 MiB maximum window. It checks cancellation, yields between decoding work, and stops on invalid or truncated streams. These are decoding limits, not a limit on the extension's total memory use; parsed session models and indexes also require memory. The setting carries a resource-impact badge.
 
 An explicitly requested import can convert incoming session data to an existing destination's storage format. It writes a temporary file and checks for source or destination changes before replacing the destination. This temporary file belongs to the import operation and is not a persistent decompression cache.
+
+### Claude Code bookmarks, progress text, and additional user input
+
+**Display Claude Code bookmarks** is disabled by default. When enabled, the extension reads bookmark data from the Claude Code extension's local storage as read-only marks. The reader validates session identifiers, resolved paths, regular-file status, UTF-8 encoding, and the bookmark schema. Reads are limited to 1 MiB per file and checked for file changes during the read. Invalid or inconsistent data is not accepted. These marks remain separate from extension-managed bookmarks and are not included in metadata exports.
+
+Saved progress updates and thinking text use the existing untrusted-content rendering safeguards. Stored signatures and redacted thinking payloads are not passed to the Session Viewer, search index, clipboard, or Markdown output.
+
+Queued text is displayed as additional user input only when its saved origin explicitly identifies a human and its fields pass validation. Internal notifications, forwarded input, metadata-only records, and rendered system-reminder wrappers are excluded. Accepted text is rendered as plain text and may be included in search, clipboard content, Markdown output, and generated Resume and Handoff context. Raw correlation identifiers remain in the extension host; cards and search navigation use derived identifiers.
 
 ## Reporting a Vulnerability
 

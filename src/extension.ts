@@ -1,3 +1,5 @@
+import { isClaudeProgressId } from "./chat/claudeProgress";
+import { isClaudeQueuedInputId } from "./chat/claudeQueuedInput";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { getExtensionVersion } from "./extensionVersion";
@@ -33,6 +35,7 @@ import {
 import { cleanupDeletedSessionUndoBackups, deleteSessionsWithConfirmation } from "./services/deleteService";
 import { PinStore, type PinEntry } from "./services/pinStore";
 import { BookmarkStore, type BookmarkEntry } from "./services/bookmarkStore";
+import { ClaudeNativeBookmarkReader, resolveClaudeNativeBookmarkDirectory } from "./services/claudeNativeBookmarkReader";
 import {
   type HistorySearchIndexSnapshot,
   type HistorySearchRefreshState,
@@ -427,6 +430,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const metadataMutationCoordinator = new SessionMetadataMutationCoordinator();
   const pinStore = new PinStore(context.globalState, metadataMutationCoordinator);
   const bookmarkStore = new BookmarkStore(context.globalState, metadataMutationCoordinator);
+  const nativeBookmarkDirectory = resolveClaudeNativeBookmarkDirectory(context.globalStorageUri);
   const annotationStore = new SessionAnnotationStore(context.globalState, metadataMutationCoordinator);
   const hiddenSessionStore = new HiddenSessionStore(context.globalState, metadataMutationCoordinator);
   const titleOverrideStore = new SessionTitleOverrideStore(context.globalState, metadataMutationCoordinator);
@@ -510,6 +514,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
     logger,
     initialAuthoritativeHistoryRefreshSettled.promise,
+    nativeBookmarkDirectory
+      ? new ClaudeNativeBookmarkReader(nativeBookmarkDirectory)
+      : undefined,
   );
   const fileChangeHistoryService = new FileChangeHistoryService(projectAssociationStore);
   const fileChangeHistoryPanels = new FileChangeHistoryPanelManager(
@@ -2285,6 +2292,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const uiLanguageChanged = e.affectsConfiguration("codexHistoryViewer.ui.language");
       const headerActionsChanged = e.affectsConfiguration("codexHistoryViewer.ui.alwaysShowHeaderActions");
       const timeGuideChanged = e.affectsConfiguration("codexHistoryViewer.ui.timeGuide.enabled");
+      const nativeBookmarksChanged = e.affectsConfiguration("codexHistoryViewer.claude.nativeBookmarks.enabled");
       const searchDefaultRolesChanged = e.affectsConfiguration("codexHistoryViewer.search.defaultRoles");
       const searchIndexToolContentChanged = e.affectsConfiguration("codexHistoryViewer.search.indexToolContent");
       const fileChangeHistoryExplorerContextMenuChanged = e.affectsConfiguration(
@@ -2330,6 +2338,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         !uiLanguageChanged &&
         !headerActionsChanged &&
         !timeGuideChanged &&
+        !nativeBookmarksChanged &&
         !searchDefaultRolesChanged &&
         !searchIndexToolContentChanged &&
         !fileChangeHistoryExplorerContextMenuChanged &&
@@ -2409,6 +2418,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void autoRefreshService?.configure(getConfig(), computeAutoRefreshConsumerVisible(), vscode.window.state.focused);
       if (uiLanguageChanged || chatTurnTimelineModeChanged || toolDisplayModeChanged || longMessageFoldingChanged || imagesChanged) chatPanels.refreshPanels();
       else chatPanels.refreshI18n();
+      if (nativeBookmarksChanged || timeGuideChanged || sourcesEnabledChanged) chatPanels.refreshNativeBookmarks();
       if (resumeMethodChanged) chatPanels.refreshResumePresentation();
       if (branchNavigationChanged) {
         chatPanels.refreshBranchNavigation();
@@ -9104,6 +9114,7 @@ export function deactivate(): void {
 function resolveRevealIndex(element: unknown, pageSearchSeed?: SessionPageSearchSeed): number | undefined {
   if (element instanceof SearchSessionNode) return pageSearchSeed?.preferredMessageIndex;
   if (!(element instanceof SearchHitNode)) return undefined;
+  if (element.hit.progressId || element.hit.inputId) return undefined;
   if (element.hit.role !== "user" && element.hit.role !== "assistant") return undefined;
   return element.hit.messageIndex;
 }
@@ -9129,6 +9140,8 @@ function sanitizeSessionPageSearchSeed(value: unknown): SessionPageSearchSeed | 
     caseSensitive: source.caseSensitive === true,
     ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
     ...(source.autoOpen === false ? { autoOpen: false } : {}),
+    ...(isClaudeProgressId(source.preferredProgressId) ? { preferredProgressId: source.preferredProgressId } : {}),
+    ...(isClaudeQueuedInputId(source.preferredInputId) ? { preferredInputId: source.preferredInputId } : {}),
   };
 }
 

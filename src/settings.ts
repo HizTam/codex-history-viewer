@@ -39,6 +39,7 @@ export interface CodexHistoryViewerConfig {
   enableCodexArchivedSessions: boolean;
   enableCodexCompressedSessions?: boolean;
   enableClaudeSource: boolean;
+  claudeNativeBookmarksEnabled?: boolean;
   branchNavigationEnabled: boolean;
   agentRunsEnabled: boolean;
   handoffEnabled: boolean;
@@ -212,6 +213,7 @@ export function getConfig(): CodexHistoryViewerConfig {
     enableCodexArchivedSessions: enabledSources.enableCodexSource && codexArchivedSessionsEnabledSetting,
     enableCodexCompressedSessions: enabledSources.enableCodexSource && cfg.get<boolean>("codex.compressedSessions.enabled") === true,
     enableClaudeSource: enabledSources.enableClaudeSource,
+    claudeNativeBookmarksEnabled: cfg.get<boolean>("claude.nativeBookmarks.enabled") === true,
     branchNavigationEnabled: cfg.get<boolean>("branchNavigation.enabled") ?? false,
     agentRunsEnabled: cfg.get<boolean>("agentRuns.enabled") ?? false,
     handoffEnabled: cfg.get<boolean>("handoff.enabled") ?? true,
