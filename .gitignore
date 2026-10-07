@@ -6,6 +6,12 @@ dist/
 out/
 media/chatViewShiki.bundle.js
 
+# Generated localization assets; edit localization/locales/*.json instead.
+/package.nls*.json
+/l10n/bundle.l10n*.json
+/src/generated/
+/media/generated/
+
 # Test outputs
 .vscode-test/
 .test-*/
@@ -27,3 +33,4 @@ CL*.md
 .agents/
 .claude/
 .codex/
+.l10n-build/

@@ -832,13 +832,14 @@ function toHistoryCard(
     sourceLabel,
     sessionFsPath: session.fsPath,
     sessionCacheKey: session.cacheKey,
-    sessionTitle: resolveSessionTitle(session, sourceLabel, timestampIso),
+    ...resolveSessionTitle(session, sourceLabel, timestampIso),
     sessionCwd: session.meta.cwd,
     bookmarkGroupId: parsed.bookmarkGroupId,
     messageIndex: parsed.messageIndex,
     timestampIso,
     localDate: dateInfo.localDate,
     dateTimeLabel: dateInfo.dateTimeLabel,
+    ...(dateInfo.unknownDate ? { unknownDate: true as const } : {}),
     changeType: entry.changeType,
     matchedSide: side,
     path: entry.path,
@@ -1226,12 +1227,13 @@ function normalizeToolName(value: unknown): string {
   return String(value ?? "").replace(/[^A-Za-z0-9]/g, "").toLowerCase();
 }
 
-function formatCardDate(timestampIso: string | undefined): { localDate: string; dateTimeLabel: string } {
+function formatCardDate(timestampIso: string | undefined): { localDate: string; dateTimeLabel: string; unknownDate?: true } {
   const date = timestampIso ? new Date(timestampIso) : null;
   if (!date || !Number.isFinite(date.getTime())) {
     return {
       localDate: t("fileChangeHistory.unknownDate"),
       dateTimeLabel: t("fileChangeHistory.unknownDate"),
+      unknownDate: true,
     };
   }
   const timeZone = resolveDateTimeSettings().timeZone;
@@ -1241,19 +1243,20 @@ function formatCardDate(timestampIso: string | undefined): { localDate: string; 
   };
 }
 
-function resolveSessionTitle(session: SessionSummary, sourceLabel: string, timestampIso: string | undefined): string {
+function resolveSessionTitle(session: SessionSummary, sourceLabel: string, timestampIso: string | undefined): Pick<FileChangeHistoryCard, "sessionTitle" | "sessionTitleFallback"> {
   const first =
     session.displayTitle?.trim() ||
     session.customTitle?.trim() ||
     session.nativeTitle?.trim() ||
     session.previewMessages.map((message) => message.text).find((text) => text.trim().length > 0)?.trim();
-  if (first) return singleLineSnippet(first, 120);
+  if (first) return { sessionTitle: singleLineSnippet(first, 120) };
 
-  const dateLabel = formatCardDate(timestampIso).localDate;
-  if (dateLabel && dateLabel !== t("fileChangeHistory.unknownDate")) {
-    return `${sourceLabel} session - ${dateLabel}`;
+  const dateInfo = formatCardDate(timestampIso);
+  const dateLabel = dateInfo.localDate;
+  if (dateLabel && !dateInfo.unknownDate) {
+    return { sessionTitle: t("fileChangeHistory.sessionTitleWithDate", sourceLabel, dateLabel), sessionTitleFallback: { source: sourceLabel, date: dateLabel } };
   }
-  return t("fileChangeHistory.untitledSession");
+  return { sessionTitle: t("fileChangeHistory.untitledSession"), sessionTitleFallback: { source: sourceLabel } };
 }
 
 function getSourceLabel(source: SessionSource): string {

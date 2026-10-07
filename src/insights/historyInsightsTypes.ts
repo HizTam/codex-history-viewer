@@ -93,6 +93,7 @@ export interface HistoryInsightsFileRow {
 }
 
 export interface HistoryInsightsFileProjectContext {
+  unknownProject?: true;
   displayName: string;
   pathHint: string;
   sessionCount: number;
@@ -200,6 +201,7 @@ export interface HistoryInsightsModelRow extends HistoryInsightsBreakdownRow {
 }
 
 export interface HistoryInsightsProjectRow extends HistoryInsightsBreakdownRow {
+  unknownProject?: true;
   canDrillDown: boolean;
 }
 
@@ -231,6 +233,7 @@ export interface HistoryInsightsActiveSessionMetricValue {
 }
 
 export interface HistoryInsightsActiveSessionRow {
+  unknownProject?: true;
   id: string;
   title: string;
   source: SessionSource;

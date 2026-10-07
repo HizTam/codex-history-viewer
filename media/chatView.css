@@ -209,6 +209,8 @@ body.chatTimeGuideEnabled {
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Keep focus-driven horizontal scrolling inside the toolbar on narrow views. */
+  overflow-x: auto;
   padding: 8px 10px;
   border-bottom: 1px solid var(--chv-border);
   position: sticky;
@@ -5568,6 +5570,14 @@ body.vscode-high-contrast-light .imagePreviewOverlay {
   font-style: italic;
 }
 
+.crossSessionMessageDetails {
+  margin: 8px 10px;
+}
+
+.crossSessionMessageDetails > .crossSessionMessageBody {
+  padding: 8px 0 0;
+}
+
 .systemEventSummary {
   display: flex;
   align-items: center;
@@ -6614,4 +6624,27 @@ body.vscode-high-contrast-light #mermaidPaneRoot {
 
 #btnClaudeOwner[hidden] {
   display: none !important;
+}
+.notificationDetailsContent {
+  padding: 6px 0;
+  overflow-wrap: anywhere;
+}
+
+.notificationDetailFields {
+  display: grid;
+  grid-template-columns: minmax(7em, max-content) minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 8px 0;
+}
+
+.notificationDetailFields dt {
+  color: var(--vscode-descriptionForeground);
+}
+
+.notificationDetailFields dd,
+.notificationDetailFields pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }

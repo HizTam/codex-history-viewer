@@ -1,3 +1,4 @@
+import { postLocalizedMessage, localizationBootstrap } from "../localization/webviewLocalization";
 import { randomBytes } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -1372,7 +1373,7 @@ export class SettingsPanelManager implements vscode.Disposable {
       return;
     }
     try {
-      await panel.webview.postMessage(message);
+      await postLocalizedMessage(panel.webview, "settings", message);
     } catch {
       // Message delivery may race with panel disposal; no external state needs rollback.
     }
@@ -1432,8 +1433,8 @@ export class SettingsPanelManager implements vscode.Disposable {
       step: definitionItem.step,
       options: getPresentedSettingOptions(definitionItem)?.map((item) => ({
         value: item.value,
-        label: t(item.labelKey),
-        description: item.descriptionKey ? t(item.descriptionKey) : undefined
+        label: item.locale ? localeDisplayName(item.locale, resolveUiLanguage()) : t(item.labelKey),
+        description: item.locale ? t("localization.languageDescription", localeDisplayName(item.locale, resolveUiLanguage())) : item.descriptionKey ? t(item.descriptionKey) : undefined
       }))
     }));
 
@@ -1459,7 +1460,7 @@ export class SettingsPanelManager implements vscode.Disposable {
     return {
       version: 2,
       revision: this.revision,
-      language: resolveUiLanguage(),
+      ...getLocaleState(),
       title: t("settingsPanel.title"),
       compactTitle: t("settingsPanel.compactTitle"),
       activeTargetId: target.id,
@@ -1842,6 +1843,7 @@ export class SettingsPanelManager implements vscode.Disposable {
       "</head>",
       "<body>",
       '<div id="app" class="settings-app"></div>',
+      localizationBootstrap(webview, this.context.extensionUri, nonce),
       '<script nonce="' + escapeHtml(nonce) + '" src="' + escapeHtml(scriptUri.toString()) + '"></script>',
       "</body>",
       "</html>"
@@ -1996,3 +1998,5 @@ function escapeHtml(value: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+import { localeDisplayName } from "../localization/localeCatalog";
+import { getLocaleState } from "../i18n";

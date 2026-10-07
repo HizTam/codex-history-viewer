@@ -2,6 +2,8 @@
   "use strict";
 
   const vscode = acquireVsCodeApi();
+  const localization = globalThis.CHVLocaleBridge?.connect("settings", vscode);
+  if (!localization) { vscode.postMessage({ type: "localizationLoadFailed" }); return; }
   const app = document.getElementById("app");
   const persisted = vscode.getState();
   const pendingRequests = new Map();
@@ -103,7 +105,7 @@
   });
 
   window.addEventListener("message", (event) => {
-    const message = event.data;
+    const message = localization.receive(event.data);
     if (!isRecord(message) || typeof message.type !== "string") {
       return;
     }
@@ -1243,7 +1245,7 @@
       value.version === 2 &&
       Number.isSafeInteger(value.revision) &&
       value.revision >= 0 &&
-      (value.language === "ja" || value.language === "en") &&
+      localization.supports(value.language) &&
       typeof value.title === "string" &&
       typeof value.compactTitle === "string" &&
       typeof value.activeTargetId === "string" &&

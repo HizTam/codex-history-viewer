@@ -130,7 +130,7 @@ export function aggregateHistoryInsights(input: HistoryInsightsAggregationInput)
   const sourceMetrics = new Map<string, HistoryInsightsBreakdownMetricValues>();
   const modelMetrics = new Map<string, HistoryInsightsBreakdownMetricValues>();
   const modelEffortTotals = new Map<string, Map<string, number>>();
-  const projectMetrics = new Map<string, { label: string; metrics: HistoryInsightsBreakdownMetricValues }>();
+  const projectMetrics = new Map<string, { label: string; unknownProject?: true; metrics: HistoryInsightsBreakdownMetricValues }>();
   const projectContextKeysByLabel = new Map<string, Set<string>>();
   const toolMetrics = new Map<string, { calls: number; sessions: number }>();
   const activeSessions: HistoryInsightsActiveSessionRow[] = [];
@@ -163,6 +163,7 @@ export function aggregateHistoryInsights(input: HistoryInsightsAggregationInput)
     sourceMetrics.set(reference.source, source);
     const project = projectMetrics.get(reference.projectKey) ?? { label: projectLabel, metrics: emptyBreakdownMetrics() };
     project.label = projectLabel;
+    if (projectContext.unknownProject) project.unknownProject = true;
     project.metrics.sessions = addAndTrack(project.metrics.sessions, 1, numericState);
     projectMetrics.set(reference.projectKey, project);
     const day = dayByYmd.get(reference.bucketLocalDate) ?? createDayBucket(reference.bucketLocalDate);
@@ -257,6 +258,7 @@ export function aggregateHistoryInsights(input: HistoryInsightsAggregationInput)
       title: String(presentation?.title || reference.identityKey).slice(0, 512),
       source: reference.source,
       projectLabel: String(projectLabel).slice(0, 512),
+      ...(projectContext.unknownProject ? { unknownProject: true as const } : {}),
       ...(presentation?.lastActivityAtIso ? { lastActivityAtIso: presentation.lastActivityAtIso } : {}),
       metrics: {
         userRequests: copyAnalysisMetric(entry.messageStats.userMessageCount),
@@ -340,6 +342,7 @@ export function aggregateHistoryInsights(input: HistoryInsightsAggregationInput)
         fileKind: inferFilePresentationKind(file.normalizedPath, file.displayPath),
         projectContexts: projectContexts.slice(0, 3).map(({ value }) => ({
           displayName: safeDisplayPath(value.context.displayName, 120),
+          ...(value.context.unknownProject ? { unknownProject: true as const } : {}),
           pathHint: safeDisplayPath(value.context.pathHint, 80),
           sessionCount: value.sessionKeys.size,
           disambiguate: (projectContextKeysByLabel.get(value.context.displayName.toLocaleLowerCase())?.size ?? 0) > 1,
@@ -715,7 +718,7 @@ function buildModelBreakdown(
 }
 
 function buildProjectBreakdown(
-  values: ReadonlyMap<string, { label: string; metrics: HistoryInsightsBreakdownMetricValues }>,
+  values: ReadonlyMap<string, { label: string; unknownProject?: true; metrics: HistoryInsightsBreakdownMetricValues }>,
   drillDownProjectKeys: ReadonlySet<string> | undefined,
   numericState: NumericAggregationState,
 ): HistoryInsightsBreakdownGroup<HistoryInsightsProjectRow> {
@@ -723,6 +726,7 @@ function buildProjectBreakdown(
     .map(([key, value]) => ({
       id: buildHistoryInsightsEntityId(key),
       label: value.label,
+      ...(value.unknownProject ? { unknownProject: true as const } : {}),
       metrics: value.metrics,
       canDrillDown: key.length > 0 && (drillDownProjectKeys?.has(key) ?? true),
     })), numericState);
@@ -789,6 +793,7 @@ function resolveProjectContext(
   return {
     contextKey: projectKey || `unknown:${identityKey}`,
     displayName,
+    ...(!projectLabel ? { unknownProject: true as const } : {}),
     pathHint: "",
     physicalCwd: "",
   };

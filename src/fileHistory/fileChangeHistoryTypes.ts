@@ -29,12 +29,14 @@ export interface FileChangeHistoryCard {
   sessionFsPath: string;
   sessionCacheKey: string;
   sessionTitle: string;
+  sessionTitleFallback?: { source: string; date?: string };
   sessionCwd?: string;
   bookmarkGroupId?: string;
   messageIndex?: number;
   timestampIso?: string;
   localDate: string;
   dateTimeLabel: string;
+  unknownDate?: true;
   changeType: ChatPatchChangeType;
   matchedSide: FileChangeHistoryMatchedSide;
   path: string;

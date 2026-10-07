@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.17.0** (2026-10-05).
+Latest release: **2.18.0** (2026-10-07).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -29,6 +29,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Show Codex / Claude Code request interruptions as dedicated timeline cards.
 - Identify commands entered in Claude Code's shell mode with a **Terminal input** badge and view their results in **Terminal output** cards.
 - Read progress updates and expandable thinking text saved in Claude Code histories, with search, bookmarks, copying, and Markdown export.
+- Inspect Claude Code task notifications with expandable details.
 - Open File AI Change History for a workspace file, including directly from a Session Viewer diff card, to review Codex / Claude Code diffs that touched that file.
 - Bookmark important history cards and use date-guide markers to revisit them quickly.
 - Optionally display Claude Code extension bookmarks as read-only marks in a different color from this extension's own bookmarks.
@@ -110,7 +111,9 @@ Request interruptions from Codex and Claude Code render as dedicated timeline ca
 
 Claude Code peer and coordinator messages received from other sessions render as dedicated cross-session cards. They remain searchable as assistant-derived content and are excluded from previews, Resume, Handoff, and human-message analysis.
 
-Claude Code internal task notifications and agent reminders appear as **Task notification** and **Internal reminder** cards. Their text remains readable and copyable, while they are excluded from ordinary user-message search, counts, previews, and request extraction for Resume and Handoff. Message numbers are preserved. Codex page-selection context is likewise kept out of ordinary user messages; its raw text remains available in the detail view.
+Claude Code internal task notifications and agent reminders appear as **Task notification** and **Internal reminder** cards. Task notifications include an expandable **Notification details** section. Notifications are displayed without duplicating the same notification recorded in another format or changing existing message numbers. Their text remains readable and copyable, while they are excluded from ordinary user-message search, counts, previews, and request extraction for Resume and Handoff.
+
+Codex page-selection context is likewise kept out of ordinary user messages; its raw text remains available in the detail view.
 
 Progress updates and thinking text saved in Claude Code histories also appear in the timeline without enabling **Show details**. Progress updates are shown directly, while thinking text is expandable. Both support search, bookmarks, copying, and Markdown export.
 
@@ -339,12 +342,13 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.17.0
+## What's New in 2.18.0
 
-- **Display Claude Code bookmarks** automatically shows bookmarks from the Claude Code extension as read-only marks in a different color from this extension's own bookmarks. Disabled by default.
-- Progress updates and thinking text saved in Claude Code histories are now displayed. Progress updates are shown directly, while thinking text is expandable. Both support search, bookmarks, copying, and Markdown export.
-- Fixed user messages sent while Claude Code was running being missing from the Session Viewer.
-- Message navigation in Markdown output now points to the correct lines when message bodies, tool arguments, or tool outputs span multiple lines.
+- Added detailed views for Claude Code task notifications.
+- Improved multilingual support.
+- Cross-session message bodies now start collapsed and expand when searching or navigating to a message.
+- Fixed some Claude Code task notifications not appearing in the Session Viewer. Duplicate notifications are also prevented when the same notification is recorded in multiple formats.
+- Fixed the Session Viewer shifting horizontally when using toolbar buttons in narrow views.
 
 ## Changelog
 

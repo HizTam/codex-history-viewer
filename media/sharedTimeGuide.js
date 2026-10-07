@@ -1357,7 +1357,7 @@
     const date = new Date(`${value}-01T00:00:00`);
     if (Number.isNaN(date.getTime())) return value;
     try {
-      return new Intl.DateTimeFormat(undefined, { month: "short" }).format(date);
+      return new Intl.DateTimeFormat(document.documentElement.lang, { month: "short" }).format(date);
     } catch {
       return value;
     }
@@ -1367,7 +1367,7 @@
     const date = parseLocalDateKey(value);
     if (!date) return value;
     try {
-      return new Intl.DateTimeFormat(undefined, { month: "numeric", day: "numeric" }).format(date);
+      return new Intl.DateTimeFormat(document.documentElement.lang, { month: "numeric", day: "numeric" }).format(date);
     } catch {
       return value.slice(5).replace("-", "/");
     }
@@ -1377,7 +1377,7 @@
     const date = new Date(`${value}-01T00:00:00`);
     if (Number.isNaN(date.getTime())) return value;
     try {
-      return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long" }).format(date);
+      return new Intl.DateTimeFormat(document.documentElement.lang, { year: "numeric", month: "long" }).format(date);
     } catch {
       return value;
     }
@@ -1387,7 +1387,7 @@
     const date = parseLocalDateKey(value);
     if (!date) return value;
     try {
-      return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric" }).format(date);
+      return new Intl.DateTimeFormat(document.documentElement.lang, { year: "numeric", month: "long", day: "numeric" }).format(date);
     } catch {
       return value;
     }

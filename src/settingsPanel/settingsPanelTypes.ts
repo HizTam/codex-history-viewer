@@ -1,3 +1,4 @@
+import type { SupportedLocale } from "../localization/localeCatalog";
 export type SettingsPanelValue = boolean | number | string | readonly string[];
 
 export type SettingsTargetKind = "global" | "workspace" | "workspaceFolder";
@@ -151,7 +152,8 @@ export interface SettingsPanelLabels {
 export interface SettingsPanelSnapshot {
   version: 2;
   revision: number;
-  language: "ja" | "en";
+  language: SupportedLocale;
+  localeRevision: number;
   title: string;
   compactTitle: string;
   activeTargetId: string;

@@ -167,6 +167,36 @@ export interface ChatNotificationAttachment {
   outputFile?: string;
   systemPreamble?: string;
   text?: string;
+  details?: ChatNotificationDetails;
+}
+
+export interface ChatNotificationRawVariant {
+  text: string;
+  truncated?: boolean;
+}
+
+export interface ChatNotificationDetails {
+  stateKey: string;
+  taskId?: string;
+  toolUseId?: string;
+  taskType?: string;
+  outputFile?: string;
+  rawStatus?: string;
+  note?: string;
+  event?: string;
+  worktreePath?: string;
+  worktreeBranch?: string;
+  rawVariants?: ChatNotificationRawVariant[];
+  omittedVariants?: number;
+  truncatedFields?: string[];
+  omitted?: boolean;
+}
+
+export interface ChatTaskNotificationPresentation {
+  stateKey: string;
+  entries: Array<Pick<ChatNotificationAttachment, "status" | "summary" | "result" | "usage" | "details">>;
+  outsideText?: boolean;
+  omitted?: boolean;
 }
 
 export interface ChatInvokeParameter {
@@ -245,11 +275,13 @@ export interface ChatCrossSessionMessageItem {
 export interface ChatTaskNotificationItem {
   type: "taskNotification";
   source: "claude";
-  messageIndex: number;
+  messageIndex?: number;
+  notificationId?: string;
   timestampIso?: string;
   body: string;
   truncated?: boolean;
   invalidContent?: boolean;
+  presentation?: ChatTaskNotificationPresentation;
 }
 
 export interface ChatSystemReminderItem {
@@ -473,6 +505,7 @@ export interface ChatPatchRow {
 
 export interface ChatNoteItem {
   type: "note";
+  noticeKind?: "historyIncomplete";
   alwaysVisible?: boolean;
   timestampIso?: string;
   title: string;

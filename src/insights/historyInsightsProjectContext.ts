@@ -8,6 +8,7 @@ const MAX_PROJECT_PATH_HINT_LENGTH = 80;
 export interface HistoryInsightsAggregationProjectContext {
   contextKey: string;
   displayName: string;
+  unknownProject?: true;
   pathHint: string;
   physicalCwd: string;
 }

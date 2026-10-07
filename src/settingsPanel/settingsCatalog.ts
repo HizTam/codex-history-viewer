@@ -1,3 +1,4 @@
+import { SUPPORTED_LOCALES, matchLocale } from "../localization/localeCatalog";
 import type {
   SettingsControlKind,
   SettingsPanelValue,
@@ -10,6 +11,7 @@ export type SettingScope = "application" | "window" | "resource";
 export interface SettingsOptionDefinition {
   value: string;
   labelKey: string;
+  locale?: (typeof SUPPORTED_LOCALES)[number];
   descriptionKey?: string;
 }
 
@@ -123,7 +125,7 @@ const CLAUDE_SOURCE = includesSource("claude");
 
 export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
   definition("ui.language", "general", "general.display", "select", "application", "auto", {
-    options: ["auto", "ja", "en"].map((value) => option("ui.language", value))
+    options: [option("ui.language", "auto"), ...SUPPORTED_LOCALES.map((locale) => ({ value: locale, labelKey: "", locale }))]
   }),
   definition("delete.useTrash", "general", "general.safety", "switch", "application", true),
   definition("webview.restoreAfterReload", "general", "general.startup", "switch", "window", false, {
@@ -627,6 +629,11 @@ export function normalizeSettingValue(
   definitionItem: SettingsDefinition,
   input: unknown
 ): NormalizedSettingValue {
+  // Reading an existing alias is permissive; writes/imports still use strict validation.
+  if (definitionItem.relativeKey === "ui.language") {
+    const locale = matchLocale(input);
+    if (locale) return { value: locale, invalid: false };
+  }
   const validation = validateSettingValue(definitionItem, input);
   if (validation.ok && validation.value !== undefined) {
     return { value: cloneSettingValue(validation.value), invalid: false };

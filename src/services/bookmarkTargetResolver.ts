@@ -6,7 +6,7 @@ import { statSafe } from "../utils/fsUtils";
 import { buildBookmarkKey, type BookmarkTarget, type BookmarkTargetKind } from "./bookmarkStore";
 import { t } from "../i18n";
 
-// New progress cards must not shift the fallback identities of existing bookmark targets.
+// Presentation-only cards must not shift the fallback identities of existing bookmark targets.
 export function createTimelineBookmarkTargetBuilder(
   sessionFsPath: string,
   sessionCacheKey: string,
@@ -27,7 +27,8 @@ export function createTimelineBookmarkTargetBuilder(
     if (!legacyIndexes.has(item)) legacyIndexes.set(item, legacyIndex++);
   };
   for (const item of items) {
-    if (item.type === "claudeProgress" || item.type === "claudeQueuedInput") continue;
+    if (item.type === "claudeProgress" || item.type === "claudeQueuedInput" ||
+      (item.type === "taskNotification" && item.notificationId)) continue;
     const message = "messageIndex" in item && item.messageIndex !== undefined ? messagesByIndex.get(item.messageIndex) : undefined;
     if (message) remember(message);
     remember(item);

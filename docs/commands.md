@@ -4,8 +4,9 @@ This document lists user-facing command IDs and what each command does.
 
 Notes:
 
-- Labels shown in VS Code can appear in English or Japanese based on your `codexHistoryViewer.ui.language` setting.
+- Extension menus follow `codexHistoryViewer.ui.language` and the bundled languages, currently English and Japanese. Labels in the standard settings editor and ordinary Command Palette entries follow VS Code's display language.
 - This page focuses on base command IDs (for example, `codexHistoryViewer.search`) and excludes internal UI alias commands (`codexHistoryViewer.ui.*`).
+- Language-specific UI aliases forward to the same base command IDs and arguments.
 
 Starting with 2.15.0, the Command Palette groups History and Pinned view options into **Filter...**, **Change Sort Order...**, and **Change Presentation...** commands for each view. Individual sort, layout, project display/scope, source, display-target, tag, and compression choices remain in the pane menus instead of appearing separately in the palette. The existing command IDs listed below remain available for custom keybindings. Clear-filter commands and primary actions such as settings, search, and refresh remain in the palette.
 

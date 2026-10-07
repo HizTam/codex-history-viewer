@@ -1,3 +1,5 @@
+import { resolveUiLanguage } from "../i18n";
+import { buildWebviewI18n, postLocalizedMessage, localizationBootstrap } from "../localization/webviewLocalization";
 import * as path from "node:path";
 import { hasClaudeAgentPathShape, isClaudePathPart } from "../agents/claudeAgentMetadata";
 import { isBoundedSessionIdentityKey } from "../sessions/sessionIdentity";
@@ -484,7 +486,7 @@ export class ChatPanelManager implements vscode.Disposable {
     }
     const send = (panel: vscode.WebviewPanel): void => {
       if (!this.readyByPanel.get(panel)) return;
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "chat", {
         type: "i18n",
         i18n,
         dateTime,
@@ -499,7 +501,9 @@ export class ChatPanelManager implements vscode.Disposable {
         autoRefreshAvailable: config.autoRefresh.enabled,
         debugLoggingEnabled: this.logger?.isDebugEnabled() ?? false,
         timeGuideEnabled: config.timeGuideEnabled,
-      });
+      }, { historySource: this.stateByPanel.get(panel)?.historySource });
+      // Reuse the cached relation and stable action targets while refreshing UI labels.
+      this.publishCodexAgentRuns(panel);
     };
 
     for (const panel of this.getOpenPanels()) send(panel);
@@ -526,7 +530,7 @@ export class ChatPanelManager implements vscode.Disposable {
         target.missingReads = 0;
         target.unavailableReads = 0;
         target.warned = false;
-        void panel.webview.postMessage({ type: "nativeBookmarkState", token: target.token, keys: [] });
+        void postLocalizedMessage(panel.webview, "chat", { type: "nativeBookmarkState", token: target.token, keys: [] });
       }
       return;
     }
@@ -575,7 +579,7 @@ export class ChatPanelManager implements vscode.Disposable {
           : [];
         if (JSON.stringify(keys) === JSON.stringify(target.keys)) continue;
         target.keys = keys;
-        await panel.webview.postMessage({ type: "nativeBookmarkState", token: target.token, keys });
+        await postLocalizedMessage(panel.webview, "chat", { type: "nativeBookmarkState", token: target.token, keys });
       }
     } catch {
       this.logger?.debug("Claude native bookmark refresh failed");
@@ -634,11 +638,11 @@ export class ChatPanelManager implements vscode.Disposable {
   private async sendBookmarkState(panel: vscode.WebviewPanel): Promise<void> {
     const targets = this.bookmarkTargetsByPanel.get(panel);
     if (!targets || targets.size === 0) {
-      await panel.webview.postMessage({ type: "bookmarkState", keys: [] });
+      await postLocalizedMessage(panel.webview, "chat", { type: "bookmarkState", keys: [] });
       return;
     }
     const keys = Array.from(this.bookmarkStore.getKeysForTargets(Array.from(targets.values())).values());
-    await panel.webview.postMessage({ type: "bookmarkState", keys });
+    await postLocalizedMessage(panel.webview, "chat", { type: "bookmarkState", keys });
   }
 
   private refreshAnnotationState(): void {
@@ -661,7 +665,7 @@ export class ChatPanelManager implements vscode.Disposable {
     if (!state || typeof revision !== "number" || !Number.isSafeInteger(revision) || revision <= 0) return true;
     try {
       const annotation = this.annotationStore.get(state.fsPath);
-      const delivered = await panel.webview.postMessage({
+      const delivered = await postLocalizedMessage(panel.webview, "chat", {
         type: "annotationState",
         revision,
         annotation: {
@@ -700,7 +704,7 @@ export class ChatPanelManager implements vscode.Disposable {
     for (const panel of this.getOpenPanels()) {
       if (!this.readyByPanel.get(panel)) continue;
       const revision = this.advanceResumeRevision(panel);
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "chat", {
         type: "resumePresentation",
         snapshot: this.buildCliResumeSnapshot(panel, revision),
       });
@@ -710,7 +714,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private refreshMermaidPreferences(preferences: MermaidPreferences = this.mermaidPreferenceStore.get()): void {
     for (const panel of this.getOpenPanels()) {
       if (!this.readyByPanel.get(panel)) continue;
-      void panel.webview.postMessage({ type: "mermaidPreferences", preferences });
+      void postLocalizedMessage(panel.webview, "chat", { type: "mermaidPreferences", preferences });
     }
   }
 
@@ -725,7 +729,7 @@ export class ChatPanelManager implements vscode.Disposable {
         : undefined,
     );
     if (!value || sequence === undefined) {
-      await panel.webview.postMessage({
+      await postLocalizedMessage(panel.webview, "chat", {
         type: "mermaidPreferences",
         preferences: this.mermaidPreferenceStore.get(),
       });
@@ -737,7 +741,7 @@ export class ChatPanelManager implements vscode.Disposable {
       if (changed) this.refreshMermaidPreferences();
     } catch (error) {
       this.logger?.debug(`mermaid.preference theme save failed error=${sanitizeDebugError(error)}`);
-      await panel.webview.postMessage({
+      await postLocalizedMessage(panel.webview, "chat", {
         type: "mermaidPreferences",
         preferences: this.mermaidPreferenceStore.get(),
       });
@@ -756,7 +760,7 @@ export class ChatPanelManager implements vscode.Disposable {
         : undefined,
     );
     if (!value || sequence === undefined) {
-      await panel.webview.postMessage({
+      await postLocalizedMessage(panel.webview, "chat", {
         type: "mermaidPreferences",
         preferences: this.mermaidPreferenceStore.get(),
       });
@@ -768,7 +772,7 @@ export class ChatPanelManager implements vscode.Disposable {
       if (changed) this.refreshMermaidPreferences();
     } catch (error) {
       this.logger?.debug(`mermaid.preference save format failed error=${sanitizeDebugError(error)}`);
-      await panel.webview.postMessage({
+      await postLocalizedMessage(panel.webview, "chat", {
         type: "mermaidPreferences",
         preferences: this.mermaidPreferenceStore.get(),
       });
@@ -792,7 +796,7 @@ export class ChatPanelManager implements vscode.Disposable {
   ): number {
     const revision = this.advanceResumeRevision(panel);
     if (this.readyByPanel.get(panel)) {
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "chat", {
         type: "resumePresentationInvalidated",
         revision,
         sessionDataPending: options.sessionDataPending === true,
@@ -1117,7 +1121,7 @@ export class ChatPanelManager implements vscode.Disposable {
       if (!this.readyByPanel.get(panel)) continue;
       const state = this.stateByPanel.get(panel);
       const candidates = this.getSearchHistoryCandidates(this.resolveSearchHistoryProjectKey(state?.sessionCwd));
-      void panel.webview.postMessage({ type: "searchHistoryCandidates", candidates });
+      void postLocalizedMessage(panel.webview, "chat", { type: "searchHistoryCandidates", candidates });
     }
   }
 
@@ -1321,7 +1325,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
   private publishTabMode(panel: vscode.WebviewPanel): void {
     try {
-      void Promise.resolve(panel.webview.postMessage({ type: "tabModeState", ...this.buildTabModeState(panel) })).catch(() => {
+      void Promise.resolve(postLocalizedMessage(panel.webview, "chat", { type: "tabModeState", ...this.buildTabModeState(panel) })).catch(() => {
         this.logger?.debug("chat.tabMode delivery failed");
       });
     } catch {
@@ -1520,7 +1524,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
     // Do not inline log content into HTML. Send it via postMessage (XSS mitigation).
     return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${resolveUiLanguage()}">
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="${csp}">
@@ -1584,6 +1588,7 @@ export class ChatPanelManager implements vscode.Disposable {
   <aside id="mermaidPaneRoot" hidden></aside>
   <div id="branchOverlayRoot" hidden></div>
   <div id="agentRunsOverlayRoot" hidden></div>
+  ${localizationBootstrap(webview, this.extensionUri, nonce)}
   <script nonce="${nonce}" src="${markdownItUri}"></script>
   <script nonce="${nonce}" src="${katexJsUri}"></script>
   <script nonce="${nonce}" src="${shikiBundleUri}"></script>
@@ -1725,14 +1730,14 @@ export class ChatPanelManager implements vscode.Disposable {
         } catch {
           this.logger?.debug("chat.copy failed");
           try {
-            await panel.webview.postMessage({ type: "copyFailed" });
+            await postLocalizedMessage(panel.webview, "chat", { type: "copyFailed" });
           } catch {
             this.logger?.debug("chat.copy failure delivery failed");
           }
           return;
         }
         try {
-          await panel.webview.postMessage({ type: "copied" });
+          await postLocalizedMessage(panel.webview, "chat", { type: "copied" });
         } catch {
           this.logger?.debug("chat.copy success delivery failed");
         }
@@ -1885,7 +1890,7 @@ export class ChatPanelManager implements vscode.Disposable {
         const copied = await vscode.commands.executeCommand<boolean>("codexHistoryViewer.copyResumePrompt", {
           fsPath: state.fsPath,
         });
-        if (copied) panel.webview.postMessage({ type: "copied" });
+        if (copied) postLocalizedMessage(panel.webview, "chat", { type: "copied" });
         return;
       }
       case "resumeInCodex": {
@@ -2027,7 +2032,7 @@ export class ChatPanelManager implements vscode.Disposable {
           msg?.sessionInfoRevision !== state.sessionInfoRevision
         ) {
           await this.publishCodexRolloutNotice(panel);
-          await panel.webview.postMessage({ type: "codexRolloutSwitchFailed", sessionInfoRevision: state.sessionInfoRevision });
+          await postLocalizedMessage(panel.webview, "chat", { type: "codexRolloutSwitchFailed", sessionInfoRevision: state.sessionInfoRevision });
           return;
         }
         const sent = await this.switchToCurrentCodexRollout(panel, state, {
@@ -2037,7 +2042,7 @@ export class ChatPanelManager implements vscode.Disposable {
         });
         if (!sent && this.stateByPanel.get(panel) === state) {
           await this.publishCodexRolloutNotice(panel);
-          await panel.webview.postMessage({ type: "codexRolloutSwitchFailed", sessionInfoRevision: state.sessionInfoRevision });
+          await postLocalizedMessage(panel.webview, "chat", { type: "codexRolloutSwitchFailed", sessionInfoRevision: state.sessionInfoRevision });
         }
         return;
       }
@@ -2290,7 +2295,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const state = this.stateByPanel.get(panel);
     if (!state || !this.readyByPanel.get(panel)) return;
     const session = this.findPanelSessionByFsPath(state.fsPath);
-    void panel.webview.postMessage({
+    void postLocalizedMessage(panel.webview, "chat", {
       type: "pinState",
       isPinned: session ? isSessionPinned(this.pinStore, session) : this.pinStore.isPinned(state.fsPath),
     });
@@ -2504,7 +2509,7 @@ export class ChatPanelManager implements vscode.Disposable {
   ): void {
     let delivery: PromiseLike<boolean>;
     try {
-      delivery = panel.webview.postMessage(message);
+      delivery = postLocalizedMessage(panel.webview, "chat", message, { historySource: this.stateByPanel.get(panel)?.historySource });
     } catch (error) {
       this.logger?.debug(`codexAgentRuns.${scope} delivery failed error=${sanitizeDebugError(error)}`);
       return;
@@ -2812,14 +2817,14 @@ export class ChatPanelManager implements vscode.Disposable {
       this.branchSnapshotByPanel.delete(panel);
       this.branchPresentationSessionKeyByPanel.delete(panel);
       this.branchHistoryGenerationByPanel.delete(panel);
-      void panel.webview.postMessage({ type: "branchNavigationDisabled", generation });
+      void postLocalizedMessage(panel.webview, "chat", { type: "branchNavigationDisabled", generation });
       return;
     }
 
     const cancellation = new vscode.CancellationTokenSource();
     this.branchCancellationByPanel.set(panel, cancellation);
     if (!preservesCurrentPresentation) {
-      void panel.webview.postMessage({ type: "branchNavigationPending", generation });
+      void postLocalizedMessage(panel.webview, "chat", { type: "branchNavigationPending", generation });
     }
     if (session.source === "codex") {
       void this.codexForkNavigation.load(session, {
@@ -2877,7 +2882,7 @@ export class ChatPanelManager implements vscode.Disposable {
         this.branchSnapshotByPanel.delete(panel);
         this.branchPresentationSessionKeyByPanel.delete(panel);
         this.branchHistoryGenerationByPanel.delete(panel);
-        void panel.webview.postMessage({
+        void postLocalizedMessage(panel.webview, "chat", {
           type: "branchNavigationError",
           generation,
           message: t("codexForks.loadFailed"),
@@ -2942,7 +2947,7 @@ export class ChatPanelManager implements vscode.Disposable {
       this.branchSnapshotByPanel.delete(panel);
       this.branchPresentationSessionKeyByPanel.delete(panel);
       this.branchHistoryGenerationByPanel.delete(panel);
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "chat", {
         type: "branchNavigationError",
         generation,
         message: t("claudeBranches.loadFailed"),
@@ -2993,24 +2998,18 @@ export class ChatPanelManager implements vscode.Disposable {
           this.userMessageIndexesByPanel.get(panel),
           state.revealMessageIndex,
         );
-    const i18n = this.buildI18n();
-    if (isCodexForkNavigationSnapshot(snapshot)) {
-      i18n.branchSwitchFailed = t("codexForks.switchFailed");
-      i18n.branchNone = t("codexForks.none");
-      i18n.branchLoadFailed = t("codexForks.loadFailed");
-    }
     this.branchSnapshotByPanel.set(panel, snapshot);
     this.branchPresentationSessionKeyByPanel.set(
       panel,
       buildBranchPresentationSessionKey(state, activeSession),
     );
     this.branchHistoryGenerationByPanel.set(panel, historyGeneration);
-    void panel.webview.postMessage({
+    void postLocalizedMessage(panel.webview, "chat", {
       type: "branchNavigation",
       navigation,
       checkingLatest,
-      i18n,
-    });
+      i18n: this.buildI18n(),
+    }, { historySource: activeSession.source });
   }
 
   private handleClaudeBranchOverlayPageRequest(panel: vscode.WebviewPanel, msg: any): void {
@@ -3038,7 +3037,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const cursor = sanitizeBranchCursor(msg?.cursor);
     const focusGroupId = sanitizeBranchModelId(msg?.groupId);
     if (!cursor && !focusGroupId) {
-      void panel.webview.postMessage({ type: "branchTreePageError", generation });
+      void postLocalizedMessage(panel.webview, "chat", { type: "branchTreePageError", generation });
       return;
     }
     const options = {
@@ -3049,7 +3048,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const overlay = isCodexForkNavigationSnapshot(snapshot)
       ? buildCodexForkBranchOverlayPage(snapshot, session.cacheKey, generation, options)
       : buildClaudeBranchOverlayPage(snapshot, session.cacheKey, generation, options);
-    void panel.webview.postMessage({ type: "branchTreePage", generation, overlay });
+    void postLocalizedMessage(panel.webview, "chat", { type: "branchTreePage", generation, overlay });
   }
 
   private handleClaudeBranchChoicePageRequest(panel: vscode.WebviewPanel, msg: any): void {
@@ -3077,7 +3076,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const groupId = sanitizeBranchModelId(msg?.groupId);
     const cursor = sanitizeBranchCursor(msg?.cursor);
     if (!groupId || !cursor) {
-      void panel.webview.postMessage({ type: "branchTreePageError", generation });
+      void postLocalizedMessage(panel.webview, "chat", { type: "branchTreePageError", generation });
       return;
     }
     const group = isCodexForkNavigationSnapshot(snapshot)
@@ -3096,10 +3095,10 @@ export class ChatPanelManager implements vscode.Disposable {
           state.revealMessageIndex,
         );
     if (!group) {
-      void panel.webview.postMessage({ type: "branchTreePageError", generation });
+      void postLocalizedMessage(panel.webview, "chat", { type: "branchTreePageError", generation });
       return;
     }
-    void panel.webview.postMessage({ type: "branchTreeChoicePage", generation, group });
+    void postLocalizedMessage(panel.webview, "chat", { type: "branchTreeChoicePage", generation, group });
   }
 
   private isCurrentBranchRequest(
@@ -3153,7 +3152,7 @@ export class ChatPanelManager implements vscode.Disposable {
       message = t(activeSource === "codex" ? "codexForks.switchFailed" : "claudeBranches.switchFailed"),
     ): void => {
       if (this.branchSwitchSequenceByPanel.get(panel) !== requestSequence) return;
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "chat", {
         type: "branchSwitchFailed",
         requestId: requestSequence,
         message,
@@ -3279,7 +3278,7 @@ export class ChatPanelManager implements vscode.Disposable {
     if (normalizeCacheKey(session.fsPath) === normalizeCacheKey(state.fsPath)) {
       this.stateByPanel.set(panel, { ...state, revealMessageIndex });
       this.publishBranchNavigation(panel, claudeSnapshot, generation, false);
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "chat", {
         type: "branchSwitchSucceeded",
         requestId: requestSequence,
         messageIndex: revealMessageIndex,
@@ -3294,7 +3293,7 @@ export class ChatPanelManager implements vscode.Disposable {
       request,
     );
     if (switched) {
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "chat", {
         type: "branchSwitchSucceeded",
         requestId: requestSequence,
         messageIndex: revealMessageIndex,
@@ -3312,7 +3311,7 @@ export class ChatPanelManager implements vscode.Disposable {
   ): Promise<void> {
     const fail = (message = t("codexForks.switchFailed")): void => {
       if (this.branchSwitchSequenceByPanel.get(panel) !== requestSequence) return;
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "chat", {
         type: "branchSwitchFailed",
         requestId: requestSequence,
         message,
@@ -3443,7 +3442,7 @@ export class ChatPanelManager implements vscode.Disposable {
       }
       this.stateByPanel.set(panel, { ...state, revealMessageIndex });
       this.publishBranchNavigation(panel, snapshot, generation, false);
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "chat", {
         type: "branchSwitchSucceeded",
         requestId: requestSequence,
         messageIndex: revealMessageIndex,
@@ -3459,7 +3458,7 @@ export class ChatPanelManager implements vscode.Disposable {
       validateResolvedTarget,
     );
     if (switched) {
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "chat", {
         type: "branchSwitchSucceeded",
         requestId: requestSequence,
         messageIndex: revealMessageIndex,
@@ -3485,7 +3484,7 @@ export class ChatPanelManager implements vscode.Disposable {
       return false;
     }
     if (!sessionFileAvailable) {
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "chat", {
         type: "branchSwitchFailed",
         requestId: request.requestSequence,
         message: t(
@@ -3504,7 +3503,7 @@ export class ChatPanelManager implements vscode.Disposable {
       autoRefreshMode: DEFAULT_CHAT_WEBVIEW_AUTO_REFRESH_MODE,
       pendingAutoRefresh: false,
     };
-    void panel.webview.postMessage({
+    void postLocalizedMessage(panel.webview, "chat", {
       type: "branchSwitchPending",
       requestId: request.requestSequence,
       generation: request.generation,
@@ -3527,7 +3526,7 @@ export class ChatPanelManager implements vscode.Disposable {
     });
     if (!sent) {
       if (this.isCurrentClaudeBranchSwitchRequest(panel, request)) {
-        void panel.webview.postMessage({
+        void postLocalizedMessage(panel.webview, "chat", {
           type: "branchSwitchFailed",
           requestId: request.requestSequence,
           message: t(
@@ -3551,7 +3550,7 @@ export class ChatPanelManager implements vscode.Disposable {
     request: BranchSwitchRequest,
   ): void {
     if (this.branchSwitchSequenceByPanel.get(panel) !== request.requestSequence) return;
-    void panel.webview.postMessage({
+    void postLocalizedMessage(panel.webview, "chat", {
       type: "branchSwitchCancelled",
       requestId: request.requestSequence,
     });
@@ -3587,7 +3586,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const state = this.stateByPanel.get(panel);
     if (!state || !this.readyByPanel.get(panel)) return;
     try {
-      await panel.webview.postMessage({
+      await postLocalizedMessage(panel.webview, "chat", {
         type: "codexRolloutNotice",
         sessionInfoRevision: state.sessionInfoRevision,
         notice: this.buildCodexRolloutNotice(state),
@@ -3733,7 +3732,7 @@ export class ChatPanelManager implements vscode.Disposable {
       const recoveryRevision = this.getResumeRevision(panel);
       this.completeSessionDataRequest(panel, request);
       if (recoverResumePresentation) {
-        void panel.webview.postMessage({
+        void postLocalizedMessage(panel.webview, "chat", {
           type: "resumePresentation",
           snapshot: this.buildCliResumeSnapshot(panel, recoveryRevision),
           sessionDataComplete: true,
@@ -3804,6 +3803,7 @@ export class ChatPanelManager implements vscode.Disposable {
         claudeSessionsRoot: config.claudeSessionsRoot,
         images: config.images,
         includeDetails: detailMode === "full",
+        includeNotificationDetails: true,
         turnTimelineMode: config.chatTurnTimelineMode,
         sessionInventory: inventory,
         ...(historyPlan ? { historyPlan } : {}),
@@ -3816,7 +3816,7 @@ export class ChatPanelManager implements vscode.Disposable {
         model = await buildChatSessionModel(state.fsPath, buildOptions);
       }
       if (historyPlan && !historyPlan.complete) {
-        model.items.unshift({ type: "note", alwaysVisible: true, title: t("chat.historyIncomplete.title"), text: t("chat.historyIncomplete.message") });
+        model.items.unshift({ type: "note", noticeKind: "historyIncomplete", alwaysVisible: true, title: t("chat.historyIncomplete.title"), text: t("chat.historyIncomplete.message") });
       }
       if (isCompressedSessionFile(state.fsPath)) model.compressed = true;
       buildMs = elapsedMs(buildStartedAt);
@@ -3981,7 +3981,7 @@ export class ChatPanelManager implements vscode.Disposable {
       modelFingerprint &&
       this.deliveredSessionModelFingerprintByPanel.get(panel) === modelFingerprint,
     );
-    const delivery = panel.webview.postMessage({
+    const delivery = postLocalizedMessage(panel.webview, "chat", {
       type: "sessionData",
       ...(reusesDeliveredAutoRefreshModel
         ? { reuseCurrentModel: true }
@@ -4039,7 +4039,7 @@ export class ChatPanelManager implements vscode.Disposable {
       detailsLoaded: detailMode === "full",
       transitionDirection: options?.transitionDirection,
       codexAgentRunsGenerationBoundary: this.codexAgentRunsGenerationByPanel.get(panel) ?? 0,
-    });
+    }, { historySource: nextState.historySource });
     this.refreshNativeBookmarks();
     this.logger?.debug(
       formatDebugFields("chatSession send done", {
@@ -4225,7 +4225,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
     const target = sanitizePatchEntryDetailTarget(msg?.entry);
     if (!target) {
-      await panel.webview.postMessage({
+      await postLocalizedMessage(panel.webview, "chat", {
         type: "patchEntryDetailsFailed",
         fsPath: state.fsPath,
         entryId: "",
@@ -4261,7 +4261,7 @@ export class ChatPanelManager implements vscode.Disposable {
       );
       if (this.stateByPanel.get(panel) !== state) return;
       if (!entry) {
-        await panel.webview.postMessage({
+        await postLocalizedMessage(panel.webview, "chat", {
           type: "patchEntryDetailsFailed",
           fsPath: state.fsPath,
           entryId: target.entryId,
@@ -4278,7 +4278,7 @@ export class ChatPanelManager implements vscode.Disposable {
         return;
       }
 
-      await panel.webview.postMessage({
+      await postLocalizedMessage(panel.webview, "chat", {
         type: "patchEntryDetails",
         fsPath: state.fsPath,
         entryId: target.entryId,
@@ -4295,7 +4295,7 @@ export class ChatPanelManager implements vscode.Disposable {
       );
     } catch (error) {
       if (this.stateByPanel.get(panel) !== state) return;
-      await panel.webview.postMessage({
+      await postLocalizedMessage(panel.webview, "chat", {
         type: "patchEntryDetailsFailed",
         fsPath: state.fsPath,
         entryId: target.entryId,
@@ -4369,11 +4369,11 @@ export class ChatPanelManager implements vscode.Disposable {
 
     const image = this.imageDataByPanel.get(panel)?.get(imageId);
     if (!image) {
-      void panel.webview.postMessage({ type: "imageDataFailed", fsPath: state.fsPath, imageId });
+      void postLocalizedMessage(panel.webview, "chat", { type: "imageDataFailed", fsPath: state.fsPath, imageId });
       return;
     }
 
-    void panel.webview.postMessage({
+    void postLocalizedMessage(panel.webview, "chat", {
       type: "imageData",
       fsPath: state.fsPath,
       imageId,
@@ -4630,442 +4630,11 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private buildI18n(): Record<string, string> {
-    return {
-      resumeInCodex: t("chat.button.resumeInCodex"),
-      resumeInCodexTooltip: t("chat.tooltip.resumeInCodex"),
-      restoreArchived: t("chat.button.restoreArchived"),
-      restoreArchivedTooltip: t("chat.tooltip.restoreArchived"),
-      sessionLocationArchived: t("session.location.archived"),
-      sessionCompressed: t("history.compressed"),
-      rolloutChanged: t("chat.rollout.changed"),
-      rolloutSwitch: t("chat.rollout.switch"),
-      rolloutSwitchFailed: t("chat.rollout.switchFailed"),
-      branchBeforeEdit: t("chat.rollout.beforeEdit"),
-      branchAfterEdit: t("chat.rollout.afterEdit"),
-      branchFork: t("chat.rollout.fork"),
-      originalCwd: t("chat.meta.originalCwd"),
-      relocatedCwd: t("chat.meta.relocatedCwd"),
-      sessionId: t("chat.meta.sessionId"),
-      sessionFile: t("chat.meta.sessionFile"),
-      copySessionIdTooltip: t("chat.tooltip.copySessionId"),
-      copySessionFilePathTooltip: t("chat.tooltip.copySessionFilePath"),
-      revealSessionFileTooltip: t("chat.tooltip.revealSessionFile"),
-      pathModeRecorded: t("chat.pathMode.recorded"),
-      pathModeRelocated: t("chat.pathMode.relocated"),
-      pathModeRecordedTooltip: t("chat.tooltip.pathModeRecorded"),
-      pathModeRelocatedTooltip: t("chat.tooltip.pathModeRelocated"),
-      pathModeDisabledTooltip: t("chat.tooltip.pathModeDisabled"),
-      resumeInClaude: t("chat.button.resumeInClaude"),
-      resumeInClaudeTooltip: t("chat.tooltip.resumeInClaude"),
-      prepareCodexCliResume: t("chat.button.prepareCodexCliResume"),
-      prepareCodexCliResumeTooltip: t("chat.tooltip.prepareCodexCliResume"),
-      prepareClaudeCliResume: t("chat.button.prepareClaudeCliResume"),
-      prepareClaudeCliResumeTooltip: t("chat.tooltip.prepareClaudeCliResume"),
-      resumeActionsAriaLabel: t("chat.aria.resumeActions"),
-      rolloutSwitchTooltip: t("chat.rollout.switchTooltip"),
-      resumeOtherMethodAriaLabel: t("chat.aria.otherResumeMethod"),
-      resumeMethodMenuAriaLabel: t("chat.menu.resumeMethod"),
-      resumeUnavailableForSessionTooltip: t("chat.tooltip.resumeUnavailableForSession"),
-      codexExtensionInvalidSessionTooltip: t("app.resumeSessionInCodexNoSessionId"),
-      claudeExtensionInvalidSessionTooltip: t("app.resumeSessionInClaudeNoSessionId"),
-      cliWorkspaceUntrustedTooltip: t("cliResume.error.workspaceUntrusted"),
-      cliInvalidSessionTooltip: t("cliResume.error.invalidSessionId"),
-      pin: t("chat.button.pin"),
-      unpin: t("chat.button.unpin"),
-      pinTooltip: t("chat.tooltip.pin"),
-      unpinTooltip: t("chat.tooltip.unpin"),
-      bookmarkAddTooltip: t("chat.tooltip.bookmarkAdd"),
-      bookmarkRemoveTooltip: t("chat.tooltip.bookmarkRemove"),
-      nativeBookmarkTooltip: t("chat.tooltip.nativeBookmark"),
-      customTitle: t("chat.button.customTitle"),
-      customTitleTooltip: t("chat.tooltip.customTitle"),
-      markdown: t("chat.button.markdown"),
-      markdownTooltip: t("chat.tooltip.markdown"),
-      copyResume: t("chat.button.copyResume"),
-      // Tooltip explains the purpose of the "Copy Quick Prompt" action.
-      copyResumeTooltip: t("chat.tooltip.copyResume"),
-      reload: t("chat.button.reload"),
-      reloadTooltip: t("chat.tooltip.reload"),
-      scrollTop: t("chat.button.scrollTop"),
-      scrollTopTooltip: t("chat.tooltip.scrollTop"),
-      scrollBottom: t("chat.button.scrollBottom"),
-      scrollBottomTooltip: t("chat.tooltip.scrollBottom"),
-      autoRefreshOffTooltip: t("chat.tooltip.autoRefreshOff"),
-      autoRefreshPreserveTooltip: t("chat.tooltip.autoRefreshPreserve"),
-      autoRefreshFollowTooltip: t("chat.tooltip.autoRefreshFollow"),
-      detailsOn: t("chat.button.detailsOn"),
-      detailsOff: t("chat.button.detailsOff"),
-      detailsOnTooltip: t("chat.tooltip.detailsOn"),
-      detailsOffTooltip: t("chat.tooltip.detailsOff"),
-      pageSearch: t("chat.pageSearch.title"),
-      pageSearchTooltip: t("chat.pageSearch.tooltip"),
-      pageSearchPlaceholder: t("chat.pageSearch.placeholder"),
-      pageSearchPrevTooltip: t("chat.pageSearch.prevTooltip"),
-      pageSearchNextTooltip: t("chat.pageSearch.nextTooltip"),
-      pageSearchCloseTooltip: t("chat.pageSearch.closeTooltip"),
-      pageSearchNoMatches: t("chat.pageSearch.noMatches"),
-      pageSearchTypeToSearch: t("chat.pageSearch.typeToSearch"),
-      pageSearchInvalidQuery: t("chat.pageSearch.invalidQuery"),
-      pageSearchInvalidRegex: t("chat.pageSearch.invalidRegex"),
-      pageSearchNoHistory: t("chat.pageSearch.noHistory"),
-      pageSearchCaseSensitive: t("chat.pageSearch.caseSensitive"),
-      pageSearchRemoveHistory: t("chat.pageSearch.removeHistory"),
-      pageSearchRoleFilters: t("chat.pageSearch.roleFilters"),
-      pageSearchRoleFilterOnlyTooltip: t("chat.pageSearch.roleFilterOnlyTooltip"),
-      pageSearchRoleFilterAddTooltip: t("chat.pageSearch.roleFilterAddTooltip"),
-      pageSearchRoleFilterRemoveTooltip: t("chat.pageSearch.roleFilterRemoveTooltip"),
-      pageSearchRoleFilterRemoveToAllTooltip: t("chat.pageSearch.roleFilterRemoveToAllTooltip"),
-      memoryCitationSummary: t("chat.memoryCitation.summary"),
-      memoryCitationEntryRange: t("chat.memoryCitation.entryRange"),
-      memoryCitationEntryLine: t("chat.memoryCitation.entryLine"),
-      memoryCitationNote: t("chat.memoryCitation.note"),
-      memoryCitationRelatedSessions: t("chat.memoryCitation.relatedSessions"),
-      sessionStartContextSummary: t("chat.sessionStartContext.summary"),
-      sessionStartContextDescription: t("chat.sessionStartContext.description"),
-      timeGuideDates: t("fileChangeHistory.guide.dates"),
-      copied: t("chat.toast.copied"),
-      copyFailed: t("chat.toast.copyFailed"),
-      restoredLastPosition: t("chat.toast.restoredLastPosition"),
-      autoRefreshOffToast: t("chat.toast.autoRefreshOff"),
-      autoRefreshPreserveToast: t("chat.toast.autoRefreshPreserve"),
-      autoRefreshFollowToast: t("chat.toast.autoRefreshFollow"),
-      tool: t("chat.label.tool"),
-      arguments: t("chat.label.arguments"),
-      output: t("chat.label.output"),
-      sessionInfo: t("chat.label.sessionInfo"),
-      turnStart: t("chat.turn.start"),
-      turnRunning: t("chat.turn.running"),
-      turnCompleted: t("chat.turn.completed"),
-      turnInterrupted: t("chat.turn.interrupted"),
-      turnRolledBack: t("chat.turn.rolledBack"),
-      turnIncomplete: t("chat.turn.incomplete"),
-      turnUnknown: t("chat.turn.unknown"),
-      turnLabel: t("chat.turn.label"),
-      turnNumberLabel: t("chat.turn.numberLabel"),
-      turnCollapse: t("chat.turn.collapse"),
-      turnExpand: t("chat.turn.expand"),
-      turnCollapsed: t("chat.turn.collapsed"),
-      turnExpandedForSearch: t("chat.turn.expandedForSearch"),
-      turnDuration: t("chat.turn.duration"),
-      turnElapsed: t("chat.turn.elapsed"),
-      turnLastActivity: t("chat.turn.lastActivity"),
-      turnObservedAt: t("chat.turn.observedAt"),
-      turnEnd: t("chat.turn.end"),
-      turnDurationSeconds: t("chat.turn.duration.seconds"),
-      turnDurationMinutesSeconds: t("chat.turn.duration.minutesSeconds"),
-      turnDurationHoursMinutesSeconds: t("chat.turn.duration.hoursMinutesSeconds"),
-      turnRangeLabel: t("chat.turn.rangeLabel"),
-      turnJumpToRunning: t("chat.turn.jumpToRunning"),
-      turnItemCount: t("chat.turn.items"),
-      turnToolCount: t("chat.turn.tools"),
-      turnPatchCount: t("chat.turn.patches"),
-      turnTokenInput: t("chat.turn.tokens.input"),
-      turnTokenOutput: t("chat.turn.tokens.output"),
-      turnTokenTotal: t("chat.turn.tokens.total"),
-      turnUsageRecords: t("chat.turn.usageRecords"),
-      patchFilesEdited: t("chat.patch.filesEdited"),
-      patchFileHistory: t("fileChangeHistory.title"),
-      patchShowMoreFiles: t("chat.patch.showMoreFiles"),
-      patchShowFewerFiles: t("chat.patch.showFewerFiles"),
-      patchOpenAllDiffs: t("chat.patch.openAllDiffs"),
-      patchCloseAllDiffs: t("chat.patch.closeAllDiffs"),
-      patchOpenAllDiffsTooltip: t("chat.patch.openAllDiffsTooltip"),
-      patchCloseAllDiffsTooltip: t("chat.patch.closeAllDiffsTooltip"),
-      patchRevert: t("chat.patch.revert"),
-      usage: t("chat.usage.title"),
-      usageTokensInOut: t("chat.usage.tokensInOut"),
-      usageTokensIn: t("chat.usage.tokensIn"),
-      usageTokensOut: t("chat.usage.tokensOut"),
-      usageInput: t("chat.usage.input"),
-      usageOutput: t("chat.usage.output"),
-      usageCachedInput: t("chat.usage.cachedInput"),
-      usageCacheRead: t("chat.usage.cacheRead"),
-      usageCacheWrite: t("chat.usage.cacheWrite"),
-      usageReasoning: t("chat.usage.reasoning"),
-      usageTotal: t("chat.usage.total"),
-      usageContextWindow: t("chat.usage.contextWindow"),
-      usageContextUsed: t("chat.usage.contextUsed"),
-      usageContextUsedValue: t("chat.usage.contextUsedValue"),
-      usageServiceTier: t("chat.usage.serviceTier"),
-      usageSpeed: t("chat.usage.speed"),
-      usageStopReason: t("chat.usage.stopReason"),
-      usageRateLimitPrimary: t("chat.usage.rateLimitPrimary"),
-      usageRateLimitSecondary: t("chat.usage.rateLimitSecondary"),
-      usageRateLimitPlan: t("chat.usage.rateLimitPlan"),
-      usageRateLimitReached: t("chat.usage.rateLimitReached"),
-      usageRateLimitUsed: t("chat.usage.rateLimitUsed"),
-      usageRateLimitWindow: t("chat.usage.rateLimitWindow"),
-      usageRateLimitWindowHours: t("chat.usage.rateLimitWindowHours"),
-      usageRateLimitWindowDays: t("chat.usage.rateLimitWindowDays"),
-      usageRateLimitResetAt: t("chat.usage.rateLimitResetAt"),
-      usageRateLimitResetIn: t("chat.usage.rateLimitResetIn"),
-      usageCumulative: t("chat.usage.cumulative"),
-      environment: t("chat.environment.title"),
-      environmentCwd: t("chat.environment.cwd"),
-      environmentBranch: t("chat.environment.branch"),
-      environmentCommit: t("chat.environment.commit"),
-      environmentDirty: t("chat.environment.dirty"),
-      environmentClean: t("chat.environment.clean"),
-      systemEventInterruptedBadge: t("chat.systemEvent.interrupted.badge"),
-      systemEventInterruptedTitle: t("chat.systemEvent.interrupted.title"),
-      systemEventInterruptedToolUseTitle: t("chat.systemEvent.interrupted.toolUseTitle"),
-      systemEventInterruptedDescription: t("chat.systemEvent.interrupted.description"),
-      systemEventInterruptedRolledBack: t("chat.systemEvent.interrupted.rolledBack"),
-      systemEventLocalCommandBadge: t("chat.systemEvent.localCommandOutput.badge"),
-      systemEventLocalCommandTitle: t("chat.systemEvent.localCommandOutput.title"),
-      terminalInputBadge: t("chat.terminalInput.badge"),
-      terminalOutputTitle: t("chat.terminalOutput.title"),
-      terminalOutputStdout: t("chat.terminalOutput.stdout"),
-      terminalOutputStderr: t("chat.terminalOutput.stderr"),
-      terminalOutputExitCode: t("chat.terminalOutput.exitCode"),
-      terminalOutputTruncated: t("chat.terminalOutput.truncated"),
-      systemEventDetailReason: t("chat.systemEvent.detail.reason"),
-      systemEventDetailDuration: t("chat.systemEvent.detail.duration"),
-      systemEventDetailTurnId: t("chat.systemEvent.detail.turnId"),
-      systemEventDetailRolledBackTurns: t("chat.systemEvent.detail.rolledBackTurns"),
-      claudeAgentContext: t("chat.claudeAgent.context"),
-      claudeAgentContextDescription: t("chat.claudeAgent.contextDescription"),
-      claudeAgentPartial: t("chat.claudeAgent.partial"),
-      claudeAgentOwner: t("chat.claudeAgent.openOwner"),
-      useDedicatedTab: t("chat.tabMode.dedicated"),
-      useTemporaryTab: t("chat.tabMode.temporary"),
-      dedicatedTabState: t("chat.tabMode.state.dedicated"),
-      temporaryTabState: t("chat.tabMode.state.temporary"),
-      taskNotificationInvalid: t("chat.taskNotification.invalid"),
-      systemReminderTitle: t("chat.systemReminder.title"),
-      claudeProgressNarration: t("chat.claudeProgress.narration"),
-      claudeProgressThinking: t("chat.claudeProgress.thinking"),
-      claudeProgressRedacted: t("chat.claudeProgress.redactedThinking"),
-      claudeProgressDuration: t("chat.claudeProgress.duration"),
-      claudeQueuedInput: t("chat.claudeQueuedInput"),
-      crossSessionMessageBadge: t("chat.crossSession.badge"),
-      crossSessionMessageTitle: t("chat.crossSession.title"),
-      crossSessionMessageFrom: t("chat.crossSession.from"),
-      crossSessionMessageTruncated: t("chat.crossSession.truncated"),
-      questionReplyQuestion: t("chat.questionReply.question"),
-      questionReplyAnswer: t("chat.questionReply.answer"),
-      questionReplySelected: t("chat.questionReply.selected"),
-      questionReplyEmptyAnswer: t("chat.questionReply.emptyAnswer"),
-      roleUser: t("chat.role.user"),
-      roleAssistant: t("chat.role.assistant"),
-      roleDeveloper: t("chat.role.developer"),
-      roleMessage: t("chat.role.message"),
-      imageUnavailable: t("chat.image.unavailable"),
-      imageTooLarge: t("chat.image.tooLarge"),
-      imageUnsupported: t("chat.image.unsupported"),
-      imageMissing: t("chat.image.missing"),
-      imageRemote: t("chat.image.remote"),
-      imageInvalid: t("chat.image.invalid"),
-      imageDisabled: t("chat.image.disabled"),
-      imageOpenPreview: t("chat.image.openPreview"),
-      imageClosePreview: t("chat.image.closePreview"),
-      imageFitPreview: t("chat.image.fitPreview"),
-      imageActualSize: t("chat.image.actualSize"),
-      imageSave: t("chat.image.save"),
-      imagePrevious: t("chat.image.previous"),
-      imageNext: t("chat.image.next"),
-      imageLoading: t("chat.image.loading"),
-      imageAttachmentLabel: t("chat.image.attachmentLabel"),
-      attachmentOpen: t("chat.attachment.open"),
-      attachmentSave: t("chat.attachment.save"),
-      mermaidLabel: t("chat.mermaid.label"),
-      mermaidLoading: t("chat.mermaid.loading"),
-      mermaidRenderFailed: t("chat.mermaid.renderFailed"),
-      mermaidExpand: t("chat.mermaid.expand"),
-      mermaidClose: t("chat.mermaid.close"),
-      mermaidPaneTitle: t("chat.mermaid.paneTitle"),
-      mermaidZoomIn: t("chat.mermaid.zoomIn"),
-      mermaidZoomOut: t("chat.mermaid.zoomOut"),
-      mermaidFit: t("chat.mermaid.fit"),
-      mermaidReveal: t("chat.mermaid.reveal"),
-      mermaidCopySource: t("chat.mermaid.copySource"),
-      mermaidThemeLight: t("chat.mermaid.themeLight"),
-      mermaidThemeDark: t("chat.mermaid.themeDark"),
-      mermaidThemeDarkSetting: t("chat.mermaid.themeDarkSetting"),
-      mermaidThemeSwitch: t("chat.mermaid.themeSwitch"),
-      mermaidSaveAs: t("chat.mermaid.saveAs"),
-      mermaidSaveMenu: t("chat.mermaid.saveMenu"),
-      mermaidSaveFormat: t("chat.mermaid.saveFormat"),
-      mermaidFormatSvg: t("chat.mermaid.formatSvg"),
-      mermaidFormatPng: t("chat.mermaid.formatPng"),
-      mermaidFormatSource: t("chat.mermaid.formatSource"),
-      mermaidResize: t("chat.mermaid.resize"),
-      mermaidExportFailed: t("chat.mermaid.exportFailed"),
-      attachmentFileReference: t("chat.attachment.fileReference"),
-      attachmentOpenedFile: t("chat.attachment.openedFile"),
-      attachmentSelection: t("chat.attachment.selection"),
-      attachmentDocument: t("chat.attachment.document"),
-      attachmentPdf: t("chat.attachment.pdf"),
-      attachmentText: t("chat.attachment.text"),
-      attachmentCode: t("chat.attachment.code"),
-      attachmentImageReference: t("chat.attachment.imageReference"),
-      attachmentWord: t("chat.attachment.word"),
-      attachmentExcel: t("chat.attachment.excel"),
-      attachmentPowerPoint: t("chat.attachment.powerPoint"),
-      attachmentArchive: t("chat.attachment.archive"),
-      attachmentGenericFile: t("chat.attachment.genericFile"),
-      attachmentPreview: t("chat.attachment.preview"),
-      attachmentTooLarge: t("chat.attachment.tooLarge"),
-      attachmentUnsupported: t("chat.attachment.unsupported"),
-      attachmentMissing: t("chat.attachment.missing"),
-      attachmentUnavailable: t("chat.attachment.unavailable"),
-      attachmentTotalCount: t("chat.attachment.totalCount"),
-      taskNotificationTitle: t("chat.notification.task.title"),
-      taskNotificationResult: t("chat.notification.task.result"),
-      taskNotificationUsage: t("chat.notification.task.usage"),
-      taskNotificationUsageTokens: t("chat.notification.task.usage.tokens"),
-      taskNotificationUsageToolUses: t("chat.notification.task.usage.toolUses"),
-      taskNotificationStatusCompleted: t("chat.notification.task.status.completed"),
-      taskNotificationStatusFailed: t("chat.notification.task.status.failed"),
-      taskNotificationStatusRunning: t("chat.notification.task.status.running"),
-      taskNotificationStatusCancelled: t("chat.notification.task.status.cancelled"),
-      taskNotificationStatusUnknown: t("chat.notification.task.status.unknown"),
-      invokeTitle: t("chat.invoke.title"),
-      invokeParameter: t("chat.invoke.parameter"),
-      invokeDescription: t("chat.invoke.description"),
-      invokeExpand: t("chat.invoke.expand"),
-      invokeCollapse: t("chat.invoke.collapse"),
-      copy: t("chat.button.copy"),
-      showMore: t("chat.button.showMore"),
-      showLess: t("chat.button.showLess"),
-      stickyUserAriaLabel: t("chat.stickyUser.ariaLabel"),
-      stickyUserAttachmentOnly: t("chat.stickyUser.attachmentOnly"),
-      stickyUserOpenOriginal: t("chat.stickyUser.openOriginal"),
-      copyMessageTooltip: t("chat.tooltip.copyMessage"),
-      copyCodeTooltip: t("chat.tooltip.copyCode"),
-      copyTableTooltip: t("chat.tooltip.copyTable"),
-      expandCardWidthTooltip: t("chat.tooltip.expandCardWidth"),
-      restoreCardWidthTooltip: t("chat.tooltip.restoreCardWidth"),
-      patchWrapOn: t("chat.patch.wrapOn"),
-      patchWrapOff: t("chat.patch.wrapOff"),
-      patchWrapOnTooltip: t("chat.patch.wrapOnTooltip"),
-      patchWrapOffTooltip: t("chat.patch.wrapOffTooltip"),
-      patchJumpTooltip: t("chat.patch.jumpTooltip"),
-      patchGroupTitle: t("chat.patch.groupTitle"),
-      patchUnconfirmed: t("chat.patch.unconfirmed"),
-      patchShared: t("chat.patch.shared"),
-      patchIncomplete: t("chat.patch.incomplete"),
-      patchGroupCount: t("chat.patch.groupCount"),
-      patchExpand: t("chat.patch.expand"),
-      patchCollapse: t("chat.patch.collapse"),
-      patchBefore: t("chat.patch.before"),
-      patchAfter: t("chat.patch.after"),
-      patchNoDiff: t("chat.patch.noDiff"),
-      patchMovedTo: t("chat.patch.movedTo"),
-      patchDetailsLoadFailed: t("chat.patch.detailsLoadFailed"),
-      patchDetailsRetry: t("chat.patch.detailsRetry"),
-      performanceAutoNormal: t("chat.performance.autoNormal"),
-      performanceAutoSimplified: t("chat.performance.autoSimplified"),
-      performanceNormal: t("chat.performance.normal"),
-      performanceSimplified: t("chat.performance.simplified"),
-      performanceLargeHistoryToast: t("chat.performance.largeHistoryToast"),
-      performanceSwitchedAuto: t("chat.performance.switchedAuto"),
-      performanceSwitchedNormal: t("chat.performance.switchedNormal"),
-      performanceSwitchedSimplified: t("chat.performance.switchedSimplified"),
-      toolStatus: t("chat.toolCard.meta.status"),
-      toolExitCode: t("chat.toolCard.meta.exitCode"),
-      toolDuration: t("chat.toolCard.meta.duration"),
-      toolStatusSuccess: t("chat.toolCard.status.success"),
-      toolStatusStaged: t("chat.toolCard.status.staged"),
-      toolStatusUnconfirmed: t("chat.toolCard.status.unconfirmed"),
-      toolStatusCompleted: t("chat.toolCard.status.completed"),
-      toolStatusError: t("chat.toolCard.status.error"),
-      toolStatusTimeout: t("chat.toolCard.status.timeout"),
-      toolStatusInterrupted: t("chat.toolCard.status.interrupted"),
-      toolStatusCancelled: t("chat.toolCard.status.cancelled"),
-      jumpPrevDiff: t("chat.nav.prevDiff"),
-      jumpNextDiff: t("chat.nav.nextDiff"),
-      jumpPrevUser: t("chat.nav.prevUser"),
-      jumpNextUser: t("chat.nav.nextUser"),
-      jumpPrevAssistant: t("chat.nav.prevAssistant"),
-      jumpNextAssistant: t("chat.nav.nextAssistant"),
-      annotationTags: t("chat.annotation.tags"),
-      annotationNote: t("chat.annotation.note"),
-      annotationNone: t("chat.annotation.none"),
-      annotationEdit: t("chat.annotation.edit"),
-      annotationFilterTag: t("chat.annotation.filterTag"),
-      annotationRemoveTag: t("chat.annotation.removeTag"),
-      annotationShowMore: t("chat.annotation.showMore"),
-      annotationShowLess: t("chat.annotation.showLess"),
-      detailsLoading: t("chat.details.loading"),
-      codeCommentLabel: t("chat.codeComment.label"),
-      codeCommentFile: t("chat.codeComment.file"),
-      codeCommentLines: t("chat.codeComment.lines"),
-      codeCommentUnparsedTitle: t("chat.codeComment.unparsedTitle"),
-      codeCommentUnparsedEmptyBody: t("chat.codeComment.unparsedEmptyBody"),
-      branchControlLabel: t("claudeBranches.controlLabel"),
-      branchPrevious: t("claudeBranches.previous"),
-      branchNext: t("claudeBranches.next"),
-      branchPosition: t("claudeBranches.position"),
-      branchOccurrencePosition: t("claudeBranches.occurrencePosition"),
-      branchMap: t("claudeBranches.showMap"),
-      branchMapTooltip: t("claudeBranches.showMapCount"),
-      branchChooseSession: t("claudeBranches.chooseSession"),
-      branchChooseHistory: t("claudeBranches.chooseHistory"),
-      branchUnknownSession: t("claudeBranches.unknownSession"),
-      branchBookmark: t("claudeBranches.bookmark"),
-      branchTags: t("claudeBranches.tags"),
-      branchNote: t("claudeBranches.note"),
-      branchOverlaySummary: t("claudeBranches.overlaySummary"),
-      branchCloseOverlay: t("claudeBranches.closeOverlay"),
-      branchCurrent: t("claudeBranches.current"),
-      branchExpandPreview: t("claudeBranches.expandPreview"),
-      branchCollapsePreview: t("claudeBranches.collapsePreview"),
-      branchOpenInChat: t("claudeBranches.openInChat"),
-      branchOccurrencePartial: t("claudeBranches.occurrencePartial"),
-      branchPartialWarning: t("claudeBranches.partialWarning"),
-      branchShowCurrent: t("claudeBranches.showCurrent"),
-      branchUntitled: t("claudeBranches.untitled"),
-      branchHistoryStart: t("claudeBranches.historyStart"),
-      branchHistoryStartAndBefore: t("claudeBranches.historyStartAndBefore"),
-      branchFromStart: t("claudeBranches.fromStart"),
-      branchDestination: t("claudeBranches.destination"),
-      branchFit: t("claudeBranches.fit"),
-      branchZoomOut: t("claudeBranches.zoomOut"),
-      branchZoomIn: t("claudeBranches.zoomIn"),
-      branchCollapsedChoices: t("claudeBranches.collapsedChoices"),
-      branchPageControls: t("claudeBranches.pageControls"),
-      branchShowPreviousPoints: t("claudeBranches.showPreviousPoints"),
-      branchShowNextPoints: t("claudeBranches.showNextPoints"),
-      branchBefore: t("claudeBranches.before"),
-      branchEnd: t("claudeBranches.end"),
-      branchEndsHere: t("claudeBranches.endsHere"),
-      branchRoleUser: t("claudeBranches.roleUser"),
-      branchRoleAssistant: t("claudeBranches.roleAssistant"),
-      branchSwitchFailed: t("claudeBranches.switchFailed"),
-      branchNone: t("claudeBranches.none"),
-      branchLoadFailed: t("claudeBranches.loadFailed"),
-      agentRunsTitle: t("codexAgentRuns.title"),
-      agentRunsShow: t("codexAgentRuns.show"),
-      agentRunsLoading: t("codexAgentRuns.loading"),
-      agentRunsNone: t("codexAgentRuns.none"),
-      agentRunsRelatedCount: t("codexAgentRuns.relatedCount"),
-      agentRunsSubagent: t("codexAgentRuns.subagent"),
-      agentRunsSourceCodex: t("history.filter.source.codex"),
-      agentRunsSourceClaude: t("history.filter.source.claude"),
-      agentRunsCurrent: t("codexAgentRuns.current"),
-      agentRunsStarted: t("codexAgentRuns.started"),
-      agentRunsLastActivity: t("codexAgentRuns.lastActivity"),
-      agentRunsOpenSession: t("codexAgentRuns.openSession"),
-      agentRunsPinSession: t("codexAgentRuns.pinSession"),
-      agentRunsUnpinSession: t("codexAgentRuns.unpinSession"),
-      agentRunsParentUnavailable: t("codexAgentRuns.parentUnavailable"),
-      agentRunsDirectChildren: t("codexAgentRuns.directChildren"),
-      agentRunsPartialWarning: t("codexAgentRuns.partialWarning"),
-      agentRunsOmitted: t("codexAgentRuns.omitted"),
-      agentRunsClose: t("codexAgentRuns.close"),
-      agentRunsShowFirst: t("codexAgentRuns.showFirst"),
-      agentRunsShowLast: t("codexAgentRuns.showLast"),
-      agentRunsShowCurrent: t("codexAgentRuns.showCurrent"),
-      agentRunsBookmark: t("codexAgentRuns.bookmark"),
-      agentRunsTags: t("codexAgentRuns.tags"),
-      agentRunsNote: t("codexAgentRuns.note"),
-      agentRunsOtherRun: t("codexAgentRuns.otherRun"),
-    };
+    return buildWebviewI18n("chat");
   }
 
   private buildDateTime(): { timeZone: string } {
-    // Resolve the display time zone from UI language settings (ja=JST, auto/en=system).
+    // Resolve the system display time zone independently of UI language.
     const { timeZone } = resolveDateTimeSettings();
     return { timeZone };
   }
@@ -5393,7 +4962,7 @@ export class ChatPanelManager implements vscode.Disposable {
     ) {
       return;
     }
-    await panel.webview.postMessage({
+    await postLocalizedMessage(panel.webview, "chat", {
       type: "sessionInfoActionResult",
       action,
       ok,
@@ -5517,7 +5086,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const viewStateRevision = (this.viewStateRevisionByPanel.get(panel) ?? 0) + 1;
     this.viewStateRevisionByPanel.set(panel, viewStateRevision);
     this.stableViewLayoutReadyPanels.delete(panel);
-    const viewStateDelivery = panel.webview.postMessage({
+    const viewStateDelivery = postLocalizedMessage(panel.webview, "chat", {
       type: "viewState",
       visible: panel.visible,
       revision: viewStateRevision,
@@ -5564,7 +5133,7 @@ export class ChatPanelManager implements vscode.Disposable {
     }
     this.liveExpiryRefreshPendingByPanel.delete(panel);
     this.stateByPanel.set(panel, { ...state, pendingAutoRefresh: false });
-    void panel.webview.postMessage({ type: "requestReload", mode });
+    void postLocalizedMessage(panel.webview, "chat", { type: "requestReload", mode });
   }
 }
 
@@ -6066,6 +5635,19 @@ function toSummaryPatchEntry(entry: ChatPatchEntry): ChatPatchEntry {
   };
 }
 
+// Count new display text without counting the existing internal raw body again.
+function countNotificationPresentationText(entries: readonly { summary?: string; result?: string; details?: import("./chatTypes").ChatNotificationDetails }[]): number {
+  let total = 0;
+  for (const entry of entries) {
+    total += (entry.summary?.length ?? 0) + (entry.result?.length ?? 0);
+    const details = entry.details;
+    if (!details) continue;
+    for (const key of ["taskId", "toolUseId", "taskType", "outputFile", "rawStatus", "note", "event", "worktreePath", "worktreeBranch"] as const) total += details[key]?.length ?? 0;
+    for (const variant of details.rawVariants ?? []) total += variant.text.length;
+  }
+  return total;
+}
+
 async function buildChatPerformanceStats(fsPath: string, model: ChatSessionModel): Promise<ChatPerformanceStats> {
   const stats: ChatPerformanceStats = {
     fileSizeBytes: 0,
@@ -6091,10 +5673,12 @@ async function buildChatPerformanceStats(fsPath: string, model: ChatSessionModel
     }
     if (item.type === "crossSessionMessage" || item.type === "taskNotification" || item.type === "systemReminder" || item.type === "claudeProgress" || item.type === "claudeQueuedInput") {
       stats.messageChars += typeof item.body === "string" ? item.body.length : 0;
+      if (item.type === "taskNotification" && item.presentation) stats.messageChars += countNotificationPresentationText(item.presentation.entries);
       continue;
     }
     if (item.type === "message") {
       stats.messageChars += typeof item.text === "string" ? item.text.length : 0;
+      stats.messageChars += countNotificationPresentationText((item.attachments ?? []).filter(attachment => attachment.type === "notification").map(attachment => ({ details: attachment.details })));
       stats.imageCount += Array.isArray(item.attachments)
         ? item.attachments.filter((attachment) => attachment?.type === "image").length
         : 0;

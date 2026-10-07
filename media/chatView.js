@@ -1,6 +1,8 @@
 // Webview script. Communicates with the extension via postMessage.
 (function () {
   const vscode = acquireVsCodeApi();
+  const localization = globalThis.CHVLocaleBridge?.connect("chat", vscode);
+  if (!localization) { vscode.postMessage({ type: "localizationLoadFailed" }); return; }
 
   const toolbarEl = document.getElementById("toolbar");
   const scrollRootEl = document.getElementById("scrollRoot");
@@ -386,7 +388,7 @@
   let currentModelRenderFingerprint = "";
   let lastRenderedSessionDataKey = "";
   /** @type {any} */
-  let i18n = {};
+  let i18n = { ...localization.defaults };
   /** @type {any} */
   let resumeSnapshot = null;
   let resumeRevision = 0;
@@ -1018,7 +1020,7 @@
   });
 
   window.addEventListener("message", (event) => {
-    const msg = event.data || {};
+    const msg = localization.receive(event.data);
     if (msg.type === "viewState") {
       const revision = Number(msg.revision);
       if (Number.isSafeInteger(revision) && revision >= 0) {
@@ -1135,7 +1137,7 @@
       branchOverlayPagePending = false;
       if (normalized.groupCount < 1 && branchOverlayOpen) {
         closeBranchOverlay({ restoreFocus: false });
-        showToast(getSafeUiText(i18n.branchNone, "No branches were found for this session."));
+        showToast(getSafeUiText(i18n.branchNone, localization.defaults.branchNone));
       }
       updateToolbar();
       if (timelineChanged) renderBranchTimelinePreservingViewState();
@@ -1183,7 +1185,7 @@
       ) return;
       branchOverlayPagePending = false;
       updateBranchControlDisabledState();
-      showToast(getSafeUiText(i18n.branchLoadFailed, "Branch information could not be loaded. Reload to try again."));
+      showToast(getSafeUiText(i18n.branchLoadFailed, localization.defaults.branchLoadFailed));
       return;
     }
     if (msg.type === "branchNavigationError") {
@@ -1204,7 +1206,7 @@
       showToast(
         getSafeUiText(
           typeof msg.message === "string" ? msg.message : i18n.branchLoadFailed,
-          "Branch information could not be loaded. Reload to try again.",
+          localization.defaults.branchLoadFailed,
         ),
       );
       return;
@@ -1217,7 +1219,7 @@
         rolloutSwitchPending = false;
         if (btnSwitchRollout) btnSwitchRollout.disabled = false;
         updateResumeToolbarSafely();
-        showToast(i18n.rolloutSwitchFailed || "");
+        showToast(i18n.rolloutSwitchFailed || localization.defaults.rolloutSwitchFailed);
       }
       return;
     }
@@ -1233,7 +1235,7 @@
       branchSwitchPending = false;
       branchSwitchPendingRequestId = 0;
       updateBranchControlDisabledState();
-      showToast(getSafeUiText(msg.message, getSafeUiText(i18n.branchSwitchFailed, "Could not switch branches.")));
+      showToast(getSafeUiText(msg.message, getSafeUiText(i18n.branchSwitchFailed, localization.defaults.branchSwitchFailed)));
       return;
     }
     if (msg.type === "branchSwitchCancelled") {
@@ -1573,6 +1575,7 @@
       return;
     }
     if (msg.type === "i18n") {
+      const restoreFocus = localization.captureFocus();
       i18n = msg.i18n || {};
       dateTime = msg.dateTime || dateTime || {};
       debugLoggingEnabled = msg.debugLoggingEnabled === true;
@@ -1608,7 +1611,9 @@
       }
       imageSettings = normalizeImageSettings(msg.imageSettings);
       updateToolbar();
-      render();
+      bumpPageSearchContentRevisionAndQueueRefresh();
+      renderBranchTimelinePreservingViewState();
+      requestAnimationFrame(() => requestAnimationFrame(restoreFocus));
       if (isImagePreviewOpen()) syncImagePreviewControls();
       if (agentRunsOverlayOpen) renderAgentRunsOverlay();
       return;
@@ -1642,11 +1647,11 @@
       return;
     }
     if (msg.type === "copied") {
-      showToast(i18n.copied || "Copied.", { key: "copied" });
+      showToast(i18n.copied || localization.defaults.copied, { key: "copied" });
       return;
     }
     if (msg.type === "copyFailed") {
-      showToast(i18n.copyFailed || "Could not copy to the clipboard.", { key: "copyFailed" });
+      showToast(i18n.copyFailed || localization.defaults.copyFailed, { key: "copyFailed" });
       return;
     }
     if (msg.type === "sessionInfoActionResult") {
@@ -1709,24 +1714,15 @@
   });
   scheduleVisibleLayoutResume();
 
-  function looksLikeMojibake(text) {
-    return (
-      typeof text === "string" &&
-      /(?:\u7e3a|\u7e67|\u7e5d|\u8373|\u879f|\u9adf|\u8c3a|\u8711|\u96a7|\u90b1|\u8b80|\u87fe|\u86fb|\u9058|\u8c9e|\u9aee)/u.test(
-        text,
-      )
-    );
-  }
-
   function getSafeUiText(value, fallback) {
     const text = typeof value === "string" ? value.trim() : "";
-    if (text && !looksLikeMojibake(text)) return text;
+    if (text) return text;
     return fallback;
   }
 
   function getRequiredResumeUiText(value) {
     const text = typeof value === "string" ? value.trim() : "";
-    if (text && !looksLikeMojibake(text)) return text;
+    if (text) return text;
     throw new Error();
   }
 
@@ -1757,7 +1753,8 @@
 
   function clearTurnTimelineInteractiveState() {
     collapsedTurnIds = new Set();
-    clearAllPageSearchTemporaryExpansions();
+    // Turn grouping must not reset independent, manually closed search disclosures.
+    pageSearchTemporaryTurnExpansionActive = false;
     pendingPageSearchRefreshOptions = null;
     runningTurnActivitySignatures = new Map();
     resetRunningTurnIndicators({ keepFallback: false });
@@ -2382,7 +2379,7 @@
     const isCodexSession = !!(model && model.meta && model.meta.historySource === "codex");
     updateResumeToolbarSafely();
 
-    const pinLabel = isPinned ? i18n.unpin || "Unpin" : i18n.pin || "Pin";
+    const pinLabel = isPinned ? i18n.unpin || localization.defaults.unpin : i18n.pin || localization.defaults.pin;
     const pinTooltip = isPinned
       ? i18n.unpinTooltip || pinLabel
       : i18n.pinTooltip || pinLabel;
@@ -2390,13 +2387,13 @@
     btnPinToggle.setAttribute("aria-pressed", isPinned ? "true" : "false");
 
     if (btnCustomTitle instanceof HTMLElement) {
-      const customTitleLabel = getSafeUiText(i18n.customTitle, "Custom title");
+      const customTitleLabel = getSafeUiText(i18n.customTitle, localization.defaults.customTitle);
       const customTitleTooltip = getSafeUiText(i18n.customTitleTooltip, customTitleLabel);
       setToolbarIconButton(btnCustomTitle, CUSTOM_TITLE_ICON_SVG, customTitleTooltip);
     }
 
-    const pageSearchLabel = getSafeUiText(i18n.pageSearch, "Find");
-    const pageSearchTooltip = getSafeUiText(i18n.pageSearchTooltip, "Toggle in-page search");
+    const pageSearchLabel = getSafeUiText(i18n.pageSearch, localization.defaults.pageSearch);
+    const pageSearchTooltip = getSafeUiText(i18n.pageSearchTooltip, localization.defaults.pageSearchTooltip);
     setToolbarIconButton(btnPageSearch, SEARCH_ICON_SVG, pageSearchTooltip);
     updatePerformanceToolbarButton();
     if (btnAutoRefresh instanceof HTMLElement) {
@@ -2412,9 +2409,9 @@
         : 0;
       const noBranches = Boolean(branchNavigation) && !branchNavigationPending && groupCount < 1;
       const branchMapTooltip = noBranches
-        ? getSafeUiText(i18n.branchNone, "No branches were found for this session.")
+        ? getSafeUiText(i18n.branchNone, localization.defaults.branchNone)
         : formatTemplate(
-            getSafeUiText(i18n.branchMapTooltip, "Show branches ({0})"),
+            getSafeUiText(i18n.branchMapTooltip, localization.defaults.branchMapTooltip),
             groupCount,
           );
       setToolbarIconButton(btnBranchMap, BRANCH_MAP_ICON_SVG, branchMapTooltip);
@@ -2441,11 +2438,11 @@
       const ready = agentRunsState === "ready" && agentRunsModel;
       const agentCount = ready ? agentRunsModel.agentCount : 0;
       const label = agentRunsState === "loading"
-        ? getSafeUiText(i18n.agentRunsLoading, "Preparing Agent Runs")
+        ? getSafeUiText(i18n.agentRunsLoading, localization.defaults.agentRunsLoading)
         : agentRunsState === "empty"
-          ? getSafeUiText(i18n.agentRunsNone, "No related agent runs were found for this session.")
+          ? getSafeUiText(i18n.agentRunsNone, localization.defaults.agentRunsNone)
         : formatTemplate(
-            getSafeUiText(i18n.agentRunsRelatedCount, "Related agent runs: {0}"),
+            getSafeUiText(i18n.agentRunsRelatedCount, localization.defaults.agentRunsRelatedCount),
             agentCount,
           );
       setToolbarIconButton(btnAgentRuns, AGENT_RUNS_ICON_SVG, label);
@@ -2458,25 +2455,25 @@
       btnAgentRuns.dataset.unavailable = agentRunsState === "empty" ? "true" : "false";
     }
 
-    const markdownLabel = i18n.markdown || "Markdown";
+    const markdownLabel = i18n.markdown || localization.defaults.markdown;
     const markdownTooltip = i18n.markdownTooltip || markdownLabel;
     setToolbarIconButton(btnMarkdown, MARKDOWN_ICON_SVG, markdownTooltip);
-    const copyResumeLabel = i18n.copyResume || "Copy prompt";
+    const copyResumeLabel = i18n.copyResume || localization.defaults.copyResume;
     // Show a descriptive tooltip so the button intent is clear.
     const copyResumeTooltip = i18n.copyResumeTooltip || copyResumeLabel;
     setToolbarIconButton(btnCopyResume, COPY_ICON_SVG, copyResumeTooltip);
-    const scrollTopLabel = i18n.scrollTop || "Top";
+    const scrollTopLabel = i18n.scrollTop || localization.defaults.scrollTop;
     const scrollTopTooltip = i18n.scrollTopTooltip || scrollTopLabel;
     setToolbarIconButton(btnScrollTop, SCROLL_TOP_ICON_SVG, scrollTopTooltip);
-    const scrollBottomLabel = i18n.scrollBottom || "Bottom";
+    const scrollBottomLabel = i18n.scrollBottom || localization.defaults.scrollBottom;
     const scrollBottomTooltip = i18n.scrollBottomTooltip || scrollBottomLabel;
     setToolbarIconButton(btnScrollBottom, SCROLL_BOTTOM_ICON_SVG, scrollBottomTooltip);
-    const reloadLabel = i18n.reload || "Reload";
+    const reloadLabel = i18n.reload || localization.defaults.reload;
     const reloadTooltip = i18n.reloadTooltip || reloadLabel;
     setToolbarIconButton(btnReload, RELOAD_ICON_SVG, reloadTooltip);
     const detailsLabel = showDetails
-      ? i18n.detailsOn || "Hide details"
-      : i18n.detailsOff || "Show details";
+      ? i18n.detailsOn || localization.defaults.detailsOn
+      : i18n.detailsOff || localization.defaults.detailsOff;
     const detailsTooltip = showDetails
       ? i18n.detailsOnTooltip || detailsLabel
       : i18n.detailsOffTooltip || detailsLabel;
@@ -2485,7 +2482,7 @@
     btnToggleDetails.setAttribute("aria-pressed", showDetails ? "true" : "false");
     updatePathModeToolbarButton();
     if (pageSearchInputEl instanceof HTMLInputElement) {
-      const searchPlaceholder = getSafeUiText(i18n.pageSearchPlaceholder, "Find in this view");
+      const searchPlaceholder = getSafeUiText(i18n.pageSearchPlaceholder, localization.defaults.pageSearchPlaceholder);
       pageSearchInputEl.placeholder = searchPlaceholder;
       pageSearchInputEl.setAttribute("aria-label", searchPlaceholder);
     }
@@ -2493,9 +2490,9 @@
       if (pageSearchTitleEl.textContent !== pageSearchLabel) pageSearchTitleEl.textContent = pageSearchLabel;
     }
     renderPageSearchRoleFilters();
-    const prevTooltip = getSafeUiText(i18n.pageSearchPrevTooltip, "Previous match");
-    const nextTooltip = getSafeUiText(i18n.pageSearchNextTooltip, "Next match");
-    const closeTooltip = getSafeUiText(i18n.pageSearchCloseTooltip, "Close search");
+    const prevTooltip = getSafeUiText(i18n.pageSearchPrevTooltip, localization.defaults.pageSearchPrevTooltip);
+    const nextTooltip = getSafeUiText(i18n.pageSearchNextTooltip, localization.defaults.pageSearchNextTooltip);
+    const closeTooltip = getSafeUiText(i18n.pageSearchCloseTooltip, localization.defaults.pageSearchCloseTooltip);
     setToolbarIconButton(btnPageSearchPrev, NAV_UP_ICON_SVG, prevTooltip);
     setToolbarIconButton(btnPageSearchNext, NAV_DOWN_ICON_SVG, nextTooltip);
     setToolbarIconButton(btnPageSearchClose, CLOSE_ICON_SVG, closeTooltip);
@@ -2562,7 +2559,7 @@
       className: "branchActionRail",
       role: "group",
       ariaLabel: formatTemplate(
-        getSafeUiText(i18n.branchControlLabel, "Branch choices for user #{0}"),
+        getSafeUiText(i18n.branchControlLabel, localization.defaults.branchControlLabel),
         group.anchorChatMessageIndex,
       ),
     });
@@ -2570,15 +2567,15 @@
     const nextIndex = (group.currentChoiceIndex + 1) % group.choiceCount;
     const previous = createBranchIconButton(
       NAV_LEFT_ICON_SVG,
-      getSafeUiText(i18n.branchPrevious, "Switch to previous branch destination"),
+      getSafeUiText(i18n.branchPrevious, localization.defaults.branchPrevious),
       () => requestBranchChoice(group, previousIndex, "previous", previous),
     );
     const positionText = formatTemplate(
-      getSafeUiText(i18n.branchPosition, "Branch destination {0} / {1}"),
+      getSafeUiText(i18n.branchPosition, localization.defaults.branchPosition),
       group.currentChoiceIndex + 1,
       group.choiceCount,
     );
-    const chooseHistoryLabel = getSafeUiText(i18n.branchChooseHistory, "Choose a history");
+    const chooseHistoryLabel = getSafeUiText(i18n.branchChooseHistory, localization.defaults.branchChooseHistory);
     const position = el("button", {
       type: "button",
       className: "branchControlPosition branchControlPositionButton",
@@ -2592,12 +2589,12 @@
     });
     const next = createBranchIconButton(
       NAV_RIGHT_ICON_SVG,
-      getSafeUiText(i18n.branchNext, "Switch to next branch destination"),
+      getSafeUiText(i18n.branchNext, localization.defaults.branchNext),
       () => requestBranchChoice(group, nextIndex, "next", next),
     );
     const list = createBranchIconButton(
       BRANCH_MAP_ICON_SVG,
-      getSafeUiText(i18n.branchMap, "Open branch list"),
+      getSafeUiText(i18n.branchMap, localization.defaults.branchMap),
       () => openBranchOverlay(list, group.id),
     );
     control.append(previous, position, next, list);
@@ -2771,13 +2768,13 @@
     const menu = el("div", {
       className: "branchChoiceMenu",
       role: "menu",
-      ariaLabel: getSafeUiText(i18n.branchChooseSession, "Choose a session occurrence"),
+      ariaLabel: getSafeUiText(i18n.branchChooseSession, localization.defaults.branchChooseSession),
     });
     menu.dataset.menuKind = "branch";
     const firstOccurrence = choice.occurrences[0];
     if (firstOccurrence?.branchStart) {
       const choicePosition = formatTemplate(
-        getSafeUiText(i18n.branchPosition, "History {0} of {1}"),
+        getSafeUiText(i18n.branchPosition, localization.defaults.branchPosition),
         choice.choiceIndex + 1,
         group.choiceCount,
       );
@@ -2832,14 +2829,14 @@
     const menu = el("div", {
       className: "branchChoiceMenu branchChoiceMenu-portal branchChoiceList",
       role: "menu",
-      ariaLabel: getSafeUiText(i18n.branchChooseHistory, "Choose a history"),
+      ariaLabel: getSafeUiText(i18n.branchChooseHistory, localization.defaults.branchChooseHistory),
     });
     menu.dataset.menuKind = "branch";
     const orderedChoices = group.choices.slice().sort((left, right) => left.choiceIndex - right.choiceIndex);
     for (const choice of orderedChoices) {
       if (!Array.isArray(choice.occurrences) || choice.occurrences.length === 0) continue;
       const choicePosition = formatTemplate(
-        getSafeUiText(i18n.branchPosition, "History {0} of {1}"),
+        getSafeUiText(i18n.branchPosition, localization.defaults.branchPosition),
         choice.choiceIndex + 1,
         group.choiceCount,
       );
@@ -2886,7 +2883,7 @@
     heading.append(position, contextPreview);
     const contextMeta = el("span", { className: "branchChoiceContextMeta" });
     contextMeta.textContent = occurrence?.branchStart
-      ? getSafeUiText(i18n.branchDestination, "Branch destination") + " ・ " + formatBranchAnchor(occurrence.branchStart)
+      ? getSafeUiText(i18n.branchDestination, localization.defaults.branchDestination) + " ・ " + formatBranchAnchor(occurrence.branchStart)
       : "";
     contextMeta.title = contextMeta.textContent;
     context.append(heading, contextMeta);
@@ -2921,13 +2918,13 @@
     const accessibleLabels = [];
     accessibleLabels.push(
       occurrence.branchStart
-        ? getSafeUiText(i18n.branchDestination, "Branch destination") + " ・ " + formatBranchAnchor(occurrence.branchStart)
+        ? getSafeUiText(i18n.branchDestination, localization.defaults.branchDestination) + " ・ " + formatBranchAnchor(occurrence.branchStart)
         : "",
       choice.preview || occurrence.branchStart?.preview || "",
     );
     const heading = el("span", { className: "branchChoiceOptionHeading" });
     if (occurrence.isCurrent) {
-      const currentLabel = getSafeUiText(i18n.branchCurrent, "Current history");
+      const currentLabel = getSafeUiText(i18n.branchCurrent, localization.defaults.branchCurrent);
       const current = el("span", { className: "branchChoiceCurrent" });
       current.textContent = currentLabel;
       heading.appendChild(current);
@@ -2936,7 +2933,7 @@
     if (choice.occurrenceCount > 1) {
       const ordinal = el("span", { className: "branchChoiceOrdinal" });
       ordinal.textContent = formatTemplate(
-        getSafeUiText(i18n.branchOccurrencePosition, "History location {0} of {1}"),
+        getSafeUiText(i18n.branchOccurrencePosition, localization.defaults.branchOccurrencePosition),
         occurrenceIndex + 1,
         choice.occurrenceCount,
       );
@@ -2958,30 +2955,30 @@
     title.textContent = historyEnd?.preview
       || occurrence.sessionLabel
       || occurrence.branchStart?.preview
-      || getSafeUiText(i18n.branchUnknownSession, "Unknown session");
+      || getSafeUiText(i18n.branchUnknownSession, localization.defaults.branchUnknownSession);
     title.title = title.textContent;
     const footer = el("span", { className: "branchChoiceFooter" });
     const meta = el("span", { className: "branchChoiceMeta" });
     const displayAnchor = historyEnd || occurrence.branchStart;
     const displayLabel = historyEnd
-      ? getSafeUiText(i18n.branchEnd, "History end")
-      : getSafeUiText(i18n.branchDestination, "Branch destination");
+      ? getSafeUiText(i18n.branchEnd, localization.defaults.branchEnd)
+      : getSafeUiText(i18n.branchDestination, localization.defaults.branchDestination);
     meta.textContent = displayAnchor ? displayLabel + " ・ " + formatBranchAnchor(displayAnchor) : "";
     meta.title = meta.textContent;
     const statuses = el("span", { className: "branchChoiceStatuses" });
     const statusLabels = [];
     if (occurrence.isBookmarked) {
-      const label = getSafeUiText(i18n.branchBookmark, "Bookmark");
+      const label = getSafeUiText(i18n.branchBookmark, localization.defaults.branchBookmark);
       statuses.appendChild(createBranchChoiceStatus(BOOKMARK_ICON_SVG, label));
       statusLabels.push(label);
     }
     if (occurrence.hasTags) {
-      const label = getSafeUiText(i18n.branchTags, "Tags");
+      const label = getSafeUiText(i18n.branchTags, localization.defaults.branchTags);
       statuses.appendChild(createBranchChoiceStatus(TAG_ICON_SVG, label));
       statusLabels.push(label);
     }
     if (occurrence.hasNote) {
-      const label = getSafeUiText(i18n.branchNote, "Note");
+      const label = getSafeUiText(i18n.branchNote, localization.defaults.branchNote);
       statuses.appendChild(createBranchChoiceStatus(NOTE_ICON_SVG, label));
       statusLabels.push(label);
     }
@@ -2990,7 +2987,7 @@
     option.appendChild(content);
     accessibleLabels.push(title.textContent, meta.textContent, ...statusLabels);
     if (interactive) {
-      const actionLabel = getSafeUiText(i18n.branchOpenInChat, "Open this position in the session view");
+      const actionLabel = getSafeUiText(i18n.branchOpenInChat, localization.defaults.branchOpenInChat);
       const action = el("span", { className: "branchChoiceAction", title: actionLabel });
       action.setAttribute("aria-hidden", "true");
       action.innerHTML = PATCH_JUMP_ICON_SVG;
@@ -3009,7 +3006,7 @@
 
   function createBranchChoicePartial() {
     const partial = el("p", { className: "branchChoicePartial" });
-    partial.textContent = getSafeUiText(i18n.branchOccurrencePartial, "Some history locations are omitted.");
+    partial.textContent = getSafeUiText(i18n.branchOccurrencePartial, localization.defaults.branchOccurrencePartial);
     return partial;
   }
 
@@ -3147,10 +3144,10 @@
     closeBranchChoicePreview();
     const hasMultipleOccurrences = choice.occurrenceCount > 1 || occurrences.length > 1;
     const actionLabel = hasMultipleOccurrences
-      ? getSafeUiText(i18n.branchChooseSession, "Choose a session occurrence")
-      : getSafeUiText(i18n.branchOpenInChat, "Open this position in the session view");
+      ? getSafeUiText(i18n.branchChooseSession, localization.defaults.branchChooseSession)
+      : getSafeUiText(i18n.branchOpenInChat, localization.defaults.branchOpenInChat);
     const choicePosition = formatTemplate(
-      getSafeUiText(i18n.branchPosition, "History {0} of {1}"),
+      getSafeUiText(i18n.branchPosition, localization.defaults.branchPosition),
       choice.choiceIndex + 1,
       group.choiceCount,
     );
@@ -3629,7 +3626,7 @@
 
   function openAgentRunsOverlay(returnFocus) {
     if (agentRunsState === "empty") {
-      showToast(getSafeUiText(i18n.agentRunsNone, "No related agent runs were found for this session."));
+      showToast(getSafeUiText(i18n.agentRunsNone, localization.defaults.agentRunsNone));
       return;
     }
     if (agentRunsState !== "ready" || !agentRunsModel || !(agentRunsOverlayRootEl instanceof HTMLElement)) return;
@@ -3714,7 +3711,7 @@
     const animateEntry = agentRunsOverlayRootEl.dataset.agentRunsOverlayEnter === "true";
     delete agentRunsOverlayRootEl.dataset.agentRunsOverlayEnter;
     const graph = buildAgentRunsGraph(agentRunsModel);
-    const featureTitle = getSafeUiText(i18n.agentRunsTitle, "Agent Runs");
+    const featureTitle = getSafeUiText(i18n.agentRunsTitle, localization.defaults.agentRunsTitle);
     const panelTitle = getAgentRunsPanelTitle(graph, featureTitle);
     const relationSummary = formatAgentRunsTreeSummary();
     const panelSummary = panelTitle === featureTitle
@@ -3759,7 +3756,7 @@
       const warning = el("span", { className: "agentRunsOverlayWarning", role: "status" });
       warning.textContent = getSafeUiText(
         i18n.agentRunsPartialWarning,
-        "Some agent relationships could not be shown. Only confirmed relationships are displayed.",
+        localization.defaults.agentRunsPartialWarning,
       );
       warning.title = warning.textContent;
       heading.appendChild(warning);
@@ -3767,22 +3764,22 @@
     const actions = el("div", { className: "agentRunsOverlayActions" });
     const first = createAgentRunsIconButton(
       SCROLL_TOP_ICON_SVG,
-      getSafeUiText(i18n.agentRunsShowFirst, "Scroll to top"),
+      getSafeUiText(i18n.agentRunsShowFirst, localization.defaults.agentRunsShowFirst),
       () => scrollAgentRunsTreeBoundary("first"),
     );
     const last = createAgentRunsIconButton(
       SCROLL_BOTTOM_ICON_SVG,
-      getSafeUiText(i18n.agentRunsShowLast, "Scroll to bottom"),
+      getSafeUiText(i18n.agentRunsShowLast, localization.defaults.agentRunsShowLast),
       () => scrollAgentRunsTreeBoundary("last"),
     );
     const current = createAgentRunsIconButton(
       BRANCH_CENTER_ICON_SVG,
-      getSafeUiText(i18n.agentRunsShowCurrent, "Show current session"),
+      getSafeUiText(i18n.agentRunsShowCurrent, localization.defaults.agentRunsShowCurrent),
       () => centerCurrentAgentRunsTreeNode(true),
     );
     const close = createAgentRunsIconButton(
       CLOSE_ICON_SVG,
-      getSafeUiText(i18n.agentRunsClose, "Close Agent Runs"),
+      getSafeUiText(i18n.agentRunsClose, localization.defaults.agentRunsClose),
       () => closeAgentRunsOverlay(),
     );
     setSessionOverlayFocusKey(first, "agent:header:first");
@@ -3849,7 +3846,7 @@
         navigationTarget: "",
         actionTarget: "",
         title: formatTemplate(
-          getSafeUiText(i18n.agentRunsOmitted, "{0} more agent runs are omitted."),
+          getSafeUiText(i18n.agentRunsOmitted, localization.defaults.agentRunsOmitted),
           model.omittedCount,
         ),
         titleIsCustom: false,
@@ -3978,13 +3975,13 @@
     if (node.isCurrent) control.setAttribute("aria-current", "true");
     if (!canNavigate && !canPin) control.setAttribute("aria-disabled", "true");
 
-    const fallbackTitle = getSafeUiText(i18n.agentRunsParentUnavailable, "Parent session unavailable");
+    const fallbackTitle = getSafeUiText(i18n.agentRunsParentUnavailable, localization.defaults.agentRunsParentUnavailable);
     const primaryText = node.isSubagent
-      ? node.taskLabel || getSafeUiText(i18n.agentRunsSubagent, "Sub-agent")
+      ? node.taskLabel || getSafeUiText(i18n.agentRunsSubagent, localization.defaults.agentRunsSubagent)
       : node.title || fallbackTitle;
     const isClaudeSource = model?.meta?.historySource === "claude";
     const sourceLabel = getSafeUiText(isClaudeSource ? i18n.agentRunsSourceClaude : i18n.agentRunsSourceCodex, "");
-    const kindText = node.isSubagent ? getSafeUiText(i18n.agentRunsSubagent, "Sub-agent") : sourceLabel;
+    const kindText = node.isSubagent ? getSafeUiText(i18n.agentRunsSubagent, localization.defaults.agentRunsSubagent) : sourceLabel;
     const top = el("span", { className: "agentRunsTreeNodeTop" });
     const marker = el("span", {
       className: node.isSubagent ? "agentRunsTreeNodeMarker subagent" : "agentRunsTreeNodeMarker",
@@ -4007,7 +4004,7 @@
     }
     if (node.isCurrent) {
       const currentBadge = el("span", { className: "agentRunsTreeNodeCurrent" });
-      currentBadge.textContent = getSafeUiText(i18n.agentRunsCurrent, "Current session");
+      currentBadge.textContent = getSafeUiText(i18n.agentRunsCurrent, localization.defaults.agentRunsCurrent);
       top.appendChild(currentBadge);
     }
 
@@ -4015,8 +4012,8 @@
     if (canPin) {
       const pending = agentRunsPendingPins.get(node.actionTarget);
       const pinLabel = node.isPinned
-        ? getSafeUiText(i18n.agentRunsUnpinSession, getSafeUiText(i18n.unpin, "Unpin"))
-        : getSafeUiText(i18n.agentRunsPinSession, getSafeUiText(i18n.pin, "Pin"));
+        ? getSafeUiText(i18n.agentRunsUnpinSession, getSafeUiText(i18n.unpin, localization.defaults.unpin))
+        : getSafeUiText(i18n.agentRunsPinSession, getSafeUiText(i18n.pin, localization.defaults.pin));
       const pinButton = document.createElement("button");
       pinButton.type = "button";
       pinButton.className = "agentRunsTreeNodePin";
@@ -4056,7 +4053,7 @@
       actions.appendChild(pinButton);
     }
     if (canNavigate) {
-      const openLabel = getSafeUiText(i18n.agentRunsOpenSession, "Open session");
+      const openLabel = getSafeUiText(i18n.agentRunsOpenSession, localization.defaults.agentRunsOpenSession);
       const openButton = document.createElement("button");
       openButton.type = "button";
       openButton.className = "agentRunsTreeNodeOpen";
@@ -4090,11 +4087,11 @@
     }
 
     const badges = [];
-    if (node.isBookmarked) badges.push(getSafeUiText(i18n.agentRunsBookmark, "Bookmark"));
-    if (node.hasTags) badges.push(getSafeUiText(i18n.agentRunsTags, "Tags"));
-    if (node.hasNote) badges.push(getSafeUiText(i18n.agentRunsNote, "Note"));
+    if (node.isBookmarked) badges.push(getSafeUiText(i18n.agentRunsBookmark, localization.defaults.agentRunsBookmark));
+    if (node.hasTags) badges.push(getSafeUiText(i18n.agentRunsTags, localization.defaults.agentRunsTags));
+    if (node.hasNote) badges.push(getSafeUiText(i18n.agentRunsNote, localization.defaults.agentRunsNote));
     if (node.directChildCount > 0) {
-      badges.push(`${getSafeUiText(i18n.agentRunsDirectChildren, "Direct agents")}: ${node.directChildCount}`);
+      badges.push(`${getSafeUiText(i18n.agentRunsDirectChildren, localization.defaults.agentRunsDirectChildren)}: ${node.directChildCount}`);
     }
     if (badges.length > 0) {
       const badgeRow = el("span", { className: "agentRunsTreeNodeBadges" });
@@ -4106,9 +4103,9 @@
       control.appendChild(badgeRow);
     }
     const dates = [];
-    if (node.started) dates.push({ label: getSafeUiText(i18n.agentRunsStarted, "Started"), value: node.started });
+    if (node.started) dates.push({ label: getSafeUiText(i18n.agentRunsStarted, localization.defaults.agentRunsStarted), value: node.started });
     if (node.lastActivity) {
-      dates.push({ label: getSafeUiText(i18n.agentRunsLastActivity, "Last activity"), value: node.lastActivity });
+      dates.push({ label: getSafeUiText(i18n.agentRunsLastActivity, localization.defaults.agentRunsLastActivity), value: node.lastActivity });
     }
     if (dates.length > 0) {
       const meta = el("span", { className: "agentRunsTreeNodeDates" });
@@ -4124,9 +4121,9 @@
       control.appendChild(meta);
     }
     const accessibleState = [];
-    if (node.isCurrent) accessibleState.push(getSafeUiText(i18n.agentRunsCurrent, "Current session"));
-    else if (!node.currentPath) accessibleState.push(getSafeUiText(i18n.agentRunsOtherRun, "Other agent run"));
-    if (node.unavailableParent) accessibleState.push(getSafeUiText(i18n.agentRunsParentUnavailable, "Parent session unavailable"));
+    if (node.isCurrent) accessibleState.push(getSafeUiText(i18n.agentRunsCurrent, localization.defaults.agentRunsCurrent));
+    else if (!node.currentPath) accessibleState.push(getSafeUiText(i18n.agentRunsOtherRun, localization.defaults.agentRunsOtherRun));
+    if (node.unavailableParent) accessibleState.push(getSafeUiText(i18n.agentRunsParentUnavailable, localization.defaults.agentRunsParentUnavailable));
     const accessibleDates = dates.map((date) => `${date.label}: ${date.value}`);
     control.setAttribute(
       "aria-label",
@@ -4327,7 +4324,7 @@
 
   function formatAgentRunsTreeSummary() {
     return formatTemplate(
-      getSafeUiText(i18n.agentRunsRelatedCount, "Related agent runs: {0}"),
+      getSafeUiText(i18n.agentRunsRelatedCount, localization.defaults.agentRunsRelatedCount),
       agentRunsModel?.agentCount || 0,
     );
   }
@@ -4436,7 +4433,7 @@
     closeAgentRunsOverlay({ restoreFocus: false });
     if (!branchNavigation || !(branchOverlayRootEl instanceof HTMLElement)) return;
     if (branchNavigation.groupCount < 1) {
-      showToast(getSafeUiText(i18n.branchNone, "No branches were found for this session."));
+      showToast(getSafeUiText(i18n.branchNone, localization.defaults.branchNone));
       return;
     }
     if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
@@ -4540,7 +4537,7 @@
       getSessionOverlayFocusKey(branchOverlayRootEl) || branchOverlayFocusKey;
     const restoreFocusKey = branchOverlayFocusKey;
     const overlay = branchNavigation.overlay;
-    const titleText = overlay.title || getSafeUiText(i18n.branchUntitled, "Untitled session");
+    const titleText = overlay.title || getSafeUiText(i18n.branchUntitled, localization.defaults.branchUntitled);
     const animateEntry = branchOverlayRootEl.dataset.branchOverlayEnter === "true";
     delete branchOverlayRootEl.dataset.branchOverlayEnter;
     branchOverlayRootEl.hidden = false;
@@ -4573,7 +4570,7 @@
     heading.append(title, summary);
     if (overlay.relationPartial || overlay.navigationIncomplete) {
       const warning = el("span", { className: "branchOverlayWarning", role: "status" });
-      warning.textContent = getSafeUiText(i18n.branchPartialWarning, "Some branch information could not be resolved.");
+      warning.textContent = getSafeUiText(i18n.branchPartialWarning, localization.defaults.branchPartialWarning);
       warning.title = warning.textContent;
       heading.appendChild(warning);
     }
@@ -4581,7 +4578,7 @@
       const paging = el("div", {
         className: "branchOverlayPaging",
         role: "group",
-        ariaLabel: getSafeUiText(i18n.branchPageControls, "Load more branch points"),
+        ariaLabel: getSafeUiText(i18n.branchPageControls, localization.defaults.branchPageControls),
       });
       const appendPageButton = (cursor, label, focusKey) => {
         if (!cursor) return;
@@ -4597,7 +4594,7 @@
       appendPageButton(
         overlay.previousCursor,
         formatTemplate(
-          getSafeUiText(i18n.branchShowPreviousPoints, "Show earlier branch points ({0} remaining)"),
+          getSafeUiText(i18n.branchShowPreviousPoints, localization.defaults.branchShowPreviousPoints),
           overlay.previousGroupCount,
         ),
         "branch:header:previous-page",
@@ -4605,7 +4602,7 @@
       appendPageButton(
         overlay.nextCursor,
         formatTemplate(
-          getSafeUiText(i18n.branchShowNextPoints, "Show later branch points ({0} remaining)"),
+          getSafeUiText(i18n.branchShowNextPoints, localization.defaults.branchShowNextPoints),
           overlay.nextGroupCount,
         ),
         "branch:header:next-page",
@@ -4614,13 +4611,13 @@
     }
 
     const actions = el("div", { className: "branchOverlayActions" });
-    const current = createBranchIconButton(BRANCH_CENTER_ICON_SVG, getSafeUiText(i18n.branchShowCurrent, "Center current history"), () => centerCurrentBranchTreeNode(true));
-    const fit = createBranchIconButton(BRANCH_FIT_ICON_SVG, getSafeUiText(i18n.branchFit, "Fit tree to view"), () => fitBranchTreeToViewport(false));
-    const zoomOut = createBranchIconButton(BRANCH_ZOOM_OUT_ICON_SVG, getSafeUiText(i18n.branchZoomOut, "Zoom out"), () => setBranchTreeScale(branchTreeScale - 0.25));
+    const current = createBranchIconButton(BRANCH_CENTER_ICON_SVG, getSafeUiText(i18n.branchShowCurrent, localization.defaults.branchShowCurrent), () => centerCurrentBranchTreeNode(true));
+    const fit = createBranchIconButton(BRANCH_FIT_ICON_SVG, getSafeUiText(i18n.branchFit, localization.defaults.branchFit), () => fitBranchTreeToViewport(false));
+    const zoomOut = createBranchIconButton(BRANCH_ZOOM_OUT_ICON_SVG, getSafeUiText(i18n.branchZoomOut, localization.defaults.branchZoomOut), () => setBranchTreeScale(branchTreeScale - 0.25));
     zoomOut.disabled = branchTreeScale <= 0.25;
-    const zoomIn = createBranchIconButton(BRANCH_ZOOM_IN_ICON_SVG, getSafeUiText(i18n.branchZoomIn, "Zoom in"), () => setBranchTreeScale(branchTreeScale + 0.25));
+    const zoomIn = createBranchIconButton(BRANCH_ZOOM_IN_ICON_SVG, getSafeUiText(i18n.branchZoomIn, localization.defaults.branchZoomIn), () => setBranchTreeScale(branchTreeScale + 0.25));
     zoomIn.disabled = branchTreeScale >= 2;
-    const close = createBranchIconButton(CLOSE_ICON_SVG, getSafeUiText(i18n.branchCloseOverlay, "Close branch tree"), () => closeBranchOverlay());
+    const close = createBranchIconButton(CLOSE_ICON_SVG, getSafeUiText(i18n.branchCloseOverlay, localization.defaults.branchCloseOverlay), () => closeBranchOverlay());
     setSessionOverlayFocusKey(current, "branch:header:current");
     setSessionOverlayFocusKey(fit, "branch:header:fit");
     setSessionOverlayFocusKey(zoomOut, "branch:header:zoom-out");
@@ -4642,7 +4639,7 @@
     const graph = buildBranchTreeGraph(overlay);
     if (graph.nodes.length === 0) {
       const empty = el("p", { className: "branchOverlayState" });
-      empty.textContent = getSafeUiText(i18n.branchNone, "No branches were found for this session.");
+      empty.textContent = getSafeUiText(i18n.branchNone, localization.defaults.branchNone);
       viewport.appendChild(empty);
     } else {
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -4732,7 +4729,7 @@
       id,
       parentId,
       kind: "collapsed",
-      label: formatTemplate(getSafeUiText(i18n.branchCollapsedChoices, "{0} more histories"), count),
+      label: formatTemplate(getSafeUiText(i18n.branchCollapsedChoices, localization.defaults.branchCollapsedChoices), count),
       preview: "",
       current: false,
       collapsedCount: count,
@@ -4764,8 +4761,8 @@
             parentId: "",
             kind: "historyFirst",
             label: combinedWithBefore
-              ? getSafeUiText(i18n.branchHistoryStartAndBefore, "History start and before branch")
-              : getSafeUiText(i18n.branchHistoryStart, "History start"),
+              ? getSafeUiText(i18n.branchHistoryStartAndBefore, localization.defaults.branchHistoryStartAndBefore)
+              : getSafeUiText(i18n.branchHistoryStart, localization.defaults.branchHistoryStart),
             anchor: firstAnchor,
             preview: firstAnchor.preview || "",
             current: false,
@@ -4782,7 +4779,7 @@
           id: beforeId,
           parentId,
           kind: "preBranch",
-          label: getSafeUiText(i18n.branchBefore, "Before branch"),
+          label: getSafeUiText(i18n.branchBefore, localization.defaults.branchBefore),
           anchor: beforeAnchor,
           preview: beforeAnchor.preview || "",
           current: false,
@@ -4807,7 +4804,7 @@
           ? occurrence.preBranch
           : null;
         const startId = "branch-start:" + group.id + ":" + choice.id;
-        const startLabel = getSafeUiText(i18n.branchDestination, "Branch destination");
+        const startLabel = getSafeUiText(i18n.branchDestination, localization.defaults.branchDestination);
         const effectiveStartId = addNode({
           id: startId,
           parentId,
@@ -4815,14 +4812,14 @@
           label: endsAtBranchPoint
             ? startLabel
             : [
-                branchedFromStart ? getSafeUiText(i18n.branchFromStart, "Branched from history start") : "",
+                branchedFromStart ? getSafeUiText(i18n.branchFromStart, localization.defaults.branchFromStart) : "",
                 startLabel,
-                combined ? getSafeUiText(i18n.branchEnd, "History end") : "",
+                combined ? getSafeUiText(i18n.branchEnd, localization.defaults.branchEnd) : "",
               ].filter(Boolean).join(" · "),
           anchor: endsAtBranchPoint ? occurrence.historyEnd : occurrence.branchStart,
           preview: endsAtBranchPoint ? "" : choice.preview || occurrence.branchStart.preview || "",
           terminalText: endsAtBranchPoint
-            ? getSafeUiText(i18n.branchEndsHere, "This branch's history ends here.")
+            ? getSafeUiText(i18n.branchEndsHere, localization.defaults.branchEndsHere)
             : "",
           beforeAnchor: endsAtBranchPoint ? null : routeBeforeAnchor,
           current: currentChoice,
@@ -4839,7 +4836,7 @@
             id: "history-end:" + group.id + ":" + choice.id,
             parentId: effectiveStartId,
             kind: "historyEnd",
-            label: getSafeUiText(i18n.branchEnd, "History end"),
+            label: getSafeUiText(i18n.branchEnd, localization.defaults.branchEnd),
             anchor: occurrence.historyEnd,
             preview: occurrence.historyEnd.preview || "",
             current: currentChoice,
@@ -4896,7 +4893,7 @@
     badges.appendChild(marker);
     if (node.current) {
       const current = el("span", { className: "branchTreeNodeState" });
-      current.textContent = getSafeUiText(i18n.branchCurrent, "Current history");
+      current.textContent = getSafeUiText(i18n.branchCurrent, localization.defaults.branchCurrent);
       badges.appendChild(current);
     }
     primary.appendChild(badges);
@@ -4909,7 +4906,7 @@
     }
     if (terminal) {
       const terminalText = el("span", { className: "branchTreeNodeTerminal" });
-      terminalText.textContent = node.terminalText || getSafeUiText(i18n.branchEndsHere, "This branch's history ends here.");
+      terminalText.textContent = node.terminalText || getSafeUiText(i18n.branchEndsHere, localization.defaults.branchEndsHere);
       primary.appendChild(terminalText);
     } else if (node.preview) {
       const preview = el("span", { className: "branchTreeNodePreview" });
@@ -4918,7 +4915,7 @@
     }
     if (!terminal && node.beforeAnchor && !anchorsMatch(node.beforeAnchor, node.anchor)) {
       const before = el("span", { className: "branchTreeNodeBefore" });
-      const beforeText = getSafeUiText(i18n.branchBefore, "Before branch") + " · " + formatBranchAnchor(node.beforeAnchor);
+      const beforeText = getSafeUiText(i18n.branchBefore, localization.defaults.branchBefore) + " · " + formatBranchAnchor(node.beforeAnchor);
       before.textContent = beforeText;
       before.title = beforeText;
       primary.appendChild(before);
@@ -4946,7 +4943,7 @@
     if (node.kind !== "collapsed" && shouldShowBranchPreviewToggle(node.preview)) {
       const expand = createBranchIconButton(
         expanded ? NAV_UP_ICON_SVG : NAV_DOWN_ICON_SVG,
-        expanded ? getSafeUiText(i18n.branchCollapsePreview, "Collapse preview") : getSafeUiText(i18n.branchExpandPreview, "Expand preview"),
+        expanded ? getSafeUiText(i18n.branchCollapsePreview, localization.defaults.branchCollapsePreview) : getSafeUiText(i18n.branchExpandPreview, localization.defaults.branchExpandPreview),
         () => {
           branchTreeFocusNodeId = node.id;
           toggleBranchTreeNodePreview(node);
@@ -4961,9 +4958,9 @@
     }
     if (node.kind !== "collapsed" && node.group && node.choice) {
       const navigateLabel = [
-        getSafeUiText(i18n.branchOpenInChat, "Open this position in the session view"),
+        getSafeUiText(i18n.branchOpenInChat, localization.defaults.branchOpenInChat),
         node.label,
-        node.current ? getSafeUiText(i18n.branchCurrent, "Current history") : "",
+        node.current ? getSafeUiText(i18n.branchCurrent, localization.defaults.branchCurrent) : "",
         node.anchor ? formatBranchAnchor(node.anchor) : "",
       ].filter(Boolean).join(" · ");
       const navigate = createBranchIconButton(
@@ -4987,12 +4984,12 @@
         primary.setAttribute("aria-label", node.label);
       } else {
         const actionLabel = expanded
-          ? getSafeUiText(i18n.branchCollapsePreview, "Collapse preview")
-          : getSafeUiText(i18n.branchExpandPreview, "Expand preview");
+          ? getSafeUiText(i18n.branchCollapsePreview, localization.defaults.branchCollapsePreview)
+          : getSafeUiText(i18n.branchExpandPreview, localization.defaults.branchExpandPreview);
         primary.setAttribute("aria-label", [
           actionLabel,
           node.label,
-          node.current ? getSafeUiText(i18n.branchCurrent, "Current history") : "",
+          node.current ? getSafeUiText(i18n.branchCurrent, localization.defaults.branchCurrent) : "",
           node.anchor ? formatBranchAnchor(node.anchor) : "",
           node.preview || "",
         ].filter(Boolean).join(" ・ "));
@@ -5398,14 +5395,14 @@
     if (summary instanceof HTMLElement) summary.textContent = text;
     const viewport = document.querySelector(".branchTreeViewport");
     if (viewport instanceof HTMLElement) {
-      const title = branchNavigation.overlay.title || getSafeUiText(i18n.branchUntitled, "Untitled session");
+      const title = branchNavigation.overlay.title || getSafeUiText(i18n.branchUntitled, localization.defaults.branchUntitled);
       viewport.setAttribute("aria-label", title + " ・ " + text);
     }
   }
 
   function formatBranchTreeSummary(overlay) {
     return formatTemplate(
-      getSafeUiText(i18n.branchOverlaySummary, "{0} branch points · {1} histories · {2}%"),
+      getSafeUiText(i18n.branchOverlaySummary, localization.defaults.branchOverlaySummary),
       overlay.totalGroupCount,
       overlay.routeCount,
       Math.round(branchTreeScale * 100),
@@ -5433,7 +5430,7 @@
 
   function formatBranchAnchor(anchor, includeTime = true) {
     if (!anchor) return "";
-    const roleLabel = anchor.role === "assistant" ? getSafeUiText(i18n.branchRoleAssistant, "assistant") : getSafeUiText(i18n.branchRoleUser, "user");
+    const roleLabel = anchor.role === "assistant" ? getSafeUiText(i18n.branchRoleAssistant, localization.defaults.branchRoleAssistant) : getSafeUiText(i18n.branchRoleUser, localization.defaults.branchRoleUser);
     const parts = [roleLabel + " #" + anchor.chatMessageIndex];
     if (includeTime && anchor.timestampIso) parts.push(formatIsoYmdHms(anchor.timestampIso));
     return parts.join(" · ");
@@ -5884,8 +5881,8 @@
     }
     if (!rolloutNoticeEl || !rolloutNoticeTextEl || !btnSwitchRollout) return;
     rolloutNoticeEl.hidden = !token;
-    rolloutNoticeTextEl.textContent = i18n.rolloutChanged || "";
-    btnSwitchRollout.textContent = i18n.rolloutSwitch || "";
+    rolloutNoticeTextEl.textContent = i18n.rolloutChanged || localization.defaults.rolloutChanged;
+    btnSwitchRollout.textContent = i18n.rolloutSwitch || localization.defaults.rolloutSwitch;
     btnSwitchRollout.disabled = rolloutSwitchPending;
   }
 
@@ -5915,9 +5912,9 @@
     const relocated = effectiveMode === "relocated";
     const tooltip = pathModeEnabled
       ? relocated
-        ? getSafeUiText(i18n.pathModeRelocatedTooltip, "Associated history: using target path. Click to use recorded path.")
-        : getSafeUiText(i18n.pathModeRecordedTooltip, "Associated history: using recorded path. Click to use target path.")
-      : getSafeUiText(i18n.pathModeDisabledTooltip, "This is not relocated history, so the recorded path is used.");
+        ? getSafeUiText(i18n.pathModeRelocatedTooltip, localization.defaults.pathModeRelocatedTooltip)
+        : getSafeUiText(i18n.pathModeRecordedTooltip, localization.defaults.pathModeRecordedTooltip)
+      : getSafeUiText(i18n.pathModeDisabledTooltip, localization.defaults.pathModeDisabledTooltip);
     setToolbarIconButton(btnPathMode, relocated ? PATH_RELOCATED_ICON_SVG : PATH_RECORDED_ICON_SVG, tooltip);
     btnPathMode.disabled = !pathModeEnabled;
     btnPathMode.dataset.mode = effectiveMode;
@@ -5944,7 +5941,7 @@
       !autoPerformanceToastShown
     ) {
       autoPerformanceToastShown = true;
-      showToast(getSafeUiText(i18n.performanceLargeHistoryToast, "Using Lightweight View for this large history."), {
+      showToast(getSafeUiText(i18n.performanceLargeHistoryToast, localization.defaults.performanceLargeHistoryToast), {
         durationMs: 3600,
         key: "performanceMode",
       });
@@ -5962,11 +5959,11 @@
 
   function getPerformanceSwitchToast() {
     if (temporaryPerformanceMode === "auto") {
-      return getSafeUiText(i18n.performanceSwitchedAuto, "Set this view's performance mode to Auto.");
+      return getSafeUiText(i18n.performanceSwitchedAuto, localization.defaults.performanceSwitchedAuto);
     }
     return temporaryPerformanceMode === "simplified"
-      ? getSafeUiText(i18n.performanceSwitchedSimplified, "Set this view's performance mode to Lightweight View.")
-      : getSafeUiText(i18n.performanceSwitchedNormal, "Set this view's performance mode to Normal View.");
+      ? getSafeUiText(i18n.performanceSwitchedSimplified, localization.defaults.performanceSwitchedSimplified)
+      : getSafeUiText(i18n.performanceSwitchedNormal, localization.defaults.performanceSwitchedNormal);
   }
 
   function resolveEffectivePerformanceMode() {
@@ -5977,18 +5974,18 @@
   }
 
   function getPerformanceTooltip() {
-    if (temporaryPerformanceMode === "normal") return getSafeUiText(i18n.performanceNormal, "Performance: Normal View");
-    if (temporaryPerformanceMode === "simplified") return getSafeUiText(i18n.performanceSimplified, "Performance: Lightweight View");
+    if (temporaryPerformanceMode === "normal") return getSafeUiText(i18n.performanceNormal, localization.defaults.performanceNormal);
+    if (temporaryPerformanceMode === "simplified") return getSafeUiText(i18n.performanceSimplified, localization.defaults.performanceSimplified);
     if (temporaryPerformanceMode === "auto") {
       return effectivePerformanceMode === "simplified"
-        ? getSafeUiText(i18n.performanceAutoSimplified, "Performance: Auto (Lightweight View)")
-        : getSafeUiText(i18n.performanceAutoNormal, "Performance: Auto (Normal View)");
+        ? getSafeUiText(i18n.performanceAutoSimplified, localization.defaults.performanceAutoSimplified)
+        : getSafeUiText(i18n.performanceAutoNormal, localization.defaults.performanceAutoNormal);
     }
-    if (configuredPerformanceMode === "normal") return getSafeUiText(i18n.performanceNormal, "Performance: Normal View");
-    if (configuredPerformanceMode === "simplified") return getSafeUiText(i18n.performanceSimplified, "Performance: Lightweight View");
+    if (configuredPerformanceMode === "normal") return getSafeUiText(i18n.performanceNormal, localization.defaults.performanceNormal);
+    if (configuredPerformanceMode === "simplified") return getSafeUiText(i18n.performanceSimplified, localization.defaults.performanceSimplified);
     return effectivePerformanceMode === "simplified"
-      ? getSafeUiText(i18n.performanceAutoSimplified, "Performance: Auto (Lightweight View)")
-      : getSafeUiText(i18n.performanceAutoNormal, "Performance: Auto (Normal View)");
+      ? getSafeUiText(i18n.performanceAutoSimplified, localization.defaults.performanceAutoSimplified)
+      : getSafeUiText(i18n.performanceAutoNormal, localization.defaults.performanceAutoNormal);
   }
 
   function getSelectedPerformanceMode() {
@@ -7106,15 +7103,15 @@
     if (mode === "follow") {
       return getSafeUiText(
         i18n.autoRefreshFollowTooltip,
-        "Session auto-refresh is on (follow latest).",
+        localization.defaults.autoRefreshFollowTooltip,
       );
     }
     if (mode === "off") {
-      return getSafeUiText(i18n.autoRefreshOffTooltip, "Session auto-refresh is off.");
+      return getSafeUiText(i18n.autoRefreshOffTooltip, localization.defaults.autoRefreshOffTooltip);
     }
     return getSafeUiText(
       i18n.autoRefreshPreserveTooltip,
-      "Session auto-refresh is on (preserve view).",
+      localization.defaults.autoRefreshPreserveTooltip,
     );
   }
 
@@ -7122,15 +7119,15 @@
     if (mode === "follow") {
       return getSafeUiText(
         i18n.autoRefreshFollowToast,
-        "Auto-refresh turned on (follow latest).",
+        localization.defaults.autoRefreshFollowToast,
       );
     }
     if (mode === "off") {
-      return getSafeUiText(i18n.autoRefreshOffToast, "Auto-refresh turned off.");
+      return getSafeUiText(i18n.autoRefreshOffToast, localization.defaults.autoRefreshOffToast);
     }
     return getSafeUiText(
       i18n.autoRefreshPreserveToast,
-      "Auto-refresh turned on (preserve view).",
+      localization.defaults.autoRefreshPreserveToast,
     );
   }
 
@@ -7585,8 +7582,28 @@
 
   function collectAttachmentDetailKeysForPageSearchExpansion() {
     const keys = new Set();
+    const addKey = (value) => {
+      const key = normalizeAttachmentDetailKey(value);
+      if (key && !pageSearchSuppressedTemporaryAttachmentDetailKeys.has(key)) keys.add(key);
+    };
     const items = model && Array.isArray(model.items) ? model.items : [];
     for (const item of items) {
+      if (item?.type === "crossSessionMessage") {
+        addKey(buildCrossSessionMessageDetailKey(item));
+        continue;
+      }
+      if (item?.type === "taskNotification" && typeof item.body === "string" && item.body.trim()) {
+        const presentation = item.presentation;
+        if (presentation && Array.isArray(presentation.entries) && presentation.entries.length) {
+          addKey(presentation.stateKey);
+          for (const [index, entry] of presentation.entries.slice(0, 16).entries()) {
+            if (entry && typeof entry.result === "string" && entry.result.trim()) {
+              addKey(buildNotificationResultDetailKey(entry, item, index, true));
+            }
+          }
+        }
+        continue;
+      }
       if (!item || item.type !== "message" || !Array.isArray(item.attachments)) continue;
       if (!canRenderMessage(item)) continue;
       const attachments = getMessageAttachments(item);
@@ -7594,12 +7611,13 @@
         const attachment = attachments[attachmentIndex];
         if (!attachment || typeof attachment !== "object") continue;
         if (attachment.type === "notification" && typeof attachment.result === "string" && attachment.result.trim()) {
-          const key = buildAttachmentDetailKey(attachment, "result", item, attachmentIndex);
-          if (key && !pageSearchSuppressedTemporaryAttachmentDetailKeys.has(key)) keys.add(key);
+          addKey(buildNotificationResultDetailKey(attachment, item, attachmentIndex));
+        }
+        if (attachment.type === "notification" && attachment.details) {
+          addKey(attachment.details.stateKey);
         }
         if (attachment.type === "invoke" && Array.isArray(attachment.parameters) && attachment.parameters.length > 0) {
-          const key = buildAttachmentDetailKey(attachment, "parameters", item, attachmentIndex);
-          if (key && !pageSearchSuppressedTemporaryAttachmentDetailKeys.has(key)) keys.add(key);
+          addKey(buildAttachmentDetailKey(attachment, "parameters", item, attachmentIndex));
         }
       }
     }
@@ -7661,7 +7679,7 @@
   function renderPageSearchRoleFilters(availableRoles = getAvailablePageSearchRoles()) {
     if (!(pageSearchRoleFiltersEl instanceof HTMLElement)) return;
     prunePageSearchSelectedRoles(availableRoles);
-    const ariaLabel = getSafeUiText(i18n.pageSearchRoleFilters, "Filter target roles");
+    const ariaLabel = getSafeUiText(i18n.pageSearchRoleFilters, localization.defaults.pageSearchRoleFilters);
     const selectedCount = availableRoles.filter((role) => pageSearchSelectedRoles.has(role)).length;
     const presentations = availableRoles.map((role) => {
       const label = getPageSearchRoleLabel(role);
@@ -7707,29 +7725,29 @@
   }
 
   function getPageSearchRoleLabel(role) {
-    if (role === "user") return getSafeUiText(i18n.roleUser, "User");
-    if (role === "assistant") return getSafeUiText(i18n.roleAssistant, "Assistant");
-    if (role === "tool") return getSafeUiText(i18n.tool, "Tool");
+    if (role === "user") return getSafeUiText(i18n.roleUser, localization.defaults.roleUser);
+    if (role === "assistant") return getSafeUiText(i18n.roleAssistant, localization.defaults.roleAssistant);
+    if (role === "tool") return getSafeUiText(i18n.tool, localization.defaults.tool);
     return String(role || "");
   }
 
   function getPageSearchRoleFilterTooltip(role, label, selected, selectedCount) {
     if (selected && selectedCount <= 1) {
       return formatTemplate(
-        getSafeUiText(i18n.pageSearchRoleFilterRemoveToAllTooltip, "Clear {0} filter and search all"),
+        getSafeUiText(i18n.pageSearchRoleFilterRemoveToAllTooltip, localization.defaults.pageSearchRoleFilterRemoveToAllTooltip),
         label,
       );
     }
     if (selected) {
       return formatTemplate(
-        getSafeUiText(i18n.pageSearchRoleFilterRemoveTooltip, "Remove {0} from filter"),
+        getSafeUiText(i18n.pageSearchRoleFilterRemoveTooltip, localization.defaults.pageSearchRoleFilterRemoveTooltip),
         label,
       );
     }
     if (selectedCount > 0) {
-      return formatTemplate(getSafeUiText(i18n.pageSearchRoleFilterAddTooltip, "Add {0} to filter"), label);
+      return formatTemplate(getSafeUiText(i18n.pageSearchRoleFilterAddTooltip, localization.defaults.pageSearchRoleFilterAddTooltip), label);
     }
-    return formatTemplate(getSafeUiText(i18n.pageSearchRoleFilterOnlyTooltip, "Search only {0}"), label);
+    return formatTemplate(getSafeUiText(i18n.pageSearchRoleFilterOnlyTooltip, localization.defaults.pageSearchRoleFilterOnlyTooltip), label);
   }
 
   function togglePageSearchRoleFilter(role) {
@@ -8330,7 +8348,7 @@
       const matches = compiled.findAll(record.source);
       if (!Array.isArray(matches) || matches.length === 0) continue;
       const context = describePageSearchContext(record.block);
-      const mermaidMeta = i18n.mermaidLabel || "Mermaid diagram";
+      const mermaidMeta = i18n.mermaidLabel || localization.defaults.mermaidLabel;
       for (const match of matches) {
         pageSearchResults.push({
           anchor: null,
@@ -8506,7 +8524,7 @@
     if (patchSummary instanceof HTMLElement) {
       const filePath = patchSummary.querySelector(".patchEntryPath");
       return {
-        title: getElementText(filePath) || getSafeUiText(i18n.patchGroupTitle, "Changes"),
+        title: getElementText(filePath) || getSafeUiText(i18n.patchGroupTitle, localization.defaults.patchGroupTitle),
         meta: "",
         lineNumber: "",
       };
@@ -8520,7 +8538,7 @@
     const crossSessionCard = mark instanceof HTMLElement ? mark.closest(".crossSessionMessageCard") : null;
     const terminalCard = mark instanceof HTMLElement ? mark.closest(".terminalOutputCard") : null;
     if (terminalCard instanceof HTMLElement) {
-      return { title: getSafeUiText(i18n.terminalOutputTitle, ""), meta: `#${terminalCard.dataset.messageIndex || ""}`, lineNumber: "" };
+      return { title: getSafeUiText(i18n.terminalOutputTitle, localization.defaults.terminalOutputTitle), meta: `#${terminalCard.dataset.messageIndex || ""}`, lineNumber: "" };
     }
     if (crossSessionCard instanceof HTMLElement) {
       const rawMessageIndex = crossSessionCard.dataset.messageIndex
@@ -8529,7 +8547,7 @@
       const messageIndex = Number.isSafeInteger(rawMessageIndex) && rawMessageIndex > 0 ? rawMessageIndex : undefined;
       return {
         title: [
-          getSafeUiText(i18n.crossSessionMessageTitle, "Cross-session message"),
+          getSafeUiText(crossSessionCard.getAttribute("aria-label"), getSafeUiText(i18n.crossSessionMessageTitle, localization.defaults.crossSessionMessageTitle)),
           typeof messageIndex === "number" ? `#${messageIndex}` : "",
         ].filter(Boolean).join(" "),
         meta: getElementText(crossSessionCard.querySelector(".crossSessionMessageSender")),
@@ -8547,8 +8565,8 @@
       const inTags = !!mark.closest(".sessionTagList");
       return {
         title: inTags
-          ? getSafeUiText(i18n.annotationTags, "Tags")
-          : getSafeUiText(i18n.annotationNote, "Note"),
+          ? getSafeUiText(i18n.annotationTags, localization.defaults.annotationTags)
+          : getSafeUiText(i18n.annotationNote, localization.defaults.annotationNote),
         meta: "",
         lineNumber: "",
       };
@@ -8556,14 +8574,14 @@
 
     if (mark instanceof HTMLElement && mark.closest("#meta")) {
       return {
-        title: getSafeUiText(i18n.sessionInfo, "Session info"),
+        title: getSafeUiText(i18n.sessionInfo, localization.defaults.sessionInfo),
         meta: "",
         lineNumber: "",
       };
     }
 
     return {
-      title: getSafeUiText(i18n.pageSearch, "Find"),
+      title: getSafeUiText(i18n.pageSearch, localization.defaults.pageSearch),
       meta: "",
       lineNumber: "",
     };
@@ -8575,11 +8593,11 @@
     const filePath = getElementText(patchEntry && patchEntry.querySelector(".patchEntryPath"));
     const hunkHeader = getElementText(patchHunk && patchHunk.querySelector(".patchHunkHeaderText"));
     const sideLabel = cell.classList.contains("patchDiffText-right")
-      ? getSafeUiText(i18n.patchAfter, "After")
-      : getSafeUiText(i18n.patchBefore, "Before");
+      ? getSafeUiText(i18n.patchAfter, localization.defaults.patchAfter)
+      : getSafeUiText(i18n.patchBefore, localization.defaults.patchBefore);
     const lineNumber = resolvePatchSearchLineNumber(cell);
     return {
-      title: filePath || getSafeUiText(i18n.patchGroupTitle, "Changes"),
+      title: filePath || getSafeUiText(i18n.patchGroupTitle, localization.defaults.patchGroupTitle),
       meta: [sideLabel, hunkHeader].filter(Boolean).join(" · "),
       lineNumber,
     };
@@ -8589,7 +8607,7 @@
     const title = getElementText(card.querySelector(".toolCardTitle"));
     const metaText = getElementText(card.querySelector(".toolCardMetaLine"));
     return {
-      title: title || getSafeUiText(i18n.roleMessage, "Message"),
+      title: title || getSafeUiText(i18n.roleMessage, localization.defaults.roleMessage),
       meta: metaText,
       lineNumber: "",
     };
@@ -8597,12 +8615,12 @@
 
   function describeBubbleSearchContext(bubble) {
     const roleLabel = bubble.classList.contains("user")
-      ? getSafeUiText(i18n.roleUser, "User")
+      ? getSafeUiText(i18n.roleUser, localization.defaults.roleUser)
       : bubble.classList.contains("assistant")
-        ? getSafeUiText(i18n.roleAssistant, "Assistant")
+        ? getSafeUiText(i18n.roleAssistant, localization.defaults.roleAssistant)
         : bubble.classList.contains("developer")
-          ? getSafeUiText(i18n.roleDeveloper, "Developer")
-          : getSafeUiText(i18n.roleMessage, "Message");
+          ? getSafeUiText(i18n.roleDeveloper, localization.defaults.roleDeveloper)
+          : getSafeUiText(i18n.roleMessage, localization.defaults.roleMessage);
     const messageIndex = bubble.dataset.messageIndex ? `#${bubble.dataset.messageIndex}` : "";
     const metaText = describeMessageSearchMeta(bubble, roleLabel, messageIndex);
     return {
@@ -8643,7 +8661,7 @@
     const query = getCurrentPageSearchQuery();
     if (!query && pageSearchResults.length === 0) {
       const empty = el("div", { className: "pageSearchEmpty" });
-      empty.textContent = getSafeUiText(i18n.pageSearchTypeToSearch, "Type to search");
+      empty.textContent = getSafeUiText(i18n.pageSearchTypeToSearch, localization.defaults.pageSearchTypeToSearch);
       pageSearchResultsEl.appendChild(empty);
       return;
     }
@@ -8657,7 +8675,7 @@
 
     if (pageSearchResults.length === 0) {
       const empty = el("div", { className: "pageSearchEmpty" });
-      empty.textContent = getSafeUiText(i18n.pageSearchNoMatches, "No matches");
+      empty.textContent = getSafeUiText(i18n.pageSearchNoMatches, localization.defaults.pageSearchNoMatches);
       pageSearchResultsEl.appendChild(empty);
       return;
     }
@@ -8685,7 +8703,7 @@
 
       const headerText = el("div", { className: "pageSearchResultHeaderText" });
       const title = el("div", { className: "pageSearchResultTitle" });
-      title.textContent = result.title || getSafeUiText(i18n.pageSearch, "Find");
+      title.textContent = result.title || getSafeUiText(i18n.pageSearch, localization.defaults.pageSearch);
       headerText.appendChild(title);
       if (result.meta) {
         const meta = el("div", { className: "pageSearchResultMeta" });
@@ -8719,7 +8737,7 @@
     pageSearchSuggestionsEl.hidden = false;
     if (suggestions.length === 0) {
       const empty = el("div", { className: "pageSearchEmpty" });
-      empty.textContent = getSafeUiText(i18n.pageSearchNoHistory, "No recent searches");
+      empty.textContent = getSafeUiText(i18n.pageSearchNoHistory, localization.defaults.pageSearchNoHistory);
       pageSearchSuggestionsEl.appendChild(empty);
       return;
     }
@@ -8742,7 +8760,7 @@
       item.appendChild(main);
 
       const remove = el("button", { type: "button", className: "pageSearchSuggestionRemove" });
-      const removeLabel = getSafeUiText(i18n.pageSearchRemoveHistory, "Remove from history");
+      const removeLabel = getSafeUiText(i18n.pageSearchRemoveHistory, localization.defaults.pageSearchRemoveHistory);
       remove.title = removeLabel;
       remove.setAttribute("aria-label", removeLabel);
       remove.innerHTML = TRASH_ICON_SVG;
@@ -8866,9 +8884,9 @@
   function getPageSearchInvalidMessage(rawInput) {
     const core = getPageSearchCore();
     if (core && core.getInvalidKind(rawInput) === "regex") {
-      return getSafeUiText(i18n.pageSearchInvalidRegex, "Invalid regular expression");
+      return getSafeUiText(i18n.pageSearchInvalidRegex, localization.defaults.pageSearchInvalidRegex);
     }
-    return getSafeUiText(i18n.pageSearchInvalidQuery, "Invalid search query");
+    return getSafeUiText(i18n.pageSearchInvalidQuery, localization.defaults.pageSearchInvalidQuery);
   }
 
   function getPageSearchCore() {
@@ -8903,10 +8921,10 @@
     if (cwd && displayCwd && cwd !== displayCwd) {
       if (getEffectivePathMode() === "relocated") {
         metaLines.push(`CWD: ${displayCwd}`);
-        metaLines.push(`${i18n.originalCwd || "Recorded CWD"}: ${cwd}`);
+        metaLines.push(`${i18n.originalCwd || localization.defaults.originalCwd}: ${cwd}`);
       } else {
         metaLines.push(`CWD: ${cwd}`);
-        metaLines.push(`${i18n.relocatedCwd || "Target CWD"}: ${displayCwd}`);
+        metaLines.push(`${i18n.relocatedCwd || localization.defaults.relocatedCwd}: ${displayCwd}`);
       }
       return;
     }
@@ -8974,7 +8992,7 @@
     if (model.meta && model.meta.source) metaLines.push(`Source: ${model.meta.source}`);
     if (model.compressed) metaLines.push(i18n.sessionCompressed);
     if (model.sessionLocation && model.sessionLocation.archiveState === "archived") {
-      metaLines.push(i18n.sessionLocationArchived || "Archived");
+      metaLines.push(i18n.sessionLocationArchived || localization.defaults.sessionLocationArchived);
     }
     const snapshot = sessionInfoSnapshot;
     let nextPresentationKey = "";
@@ -9634,14 +9652,14 @@
     main.appendChild(title);
 
     const badge = el("span", { className: "turnMarkerBadge turnMarkerBadge-start" });
-    badge.textContent = getSafeUiText(i18n.turnStart, "Start");
+    badge.textContent = getSafeUiText(i18n.turnStart, localization.defaults.turnStart);
     main.appendChild(badge);
 
     const startText = buildTurnStartTimestampText(turn);
     if (startText) main.appendChild(el("span", { className: "turnMarkerMeta", textContent: startText }));
     if (collapsed) {
       const endBadge = el("span", { className: "turnMarkerBadge turnMarkerBadge-end" });
-      endBadge.textContent = getSafeUiText(i18n.turnEnd, "End");
+      endBadge.textContent = getSafeUiText(i18n.turnEnd, localization.defaults.turnEnd);
       main.appendChild(endBadge);
 
       const endText = buildTurnEndTimestampText(turn);
@@ -9758,8 +9776,8 @@
     const sequenceNumber = getTurnSequenceNumber(turn);
     const turnLabel = sequenceNumber > 0 ? String(sequenceNumber) : buildTurnNumberLabel(turn, turnId);
     return manualCollapsed
-      ? formatTemplate(getSafeUiText(i18n.turnExpand, "Expand turn {0}"), turnLabel)
-      : formatTemplate(getSafeUiText(i18n.turnCollapse, "Collapse turn {0}"), turnLabel);
+      ? formatTemplate(getSafeUiText(i18n.turnExpand, localization.defaults.turnExpand), turnLabel)
+      : formatTemplate(getSafeUiText(i18n.turnCollapse, localization.defaults.turnCollapse), turnLabel);
   }
 
   function buildTurnBodyRegionId(turnId, runKey) {
@@ -9776,8 +9794,8 @@
     if (!canCollapseTurn(turn, turnId) || !isTurnManuallyCollapsed(turnId)) return;
     const temporary = isTurnTemporarilyExpandedForSearch(turnId);
     const text = temporary
-      ? getSafeUiText(i18n.turnExpandedForSearch, "Expanded for search")
-      : getSafeUiText(i18n.turnCollapsed, "Collapsed");
+      ? getSafeUiText(i18n.turnExpandedForSearch, localization.defaults.turnExpandedForSearch)
+      : getSafeUiText(i18n.turnCollapsed, localization.defaults.turnCollapsed);
     container.appendChild(
       el("span", {
         className: `turnMarkerBadge turnCollapseStateBadge${temporary ? " turnCollapseStateBadge-search" : ""}`,
@@ -9804,12 +9822,12 @@
   }
 
   function getTurnStatusLabel(status) {
-    if (status === "running") return getSafeUiText(i18n.turnRunning, "Running");
-    if (status === "completed") return getSafeUiText(i18n.turnCompleted, "Completed");
-    if (status === "interrupted") return getSafeUiText(i18n.turnInterrupted, "Interrupted");
-    if (status === "rolledBack") return getSafeUiText(i18n.turnRolledBack, "Rolled back");
-    if (status === "incomplete") return getSafeUiText(i18n.turnIncomplete, "Incomplete");
-    return getSafeUiText(i18n.turnUnknown, "Unknown");
+    if (status === "running") return getSafeUiText(i18n.turnRunning, localization.defaults.turnRunning);
+    if (status === "completed") return getSafeUiText(i18n.turnCompleted, localization.defaults.turnCompleted);
+    if (status === "interrupted") return getSafeUiText(i18n.turnInterrupted, localization.defaults.turnInterrupted);
+    if (status === "rolledBack") return getSafeUiText(i18n.turnRolledBack, localization.defaults.turnRolledBack);
+    if (status === "incomplete") return getSafeUiText(i18n.turnIncomplete, localization.defaults.turnIncomplete);
+    return getSafeUiText(i18n.turnUnknown, localization.defaults.turnUnknown);
   }
 
   function getTurnSequenceNumber(turn) {
@@ -9822,12 +9840,12 @@
   function buildTurnNumberLabel(turn, fallbackTurnId) {
     const sequenceNumber = getTurnSequenceNumber(turn);
     if (sequenceNumber > 0) {
-      return formatTemplate(getSafeUiText(i18n.turnNumberLabel, "Turn {0}"), sequenceNumber);
+      return formatTemplate(getSafeUiText(i18n.turnNumberLabel, localization.defaults.turnNumberLabel), sequenceNumber);
     }
     const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
     return turnId
-      ? formatTemplate(getSafeUiText(i18n.turnNumberLabel || i18n.turnRangeLabel, "Turn {0}"), "?")
-      : getSafeUiText(i18n.turnLabel, "Turn");
+      ? formatTemplate(getSafeUiText(i18n.turnNumberLabel || i18n.turnRangeLabel, localization.defaults.turnNumberLabel), "?")
+      : getSafeUiText(i18n.turnLabel, localization.defaults.turnLabel);
   }
 
   function buildTurnStartTimestampText(turn) {
@@ -9856,7 +9874,7 @@
     const startedAt = typeof (turn && turn.startedAtIso) === "string" ? turn.startedAtIso : "";
     const timestamp = updatedAt || startedAt;
     return timestamp
-      ? formatTemplate(getSafeUiText(i18n.turnLastActivity, "Last activity {0}"), formatIsoYmdHms(timestamp))
+      ? formatTemplate(getSafeUiText(i18n.turnLastActivity, localization.defaults.turnLastActivity), formatIsoYmdHms(timestamp))
       : "";
   }
 
@@ -9864,12 +9882,12 @@
     const status = normalizeTurnDisplayStatus(turn && turn.status);
     if (status !== "completed") return "";
     const durationText = buildDurationTextBetweenIso(turn && turn.startedAtIso, turn && turn.completedAtIso);
-    return durationText ? formatTemplate(getSafeUiText(i18n.turnDuration, "Duration {0}"), durationText) : "";
+    return durationText ? formatTemplate(getSafeUiText(i18n.turnDuration, localization.defaults.turnDuration), durationText) : "";
   }
 
   function buildTurnElapsedText(turn, nowMs = Date.now()) {
     const durationText = buildDurationTextSinceIso(turn && turn.startedAtIso, nowMs);
-    return durationText ? formatTemplate(getSafeUiText(i18n.turnElapsed, "Elapsed {0}"), durationText) : "";
+    return durationText ? formatTemplate(getSafeUiText(i18n.turnElapsed, localization.defaults.turnElapsed), durationText) : "";
   }
 
   function buildDurationTextBetweenIso(startIso, endIso) {
@@ -9897,12 +9915,12 @@
     if (!Number.isFinite(durationMs) || durationMs < 0) return "";
     const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
     if (totalSeconds < 60) {
-      return formatTemplate(getSafeUiText(i18n.turnDurationSeconds, "{0}s"), totalSeconds);
+      return formatTemplate(getSafeUiText(i18n.turnDurationSeconds, localization.defaults.turnDurationSeconds), totalSeconds);
     }
     const totalMinutes = Math.floor(totalSeconds / 60);
     if (totalMinutes < 60) {
       return formatTemplate(
-        getSafeUiText(i18n.turnDurationMinutesSeconds, "{0}m {1}s"),
+        getSafeUiText(i18n.turnDurationMinutesSeconds, localization.defaults.turnDurationMinutesSeconds),
         totalMinutes,
         totalSeconds % 60,
       );
@@ -9910,7 +9928,7 @@
     const hours = Math.floor(totalMinutes / 60);
     const minutes = String(totalMinutes % 60).padStart(2, "0");
     return formatTemplate(
-      getSafeUiText(i18n.turnDurationHoursMinutesSeconds, "{0}h {1}m {2}s"),
+      getSafeUiText(i18n.turnDurationHoursMinutesSeconds, localization.defaults.turnDurationHoursMinutesSeconds),
       hours,
       minutes,
       totalSeconds % 60,
@@ -10020,7 +10038,7 @@
     container.appendChild(
       el("span", {
         className: "runningTurnChipBadge",
-        textContent: getSafeUiText(i18n.turnRunning, "Running"),
+        textContent: getSafeUiText(i18n.turnRunning, localization.defaults.turnRunning),
       }),
     );
     const elapsedText = buildTurnElapsedText(turn);
@@ -10047,7 +10065,7 @@
   }
 
   function buildRunningTurnChipTooltip(turn, fallbackTurnId, options = {}) {
-    return options.includeJumpLabel ? getSafeUiText(i18n.turnJumpToRunning, "Jump to running turn") : "";
+    return options.includeJumpLabel ? getSafeUiText(i18n.turnJumpToRunning, localization.defaults.turnJumpToRunning) : "";
   }
 
   function applyRunningTurnChipTooltip(element, turn, fallbackTurnId, options = {}) {
@@ -10268,7 +10286,7 @@
     for (const target of getRunningTurnElapsedTargets()) {
       const startedAt = target.dataset.turnStartedAt || "";
       const durationText = buildDurationTextSinceIso(startedAt, nowMs);
-      const nextText = durationText ? formatTemplate(getSafeUiText(i18n.turnElapsed, "Elapsed {0}"), durationText) : "";
+      const nextText = durationText ? formatTemplate(getSafeUiText(i18n.turnElapsed, localization.defaults.turnElapsed), durationText) : "";
       if (!durationText) {
         if (target.textContent !== "") target.textContent = "";
         if (!target.hidden) target.hidden = true;
@@ -10344,26 +10362,26 @@
     const totalTokens = normalizeCount(turn.totalTokens);
     const parts = [];
     let hasTokenParts = false;
-    if (itemCount > 0) parts.push(formatTemplate(getSafeUiText(i18n.turnItemCount, "{0} items"), itemCount));
-    if (toolCount > 0) parts.push(formatTemplate(getSafeUiText(i18n.turnToolCount, "{0} tools"), toolCount));
+    if (itemCount > 0) parts.push(formatTemplate(getSafeUiText(i18n.turnItemCount, localization.defaults.turnItemCount), itemCount));
+    if (toolCount > 0) parts.push(formatTemplate(getSafeUiText(i18n.turnToolCount, localization.defaults.turnToolCount), toolCount));
     if (patchEntryCount > 0) {
-      parts.push(formatTemplate(getSafeUiText(i18n.turnPatchCount, "{0} changes"), patchEntryCount));
+      parts.push(formatTemplate(getSafeUiText(i18n.turnPatchCount, localization.defaults.turnPatchCount), patchEntryCount));
     }
     if (inputTokens > 0) {
-      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenInput, "Input {0}"), getUsageNumber(inputTokens)));
+      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenInput, localization.defaults.turnTokenInput), getUsageNumber(inputTokens)));
       hasTokenParts = true;
     }
     if (outputTokens > 0) {
-      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenOutput, "Output {0}"), getUsageNumber(outputTokens)));
+      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenOutput, localization.defaults.turnTokenOutput), getUsageNumber(outputTokens)));
       hasTokenParts = true;
     }
     const totalAddsInformation = totalTokens > 0 && inputTokens + outputTokens !== totalTokens;
     if (totalAddsInformation) {
-      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenTotal, "Total {0}"), getUsageNumber(totalTokens)));
+      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenTotal, localization.defaults.turnTokenTotal), getUsageNumber(totalTokens)));
       hasTokenParts = true;
     }
     if (!hasTokenParts && usageRecordCount > 0) {
-      parts.push(formatTemplate(getSafeUiText(i18n.turnUsageRecords, "Usage records {0}"), usageRecordCount));
+      parts.push(formatTemplate(getSafeUiText(i18n.turnUsageRecords, localization.defaults.turnUsageRecords), usageRecordCount));
     }
     return {
       text: parts.join(" / "),
@@ -10390,13 +10408,13 @@
 
     const tagsRow = el("div", { className: "sessionHeaderRow" });
     const tagsLabel = el("span", { className: "sessionHeaderLabel" });
-    tagsLabel.textContent = `${i18n.annotationTags || "Tags"}:`;
+    tagsLabel.textContent = `${i18n.annotationTags || localization.defaults.annotationTags}:`;
     tagsRow.appendChild(tagsLabel);
 
     const tagsBody = el("div", { className: "sessionTagList" });
     if (tags.length === 0) {
       const none = el("span", { className: "sessionHeaderNone" });
-      none.textContent = i18n.annotationNone || "None";
+      none.textContent = i18n.annotationNone || localization.defaults.annotationNone;
       tagsBody.appendChild(none);
     } else {
       for (const tag of tags) {
@@ -10404,7 +10422,7 @@
 
         const filterBtn = el("button", { type: "button", className: "sessionTagChip" });
         filterBtn.textContent = `#${tag}`;
-        const filterLabel = i18n.annotationFilterTag || "Filter history by this tag";
+        const filterLabel = i18n.annotationFilterTag || localization.defaults.annotationFilterTag;
         filterBtn.title = filterLabel;
         filterBtn.setAttribute("aria-label", `${filterLabel}: ${tag}`);
         filterBtn.addEventListener("click", (e) => {
@@ -10416,7 +10434,7 @@
 
         const removeBtn = el("button", { type: "button", className: "sessionTagRemove" });
         removeBtn.textContent = "×";
-        const removeLabel = i18n.annotationRemoveTag || "Remove this tag";
+        const removeLabel = i18n.annotationRemoveTag || localization.defaults.annotationRemoveTag;
         removeBtn.title = removeLabel;
         removeBtn.setAttribute("aria-label", `${removeLabel}: ${tag}`);
         removeBtn.addEventListener("click", (e) => {
@@ -10432,7 +10450,7 @@
     tagsRow.appendChild(tagsBody);
 
     const editBtn = el("button", { type: "button", className: "sessionHeaderEditBtn" });
-    const editLabel = i18n.annotationEdit || "Edit";
+    const editLabel = i18n.annotationEdit || localization.defaults.annotationEdit;
     editBtn.textContent = editLabel;
     editBtn.title = editLabel;
     editBtn.setAttribute("aria-label", editLabel);
@@ -10446,18 +10464,18 @@
 
     const noteRow = el("div", { className: "sessionHeaderRow" });
     const noteLabel = el("span", { className: "sessionHeaderLabel" });
-    noteLabel.textContent = `${i18n.annotationNote || "Note"}:`;
+    noteLabel.textContent = `${i18n.annotationNote || localization.defaults.annotationNote}:`;
     noteRow.appendChild(noteLabel);
     const noteBody = el("div", { className: "sessionNoteWrap" });
     const noteText = el("div", { className: "sessionNoteText" });
-    noteText.textContent = note || i18n.annotationNone || "None";
+    noteText.textContent = note || i18n.annotationNone || localization.defaults["annotationNone"];
     noteBody.appendChild(noteText);
 
     if (note.length > 220) {
       noteText.classList.toggle("clamped", !expandedNote);
       const toggleBtn = el("button", { type: "button", className: "sessionNoteToggleBtn" });
       const applyToggleLabel = () => {
-        toggleBtn.textContent = expandedNote ? (i18n.annotationShowLess || "Show less") : (i18n.annotationShowMore || "Show more");
+        toggleBtn.textContent = expandedNote ? (i18n.annotationShowLess || localization.defaults.annotationShowLess) : (i18n.annotationShowMore || localization.defaults.annotationShowMore);
       };
       applyToggleLabel();
       toggleBtn.addEventListener("click", (e) => {
@@ -10675,10 +10693,10 @@
     const oneLineText = fullText.replace(/\s+/g, " ").trim();
     const attachments = getMessageAttachments(item);
     const attachmentOnly = formatTemplate(
-      i18n.stickyUserAttachmentOnly || "{0} attachment(s)",
+      i18n.stickyUserAttachmentOnly || localization.defaults.stickyUserAttachmentOnly,
       attachments.length,
     );
-    const summarySource = oneLineText || (attachments.length > 0 ? attachmentOnly : getSafeUiText(i18n.roleUser, "User"));
+    const summarySource = oneLineText || (attachments.length > 0 ? attachmentOnly : getSafeUiText(i18n.roleUser, localization.defaults.roleUser));
     const summary = truncatePlainText(summarySource, STICKY_USER_SUMMARY_LIMIT);
     const summaryTitle = truncatePlainText(summarySource, STICKY_USER_PREVIEW_LIMIT);
     const previewText = truncatePlainText(fullText || summarySource, STICKY_USER_PREVIEW_LIMIT);
@@ -10692,9 +10710,9 @@
 
     const row = el("div", { className: "userStickyHeaderRow" });
     const main = el("button", { type: "button", className: "userStickyHeaderMain" });
-    const ariaSummary = summaryTitle || getSafeUiText(i18n.roleUser, "User");
-    const promptLabel = formatTemplate(i18n.stickyUserAriaLabel || "Current user prompt: {0}", ariaSummary);
-    const openOriginalLabel = getSafeUiText(i18n.stickyUserOpenOriginal, "Jump to original user prompt");
+    const ariaSummary = summaryTitle || getSafeUiText(i18n.roleUser, localization.defaults.roleUser);
+    const promptLabel = formatTemplate(i18n.stickyUserAriaLabel || localization.defaults.stickyUserAriaLabel, ariaSummary);
+    const openOriginalLabel = getSafeUiText(i18n.stickyUserOpenOriginal, localization.defaults.stickyUserOpenOriginal);
     main.setAttribute(
       "aria-label",
       [promptLabel, openOriginalLabel].filter(Boolean).join(" · "),
@@ -10710,7 +10728,7 @@
     });
 
     const role = el("span", { className: "userStickyHeaderRole" });
-    role.textContent = getSafeUiText(i18n.roleUser, "User");
+    role.textContent = getSafeUiText(i18n.roleUser, localization.defaults.roleUser);
     main.appendChild(role);
     if (typeof messageIndex === "number") {
       const index = el("span", { className: "userStickyHeaderIndex" });
@@ -10754,7 +10772,7 @@
 
   function syncStickyUserToggle(button, expanded) {
     if (!(button instanceof HTMLButtonElement)) return;
-    button.textContent = expanded ? i18n.showLess || "Show less" : i18n.showMore || "Show more";
+    button.textContent = expanded ? i18n.showLess || localization.defaults.showLess : i18n.showMore || localization.defaults.showMore;
     button.setAttribute("aria-expanded", expanded ? "true" : "false");
   }
 
@@ -10839,7 +10857,7 @@
           itemIndex: Number.isFinite(itemIndex) ? itemIndex : index,
           timestampIso,
           title: [buildTimeGuideItemTitle(item, Number.isFinite(itemIndex) ? itemIndex : index),
-            nativeBookmarkedKeys.has(getItemBookmarkKey(item)) ? getSafeUiText(i18n.nativeBookmarkTooltip, "") : ""].filter(Boolean).join(" · "),
+            nativeBookmarkedKeys.has(getItemBookmarkKey(item)) ? getSafeUiText(i18n.nativeBookmarkTooltip, localization.defaults.nativeBookmarkTooltip) : ""].filter(Boolean).join(" · "),
           role: item?.type === "claudeQueuedInput" ? "user" : item && item.type === "message" ? getMessageRole(item) : "",
           attachmentKind: item && item.type === "message" ? getTimeGuideAttachmentKind(getMessageAttachments(item)) : "",
           bookmarked: isItemBookmarked(item),
@@ -10867,7 +10885,7 @@
       getScrollRoot,
       getContentElement: () => timelineEl,
       getTimeZone,
-      getAriaLabel: () => getSafeUiText(i18n.timeGuideDates, "Dates"),
+      getAriaLabel: () => getSafeUiText(i18n.timeGuideDates, localization.defaults.timeGuideDates),
       getItems: getTimeGuideItems,
       onActivatePeriod: (period) => {
         if (period && period.role === "user") suppressStickyUserUntilUserScroll();
@@ -10979,24 +10997,24 @@
         .join(" ");
     }
     if (item.type === "patchGroup") {
-      return formatTemplate(i18n.patchGroupCount || "{0} changes", item.entryCount || 0);
+      return formatTemplate(i18n.patchGroupCount || localization.defaults.patchGroupCount, item.entryCount || 0);
     }
     if (item.type === "tool") {
       const presentation = resolveToolPresentation(item);
       const messageIndex = typeof item.messageIndex === "number" ? `#${item.messageIndex}` : "";
       return [presentation.title, messageIndex].filter(Boolean).join(" ");
     }
-    if (item.type === "usage") return getSafeUiText(i18n.usage, "Usage");
-    if (item.type === "environment") return getSafeUiText(i18n.environment, "Environment");
+    if (item.type === "usage") return getSafeUiText(i18n.usage, localization.defaults.usage);
+    if (item.type === "environment") return getSafeUiText(i18n.environment, localization.defaults.environment);
     if (item.type === "systemEvent") return getSystemEventBadgeText(item);
     if (item.type === "note" && typeof item.title === "string" && item.title.trim()) return item.title.trim();
-    return `${getSafeUiText(i18n.roleMessage, "Message")} #${itemIndex + 1}`;
+    return `${getSafeUiText(i18n.roleMessage, localization.defaults.roleMessage)} #${itemIndex + 1}`;
   }
 
   function getInternalMessageTitle(item) {
     if (item.type === "taskNotification") return i18n.taskNotificationTitle;
     if (item.type === "systemReminder") return i18n.systemReminderTitle;
-    return getSafeUiText(i18n.crossSessionMessageTitle, "Cross-session message");
+    return getSafeUiText(i18n.crossSessionMessageTitle, localization.defaults.crossSessionMessageTitle);
   }
 
   function normalizeClaudeProgressId(value) {
@@ -11188,7 +11206,7 @@
     summary.appendChild(
       el("span", {
         className: "crossSessionMessageBadge",
-        textContent: item.type === "crossSessionMessage" ? getSafeUiText(i18n.crossSessionMessageBadge, "Other session") : titleText,
+        textContent: item.type === "crossSessionMessage" ? getSafeUiText(i18n.crossSessionMessageBadge, localization.defaults.crossSessionMessageBadge) : titleText,
       }),
     );
     if (item.type === "crossSessionMessage") summary.appendChild(el("span", { className: "crossSessionMessageTitle", textContent: titleText }));
@@ -11212,7 +11230,7 @@
 
     const actions = el("div", { className: "cardHeaderActions" });
     const copyButton = el("button", { type: "button", className: "iconBtn" });
-    const copyLabel = i18n.copyMessageTooltip || i18n.copy || "Copy";
+    const copyLabel = i18n.copyMessageTooltip || i18n.copy || localization.defaults["copyMessageTooltip"];
     copyButton.title = copyLabel;
     copyButton.setAttribute("aria-label", copyLabel);
     copyButton.innerHTML = COPY_ICON_SVG;
@@ -11231,12 +11249,40 @@
       card.appendChild(
         el("div", {
           className: "crossSessionMessageSender",
-          textContent: formatTemplate(i18n.crossSessionMessageFrom || "From: {0}", senderName),
+          textContent: formatTemplate(i18n.crossSessionMessageFrom || localization.defaults.crossSessionMessageFrom, senderName),
         }),
       );
     }
-    const body = el("pre", { className: "crossSessionMessageBody", textContent: bodyText });
-    if (item.type === "taskNotification" && item.invalidContent === true) {
+    // Preserve the legacy copy payload while avoiding a split surrogate in the display.
+    const displayBody = item.type === "taskNotification" && /[\uD800-\uDBFF]$/u.test(bodyText) ? bodyText.slice(0, -1) : bodyText;
+    const body = el("pre", { className: "crossSessionMessageBody", textContent: displayBody });
+    if (item.type === "crossSessionMessage") {
+      const details = renderAttachmentDetails(
+        getSafeUiText(i18n.crossSessionMessageBody, localization.defaults.crossSessionMessageBody),
+        "",
+        "crossSessionMessageBody",
+        buildCrossSessionMessageDetailKey(item),
+      );
+      details.classList.add("crossSessionMessageDetails");
+      details.lastElementChild.replaceWith(body);
+      card.appendChild(details);
+    } else if (item.type === "taskNotification" && item.presentation && Array.isArray(item.presentation.entries) && item.presentation.entries.length) {
+      const presentation = item.presentation;
+      for (const [index, entry] of presentation.entries.slice(0, 16).entries()) {
+        card.appendChild(renderTaskNotificationAttachment(entry, item, index, true));
+      }
+      const details = createNotificationDetailsContainer(presentation.stateKey);
+      const content = details.lastElementChild;
+      for (const [index, entry] of presentation.entries.slice(0, 16).entries()) {
+        if (presentation.entries.length > 1) content.appendChild(el("h4", { textContent: formatTemplate(i18n.taskDetailVariant, index + 1) }));
+        appendNotificationDetailFields(content, entry.details);
+      }
+      if (presentation.outsideText) content.appendChild(el("p", { textContent: i18n.taskDetailOtherText }));
+      if (presentation.omitted) content.appendChild(el("p", { textContent: i18n.taskDetailOmitted }));
+      content.appendChild(el("h4", { textContent: i18n.taskDetailRaw }));
+      content.appendChild(body);
+      card.appendChild(details);
+    } else if (item.type === "taskNotification" && item.invalidContent === true) {
       const details = el("details", {});
       details.appendChild(el("summary", { textContent: i18n.taskNotificationInvalid }));
       details.appendChild(body);
@@ -11248,7 +11294,7 @@
       card.appendChild(
         el("div", {
           className: "crossSessionMessageTruncated",
-          textContent: getSafeUiText(i18n.crossSessionMessageTruncated, "Message truncated for display."),
+          textContent: getSafeUiText(i18n.crossSessionMessageTruncated, localization.defaults.crossSessionMessageTruncated),
         }),
       );
     }
@@ -11273,7 +11319,7 @@
       summary.appendChild(
         el("span", {
           className: "systemEventMeta systemEventMeta-rolledBack",
-          textContent: getSafeUiText(i18n.systemEventInterruptedRolledBack, "Rolled back"),
+          textContent: getSafeUiText(i18n.systemEventInterruptedRolledBack, localization.defaults.systemEventInterruptedRolledBack),
         }),
       );
     }
@@ -11289,16 +11335,16 @@
 
     if (showDetails) {
       const details = el("div", { className: "systemEventDetails" });
-      appendUsageDetail(details, i18n.systemEventDetailReason || "Reason", normalizeUsageText(item && item.reason));
+      appendUsageDetail(details, i18n.systemEventDetailReason || localization.defaults.systemEventDetailReason, normalizeUsageText(item && item.reason));
       appendUsageDetail(
         details,
-        i18n.systemEventDetailDuration || "Duration",
+        i18n.systemEventDetailDuration || localization.defaults.systemEventDetailDuration,
         typeof item.durationMs === "number" && Number.isFinite(item.durationMs) ? formatDurationMs(item.durationMs) : "",
       );
-      appendUsageDetail(details, i18n.systemEventDetailTurnId || "Turn ID", normalizeUsageText(item && item.turnId));
+      appendUsageDetail(details, i18n.systemEventDetailTurnId || localization.defaults.systemEventDetailTurnId, normalizeUsageText(item && item.turnId));
       appendUsageDetail(
         details,
-        i18n.systemEventDetailRolledBackTurns || "Rolled back turns",
+        i18n.systemEventDetailRolledBackTurns || localization.defaults.systemEventDetailRolledBackTurns,
         typeof item.rolledBackTurns === "number" && Number.isFinite(item.rolledBackTurns)
           ? String(Math.max(0, Math.floor(item.rolledBackTurns)))
           : "",
@@ -11345,7 +11391,7 @@
     ].filter(([key]) => typeof item[key] === "string");
     if (fields.length === 0) return null;
     const messageIndex = item.messageIndex;
-    const title = getSafeUiText(i18n.terminalOutputTitle, "");
+    const title = getSafeUiText(i18n.terminalOutputTitle, localization.defaults.terminalOutputTitle);
     const row = el("div", { className: "row systemEvent terminalOutput" });
     const card = el("details", { className: "systemEventCard systemEventCard-terminalOutput terminalOutputCard" });
     card.id = `msg-${messageIndex}`;
@@ -11368,7 +11414,7 @@
       summary.appendChild(stamp);
     }
     const copy = el("button", { type: "button", className: "iconBtn" });
-    copy.title = i18n.copyMessageTooltip || i18n.copy || "Copy";
+    copy.title = i18n.copyMessageTooltip || i18n.copy || localization.defaults["copyMessageTooltip"];
     copy.setAttribute("aria-label", copy.title);
     copy.innerHTML = COPY_ICON_SVG;
     const values = fields.map(([key]) => item[key].slice(0, key === "exitCode" ? 64 : 64000));
@@ -11387,7 +11433,7 @@
       card.appendChild(el("pre", { className: "systemEventOutput", textContent: values[index] }));
     });
     if (item.truncated === true || fields.some(([key], index) => item[key].length > values[index].length)) {
-      card.appendChild(el("div", { className: "systemEventDescription", textContent: getSafeUiText(i18n.terminalOutputTruncated, "") }));
+      card.appendChild(el("div", { className: "systemEventDescription", textContent: getSafeUiText(i18n.terminalOutputTruncated, localization.defaults.terminalOutputTruncated) }));
     }
     row.appendChild(card);
     return row;
@@ -11400,32 +11446,32 @@
   }
 
   function getSystemEventBadgeText(item) {
-    if (item && item.kind === "terminalOutput") return getSafeUiText(i18n.terminalOutputTitle, "");
+    if (item && item.kind === "terminalOutput") return getSafeUiText(i18n.terminalOutputTitle, localization.defaults.terminalOutputTitle);
     if (item && item.kind === "localCommandOutput") {
-      return getSafeUiText(i18n.systemEventLocalCommandBadge, "Local command");
+      return getSafeUiText(i18n.systemEventLocalCommandBadge, localization.defaults.systemEventLocalCommandBadge);
     }
     if (item && item.kind === "requestInterrupted") {
-      return getSafeUiText(i18n.systemEventInterruptedBadge, "Request stopped");
+      return getSafeUiText(i18n.systemEventInterruptedBadge, localization.defaults.systemEventInterruptedBadge);
     }
-    return getSafeUiText(i18n.roleMessage, "Message");
+    return getSafeUiText(i18n.roleMessage, localization.defaults.roleMessage);
   }
 
   function getSystemEventTitleText(item) {
     if (item && item.kind === "localCommandOutput") {
-      return getSafeUiText(i18n.systemEventLocalCommandTitle, "Output");
+      return getSafeUiText(i18n.systemEventLocalCommandTitle, localization.defaults.systemEventLocalCommandTitle);
     }
     if (item && item.kind === "requestInterrupted" && item.scope === "toolUse") {
-      return getSafeUiText(i18n.systemEventInterruptedToolUseTitle, "Tool use interrupted");
+      return getSafeUiText(i18n.systemEventInterruptedToolUseTitle, localization.defaults.systemEventInterruptedToolUseTitle);
     }
     if (item && item.kind === "requestInterrupted") {
-      return getSafeUiText(i18n.systemEventInterruptedTitle, "Request interrupted");
+      return getSafeUiText(i18n.systemEventInterruptedTitle, localization.defaults.systemEventInterruptedTitle);
     }
     return getSystemEventBadgeText(item);
   }
 
   function getSystemEventDescriptionText(item) {
     if (item && item.kind === "requestInterrupted") {
-      return getSafeUiText(i18n.systemEventInterruptedDescription, "The previous response was stopped by the user.");
+      return getSafeUiText(i18n.systemEventInterruptedDescription, localization.defaults.systemEventInterruptedDescription);
     }
     return "";
   }
@@ -11459,11 +11505,11 @@
     const summary = el("summary", { className: "protocolContextSummary" });
     const summaryText = el("span", { className: "protocolContextSummaryText" });
     const title = el("span", { className: "protocolContextTitle" });
-    title.textContent = item.kind === "agentInherited" ? i18n.claudeAgentContext : getSafeUiText(i18n.sessionStartContextSummary, "Codex runtime context");
+    title.textContent = item.kind === "agentInherited" ? i18n.claudeAgentContext : getSafeUiText(i18n.sessionStartContextSummary, localization.defaults.sessionStartContextSummary);
     const description = el("span", { className: "protocolContextDescription" });
     description.textContent = item.kind === "agentInherited" ? (item.partial ? i18n.claudeAgentPartial : i18n.claudeAgentContextDescription) : getSafeUiText(
       i18n.sessionStartContextDescription,
-      "Instructions and environment supplied to Codex when this session started",
+      localization.defaults.sessionStartContextDescription,
     );
     summaryText.append(title, description);
     summary.appendChild(summaryText);
@@ -11476,7 +11522,7 @@
 
     const actions = el("div", { className: "protocolContextActions" });
     const copyButton = el("button", { type: "button", className: "iconBtn" });
-    const copyLabel = i18n.copyMessageTooltip || i18n.copy || "Copy";
+    const copyLabel = i18n.copyMessageTooltip || i18n.copy || localization.defaults["copyMessageTooltip"];
     copyButton.title = copyLabel;
     copyButton.setAttribute("aria-label", copyLabel);
     copyButton.innerHTML = COPY_ICON_SVG;
@@ -11525,7 +11571,7 @@
     if (role === "user" && item.isTerminalInput === true) {
       const terminalInputTag = el("span", {
         className: "tag terminalInputTag",
-        textContent: getSafeUiText(i18n.terminalInputBadge, ""),
+        textContent: getSafeUiText(i18n.terminalInputBadge, localization.defaults.terminalInputBadge),
       });
       terminalInputTag.dataset.pageSearchIgnore = "true";
       metaTags.appendChild(terminalInputTag);
@@ -11616,7 +11662,7 @@
     if (collapseState.canCollapse) {
       const expandRow = el("div", { className: "messageExpandRow" });
       const expandBtn = el("button", { type: "button", className: "messageExpandBtn" });
-      expandBtn.textContent = collapseState.collapsed ? i18n.showMore || "Show more" : i18n.showLess || "Show less";
+      expandBtn.textContent = collapseState.collapsed ? i18n.showMore || localization.defaults.showMore : i18n.showLess || localization.defaults.showLess;
       expandBtn.addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -11632,7 +11678,7 @@
     if (role === "user" || role === "assistant") {
       const actions = el("div", { className: "bubbleActions" });
       const btn = el("button", { type: "button", className: "iconBtn" });
-      const copyMessageLabel = i18n.copyMessageTooltip || i18n.copy || "Copy";
+      const copyMessageLabel = i18n.copyMessageTooltip || i18n.copy || localization.defaults["copyMessageTooltip"];
       btn.title = copyMessageLabel;
       btn.setAttribute("aria-label", copyMessageLabel);
       btn.innerHTML = COPY_ICON_SVG;
@@ -11667,7 +11713,7 @@
     const details = el("details", { className: "memoryCitation" });
     const summary = el("summary", { className: "memoryCitationSummary" });
     const count = entries.length > 0 ? entries.length : rolloutIds.length;
-    summary.textContent = formatTemplate(i18n.memoryCitationSummary || "Referenced memory ({0})", count);
+    summary.textContent = formatTemplate(i18n.memoryCitationSummary || localization.defaults.memoryCitationSummary, count);
     details.appendChild(summary);
 
     const body = el("div", { className: "memoryCitationBody" });
@@ -11695,7 +11741,7 @@
     if (note) {
       const noteEl = el("div", { className: "memoryCitationNote" });
       const label = el("span", { className: "memoryCitationNoteLabel" });
-      label.textContent = `${i18n.memoryCitationNote || "Note"}:`;
+      label.textContent = `${i18n.memoryCitationNote || localization.defaults.memoryCitationNote}:`;
       const text = el("span", { className: "memoryCitationNoteText" });
       text.textContent = note;
       noteEl.appendChild(label);
@@ -11708,7 +11754,7 @@
   function renderMemoryCitationRolloutIds(rolloutIds) {
     const section = el("div", { className: "memoryCitationRollouts" });
     const title = el("div", { className: "memoryCitationRolloutsTitle" });
-    title.textContent = i18n.memoryCitationRelatedSessions || "Related sessions";
+    title.textContent = i18n.memoryCitationRelatedSessions || localization.defaults.memoryCitationRelatedSessions;
     section.appendChild(title);
     const list = el("div", { className: "memoryCitationRolloutList" });
     for (const id of rolloutIds) {
@@ -11753,10 +11799,10 @@
     const lineStart = normalizeMemoryCitationLine(entry && entry.lineStart);
     const lineEnd = normalizeMemoryCitationLine(entry && entry.lineEnd);
     if (lineStart !== undefined && lineEnd !== undefined && lineEnd !== lineStart) {
-      return formatTemplate(i18n.memoryCitationEntryRange || "{0}:{1}-{2}", path, lineStart, lineEnd);
+      return formatTemplate(i18n.memoryCitationEntryRange || localization.defaults.memoryCitationEntryRange, path, lineStart, lineEnd);
     }
     if (lineStart !== undefined) {
-      return formatTemplate(i18n.memoryCitationEntryLine || "{0}:{1}", path, lineStart);
+      return formatTemplate(i18n.memoryCitationEntryLine || localization.defaults.memoryCitationEntryLine, path, lineStart);
     }
     return path;
   }
@@ -11794,7 +11840,7 @@
     });
 
     const summary = el("div", { className: "usageSummary" });
-    summary.appendChild(el("span", { className: "usageTitle", textContent: getSafeUiText(i18n.usage, "Usage") }));
+    summary.appendChild(el("span", { className: "usageTitle", textContent: getSafeUiText(i18n.usage, localization.defaults.usage) }));
     const modelText = getMessageModelMetaText(item);
     if (modelText) summary.appendChild(el("span", { className: "usageModel", textContent: modelText }));
     const tokenText = formatUsageTokenSummary(item && item.usage);
@@ -11803,19 +11849,19 @@
 
     if (expanded) {
       const details = el("div", { className: "usageDetails" });
-      appendUsageDetail(details, i18n.usageInput || "Input", getUsageNumber(item?.usage?.inputTokens));
-      appendUsageDetail(details, i18n.usageOutput || "Output", getUsageNumber(item?.usage?.outputTokens));
-      appendUsageDetail(details, i18n.usageCachedInput || "Cached input", getUsageNumber(item?.usage?.cachedInputTokens));
-      appendUsageDetail(details, i18n.usageCacheRead || "Cache read", getUsageNumber(item?.usage?.cacheReadInputTokens));
-      appendUsageDetail(details, i18n.usageCacheWrite || "Cache write", getUsageNumber(item?.usage?.cacheCreationInputTokens));
-      appendUsageDetail(details, i18n.usageReasoning || "Reasoning", getUsageNumber(item?.usage?.reasoningOutputTokens));
-      appendUsageDetail(details, i18n.usageTotal || "Total", getUsageNumber(item?.usage?.totalTokens));
+      appendUsageDetail(details, i18n.usageInput || localization.defaults.usageInput, getUsageNumber(item?.usage?.inputTokens));
+      appendUsageDetail(details, i18n.usageOutput || localization.defaults.usageOutput, getUsageNumber(item?.usage?.outputTokens));
+      appendUsageDetail(details, i18n.usageCachedInput || localization.defaults.usageCachedInput, getUsageNumber(item?.usage?.cachedInputTokens));
+      appendUsageDetail(details, i18n.usageCacheRead || localization.defaults.usageCacheRead, getUsageNumber(item?.usage?.cacheReadInputTokens));
+      appendUsageDetail(details, i18n.usageCacheWrite || localization.defaults.usageCacheWrite, getUsageNumber(item?.usage?.cacheCreationInputTokens));
+      appendUsageDetail(details, i18n.usageReasoning || localization.defaults.usageReasoning, getUsageNumber(item?.usage?.reasoningOutputTokens));
+      appendUsageDetail(details, i18n.usageTotal || localization.defaults.usageTotal, getUsageNumber(item?.usage?.totalTokens));
       const contextUsed = formatUsageContextUsed(item);
-      if (contextUsed) appendUsageDetail(details, i18n.usageContextUsed || "Context", contextUsed);
-      else appendUsageDetail(details, i18n.usageContextWindow || "Context window", getUsageNumber(item?.modelContextWindow));
-      appendUsageDetail(details, i18n.usageServiceTier || "Service tier", normalizeUsageText(item?.serviceTier));
-      appendUsageDetail(details, i18n.usageSpeed || "Speed", normalizeUsageText(item?.speed));
-      appendUsageDetail(details, i18n.usageStopReason || "Stop reason", normalizeUsageText(item?.stopReason));
+      if (contextUsed) appendUsageDetail(details, i18n.usageContextUsed || localization.defaults.usageContextUsed, contextUsed);
+      else appendUsageDetail(details, i18n.usageContextWindow || localization.defaults.usageContextWindow, getUsageNumber(item?.modelContextWindow));
+      appendUsageDetail(details, i18n.usageServiceTier || localization.defaults.usageServiceTier, normalizeUsageText(item?.serviceTier));
+      appendUsageDetail(details, i18n.usageSpeed || localization.defaults.usageSpeed, normalizeUsageText(item?.speed));
+      appendUsageDetail(details, i18n.usageStopReason || localization.defaults.usageStopReason, normalizeUsageText(item?.stopReason));
       appendRateLimitDetails(details, item && item.rateLimits);
       appendTotalUsageDetails(details, item && item.totalUsage);
       if (details.childElementCount > 0) card.appendChild(details);
@@ -11828,9 +11874,9 @@
   function formatUsageTokenSummary(usage) {
     const input = getUsageNumber(usage && usage.inputTokens);
     const output = getUsageNumber(usage && usage.outputTokens);
-    if (input && output) return formatTemplate(getSafeUiText(i18n.usageTokensInOut, "{0} in / {1} out"), input, output);
-    if (input) return formatTemplate(getSafeUiText(i18n.usageTokensIn, "{0} in"), input);
-    if (output) return formatTemplate(getSafeUiText(i18n.usageTokensOut, "{0} out"), output);
+    if (input && output) return formatTemplate(getSafeUiText(i18n.usageTokensInOut, localization.defaults.usageTokensInOut), input, output);
+    if (input) return formatTemplate(getSafeUiText(i18n.usageTokensIn, localization.defaults.usageTokensIn), input);
+    if (output) return formatTemplate(getSafeUiText(i18n.usageTokensOut, localization.defaults.usageTokensOut), output);
     return "";
   }
 
@@ -11840,7 +11886,7 @@
     if (!Number.isFinite(inputTokens) || !Number.isFinite(contextWindow) || contextWindow <= 0) return "";
     const percent = (Math.max(0, inputTokens) / contextWindow) * 100;
     return formatTemplate(
-      getSafeUiText(i18n.usageContextUsedValue, "input {0} / window {1} ({2})"),
+      getSafeUiText(i18n.usageContextUsedValue, localization.defaults.usageContextUsedValue),
       getUsageNumber(inputTokens),
       getUsageNumber(contextWindow),
       formatPercent(percent),
@@ -11849,17 +11895,17 @@
 
   function appendRateLimitDetails(container, rateLimits) {
     if (!rateLimits || typeof rateLimits !== "object") return;
-    appendUsageDetail(container, i18n.usageRateLimitPrimary || "Short-term rate limit", formatRateLimit(rateLimits.primary, "hours"));
-    appendUsageDetail(container, i18n.usageRateLimitSecondary || "Long-term rate limit", formatRateLimit(rateLimits.secondary, "days"));
-    appendUsageDetail(container, i18n.usageRateLimitPlan || "Plan", normalizeUsageText(rateLimits.planType));
-    appendUsageDetail(container, i18n.usageRateLimitReached || "Rate limit reached", normalizeUsageText(rateLimits.reachedType));
+    appendUsageDetail(container, i18n.usageRateLimitPrimary || localization.defaults.usageRateLimitPrimary, formatRateLimit(rateLimits.primary, "hours"));
+    appendUsageDetail(container, i18n.usageRateLimitSecondary || localization.defaults.usageRateLimitSecondary, formatRateLimit(rateLimits.secondary, "days"));
+    appendUsageDetail(container, i18n.usageRateLimitPlan || localization.defaults.usageRateLimitPlan, normalizeUsageText(rateLimits.planType));
+    appendUsageDetail(container, i18n.usageRateLimitReached || localization.defaults.usageRateLimitReached, normalizeUsageText(rateLimits.reachedType));
   }
 
   function formatRateLimit(limit, windowUnit) {
     if (!limit || typeof limit !== "object") return "";
     const parts = [];
     if (typeof limit.usedPercent === "number" && Number.isFinite(limit.usedPercent)) {
-      parts.push(formatTemplate(getSafeUiText(i18n.usageRateLimitUsed, "usage {0}"), formatPercent(limit.usedPercent)));
+      parts.push(formatTemplate(getSafeUiText(i18n.usageRateLimitUsed, localization.defaults.usageRateLimitUsed), formatPercent(limit.usedPercent)));
     }
     if (typeof limit.windowMinutes === "number" && Number.isFinite(limit.windowMinutes)) {
       const windowText = formatRateLimitWindow(limit.windowMinutes, windowUnit);
@@ -11867,11 +11913,11 @@
     }
     if (typeof limit.resetsAt === "number" && Number.isFinite(limit.resetsAt)) {
       const resetAt = formatUnixSeconds(limit.resetsAt);
-      if (resetAt) parts.push(formatTemplate(getSafeUiText(i18n.usageRateLimitResetAt, "reset {0}"), resetAt));
+      if (resetAt) parts.push(formatTemplate(getSafeUiText(i18n.usageRateLimitResetAt, localization.defaults.usageRateLimitResetAt), resetAt));
     } else if (typeof limit.resetsInSeconds === "number" && Number.isFinite(limit.resetsInSeconds)) {
       parts.push(
         formatTemplate(
-          getSafeUiText(i18n.usageRateLimitResetIn, "reset in {0}"),
+          getSafeUiText(i18n.usageRateLimitResetIn, localization.defaults.usageRateLimitResetIn),
           formatDurationSeconds(limit.resetsInSeconds),
         ),
       );
@@ -11883,17 +11929,17 @@
     if (typeof windowMinutes !== "number" || !Number.isFinite(windowMinutes)) return "";
     if (unit === "hours") {
       return formatTemplate(
-        getSafeUiText(i18n.usageRateLimitWindowHours, "window {0} h"),
+        getSafeUiText(i18n.usageRateLimitWindowHours, localization.defaults.usageRateLimitWindowHours),
         formatUsageDecimalNumber(windowMinutes / 60),
       );
     }
     if (unit === "days") {
       return formatTemplate(
-        getSafeUiText(i18n.usageRateLimitWindowDays, "window {0} d"),
+        getSafeUiText(i18n.usageRateLimitWindowDays, localization.defaults.usageRateLimitWindowDays),
         formatUsageDecimalNumber(windowMinutes / 1440),
       );
     }
-    return formatTemplate(getSafeUiText(i18n.usageRateLimitWindow, "window {0} min"), getUsageNumber(windowMinutes));
+    return formatTemplate(getSafeUiText(i18n.usageRateLimitWindow, localization.defaults.usageRateLimitWindow), getUsageNumber(windowMinutes));
   }
 
   function appendUsageDetail(container, label, value) {
@@ -11909,14 +11955,14 @@
 
   function appendTotalUsageDetails(container, totalUsage) {
     if (!totalUsage || typeof totalUsage !== "object") return;
-    const totalLabel = getSafeUiText(i18n.usageCumulative, "Cumulative tokens");
+    const totalLabel = getSafeUiText(i18n.usageCumulative, localization.defaults.usageCumulative);
     const input = getUsageNumber(totalUsage.inputTokens);
     const output = getUsageNumber(totalUsage.outputTokens);
     const total = getUsageNumber(totalUsage.totalTokens);
     const parts = [];
-    if (input) parts.push(`${getSafeUiText(i18n.usageInput, "Input")} ${input}`);
-    if (output) parts.push(`${getSafeUiText(i18n.usageOutput, "Output")} ${output}`);
-    if (total) parts.push(`${getSafeUiText(i18n.usageTotal, "Total")} ${total}`);
+    if (input) parts.push(`${getSafeUiText(i18n.usageInput, localization.defaults.usageInput)} ${input}`);
+    if (output) parts.push(`${getSafeUiText(i18n.usageOutput, localization.defaults.usageOutput)} ${output}`);
+    if (total) parts.push(`${getSafeUiText(i18n.usageTotal, localization.defaults.usageTotal)} ${total}`);
     if (parts.length > 0) appendUsageDetail(container, totalLabel, parts.join(" / "));
   }
 
@@ -11972,7 +12018,7 @@
     applyTimelineCardWidthState(card, cardKey);
 
     const summary = el("div", { className: "environmentSummary" });
-    summary.appendChild(el("span", { className: "environmentTitle", textContent: getSafeUiText(i18n.environment, "Environment") }));
+    summary.appendChild(el("span", { className: "environmentTitle", textContent: getSafeUiText(i18n.environment, localization.defaults.environment) }));
     const branch = normalizeUsageText(item && item.gitBranch);
     if (branch) summary.appendChild(el("span", { className: "environmentMeta", textContent: branch }));
     const commit = normalizeGitCommitDisplay(item && item.gitCommit);
@@ -11981,7 +12027,7 @@
       summary.appendChild(
         el("span", {
           className: "environmentMeta",
-          textContent: item.gitDirty ? getSafeUiText(i18n.environmentDirty, "dirty") : getSafeUiText(i18n.environmentClean, "clean"),
+          textContent: item.gitDirty ? getSafeUiText(i18n.environmentDirty, localization.defaults.environmentDirty) : getSafeUiText(i18n.environmentClean, localization.defaults.environmentClean),
         }),
       );
     }
@@ -11993,9 +12039,9 @@
     card.appendChild(summary);
 
     const details = el("div", { className: "environmentDetails" });
-    appendUsageDetail(details, i18n.environmentCwd || "CWD", normalizeUsageText(item && item.cwd));
-    appendUsageDetail(details, i18n.environmentBranch || "Branch", branch);
-    appendUsageDetail(details, i18n.environmentCommit || "Commit", normalizeUsageText(item && item.gitCommit));
+    appendUsageDetail(details, i18n.environmentCwd || localization.defaults.environmentCwd, normalizeUsageText(item && item.cwd));
+    appendUsageDetail(details, i18n.environmentBranch || localization.defaults.environmentBranch, branch);
+    appendUsageDetail(details, i18n.environmentCommit || localization.defaults.environmentCommit, normalizeUsageText(item && item.gitCommit));
     if (details.childElementCount > 0) card.appendChild(details);
 
     row.appendChild(card);
@@ -12039,7 +12085,7 @@
     const remaining = Math.max(0, seen.size - labels.length);
     const kindSummary = remaining > 0 ? `${labels.join(", ")} +${remaining}` : labels.join(", ");
     if (total > seen.size || remaining > 0) {
-      const countLabel = formatTemplate(getSafeUiText(i18n.attachmentTotalCount, "{0} attachments"), total);
+      const countLabel = formatTemplate(getSafeUiText(i18n.attachmentTotalCount, localization.defaults.attachmentTotalCount), total);
       return countLabel ? `${kindSummary} / ${countLabel}` : kindSummary;
     }
     return kindSummary;
@@ -12047,7 +12093,7 @@
 
   function getTimeGuideAttachmentLabel(attachment) {
     if (!attachment || typeof attachment !== "object") return "";
-    if (attachment.type === "image") return getSafeUiText(i18n.imageAttachmentLabel, "Image");
+    if (attachment.type === "image") return getSafeUiText(i18n.imageAttachmentLabel, localization.defaults.imageAttachmentLabel);
     return getAttachmentKindLabel(attachment);
   }
 
@@ -12104,7 +12150,7 @@
     if (attachment.previewText) {
       previewPanel = el("pre", { className: "messageAttachmentPreviewPanel", hidden: true });
       previewPanel.textContent = attachment.previewText;
-      const previewButton = createAttachmentActionButton(i18n.attachmentPreview || "Preview", () => {
+      const previewButton = createAttachmentActionButton(i18n.attachmentPreview || localization.defaults.attachmentPreview, () => {
         const willOpen = previewPanel.hidden;
         previewPanel.hidden = !willOpen;
         previewButton.setAttribute("aria-expanded", willOpen ? "true" : "false");
@@ -12114,7 +12160,7 @@
       actions.appendChild(previewButton);
     }
     if (attachment.status === "available" && attachment.dataOmitted === true && getAttachmentId(attachment)) {
-      actions.appendChild(createAttachmentActionButton(i18n.attachmentSave || "Save", () => {
+      actions.appendChild(createAttachmentActionButton(i18n.attachmentSave || localization.defaults.attachmentSave, () => {
         vscode.postMessage({
           type: "saveAttachment",
           attachmentId: getAttachmentId(attachment),
@@ -12144,7 +12190,7 @@
 
     if (attachment.path) {
       const actions = el("div", { className: "messageAttachmentActions" });
-      actions.appendChild(createAttachmentActionButton(i18n.attachmentOpen || "Open", () => {
+      actions.appendChild(createAttachmentActionButton(i18n.attachmentOpen || localization.defaults.attachmentOpen, () => {
         vscode.postMessage({
           type: "openAttachment",
           fsPath: attachment.path,
@@ -12179,7 +12225,7 @@
 
     if (attachment.path) {
       const actions = el("div", { className: "messageAttachmentActions" });
-      actions.appendChild(createAttachmentActionButton(i18n.attachmentOpen || "Open", () => {
+      actions.appendChild(createAttachmentActionButton(i18n.attachmentOpen || localization.defaults.attachmentOpen, () => {
         vscode.postMessage({
           type: "openAttachment",
           fsPath: attachment.path,
@@ -12191,50 +12237,84 @@
     return card;
   }
 
-  function renderTaskNotificationAttachment(attachment, messageItem, attachmentIndex) {
+  function renderTaskNotificationAttachment(attachment, messageItem, attachmentIndex, internal = false) {
     const statusLabel = getTaskNotificationStatusLabel(attachment && attachment.status);
-    const tooltip = [getSafeUiText(i18n.taskNotificationTitle, "Task notification"), statusLabel, attachment.summary]
+    const tooltip = [getSafeUiText(i18n.taskNotificationTitle, localization.defaults.taskNotificationTitle), statusLabel, attachment.summary]
       .filter(Boolean)
       .join("\n");
     const card = el("div", { className: "messageAttachmentCard messageAttachmentCard-notification" });
     card.title = tooltip;
-    appendAttachmentBadge(card, statusLabel || getSafeUiText(i18n.taskNotificationTitle, "Task notification"), tooltip);
+    appendAttachmentBadge(card, statusLabel || getSafeUiText(i18n.taskNotificationTitle, localization.defaults.taskNotificationTitle), tooltip);
 
     const body = el("div", { className: "messageAttachmentBody" });
     const title = el("div", { className: "messageAttachmentTitle" });
-    title.textContent = attachment.summary || getSafeUiText(i18n.taskNotificationTitle, "Task notification");
+    title.textContent = attachment.summary || getSafeUiText(i18n.taskNotificationTitle, localization.defaults.taskNotificationTitle);
     title.title = tooltip;
     body.appendChild(title);
 
     const usageText = formatTaskNotificationUsage(attachment && attachment.usage);
     if (usageText) {
       const meta = el("div", { className: "messageAttachmentMeta" });
-      meta.textContent = `${getSafeUiText(i18n.taskNotificationUsage, "Usage")}: ${usageText}`;
+      meta.textContent = `${getSafeUiText(i18n.taskNotificationUsage, localization.defaults.taskNotificationUsage)}: ${usageText}`;
       body.appendChild(meta);
     }
 
     if (attachment.result) {
       body.appendChild(
         renderAttachmentDetails(
-          getSafeUiText(i18n.taskNotificationResult, "Result"),
+          getSafeUiText(i18n.taskNotificationResult, localization.defaults.taskNotificationResult),
           attachment.result,
           "messageAttachmentStructuredPreview",
-          buildAttachmentDetailKey(attachment, "result", messageItem, attachmentIndex),
+          buildNotificationResultDetailKey(attachment, messageItem, attachmentIndex, internal),
         ),
       );
+    }
+    if (!internal && attachment.details) {
+      const details = createNotificationDetailsContainer(attachment.details.stateKey);
+      const content = details.lastElementChild;
+      appendNotificationDetailFields(content, attachment.details);
+      const variants = Array.isArray(attachment.details.rawVariants) ? attachment.details.rawVariants.slice(0, 16) : [];
+      if (variants.length) content.appendChild(el("h4", { textContent: i18n.taskDetailRaw }));
+      for (const [index, variant] of variants.entries()) {
+        if (variants.length > 1) content.appendChild(el("h5", { textContent: formatTemplate(i18n.taskDetailVariant, index + 1) }));
+        content.appendChild(el("pre", { className: "messageAttachmentStructuredPreview", textContent: variant.text }));
+        if (variant.truncated) content.appendChild(el("p", { textContent: i18n.taskDetailOmitted }));
+      }
+      body.appendChild(details);
     }
     card.appendChild(body);
     return card;
   }
 
+  function createNotificationDetailsContainer(key) {
+    const details = renderAttachmentDetails(i18n.taskDetailDetails, "", "notificationDetailsContent", key);
+    details.lastElementChild.replaceWith(el("div", { className: "notificationDetailsContent" }));
+    return details;
+  }
+
+  function appendNotificationDetailFields(container, details) {
+    if (!details || typeof details !== "object") return;
+    const fields = ["taskId", "toolUseId", "taskType", "outputFile", "rawStatus", "note", "event", "worktreePath", "worktreeBranch"];
+    const list = el("dl", { className: "notificationDetailFields" });
+    for (const field of fields) {
+      if (typeof details[field] !== "string" || !details[field]) continue;
+      list.appendChild(el("dt", { textContent: i18n["taskDetail" + field[0].toUpperCase() + field.slice(1)] }));
+      const value = el("dd", {});
+      value.appendChild(el("pre", { textContent: details[field] }));
+      list.appendChild(value);
+    }
+    container.appendChild(list);
+    if (details.omitted || details.omittedVariants || details.truncatedFields?.length) container.appendChild(el("p", { textContent: i18n.taskDetailOmitted }));
+  }
+
   function renderInvokeAttachment(attachment, messageItem, attachmentIndex) {
-    const titleText = attachment.toolName || getSafeUiText(i18n.invokeTitle, "Tool invocation");
-    const tooltip = [getSafeUiText(i18n.invokeTitle, "Tool invocation"), titleText, attachment.description]
+    const titleText = attachment.toolName || getSafeUiText(i18n.invokeTitle, localization.defaults.invokeTitle);
+    const tooltip = [getSafeUiText(i18n.invokeTitle, localization.defaults.invokeTitle), titleText, attachment.description]
       .filter(Boolean)
       .join("\n");
     const card = el("div", { className: "messageAttachmentCard messageAttachmentCard-invoke" });
     card.title = tooltip;
-    appendAttachmentBadge(card, getSafeUiText(i18n.invokeTitle, "Tool invocation"), tooltip);
+    appendAttachmentBadge(card, getSafeUiText(i18n.invokeTitle, localization.defaults.invokeTitle), tooltip);
 
     const body = el("div", { className: "messageAttachmentBody" });
     const title = el("div", { className: "messageAttachmentTitle mono" });
@@ -12244,13 +12324,13 @@
 
     if (attachment.description) {
       const description = el("div", { className: "messageAttachmentMeta" });
-      description.textContent = `${getSafeUiText(i18n.invokeDescription, "Description")}: ${attachment.description}`;
+      description.textContent = `${getSafeUiText(i18n.invokeDescription, localization.defaults.invokeDescription)}: ${attachment.description}`;
       body.appendChild(description);
     }
 
     if (Array.isArray(attachment.parameters) && attachment.parameters.length > 0) {
       const details = renderAttachmentDetails(
-        getSafeUiText(i18n.invokeParameter, "Parameter"),
+        getSafeUiText(i18n.invokeParameter, localization.defaults.invokeParameter),
         "",
         "messageAttachmentStructuredPreview",
         buildAttachmentDetailKey(attachment, "parameters", messageItem, attachmentIndex),
@@ -12275,6 +12355,29 @@
 
     card.appendChild(body);
     return card;
+  }
+
+  function buildCrossSessionMessageDetailKey(item) {
+    if (item?.type !== "crossSessionMessage" || !Number.isSafeInteger(item.messageIndex) || item.messageIndex <= 0) return "";
+    if (typeof item.body !== "string" || !item.body.trim()) return "";
+    return `cross-session:${item.messageIndex}:body`;
+  }
+
+  function expandCrossSessionMessageForReveal(messageIndex) {
+    if (!Number.isSafeInteger(messageIndex) || messageIndex <= 0 || !Array.isArray(model?.items)) return;
+    const item = model.items.find((candidate) => candidate.type === "crossSessionMessage" && candidate.messageIndex === messageIndex);
+    const key = buildCrossSessionMessageDetailKey(item);
+    if (!key) return;
+    expandedAttachmentDetails.add(key);
+    pageSearchSuppressedTemporaryAttachmentDetailKeys.delete(key);
+  }
+
+  function buildNotificationResultDetailKey(attachment, messageItem, attachmentIndex, internal = false) {
+    if (internal && attachment?.details) {
+      const key = normalizeAttachmentDetailKey(attachment.details.stateKey);
+      return key ? `${key}:result` : "";
+    }
+    return buildAttachmentDetailKey(attachment, "result", messageItem, attachmentIndex);
   }
 
   function buildAttachmentDetailKey(attachment, detailKind, messageItem, attachmentIndex) {
@@ -12406,11 +12509,11 @@
   }
 
   function getTaskNotificationStatusLabel(status) {
-    if (status === "completed") return getSafeUiText(i18n.taskNotificationStatusCompleted, "completed");
-    if (status === "failed") return getSafeUiText(i18n.taskNotificationStatusFailed, "failed");
-    if (status === "running") return getSafeUiText(i18n.taskNotificationStatusRunning, "running");
-    if (status === "cancelled") return getSafeUiText(i18n.taskNotificationStatusCancelled, "cancelled");
-    return getSafeUiText(i18n.taskNotificationStatusUnknown, "unknown");
+    if (status === "completed") return getSafeUiText(i18n.taskNotificationStatusCompleted, localization.defaults.taskNotificationStatusCompleted);
+    if (status === "failed") return getSafeUiText(i18n.taskNotificationStatusFailed, localization.defaults.taskNotificationStatusFailed);
+    if (status === "running") return getSafeUiText(i18n.taskNotificationStatusRunning, localization.defaults.taskNotificationStatusRunning);
+    if (status === "cancelled") return getSafeUiText(i18n.taskNotificationStatusCancelled, localization.defaults.taskNotificationStatusCancelled);
+    return getSafeUiText(i18n.taskNotificationStatusUnknown, localization.defaults.taskNotificationStatusUnknown);
   }
 
   function formatTaskNotificationUsage(usage) {
@@ -12419,7 +12522,7 @@
     if (typeof usage.subagentTokens === "number" && Number.isFinite(usage.subagentTokens)) {
       parts.push(
         formatTemplate(
-          getSafeUiText(i18n.taskNotificationUsageTokens, "{0} tokens"),
+          getSafeUiText(i18n.taskNotificationUsageTokens, localization.defaults.taskNotificationUsageTokens),
           getUsageNumber(usage.subagentTokens),
         ),
       );
@@ -12427,7 +12530,7 @@
     if (typeof usage.toolUses === "number" && Number.isFinite(usage.toolUses)) {
       parts.push(
         formatTemplate(
-          getSafeUiText(i18n.taskNotificationUsageToolUses, "{0} tool uses"),
+          getSafeUiText(i18n.taskNotificationUsageToolUses, localization.defaults.taskNotificationUsageToolUses),
           getUsageNumber(usage.toolUses),
         ),
       );
@@ -12474,11 +12577,11 @@
   function getAttachmentLabel(attachment) {
     const label = attachment && typeof attachment.label === "string" ? attachment.label.trim() : "";
     if (label) return label;
-    if (attachment?.type === "document") return i18n.attachmentDocument || "Document";
-    if (attachment?.type === "selectionReference") return i18n.attachmentSelection || "Selection";
-    if (attachment?.type === "notification") return i18n.taskNotificationTitle || "Task notification";
-    if (attachment?.type === "invoke") return attachment.toolName || i18n.invokeTitle || "Tool invocation";
-    return i18n.attachmentFileReference || "File reference";
+    if (attachment?.type === "document") return i18n.attachmentDocument || localization.defaults.attachmentDocument;
+    if (attachment?.type === "selectionReference") return i18n.attachmentSelection || localization.defaults.attachmentSelection;
+    if (attachment?.type === "notification") return i18n.taskNotificationTitle || localization.defaults.taskNotificationTitle;
+    if (attachment?.type === "invoke") return attachment.toolName || i18n.invokeTitle || localization.defaults["invokeTitle"];
+    return i18n.attachmentFileReference || localization.defaults.attachmentFileReference;
   }
 
   function getDocumentKind(attachment) {
@@ -12496,24 +12599,24 @@
   function getAttachmentKindLabel(attachment) {
     if (attachment?.type === "document") {
       const kind = getDocumentKind(attachment);
-      if (kind === "pdf") return i18n.attachmentPdf || "PDF";
-      if (kind === "text") return i18n.attachmentText || "Text";
-      return i18n.attachmentDocument || "Document";
+      if (kind === "pdf") return i18n.attachmentPdf || localization.defaults.attachmentPdf;
+      if (kind === "text") return i18n.attachmentText || localization.defaults.attachmentText;
+      return i18n.attachmentDocument || localization.defaults.attachmentDocument;
     }
-    if (attachment?.type === "selectionReference") return i18n.attachmentSelection || "Selection";
+    if (attachment?.type === "selectionReference") return i18n.attachmentSelection || localization.defaults.attachmentSelection;
     if (attachment?.type === "notification") return getTaskNotificationStatusLabel(attachment.status);
-    if (attachment?.type === "invoke") return i18n.invokeTitle || "Tool invocation";
-    if (attachment?.source === "claudeIdeOpenedFile") return i18n.attachmentOpenedFile || "Opened file";
+    if (attachment?.type === "invoke") return i18n.invokeTitle || localization.defaults.invokeTitle;
+    if (attachment?.source === "claudeIdeOpenedFile") return i18n.attachmentOpenedFile || localization.defaults.attachmentOpenedFile;
     const kind = getFileKind(attachment);
-    if (kind === "pdf") return i18n.attachmentPdf || "PDF";
-    if (kind === "word") return i18n.attachmentWord || "Word";
-    if (kind === "excel") return i18n.attachmentExcel || "Excel";
-    if (kind === "powerpoint") return i18n.attachmentPowerPoint || "PowerPoint";
-    if (kind === "archive") return i18n.attachmentArchive || "Archive";
-    if (kind === "text") return i18n.attachmentText || "Text";
-    if (kind === "code") return i18n.attachmentCode || "Code";
-    if (kind === "image") return i18n.attachmentImageReference || "Image";
-    return i18n.attachmentGenericFile || "File";
+    if (kind === "pdf") return i18n.attachmentPdf || localization.defaults.attachmentPdf;
+    if (kind === "word") return i18n.attachmentWord || localization.defaults.attachmentWord;
+    if (kind === "excel") return i18n.attachmentExcel || localization.defaults.attachmentExcel;
+    if (kind === "powerpoint") return i18n.attachmentPowerPoint || localization.defaults.attachmentPowerPoint;
+    if (kind === "archive") return i18n.attachmentArchive || localization.defaults.attachmentArchive;
+    if (kind === "text") return i18n.attachmentText || localization.defaults.attachmentText;
+    if (kind === "code") return i18n.attachmentCode || localization.defaults.attachmentCode;
+    if (kind === "image") return i18n.attachmentImageReference || localization.defaults.attachmentImageReference;
+    return i18n.attachmentGenericFile || localization.defaults.attachmentGenericFile;
   }
 
   function buildAttachmentTitle(attachment) {
@@ -12537,11 +12640,11 @@
   }
 
   function formatAttachmentUnavailableReason(reason) {
-    if (reason === "tooLarge") return i18n.attachmentTooLarge || "Too large";
-    if (reason === "unsupported") return i18n.attachmentUnsupported || "Unsupported";
-    if (reason === "missing") return i18n.attachmentMissing || "Missing";
-    if (reason === "disabled") return i18n.imageDisabled || "Disabled";
-    return i18n.attachmentUnavailable || "Unavailable";
+    if (reason === "tooLarge") return i18n.attachmentTooLarge || localization.defaults.attachmentTooLarge;
+    if (reason === "unsupported") return i18n.attachmentUnsupported || localization.defaults.attachmentUnsupported;
+    if (reason === "missing") return i18n.attachmentMissing || localization.defaults.attachmentMissing;
+    if (reason === "disabled") return i18n.imageDisabled || localization.defaults.imageDisabled;
+    return i18n.attachmentUnavailable || localization.defaults.attachmentUnavailable;
   }
 
   function formatAttachmentLineRange(attachment) {
@@ -12579,7 +12682,7 @@
   function getImageAttachmentLabel(value) {
     const label = typeof value === "string" ? value.trim() : "";
     if (label && label !== "Image attachment" && label !== "image-attachment") return label;
-    return getSafeUiText(i18n.imageAttachmentLabel, "Image attachment");
+    return getSafeUiText(i18n.imageAttachmentLabel, localization.defaults.imageAttachmentLabel);
   }
 
   function renderMessageImage(image, previewImages, previewIndex) {
@@ -12625,7 +12728,7 @@
     const frame = el("div", { className: "messageImageFrame" });
     frame.classList.add("messageImageFrame-unavailable");
     const title = el("div", { className: "messageImageUnavailableTitle" });
-    title.textContent = i18n.imageUnavailable || "Image unavailable";
+    title.textContent = i18n.imageUnavailable || localization.defaults.imageUnavailable;
     frame.appendChild(title);
 
     const reason = el("div", { className: "messageImageUnavailableReason" });
@@ -12669,7 +12772,7 @@
   }
 
   function getImageLoadingText() {
-    return getSafeUiText(i18n.imageLoading, "Loading image...");
+    return getSafeUiText(i18n.imageLoading, localization.defaults.imageLoading);
   }
 
   function renderImageLoadingContent() {
@@ -12776,7 +12879,7 @@
 
     withPageSearchContentMutation(
       () => {
-        const failedMessage = getSafeUiText(msg.message, i18n.patchDetailsLoadFailed || "Failed to load diff details.");
+        const failedMessage = getSafeUiText(msg.message, i18n.patchDetailsLoadFailed || localization.defaults.patchDetailsLoadFailed);
         const wasLoading = patchEntryDetailsLoading.has(entryId);
         const hadSameFailure = patchEntryDetailsFailed.get(entryId) === failedMessage;
         // True no-op re-delivery of an identical failure: don't re-render the error body
@@ -12836,9 +12939,9 @@
       frame.removeAttribute("data-image-id");
       frame.replaceChildren();
       const title = el("div", { className: "messageImageUnavailableTitle" });
-      title.textContent = i18n.imageUnavailable || "Image unavailable";
+      title.textContent = i18n.imageUnavailable || localization.defaults.imageUnavailable;
       const reason = el("div", { className: "messageImageUnavailableReason" });
-      reason.textContent = i18n.imageInvalid || "The image data could not be displayed.";
+      reason.textContent = i18n.imageInvalid || localization.defaults.imageInvalid;
       frame.appendChild(title);
       frame.appendChild(reason);
       if (frame instanceof HTMLButtonElement) frame.disabled = true;
@@ -12868,12 +12971,12 @@
 
   function formatImageUnavailableReason(image) {
     const reason = image && typeof image.reason === "string" ? image.reason : "";
-    if (reason === "tooLarge") return i18n.imageTooLarge || "The image is too large to display.";
-    if (reason === "unsupported") return i18n.imageUnsupported || "This image format is not supported.";
-    if (reason === "missing") return i18n.imageMissing || "The local image file could not be found.";
-    if (reason === "remote") return i18n.imageRemote || "This image requires an external file reference.";
-    if (reason === "disabled") return i18n.imageDisabled || "Image display is disabled in settings.";
-    return i18n.imageInvalid || "The image data could not be displayed.";
+    if (reason === "tooLarge") return i18n.imageTooLarge || localization.defaults.imageTooLarge;
+    if (reason === "unsupported") return i18n.imageUnsupported || localization.defaults.imageUnsupported;
+    if (reason === "missing") return i18n.imageMissing || localization.defaults.imageMissing;
+    if (reason === "remote") return i18n.imageRemote || localization.defaults.imageRemote;
+    if (reason === "disabled") return i18n.imageDisabled || localization.defaults.imageDisabled;
+    return i18n.imageInvalid || localization.defaults.imageInvalid;
   }
 
   function openImagePreview(images, index) {
@@ -12957,19 +13060,19 @@
     preview.overlay.classList.toggle("imagePreviewOverlay-actual", actualSize);
     preview.gallery.hidden = !hasImages;
     const label = actualSize
-      ? i18n.imageFitPreview || "Fit to window"
-      : i18n.imageActualSize || "Actual size";
+      ? i18n.imageFitPreview || localization.defaults.imageFitPreview
+      : i18n.imageActualSize || localization.defaults.imageActualSize;
     preview.sizeButton.title = label;
     preview.sizeButton.setAttribute("aria-label", label);
     preview.sizeButton.innerHTML = actualSize ? CARD_RESTORE_ICON_SVG : CARD_EXPAND_ICON_SVG;
-    preview.saveButton.title = i18n.imageSave || "Save image";
-    preview.saveButton.setAttribute("aria-label", i18n.imageSave || "Save image");
-    preview.closeButton.title = i18n.imageClosePreview || "Close image preview";
-    preview.closeButton.setAttribute("aria-label", i18n.imageClosePreview || "Close image preview");
-    preview.prevButton.title = i18n.imagePrevious || "Previous image";
-    preview.prevButton.setAttribute("aria-label", i18n.imagePrevious || "Previous image");
-    preview.nextButton.title = i18n.imageNext || "Next image";
-    preview.nextButton.setAttribute("aria-label", i18n.imageNext || "Next image");
+    preview.saveButton.title = i18n.imageSave || localization.defaults.imageSave;
+    preview.saveButton.setAttribute("aria-label", i18n.imageSave || localization.defaults.imageSave);
+    preview.closeButton.title = i18n.imageClosePreview || localization.defaults.imageClosePreview;
+    preview.closeButton.setAttribute("aria-label", i18n.imageClosePreview || localization.defaults.imageClosePreview);
+    preview.prevButton.title = i18n.imagePrevious || localization.defaults.imagePrevious;
+    preview.prevButton.setAttribute("aria-label", i18n.imagePrevious || localization.defaults.imagePrevious);
+    preview.nextButton.title = i18n.imageNext || localization.defaults.imageNext;
+    preview.nextButton.setAttribute("aria-label", i18n.imageNext || localization.defaults.imageNext);
     updateImagePreviewGalleryScrollState(preview);
   }
 
@@ -13217,7 +13320,7 @@
 
     const title = el("div", { className: "toolCardTitle" });
     title.textContent = item.incomplete ? i18n.patchGroupTitle : formatTemplate(
-      getSafeUiText(i18n.patchFilesEdited || i18n.patchGroupCount, "Edited {0} files"),
+      getSafeUiText(i18n.patchFilesEdited || i18n.patchGroupCount, localization.defaults.patchFilesEdited),
       item.entryCount || (Array.isArray(item.entries) ? item.entries.length : 0),
     );
     titleWrap.appendChild(title);
@@ -13262,7 +13365,7 @@
 
     if (entries.length === 0) {
       const empty = el("div", { className: "toolCardSecondary" });
-      empty.textContent = i18n.patchNoDiff || "No diff available";
+      empty.textContent = i18n.patchNoDiff || localization.defaults.patchNoDiff;
       bubble.appendChild(empty);
     } else {
       bubble.appendChild(renderPatchGroupCompactSummary(cardKey, item, entries, { allDiffActive }));
@@ -13290,8 +13393,8 @@
       const remaining = countHiddenPatchGroupEntries(entries, visibleEntries);
       const toggle = el("button", { type: "button", className: "patchGroupFileToggle" });
       toggle.textContent = fileListExpanded
-        ? getSafeUiText(i18n.patchShowFewerFiles, "Show fewer files")
-        : formatTemplate(getSafeUiText(i18n.patchShowMoreFiles, "Show {0} more files"), remaining);
+        ? getSafeUiText(i18n.patchShowFewerFiles, localization.defaults.patchShowFewerFiles)
+        : formatTemplate(getSafeUiText(i18n.patchShowMoreFiles, localization.defaults.patchShowMoreFiles), remaining);
       toggle.title = toggle.textContent;
       toggle.setAttribute("aria-expanded", fileListExpanded ? "true" : "false");
       toggle.addEventListener("click", (event) => {
@@ -13364,11 +13467,11 @@
   function syncPatchGroupAllDiffButton(button, allDiffActive) {
     if (!(button instanceof HTMLButtonElement)) return;
     const label = allDiffActive
-      ? getSafeUiText(i18n.patchCloseAllDiffs, "Close all diffs")
-      : getSafeUiText(i18n.patchOpenAllDiffs, "Open all diffs");
+      ? getSafeUiText(i18n.patchCloseAllDiffs, localization.defaults.patchCloseAllDiffs)
+      : getSafeUiText(i18n.patchOpenAllDiffs, localization.defaults.patchOpenAllDiffs);
     const tooltip = allDiffActive
-      ? getSafeUiText(i18n.patchCloseAllDiffsTooltip, "Close all file diffs and return to the compact summary")
-      : getSafeUiText(i18n.patchOpenAllDiffsTooltip, "Expand this card to full width and open diffs for all files");
+      ? getSafeUiText(i18n.patchCloseAllDiffsTooltip, localization.defaults.patchCloseAllDiffsTooltip)
+      : getSafeUiText(i18n.patchOpenAllDiffsTooltip, localization.defaults.patchOpenAllDiffsTooltip);
     button.textContent = label;
     button.title = tooltip;
     button.setAttribute("aria-label", tooltip);
@@ -13561,8 +13664,8 @@
     const applyPatchToggleLabel = () => {
       if (!(summary instanceof HTMLElement)) return;
       const label = details.open
-        ? i18n.patchCollapse || "Collapse diff"
-        : i18n.patchExpand || "Expand diff";
+        ? i18n.patchCollapse || localization.defaults.patchCollapse
+        : i18n.patchExpand || localization.defaults.patchExpand;
       summary.title = label;
       summary.setAttribute("aria-label", label);
     };
@@ -13663,10 +13766,10 @@
     const message = el("span", {});
     message.textContent =
       (entryId && patchEntryDetailsFailed.get(entryId)) ||
-      getSafeUiText(i18n.patchDetailsLoadFailed, "Failed to load diff details.");
+      getSafeUiText(i18n.patchDetailsLoadFailed, localization.defaults.patchDetailsLoadFailed);
     wrap.appendChild(message);
     const retry = el("button", { type: "button", className: "patchEntryDetailsRetry" });
-    retry.textContent = getSafeUiText(i18n.patchDetailsRetry, "Retry");
+    retry.textContent = getSafeUiText(i18n.patchDetailsRetry, localization.defaults.patchDetailsRetry);
     retry.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -13764,14 +13867,14 @@
 
     if (entry.moveDisplayPath && entry.moveDisplayPath !== entry.displayPath) {
       const movedTo = el("div", { className: "patchEntryMove" });
-      movedTo.textContent = formatTemplate(i18n.patchMovedTo || "Moved to: {0}", entry.moveDisplayPath);
+      movedTo.textContent = formatTemplate(i18n.patchMovedTo || localization.defaults.patchMovedTo, entry.moveDisplayPath);
       body.appendChild(movedTo);
     }
 
     const hunks = Array.isArray(entry.hunks) ? entry.hunks : [];
     if (hunks.length === 0) {
       const empty = el("div", { className: "toolCardSecondary" });
-      empty.textContent = i18n.patchNoDiff || "No diff available";
+      empty.textContent = i18n.patchNoDiff || localization.defaults.patchNoDiff;
       body.appendChild(empty);
       finalizeDeferredPatchEntryBody(body, entry);
       return;
@@ -14010,14 +14113,14 @@
 
     if (entry.moveDisplayPath && entry.moveDisplayPath !== entry.displayPath) {
       const movedTo = el("div", { className: "patchEntryMove" });
-      movedTo.textContent = formatTemplate(i18n.patchMovedTo || "Moved to: {0}", entry.moveDisplayPath);
+      movedTo.textContent = formatTemplate(i18n.patchMovedTo || localization.defaults.patchMovedTo, entry.moveDisplayPath);
       body.appendChild(movedTo);
     }
 
     const hunks = Array.isArray(entry.hunks) ? entry.hunks : [];
     if (hunks.length === 0) {
       const empty = el("div", { className: "toolCardSecondary" });
-      empty.textContent = i18n.patchNoDiff || "No diff available";
+      empty.textContent = i18n.patchNoDiff || localization.defaults.patchNoDiff;
       body.appendChild(empty);
       return;
     }
@@ -14045,7 +14148,7 @@
     if (jumpTarget) {
       const jumpBtn = el("button", { type: "button", className: "patchHunkActionBtn iconBtn" });
       jumpBtn.innerHTML = PATCH_JUMP_ICON_SVG;
-      const jumpTooltip = formatTemplate(i18n.patchJumpTooltip || "Jump to line {0}", jumpTarget.line);
+      const jumpTooltip = formatTemplate(i18n.patchJumpTooltip || localization.defaults.patchJumpTooltip, jumpTarget.line);
       jumpBtn.title = jumpTooltip;
       jumpBtn.setAttribute("aria-label", jumpTooltip);
       jumpBtn.addEventListener("click", (event) => {
@@ -14065,9 +14168,9 @@
 
     const labels = el("div", { className: "patchDiffColumnLabels" });
     const before = el("div", { className: "patchDiffColumnLabel patchDiffColumnLabel-before" });
-    before.textContent = i18n.patchBefore || "Before";
+    before.textContent = i18n.patchBefore || localization.defaults.patchBefore;
     const after = el("div", { className: "patchDiffColumnLabel patchDiffColumnLabel-after" });
-    after.textContent = i18n.patchAfter || "After";
+    after.textContent = i18n.patchAfter || localization.defaults.patchAfter;
     labels.appendChild(before);
     labels.appendChild(after);
     wrap.appendChild(labels);
@@ -14107,8 +14210,8 @@
     if (!(button instanceof HTMLButtonElement)) return;
     button.innerHTML = enabled ? PATCH_WRAP_OFF_ICON_SVG : PATCH_WRAP_ON_ICON_SVG;
     const label = enabled
-      ? i18n.patchWrapOffTooltip || i18n.patchWrapOff || "Keep diff lines on one row with horizontal scroll"
-      : i18n.patchWrapOnTooltip || i18n.patchWrapOn || "Wrap long diff lines";
+      ? i18n.patchWrapOffTooltip || i18n.patchWrapOff || localization.defaults["patchWrapOffTooltip"]
+      : i18n.patchWrapOnTooltip || i18n.patchWrapOn || localization.defaults["patchWrapOnTooltip"];
     button.title = label;
     button.setAttribute("aria-label", label);
   }
@@ -14464,8 +14567,8 @@
         bubble.appendChild(renderLazyDetailsPlaceholder());
         requestFullDetailsIfNeeded();
       } else {
-        appendToolDetailsBlock(bubble, i18n.arguments || "Arguments", "json", item.argumentsText);
-        appendToolDetailsBlock(bubble, i18n.output || "Output", "", item.outputText);
+        appendToolDetailsBlock(bubble, i18n.arguments || localization.defaults.arguments, "json", item.argumentsText);
+        appendToolDetailsBlock(bubble, i18n.output || localization.defaults.output, "", item.outputText);
       }
     }
 
@@ -14482,12 +14585,12 @@
   function appendToolExecutionMetaTags(container, execution) {
     if (!execution || typeof execution !== "object") return;
     const status = normalizeToolStatus(execution.status);
-    if (status) appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolStatus, "Status: {0}"), status));
+    if (status) appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolStatus, localization.defaults.toolStatus), status));
     if (typeof execution.exitCode === "number" && Number.isFinite(execution.exitCode)) {
-      appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolExitCode, "Exit: {0}"), String(Math.trunc(execution.exitCode))));
+      appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolExitCode, localization.defaults.toolExitCode), String(Math.trunc(execution.exitCode))));
     }
     if (typeof execution.durationMs === "number" && Number.isFinite(execution.durationMs)) {
-      appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolDuration, "Duration: {0}"), formatDurationMs(execution.durationMs)));
+      appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolDuration, localization.defaults.toolDuration), formatDurationMs(execution.durationMs)));
     }
     const errorText = typeof execution.error === "string" ? execution.error.trim() : "";
     if (errorText) appendToolMetaTag(container, errorText, errorText);
@@ -14496,14 +14599,14 @@
   function normalizeToolStatus(value) {
     const status = typeof value === "string" ? value.trim().toLowerCase() : "";
     if (!status) return "";
-    if (status === "success") return getSafeUiText(i18n.toolStatusSuccess, "success");
+    if (status === "success") return getSafeUiText(i18n.toolStatusSuccess, localization.defaults.toolStatusSuccess);
     if (status === "staged") return i18n.toolStatusStaged;
     if (status === "unconfirmed") return i18n.toolStatusUnconfirmed;
-    if (status === "completed") return getSafeUiText(i18n.toolStatusCompleted, "completed");
-    if (status === "error" || status === "failed") return getSafeUiText(i18n.toolStatusError, "error");
-    if (status === "timeout" || status === "timed_out") return getSafeUiText(i18n.toolStatusTimeout, "timeout");
-    if (status === "interrupted") return getSafeUiText(i18n.toolStatusInterrupted, "interrupted");
-    if (status === "cancelled" || status === "canceled") return getSafeUiText(i18n.toolStatusCancelled, "cancelled");
+    if (status === "completed") return getSafeUiText(i18n.toolStatusCompleted, localization.defaults.toolStatusCompleted);
+    if (status === "error" || status === "failed") return getSafeUiText(i18n.toolStatusError, localization.defaults.toolStatusError);
+    if (status === "timeout" || status === "timed_out") return getSafeUiText(i18n.toolStatusTimeout, localization.defaults.toolStatusTimeout);
+    if (status === "interrupted") return getSafeUiText(i18n.toolStatusInterrupted, localization.defaults.toolStatusInterrupted);
+    if (status === "cancelled" || status === "canceled") return getSafeUiText(i18n.toolStatusCancelled, localization.defaults.toolStatusCancelled);
     return status;
   }
 
@@ -14610,7 +14713,7 @@
     const title =
       raw && typeof raw.title === "string" && raw.title.trim().length > 0
         ? raw.title.trim()
-        : i18n.tool || "Tool";
+        : i18n.tool || localization.defaults.tool;
     const primaryText =
       raw && typeof raw.primaryText === "string" && raw.primaryText.trim().length > 0
         ? raw.primaryText.trim()
@@ -14664,27 +14767,30 @@
 
   function renderLazyDetailsPlaceholder() {
     const placeholder = el("div", { className: "toolCardSecondary" });
-    placeholder.textContent = getSafeUiText(i18n.detailsLoading, "Loading details...");
+    placeholder.textContent = getSafeUiText(i18n.detailsLoading, localization.defaults.detailsLoading);
     return placeholder;
   }
 
   function renderNote(item, cardKey) {
+    const historyIncomplete = item && item.noticeKind === "historyIncomplete";
+    const noteTitle = historyIncomplete ? getSafeUiText(i18n.historyIncompleteTitle, localization.defaults.historyIncompleteTitle) : item && item.title;
+    const noteText = historyIncomplete ? getSafeUiText(i18n.historyIncompleteMessage, localization.defaults.historyIncompleteMessage) : item && item.text;
     const row = el("div", { className: "row tool" });
     const bubble = el("div", { className: "bubble tool" });
     applyTimelineCardWidthState(bubble, cardKey);
     applyBookmarkMetadata(bubble, item);
     const title = el("div", { className: "metaLine" });
     const titleText = el("span", {});
-    titleText.textContent = item && item.title ? String(item.title) : "note";
+    titleText.textContent = noteTitle ? String(noteTitle) : "note";
     title.appendChild(titleText);
     const headerActions = el("div", { className: "messageNav cardHeaderActions" });
     appendBookmarkButton(headerActions, item);
     headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
     title.appendChild(headerActions);
     bubble.appendChild(title);
-    if (item && item.text) {
+    if (noteText) {
       const textBlock = el("div", { className: "textBlock" });
-      textBlock.textContent = String(item.text);
+      textBlock.textContent = String(noteText);
       bubble.appendChild(textBlock);
     }
     row.appendChild(bubble);
@@ -14813,7 +14919,7 @@
     label.textContent = explicitLanguage ? resolveMarkdownCodeLabel(explicitLanguage, codeText) : "";
     header.appendChild(label);
     const btn = el("button", { type: "button", className: "codeCopyBtn iconBtn" });
-    const copyLabel = i18n.copy || "Copy";
+    const copyLabel = i18n.copy || localization.defaults.copy;
     const copyCodeLabel = i18n.copyCodeTooltip || copyLabel;
     btn.innerHTML = COPY_ICON_SVG;
     btn.title = copyCodeLabel;
@@ -14897,7 +15003,7 @@
     for (const reply of replies) {
       const card = el("section", { className: "questionReply" });
       const questionLabel = el("div", { className: "questionReplyLabel" });
-      questionLabel.textContent = i18n.questionReplyQuestion || "";
+      questionLabel.textContent = i18n.questionReplyQuestion || localization.defaults.questionReplyQuestion;
       card.appendChild(questionLabel);
       const question = el("div", { className: "questionReplyQuestion" });
       question.textContent = reply.question;
@@ -14912,7 +15018,7 @@
           option.appendChild(label);
           if (selected) {
             const badge = el("span", { className: "questionReplySelected" });
-            badge.textContent = i18n.questionReplySelected || "";
+            badge.textContent = i18n.questionReplySelected || localization.defaults.questionReplySelected;
             option.appendChild(badge);
           }
           options.appendChild(option);
@@ -14920,10 +15026,10 @@
         card.appendChild(options);
       }
       const answerLabel = el("div", { className: "questionReplyLabel" });
-      answerLabel.textContent = i18n.questionReplyAnswer || "";
+      answerLabel.textContent = i18n.questionReplyAnswer || localization.defaults.questionReplyAnswer;
       card.appendChild(answerLabel);
       const answer = el("div", { className: "questionReplyAnswer" });
-      answer.textContent = reply.answer || i18n.questionReplyEmptyAnswer || "";
+      answer.textContent = reply.answer || i18n.questionReplyEmptyAnswer || localization.defaults["questionReplyEmptyAnswer"];
       card.appendChild(answer);
       group.appendChild(card);
     }
@@ -14961,6 +15067,7 @@
     const safeIndex = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex : 0;
     if (type === "claudeProgress" && normalizeClaudeProgressId(item.progressId)) return `claude-progress:${item.progressId}`;
     if (type === "claudeQueuedInput" && normalizeClaudeQueuedInputId(item.inputId)) return `claude-input:${item.inputId}`;
+    if (type === "taskNotification" && typeof item.notificationId === "string" && /^ctn-[a-f0-9]{32}$/u.test(item.notificationId)) return `claude-notification:${item.notificationId}`;
     if (type === "message" && item && typeof item.messageIndex === "number") return `message:${item.messageIndex}`;
     if ((type === "crossSessionMessage" || type === "taskNotification") && item && typeof item.messageIndex === "number") {
       return `cross-session-message:${Math.max(0, Math.floor(item.messageIndex))}`;
@@ -15093,8 +15200,8 @@
     if (!(button instanceof HTMLButtonElement)) return;
     button.innerHTML = expanded ? CARD_RESTORE_ICON_SVG : CARD_EXPAND_ICON_SVG;
     const label = expanded
-      ? getSafeUiText(i18n.restoreCardWidthTooltip, "Restore card width")
-      : getSafeUiText(i18n.expandCardWidthTooltip, "Expand card to full width");
+      ? getSafeUiText(i18n.restoreCardWidthTooltip, localization.defaults.restoreCardWidthTooltip)
+      : getSafeUiText(i18n.expandCardWidthTooltip, localization.defaults.expandCardWidthTooltip);
     button.title = label;
     button.setAttribute("aria-label", label);
     button.setAttribute("aria-pressed", expanded ? "true" : "false");
@@ -15162,7 +15269,7 @@
       if (localButton) localButton.insertAdjacentElement("afterend", mark);
       else container.appendChild(mark);
     }
-    const label = getSafeUiText(i18n.nativeBookmarkTooltip, "");
+    const label = getSafeUiText(i18n.nativeBookmarkTooltip, localization.defaults.nativeBookmarkTooltip);
     mark.title = label;
     mark.setAttribute("aria-label", label);
   }
@@ -15179,8 +15286,8 @@
     if (!(button instanceof HTMLButtonElement)) return;
     const on = bookmarked === true;
     const label = on
-      ? getSafeUiText(i18n.bookmarkRemoveTooltip, "Remove bookmark")
-      : getSafeUiText(i18n.bookmarkAddTooltip, "Add bookmark");
+      ? getSafeUiText(i18n.bookmarkRemoveTooltip, localization.defaults.bookmarkRemoveTooltip)
+      : getSafeUiText(i18n.bookmarkAddTooltip, localization.defaults.bookmarkAddTooltip);
     button.classList.toggle("bookmarkBtn-on", on);
     button.title = label;
     button.setAttribute("aria-label", label);
@@ -15285,8 +15392,8 @@
     const btn = el("button", { type: "button", className: "iconBtn navBtn" });
     const label =
       direction === "prev"
-        ? getSafeUiText(i18n.jumpPrevDiff, "Jump to previous diff")
-        : getSafeUiText(i18n.jumpNextDiff, "Jump to next diff");
+        ? getSafeUiText(i18n.jumpPrevDiff, localization.defaults.jumpPrevDiff)
+        : getSafeUiText(i18n.jumpNextDiff, localization.defaults.jumpNextDiff);
     btn.title = label;
     btn.setAttribute("aria-label", label);
     btn.innerHTML = direction === "prev" ? NAV_UP_ICON_SVG : NAV_DOWN_ICON_SVG;
@@ -15305,17 +15412,18 @@
   function getMessageNavLabel(direction, role) {
     if (role === "user") {
       return direction === "prev"
-        ? i18n.jumpPrevUser || "Jump to previous user prompt"
-        : i18n.jumpNextUser || "Jump to next user prompt";
+        ? i18n.jumpPrevUser || localization.defaults.jumpPrevUser
+        : i18n.jumpNextUser || localization.defaults.jumpNextUser;
     }
     return direction === "prev"
-      ? i18n.jumpPrevAssistant || "Jump to previous assistant response"
-      : i18n.jumpNextAssistant || "Jump to next assistant response";
+      ? i18n.jumpPrevAssistant || localization.defaults.jumpPrevAssistant
+      : i18n.jumpNextAssistant || localization.defaults.jumpNextAssistant;
   }
 
   function jumpToMessage(messageIndex) {
     selectedMessageIndex = messageIndex;
     expandedMessageIndexes.add(messageIndex);
+    expandCrossSessionMessageForReveal(messageIndex);
     ensureTurnExpandedForReveal(getTurnIdForMessageIndex(messageIndex), { render: false });
     render();
     const elTarget = document.getElementById(`msg-${messageIndex}`);
@@ -15458,6 +15566,7 @@
     };
     ensureTurnExpandedForReveal(getTurnIdForMessageIndex(messageIndex), { render: false });
     expandedMessageIndexes.add(messageIndex);
+    expandCrossSessionMessageForReveal(messageIndex);
     render();
     const elTarget = document.getElementById(`msg-${messageIndex}`);
     if (!elTarget) {
@@ -15828,7 +15937,7 @@
           index: targetMessageIndex,
           scrollTop: getScrollTop(),
         });
-        showToast(i18n.restoredLastPosition || "Restored last viewed position.", { key: "restoredLastPosition" });
+        showToast(i18n.restoredLastPosition || localization.defaults.restoredLastPosition, { key: "restoredLastPosition" });
         finish();
       });
     });
@@ -16144,7 +16253,7 @@
       const actions = el("div", { className: "markdownTableActions" });
       actions.setAttribute("data-page-search-ignore", "true");
       const button = el("button", { type: "button", className: "markdownTableCopyBtn iconBtn" });
-      const copyLabel = i18n.copyTableTooltip || i18n.copy || "Copy";
+      const copyLabel = i18n.copyTableTooltip || i18n.copy || localization.defaults["copyTableTooltip"];
       button.innerHTML = COPY_ICON_SVG;
       button.title = copyLabel;
       button.setAttribute("aria-label", copyLabel);
@@ -16153,7 +16262,7 @@
         event.stopPropagation();
         const currentSource = markdownTableSourceByElement.get(table);
         if (typeof currentSource !== "string" || !currentSource) {
-          showToast(i18n.copyFailed || "Could not copy to the clipboard.", { key: "copyFailed" });
+          showToast(i18n.copyFailed || localization.defaults.copyFailed, { key: "copyFailed" });
           return;
         }
         vscode.postMessage({ type: "copy", text: currentSource });
@@ -16405,7 +16514,7 @@
     const card = el("section", { className: "codeCommentCard" });
     const header = el("div", { className: "codeCommentHeader" });
     const label = el("span", { className: "codeCommentLabel" });
-    label.textContent = i18n.codeCommentLabel || "Code Comment";
+    label.textContent = i18n.codeCommentLabel || localization.defaults.codeCommentLabel;
     header.appendChild(label);
     if (comment.priority) {
       const badge = el("span", { className: "codeCommentBadge" });
@@ -16415,21 +16524,21 @@
     card.appendChild(header);
 
     const title = el("div", { className: "codeCommentTitle" });
-    title.textContent = comment.unparsed ? i18n.codeCommentUnparsedTitle || "Code comment (unparsed)" : comment.title;
+    title.textContent = comment.unparsed ? i18n.codeCommentUnparsedTitle || localization.defaults.codeCommentUnparsedTitle : comment.title;
     card.appendChild(title);
 
     if (!comment.unparsed) {
       const location = el("div", { className: "codeCommentLocation" });
-      const locationParts = [`${i18n.codeCommentFile || "File"}: ${comment.file}`];
+      const locationParts = [`${i18n.codeCommentFile || localization.defaults.codeCommentFile}: ${comment.file}`];
       const lineLabel = formatCodeCommentLineRange(comment);
-      if (lineLabel) locationParts.push(`${i18n.codeCommentLines || "Lines"}: ${lineLabel}`);
+      if (lineLabel) locationParts.push(`${i18n.codeCommentLines || localization.defaults.codeCommentLines}: ${lineLabel}`);
       location.textContent = locationParts.join("  ");
       card.appendChild(location);
     }
 
     const body = el("div", { className: "codeCommentBody" });
     body.textContent = comment.unparsed
-      ? comment.rawBody || i18n.codeCommentUnparsedEmptyBody || "(empty directive)"
+      ? comment.rawBody || i18n.codeCommentUnparsedEmptyBody || localization.defaults["codeCommentUnparsedEmptyBody"]
       : comment.body;
     card.appendChild(body);
     return card;
@@ -16471,7 +16580,7 @@
       label.textContent = displayLang;
       header.appendChild(label);
       const btn = el("button", { type: "button", className: "codeCopyBtn iconBtn" });
-      const copyLabel = i18n.copy || "Copy";
+      const copyLabel = i18n.copy || localization.defaults.copy;
       const copyCodeLabel = i18n.copyCodeTooltip || copyLabel;
       btn.innerHTML = COPY_ICON_SVG;
       btn.title = copyCodeLabel;
@@ -16563,18 +16672,18 @@
     });
     const header = el("div", { className: "mermaidHeader" });
     const label = el("span", { className: "mermaidLabel" });
-    label.textContent = i18n.mermaidLabel || "Mermaid diagram";
+    label.textContent = i18n.mermaidLabel || localization.defaults.mermaidLabel;
     header.appendChild(label);
 
     const actions = el("div", { className: "mermaidActions" });
     const themeToggle = createMermaidThemeToggle();
     const copyButton = createMermaidActionButton(
       COPY_ICON_SVG,
-      i18n.mermaidCopySource || i18n.copyCodeTooltip || "Copy Mermaid source",
+      i18n.mermaidCopySource || i18n.copyCodeTooltip || localization.defaults["mermaidCopySource"],
     );
     const expandButton = createMermaidActionButton(
       OPEN_RIGHT_PANE_ICON_SVG,
-      i18n.mermaidExpand || "Open Mermaid diagram in right pane",
+      i18n.mermaidExpand || localization.defaults.mermaidExpand,
     );
     expandButton.disabled = true;
     actions.append(themeToggle, copyButton);
@@ -16586,7 +16695,7 @@
     });
     setMermaidSurfaceTheme(viewport, getActiveMermaidThemeMode());
     const status = el("div", { className: "mermaidStatus", role: "status" });
-    status.textContent = i18n.mermaidLoading || "Rendering Mermaid diagram...";
+    status.textContent = i18n.mermaidLoading || localization.defaults.mermaidLoading;
     viewport.appendChild(status);
     block.appendChild(viewport);
 
@@ -16660,7 +16769,7 @@
     if (!(viewport instanceof HTMLElement)) return;
     if (state === "image") {
       viewport.setAttribute("role", "img");
-      viewport.setAttribute("aria-label", i18n.mermaidLabel || "Mermaid diagram");
+      viewport.setAttribute("aria-label", i18n.mermaidLabel || localization.defaults.mermaidLabel);
       return;
     }
     viewport.removeAttribute("role");
@@ -16711,8 +16820,8 @@
 
   function getMermaidThemeLabel(value) {
     return value === "dark"
-      ? i18n.mermaidThemeDark || "Dark"
-      : i18n.mermaidThemeLight || "Light";
+      ? i18n.mermaidThemeDark || localization.defaults.mermaidThemeDark
+      : i18n.mermaidThemeLight || localization.defaults.mermaidThemeLight;
   }
 
   function syncMermaidThemeControlPresentation(button) {
@@ -16729,10 +16838,10 @@
     button.setAttribute("aria-checked", currentVariant === "dark" ? "true" : "false");
     button.setAttribute(
       "aria-label",
-      i18n.mermaidThemeDarkSetting || "Dark Mermaid theme",
+      i18n.mermaidThemeDarkSetting || localization.defaults.mermaidThemeDarkSetting,
     );
     button.title = formatTemplate(
-      i18n.mermaidThemeSwitch || "Switch Mermaid diagram to {0} theme",
+      i18n.mermaidThemeSwitch || localization.defaults.mermaidThemeSwitch,
       nextLabel,
     );
   }
@@ -16807,7 +16916,7 @@
     primaryButton.appendChild(primaryFormat);
     const menuButton = createMermaidActionButton(
       NAV_DOWN_ICON_SVG,
-      i18n.mermaidSaveMenu || i18n.mermaidSaveFormat || "Choose Mermaid save format",
+      i18n.mermaidSaveMenu || i18n.mermaidSaveFormat || localization.defaults["mermaidSaveMenu"],
     );
     menuButton.classList.add("mermaidSaveMenuButton");
     menuButton.setAttribute("aria-haspopup", "menu");
@@ -16834,14 +16943,14 @@
   }
 
   function getMermaidSaveFormatLabel(format, compact = false) {
-    if (format === "png") return i18n.mermaidFormatPng || "PNG";
-    if (format === "mmd") return compact ? "MMD" : i18n.mermaidFormatSource || "Mermaid source";
-    return i18n.mermaidFormatSvg || "SVG";
+    if (format === "png") return i18n.mermaidFormatPng || localization.defaults.mermaidFormatPng;
+    if (format === "mmd") return compact ? "MMD" : i18n.mermaidFormatSource || localization.defaults.mermaidFormatSource;
+    return i18n.mermaidFormatSvg || localization.defaults.mermaidFormatSvg;
   }
 
   function getMermaidPrimarySaveLabel(format) {
     return formatTemplate(
-      i18n.mermaidSaveAs || "Save Mermaid diagram as {0}",
+      i18n.mermaidSaveAs || localization.defaults.mermaidSaveAs,
       getMermaidSaveFormatLabel(normalizeMermaidSaveFormat(format)),
     );
   }
@@ -16960,7 +17069,7 @@
     menu.setAttribute("role", "menu");
     menu.setAttribute(
       "aria-label",
-      i18n.mermaidSaveMenu || i18n.mermaidSaveFormat || "Choose Mermaid save format",
+      i18n.mermaidSaveMenu || i18n.mermaidSaveFormat || localization.defaults["mermaidSaveMenu"],
     );
 
     const options = [];
@@ -17027,7 +17136,7 @@
     setMermaidSaveControlDisabled(diagramModel.saveControl, true);
     setOpenMermaidPaneSaveControlDisabled(diagramModel, true);
     diagramModel.expandButton.disabled = true;
-    diagramModel.status.textContent = i18n.mermaidLoading || "Rendering Mermaid diagram...";
+    diagramModel.status.textContent = i18n.mermaidLoading || localization.defaults.mermaidLoading;
     setMermaidSurfaceTheme(diagramModel.viewport, renderThemeMode);
     setMermaidViewportAccessibility(diagramModel.viewport, "status");
     diagramModel.viewport.classList.remove("mermaidInlineScrollable");
@@ -17105,7 +17214,7 @@
       closeMermaidPane({ restoreFocus: false });
     }
     const error = el("div", { className: "mermaidError", role: "alert" });
-    error.textContent = i18n.mermaidRenderFailed || "The Mermaid diagram could not be rendered.";
+    error.textContent = i18n.mermaidRenderFailed || localization.defaults.mermaidRenderFailed;
     const fallback = el("pre", {
       className: "mermaidSourceFallback",
       "data-page-search-ignore": "true",
@@ -17608,7 +17717,7 @@
     setMermaidSaveControlDisabled(diagramModel.saveControl, true);
     diagramModel.expandButton.disabled = true;
     if (!(diagramModel.svg instanceof SVGElement)) {
-      diagramModel.status.textContent = i18n.mermaidLoading || "Rendering Mermaid diagram...";
+      diagramModel.status.textContent = i18n.mermaidLoading || localization.defaults.mermaidLoading;
       setMermaidSurfaceTheme(diagramModel.viewport, themeMode);
       setMermaidViewportAccessibility(diagramModel.viewport, "status");
       diagramModel.viewport.replaceChildren(diagramModel.status);
@@ -17693,7 +17802,7 @@
     mermaidPaneScrollTop = 0;
     mermaidPaneRootEl.hidden = false;
     mermaidPaneRootEl.setAttribute("role", "complementary");
-    mermaidPaneRootEl.setAttribute("aria-label", i18n.mermaidPaneTitle || "Mermaid diagram");
+    mermaidPaneRootEl.setAttribute("aria-label", i18n.mermaidPaneTitle || localization.defaults.mermaidPaneTitle);
     document.body.classList.add("mermaidPaneOpen");
     applyMermaidPaneWidth();
     renderMermaidPane({ preserveViewport: false });
@@ -17763,7 +17872,7 @@
       className: "mermaidPaneResizeHandle",
       role: "separator",
       "aria-orientation": "vertical",
-      "aria-label": i18n.mermaidResize || "Resize Mermaid diagram pane",
+      "aria-label": i18n.mermaidResize || localization.defaults.mermaidResize,
       tabindex: "0",
     });
     resizeHandle.dataset.mermaidPaneAction = "resize";
@@ -17772,37 +17881,37 @@
 
     const header = el("div", { className: "mermaidPaneHeader" });
     const title = el("div", { className: "mermaidPaneTitle" });
-    title.textContent = i18n.mermaidPaneTitle || "Mermaid diagram";
+    title.textContent = i18n.mermaidPaneTitle || localization.defaults.mermaidPaneTitle;
     header.appendChild(title);
     const controls = el("div", {
       className: "mermaidPaneControls",
       role: "toolbar",
-      "aria-label": i18n.mermaidPaneTitle || "Mermaid diagram",
+      "aria-label": i18n.mermaidPaneTitle || localization.defaults.mermaidPaneTitle,
     });
 
     const revealButton = createMermaidActionButton(
       BRANCH_CENTER_ICON_SVG,
-      i18n.mermaidReveal || "Reveal source diagram",
+      i18n.mermaidReveal || localization.defaults.mermaidReveal,
     );
     revealButton.dataset.mermaidPaneAction = "reveal";
     revealButton.disabled = typeof mermaidPaneModel.key !== "string" || !mermaidPaneModel.key;
     revealButton.addEventListener("click", () => {
       revealMermaidSourceDiagram(mermaidPaneModel);
     });
-    const fitButton = createMermaidActionButton(BRANCH_FIT_ICON_SVG, i18n.mermaidFit || "Fit diagram");
+    const fitButton = createMermaidActionButton(BRANCH_FIT_ICON_SVG, i18n.mermaidFit || localization.defaults.mermaidFit);
     fitButton.dataset.mermaidPaneAction = "fit";
     fitButton.addEventListener("click", () => fitMermaidPaneDiagram());
-    const zoomOutButton = createMermaidActionButton(BRANCH_ZOOM_OUT_ICON_SVG, i18n.mermaidZoomOut || "Zoom out");
+    const zoomOutButton = createMermaidActionButton(BRANCH_ZOOM_OUT_ICON_SVG, i18n.mermaidZoomOut || localization.defaults.mermaidZoomOut);
     zoomOutButton.classList.add("mermaidPaneZoomOutButton");
     zoomOutButton.dataset.mermaidPaneAction = "zoomOut";
     zoomOutButton.addEventListener("click", () => zoomMermaidPane(-MERMAID_PANE_ZOOM_STEP));
-    const zoomInButton = createMermaidActionButton(BRANCH_ZOOM_IN_ICON_SVG, i18n.mermaidZoomIn || "Zoom in");
+    const zoomInButton = createMermaidActionButton(BRANCH_ZOOM_IN_ICON_SVG, i18n.mermaidZoomIn || localization.defaults.mermaidZoomIn);
     zoomInButton.classList.add("mermaidPaneZoomInButton");
     zoomInButton.dataset.mermaidPaneAction = "zoomIn";
     zoomInButton.addEventListener("click", () => zoomMermaidPane(MERMAID_PANE_ZOOM_STEP));
     const copyButton = createMermaidActionButton(
       COPY_ICON_SVG,
-      i18n.mermaidCopySource || "Copy Mermaid source",
+      i18n.mermaidCopySource || localization.defaults.mermaidCopySource,
     );
     copyButton.dataset.mermaidPaneAction = "copy";
     copyButton.addEventListener("click", () => {
@@ -17815,7 +17924,7 @@
     saveControl.primaryButton.dataset.mermaidPaneAction = "save";
     saveControl.menuButton.dataset.mermaidPaneAction = "saveMenu";
     mermaidPaneSaveControl = saveControl;
-    const closeButton = createMermaidActionButton(CLOSE_ICON_SVG, i18n.mermaidClose || "Close Mermaid diagram");
+    const closeButton = createMermaidActionButton(CLOSE_ICON_SVG, i18n.mermaidClose || localization.defaults.mermaidClose);
     closeButton.dataset.mermaidPaneAction = "close";
     closeButton.addEventListener("click", () => closeMermaidPane());
     controls.append(
@@ -17834,7 +17943,7 @@
     const stage = el("div", {
       className: "mermaidPaneStage",
       role: "region",
-      "aria-label": i18n.mermaidLabel || "Mermaid diagram",
+      "aria-label": i18n.mermaidLabel || localization.defaults.mermaidLabel,
       tabindex: "0",
     });
     setMermaidSurfaceTheme(stage, mermaidPaneModel.renderedThemeMode);
@@ -18322,7 +18431,7 @@
       !(diagramModel.svg instanceof SVGElement) ||
       (format !== "svg" && format !== "png" && format !== "mmd")
     ) {
-      showToast(i18n.mermaidExportFailed || "The Mermaid diagram could not be prepared for saving.");
+      showToast(i18n.mermaidExportFailed || localization.defaults.mermaidExportFailed);
       return;
     }
 
@@ -18357,7 +18466,7 @@
         payload,
       });
     } catch {
-      showToast(i18n.mermaidExportFailed || "The Mermaid diagram could not be prepared for saving.");
+      showToast(i18n.mermaidExportFailed || localization.defaults.mermaidExportFailed);
     }
   }
 

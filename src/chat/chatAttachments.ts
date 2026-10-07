@@ -93,6 +93,7 @@ export interface ClaudeMessageExtractionOptions {
   role?: Extract<ChatRole, "user" | "assistant">;
   pastedPrompt?: ClaudePastedPromptResolution;
   record?: unknown;
+  includeNotificationDetails?: boolean;
 }
 
 export function selectClaudeControlContent(
@@ -132,6 +133,8 @@ export interface AttachmentSummaryOptions {
 }
 
 interface TextAttachmentSpan {
+  notificationBodyStart?: number;
+  notificationBodyEnd?: number;
   start: number;
   end: number;
   attachment: ChatAttachment;
@@ -444,6 +447,7 @@ function extractClaudeTextAttachmentsFromText(
   role: ClaudeMessageExtractionOptions["role"] | undefined,
   additionalSpans: readonly TextAttachmentSpan[] = [],
   detectTextAttachments = true,
+  detailBudget?: NotificationDetailBudget,
 ): ExtractedMessageContent {
   const normalized = normalizeNewlines(text);
   const spans: TextAttachmentSpan[] = [
@@ -456,7 +460,7 @@ function extractClaudeTextAttachmentsFromText(
 
   const attachments: ChatAttachment[] = [];
   const parts: string[] = [];
-  const seenNotifications = new Set<string>();
+  const seenNotifications = new Map<string, { attachment: ChatNotificationAttachment; raw: NotificationRawSlice[] }>();
   let cursor = 0;
 
   for (const span of spans) {
@@ -464,9 +468,17 @@ function extractClaudeTextAttachmentsFromText(
     parts.push(normalized.slice(cursor, span.start));
     if (span.attachment.type === "notification") {
       const key = buildTaskNotificationDedupKey(span.attachment);
-      if (!seenNotifications.has(key)) {
-        seenNotifications.add(key);
+      let retained = seenNotifications.get(key);
+      if (!retained) {
+        retained = { attachment: span.attachment, raw: [] };
+        seenNotifications.set(key, retained);
         attachments.push(span.attachment);
+        if (detailBudget && span.notificationBodyStart !== undefined && span.notificationBodyEnd !== undefined) {
+          span.attachment.details = createNotificationDetails(normalized.slice(span.notificationBodyStart, span.notificationBodyEnd), span.attachment, detailBudget);
+        }
+      }
+      if (detailBudget && retained.attachment.details) {
+        addNotificationRawVariant(retained.attachment.details, { source: normalized, start: span.start, end: span.end }, retained.raw, detailBudget);
       }
     } else {
       attachments.push(span.attachment);
@@ -774,7 +786,7 @@ function collectBoundedStructuredBlocks<T extends ChatAttachment, TOpen>(
     const preamble = spec.findPreamble?.(text, cursor, open.index);
     const removeStart = preamble?.start ?? open.index;
     if (preamble?.text) attachStructuredPreamble(attachment, preamble.text);
-    spans.push({ start: removeStart, end: closeEnd, attachment });
+    spans.push({ start: removeStart, end: closeEnd, attachment, ...(attachment.type === "notification" ? { notificationBodyStart: open.openEnd, notificationBodyEnd: close.closeIndex } : {}) });
     cursor = closeEnd;
     searchIndex = closeEnd;
     candidateIndex += 1;
@@ -1096,6 +1108,7 @@ export async function extractClaudeMessageContent(
   options?: ChatImageExtractionOptions,
   claudeOptions?: ClaudeMessageExtractionOptions,
 ): Promise<ExtractedMessageContent> {
+  const detailBudget = claudeOptions?.includeNotificationDetails === true ? createNotificationDetailBudget(claudeOptions.record ?? content) : undefined;
   const imageOptions = normalizeImageOptions(options);
   const items = normalizeContentItems(content);
   const pastedPrompt = claudeOptions?.role === "user" ? claudeOptions.pastedPrompt : undefined;
@@ -1113,7 +1126,7 @@ export async function extractClaudeMessageContent(
   if (pastedPrompt && !preserveSessionText && !hasDirectDocument) {
     const projected = buildClaudePastedPromptSpans(pastedPrompt, imageOptions.enabled ? "remote" : "disabled");
     if (projected) {
-      const extracted = extractClaudeTextAttachmentsFromText(projected.display, claudeOptions?.role, projected.spans);
+      const extracted = extractClaudeTextAttachmentsFromText(projected.display, claudeOptions?.role, projected.spans, true, detailBudget);
       const images: ChatImageAttachment[] = [];
       for (const item of items) {
         if (!item || typeof item !== "object") continue;
@@ -1153,6 +1166,7 @@ export async function extractClaudeMessageContent(
       claudeOptions?.role,
       [],
       !retainRawText,
+      detailBudget,
     );
     texts.push(extracted.text);
     attachments.push(...extracted.attachments);
@@ -1179,6 +1193,7 @@ export async function extractClaudeMessageContent(
           claudeOptions?.role,
           [],
           !retainRawText,
+          detailBudget,
         );
         texts.push(extracted.text);
         attachments.push(...extracted.attachments);
@@ -1429,7 +1444,34 @@ function sanitizeNotificationAttachmentForChannel(
     ...(attachment.summary ? { summary: attachment.summary } : {}),
     ...(result ? { result } : {}),
     ...(usage ? { usage } : {}),
+    ...(channel === "webview" && attachment.details ? { details: attachment.details } : {}),
   };
+}
+
+// Reuse the existing acceptance and markdown boundaries for internal notification presentation.
+export function buildClaudeTaskNotificationPresentation(body: string, record: unknown): ChatTaskNotificationPresentation | undefined {
+  const spans = collectClaudeStructuredAttachmentSpans(body, "user").filter(span => span.attachment.type === "notification");
+  if (!spans.length) return undefined;
+  const budget = createNotificationDetailBudget(record);
+  const entries: ChatTaskNotificationPresentation["entries"] = [];
+  let cursor = 0;
+  let outsideText = false;
+  let omitted = false;
+  for (const span of spans) {
+    if (span.start < cursor) continue;
+    if (body.slice(cursor, span.start).trim()) outsideText = true;
+    cursor = span.end;
+    if (entries.length >= 16 || budget.remaining === 0) { omitted = true; continue; }
+    const attachment = span.attachment as ChatNotificationAttachment;
+    budget.remaining = Math.max(0, budget.remaining - attachment.status.length);
+    const summary = takeNotificationText(attachment.summary, 4000, budget);
+    const result = takeNotificationText(attachment.result, CHAT_TASK_NOTIFICATION_RESULT_PREVIEW_CHARS, budget);
+    const details = createNotificationDetails(body.slice(span.notificationBodyStart, span.notificationBodyEnd), attachment, budget);
+    if (normalizeNotificationText(attachment.summary ?? "").length > (summary?.length ?? 0) || normalizeNotificationText(attachment.result ?? "").length > (result?.length ?? 0)) details.omitted = true;
+    entries.push({ status: attachment.status, ...(summary ? { summary } : {}), ...(result ? { result } : {}), ...(attachment.usage ? { usage: { ...attachment.usage } } : {}), details });
+  }
+  if (body.slice(cursor).trim()) outsideText = true;
+  return { stateKey: "notification:" + budget.scope + ":internal", entries, ...(outsideText ? { outsideText: true } : {}), ...(omitted ? { omitted: true } : {}) };
 }
 
 function projectTaskNotificationResultForChannel(
@@ -2221,3 +2263,5 @@ function readStringField(item: Record<string, unknown> | null, key: string): str
   const value = item?.[key];
   return typeof value === "string" && value.trim() ? value : undefined;
 }
+import { addNotificationRawVariant, createNotificationDetailBudget, createNotificationDetails, normalizeNotificationText, takeNotificationText, type NotificationDetailBudget, type NotificationRawSlice } from "./claudeTaskNotificationDetails";
+import type { ChatTaskNotificationPresentation } from "./chatTypes";

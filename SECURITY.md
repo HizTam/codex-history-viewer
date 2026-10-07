@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-10-05
+Last updated: 2026-10-07
 
 ## Supported Versions
 
@@ -17,9 +17,9 @@ Use the latest published release of Codex History Viewer whenever possible. Olde
 | 1.2.2 through 2.7.x | Does not include all current Markdown and KaTeX dependency security updates; upgrade to 2.15.0 or later. |
 | 1.2.1 and earlier | Do not install or redistribute historical VSIX files. |
 
-## Dependencies Shipped in 2.17.0
+## Dependencies Shipped in 2.18.0
 
-Version 2.17.0 retains the dependency versions shipped in 2.15.0 and 2.16.0.
+Version 2.18.0 retains the dependency versions shipped in 2.17.0.
 
 | Component | Bundled version | Use |
 | --- | --- | --- |
@@ -105,13 +105,19 @@ The reader processes compressed input incrementally, enforces a 1 GiB decoded-da
 
 An explicitly requested import can convert incoming session data to an existing destination's storage format. It writes a temporary file and checks for source or destination changes before replacing the destination. This temporary file belongs to the import operation and is not a persistent decompression cache.
 
-### Claude Code bookmarks, progress text, and additional user input
+### Claude Code bookmarks, progress text, additional user input, and notifications
 
 **Display Claude Code bookmarks** is disabled by default. When enabled, the extension reads bookmark data from the Claude Code extension's local storage as read-only marks. The reader validates session identifiers, resolved paths, regular-file status, UTF-8 encoding, and the bookmark schema. Reads are limited to 1 MiB per file and checked for file changes during the read. Invalid or inconsistent data is not accepted. These marks remain separate from extension-managed bookmarks and are not included in metadata exports.
 
 Saved progress updates and thinking text use the existing untrusted-content rendering safeguards. Stored signatures and redacted thinking payloads are not passed to the Session Viewer, search index, clipboard, or Markdown output.
 
 Queued text is displayed as additional user input only when its saved origin explicitly identifies a human and its fields pass validation. Internal notifications, forwarded input, metadata-only records, and rendered system-reminder wrappers are excluded. Accepted text is rendered as plain text and may be included in search, clipboard content, Markdown output, and generated Resume and Handoff context. Raw correlation identifiers remain in the extension host; cards and search navigation use derived identifiers.
+
+Delivered internal task notifications are accepted only when their saved origin identifies a supported task notification, and remain separate from human input. Notification details and raw text are displayed as bounded plain text. Recorded output-file and worktree paths are not opened, linked, or read to display these details.
+
+### Bundled translations
+
+Translation files are validated at build time and packaged with the extension. At runtime, the extension reads only bundled locale files listed in the generated catalog and verifies their hashes. It does not load language packs from external paths or download translations.
 
 ## Reporting a Vulnerability
 

@@ -35,8 +35,10 @@
     return;
   }
   const vscode = acquireVsCodeApi();
+  const localization = globalThis.CHVLocaleBridge?.connect("insights", vscode);
+  if (!localization) { vscode.postMessage({ type: "localizationLoadFailed" }); return; }
   const app = document.getElementById("app");
-  let i18n = {};
+  let i18n = { ...localization.defaults };
   let extensionIcon = "";
   let model = null;
   let stateView = null;
@@ -74,14 +76,16 @@
   let headerResizeObserver = null;
 
   window.addEventListener("message", (event) => {
-    const message = event.data && typeof event.data === "object" ? event.data : {};
+    const message = localization.receive(event.data);
     if (message.i18n && typeof message.i18n === "object") i18n = message.i18n;
     if (typeof message.language === "string") document.documentElement.lang = normalizeUiLanguage(message.language);
     if (typeof message.extensionIcon === "string") extensionIcon = message.extensionIcon;
     if (message.filters) filters = normalizeFilters(message.filters);
     if (message.type === "i18n") {
-      if (model) renderModel();
+      const restoreFocus = localization.captureFocus();
+      if (model) renderModel(true);
       else if (stateView) renderState(...stateView);
+      requestAnimationFrame(() => requestAnimationFrame(restoreFocus));
       return;
     }
     if (message.type === "bootstrap") {
@@ -211,7 +215,15 @@
     app.appendChild(panel);
   }
 
-  function renderModel() {
+  function renderModel(preserveDraft = false) {
+    if (model) {
+      for (const row of model.projects.rows) if (row.unknownProject) row.label = text("fileProjectUnknown");
+      for (const row of model.activeSessions) if (row.unknownProject) row.projectLabel = text("fileProjectUnknown");
+      for (const file of model.files) for (const context of file.projectContexts) if (context.unknownProject) context.displayName = text("fileProjectUnknown");
+    }
+    const savedDraft = preserveDraft && filterOverlay ? { draft: filterDraft, applying: filterApplying, visibility: visibilitySelectionBeforeClaude } : null;
+    const savedDropdownKind = savedDraft && activeFilterDropdown ? activeFilterDropdown.button.dataset.filterKind : undefined;
+    const savedQuery = savedDraft && activeFilterDropdown ? activeFilterDropdown.menu.querySelector("input")?.value : undefined;
     captureScrollPosition();
     stateView = null;
     disconnectHeaderObserver();
@@ -284,6 +296,21 @@
     shell.appendChild(renderBreakdowns());
     shell.appendChild(renderQuality());
     app.appendChild(shell);
+    if (savedDraft) {
+      filterDraft = savedDraft.draft;
+      filterApplying = savedDraft.applying;
+      visibilitySelectionBeforeClaude = savedDraft.visibility;
+      filterControlSyncers.clear();
+      filterOverlay = renderFilterOverlay(filterButton);
+      app.appendChild(filterOverlay);
+      filterButton.setAttribute("aria-expanded", "true");
+      syncFilterApplyState();
+      if (savedDropdownKind) {
+        filterOverlay.querySelector(`[data-filter-kind="${CSS.escape(savedDropdownKind)}"]`)?.click();
+        const search = activeFilterDropdown?.menu.querySelector("input");
+        if (search && savedQuery !== undefined) { search.value = savedQuery; search.dispatchEvent(new Event("input")); }
+      }
+    }
     restoreScroll();
   }
 
@@ -1278,7 +1305,7 @@
     weekStarts.forEach((date, index) => {
       const value = el("span", { className: "heatmapHeaderCell dayHeaderCell" });
       value.style.gridColumn = String(index + 1);
-      value.textContent = new Intl.DateTimeFormat(undefined, { day: "numeric", timeZone: "UTC" }).format(date);
+      value.textContent = new Intl.DateTimeFormat(document.documentElement.lang, { day: "numeric", timeZone: "UTC" }).format(date);
       value.title = formatFullDate(date);
       dayRow.appendChild(value);
     });
@@ -2332,20 +2359,20 @@
   }
 
   function buildWeekdayLabels() {
-    const formatter = new Intl.DateTimeFormat(undefined, { weekday: "short", timeZone: "UTC" });
+    const formatter = new Intl.DateTimeFormat(document.documentElement.lang, { weekday: "short", timeZone: "UTC" });
     return Array.from({ length: 7 }, (_value, day) => formatter.format(new Date(Date.UTC(2023, 0, 2 + day))));
   }
 
   function formatYear(date) {
-    return new Intl.DateTimeFormat(undefined, { year: "numeric", timeZone: "UTC" }).format(date);
+    return new Intl.DateTimeFormat(document.documentElement.lang, { year: "numeric", timeZone: "UTC" }).format(date);
   }
 
   function formatMonth(date) {
-    return new Intl.DateTimeFormat(undefined, { month: "short", timeZone: "UTC" }).format(date);
+    return new Intl.DateTimeFormat(document.documentElement.lang, { month: "short", timeZone: "UTC" }).format(date);
   }
 
   function formatFullDate(date) {
-    return new Intl.DateTimeFormat(undefined, { year: "numeric", month: "long", day: "numeric", weekday: "short", timeZone: "UTC" }).format(date);
+    return new Intl.DateTimeFormat(document.documentElement.lang, { year: "numeric", month: "long", day: "numeric", weekday: "short", timeZone: "UTC" }).format(date);
   }
 
   function resolveMetricPresentation(metric, unknownLabel, formatter) {
@@ -2428,6 +2455,7 @@
     value.files.forEach((file) => {
       file.fileKind = normalizeFileKind(file.fileKind);
       file.projectContexts = file.projectContexts.map((context) => ({
+        ...(context?.unknownProject === true ? { unknownProject: true } : {}),
         displayName: typeof context?.displayName === "string" && context.displayName ? context.displayName.slice(0, 120) : text("fileProjectUnknown"),
         pathHint: typeof context?.pathHint === "string" ? context.pathHint.slice(0, 80) : "",
         sessionCount: nonNegativeInteger(context?.sessionCount),
@@ -2619,7 +2647,7 @@
   }
 
   function normalizeUiLanguage(value) {
-    return String(value || "").trim().toLowerCase().startsWith("ja") ? "ja" : "en";
+    return (globalThis.CHVLocalization || require("./generated/localization.js")).normalize(value);
   }
 
   function selectBreakdownRows(group, metricValue) {
@@ -2772,17 +2800,17 @@
   }
 
   function formatNumber(value) {
-    return new Intl.NumberFormat().format(nonNegativeInteger(value));
+    return new Intl.NumberFormat(document.documentElement.lang).format(nonNegativeInteger(value));
   }
 
   function formatDateTime(value) {
     const date = new Date(value);
-    return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date) : "";
+    return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(document.documentElement.lang, { dateStyle: "medium", timeStyle: "short" }).format(date) : "";
   }
 
   function formatFullDateTime(value) {
     const date = new Date(value);
-    return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(undefined, { dateStyle: "full", timeStyle: "long" }).format(date) : text("unknown");
+    return Number.isFinite(date.getTime()) ? new Intl.DateTimeFormat(document.documentElement.lang, { dateStyle: "full", timeStyle: "long" }).format(date) : text("unknown");
   }
 
   function validDateTime(value) {

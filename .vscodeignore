@@ -30,3 +30,6 @@ CL*.md
 # The chat view uses markdown-it for Markdown rendering, so include only the minimal runtime files
 !node_modules/markdown-it/dist/markdown-it.min.js
 !node_modules/markdown-it/LICENSE
+localization/**
+.l10n-build/**
+.node-version

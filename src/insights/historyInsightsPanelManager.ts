@@ -1,3 +1,4 @@
+import { buildWebviewI18n, postLocalizedMessage, localizationBootstrap } from "../localization/webviewLocalization";
 import * as fs from "node:fs";
 import * as vscode from "vscode";
 import { SessionAnalysisCancelledError, SessionAnalysisIndexService } from "../analysis/sessionAnalysisIndexService";
@@ -180,7 +181,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
     if (this.ready) {
       this.runObservedAsync(
         "i18n",
-        () => panel.webview.postMessage({
+        () => postLocalizedMessage(panel.webview, "insights", {
           type: "i18n",
           i18n: this.buildI18n(),
           language: resolveLanguage(),
@@ -380,7 +381,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       const requestPanel = panel;
       const result = await this.applyPreferenceStore.update(enabled);
       if (this.panel !== requestPanel || !this.ready) return;
-      await requestPanel.webview.postMessage({
+      await postLocalizedMessage(requestPanel.webview, "insights", {
         type: result.ok ? "applyToHistoryPreference" : "applyToHistoryPreferenceError",
         enabled: result.value,
         revision,
@@ -393,7 +394,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
     if (type === "applyFilters") {
       const resolved = resolveHistoryInsightsFilterApplication(raw, state.snapshot.id, state.filterSelectionByOptionId);
       if (!resolved.ok) {
-        await this.panel?.webview.postMessage({ type: "filterApplyError", reason: resolved.reason, i18n: this.buildI18n() });
+        await postLocalizedMessage(this.panel?.webview, "insights", { type: "filterApplyError", reason: resolved.reason, i18n: this.buildI18n() });
         return;
       }
       const application = this.enqueuePanelTransition(() => this.applyFilters(panel, state, resolved.value));
@@ -510,7 +511,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
         }
       }
       if (this.panel === panel && this.state === previousState) {
-        const errorMessage = panel.webview.postMessage({
+        const errorMessage = postLocalizedMessage(panel.webview, "insights", {
           type: "filterApplyError",
           reason: "invalid",
           i18n: this.buildI18n(),
@@ -563,7 +564,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
     const hasCurrentHistoryIndex = this.historyService.isCurrentIndexForConfig(currentConfig);
     if (hasCurrentHistoryIndex && !hasCurrentDateContext) {
       this.clearModelCapabilities(state);
-      await panel.webview.postMessage({ type: "staleContext", i18n: this.buildI18n() });
+      await postLocalizedMessage(panel.webview, "insights", { type: "staleContext", i18n: this.buildI18n() });
       return;
     }
     const hideStaleModelWhileWaiting =
@@ -590,7 +591,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       }
       if (reason === "refresh" && state.model) {
         state.model = { ...state.model, refreshing: true };
-        await panel.webview.postMessage({
+        await postLocalizedMessage(panel.webview, "insights", {
           type: "model",
           model: state.model,
           filters: this.buildFilterPresentation(state.snapshot),
@@ -609,7 +610,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       if (!historyIndex) throw new Error("Current History index is unavailable.");
       if (!this.hasCurrentDateContext(state.snapshot, historyIndex.config)) {
         this.clearModelCapabilities(state);
-        await panel.webview.postMessage({ type: "staleContext", i18n: this.buildI18n() });
+        await postLocalizedMessage(panel.webview, "insights", { type: "staleContext", i18n: this.buildI18n() });
         return;
       }
       await this.sendProgress(panel, state, generation, {
@@ -656,7 +657,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
         });
         if (!this.hasCurrentDateContext(state.snapshot, getConfig())) {
           this.clearModelCapabilities(state);
-          await panel.webview.postMessage({ type: "staleContext", i18n: this.buildI18n() });
+          await postLocalizedMessage(panel.webview, "insights", { type: "staleContext", i18n: this.buildI18n() });
           return;
         }
         state.filePathById = buildFilePathMap(
@@ -671,7 +672,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
         );
         state.sessionById = buildSessionMap(sessions, new Set(cachedModel.activeSessions.map((session) => session.id)));
         state.model = cachedModel;
-        await panel.webview.postMessage({
+        await postLocalizedMessage(panel.webview, "insights", {
           type: "model",
           model: cachedModel,
           filters: this.buildFilterPresentation(state.snapshot),
@@ -736,7 +737,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       if (!this.requireActiveLoad(panel, state, generation, cancellation)) return;
       if (!this.hasCurrentDateContext(state.snapshot, getConfig())) {
         this.clearModelCapabilities(state);
-        await panel.webview.postMessage({ type: "staleContext", i18n: this.buildI18n() });
+        await postLocalizedMessage(panel.webview, "insights", { type: "staleContext", i18n: this.buildI18n() });
         return;
       }
       state.filePathById = buildFilePathMap(
@@ -751,7 +752,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       );
       state.sessionById = buildSessionMap(sessions, new Set(model.activeSessions.map((session) => session.id)));
       state.model = model;
-      await panel.webview.postMessage({
+      await postLocalizedMessage(panel.webview, "insights", {
         type: "model",
         model,
         filters: this.buildFilterPresentation(state.snapshot),
@@ -761,20 +762,20 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       if (!this.ownsLoad(panel, state, generation, cancellation)) return;
       if (!this.hasCurrentDateContext(state.snapshot, getConfig())) {
         this.clearModelCapabilities(state);
-        await panel.webview.postMessage({ type: "staleContext", i18n: this.buildI18n() });
+        await postLocalizedMessage(panel.webview, "insights", { type: "staleContext", i18n: this.buildI18n() });
       } else if (error instanceof SessionAnalysisCancelledError || cancellation.token.isCancellationRequested) {
         if (state.model?.refreshing) state.model = { ...state.model, refreshing: false };
-        await panel.webview.postMessage({ type: "cancelled", i18n: this.buildI18n() });
+        await postLocalizedMessage(panel.webview, "insights", { type: "cancelled", i18n: this.buildI18n() });
       } else if (state.model?.refreshing) {
         state.model = { ...state.model, refreshing: false, stale: true };
-        await panel.webview.postMessage({
+        await postLocalizedMessage(panel.webview, "insights", {
           type: "model",
           model: state.model,
           filters: this.buildFilterPresentation(state.snapshot),
           i18n: this.buildI18n(),
         });
       } else {
-        await panel.webview.postMessage({ type: "error", i18n: this.buildI18n() });
+        await postLocalizedMessage(panel.webview, "insights", { type: "error", i18n: this.buildI18n() });
       }
     } finally {
       progressNotification.dispose();
@@ -847,6 +848,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       const resolved = {
         ...context,
         displayName: context.displayName || t("historyInsights.fileProjectUnknown"),
+        ...(!context.displayName ? { unknownProject: true as const } : {}),
       };
       contexts.set(session.cacheKey, resolved);
       contexts.set(session.identityKey, resolved);
@@ -981,7 +983,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
     state: HistoryInsightsPanelState | null,
   ): Promise<void> {
     if (!state || this.panel !== panel || this.state !== state) return;
-    await panel.webview.postMessage({ type: "cancelled", i18n: this.buildI18n() });
+    await postLocalizedMessage(panel.webview, "insights", { type: "cancelled", i18n: this.buildI18n() });
   }
 
   private cancelCurrent(): void {
@@ -1012,7 +1014,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
 
   private async sendBootstrap(): Promise<void> {
     if (!this.panel || !this.state || !this.ready) return;
-    await this.panel.webview.postMessage({
+    await postLocalizedMessage(this.panel.webview, "insights", {
       type: "bootstrap",
       i18n: this.buildI18n(),
       language: resolveLanguage(),
@@ -1063,7 +1065,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
     progress: SessionAnalysisProgress,
   ): Promise<void> {
     if (!this.ready || !this.isCurrent(panel, state, generation)) return;
-    await panel.webview.postMessage({ type: "progress", progress, i18n: this.buildI18n() });
+    await postLocalizedMessage(panel.webview, "insights", { type: "progress", progress, i18n: this.buildI18n() });
   }
 
   private startLoad(reason: HistoryInsightsLoadReason, userInitiated = false): void {
@@ -1165,6 +1167,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       <p class="muted">${escapeHtml(t("historyInsights.progress.loadCache"))}</p>
     </section>
   </main>
+  ${localizationBootstrap(webview, this.extensionUri, nonce)}
   <script nonce="${nonce}" src="${jsUri}"></script>
 </body>
 </html>`;
@@ -1175,44 +1178,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
   }
 
   private buildI18n(): Record<string, string> {
-    const keys = [
-      "title", "preparing", "refresh", "refreshHint", "refreshCurrent", "refreshCurrentHint", "cancel", "retry", "backToHistory", "cancelled",
-      "error", "staleContext", "lastUpdated", "dataQuality", "unknown", "lowerBoundAria", "notifications", "sessions", "userRequests",
-      "inputTokens", "outputTokens", "totalTokens", "distinctFiles", "linesAdded", "linesRemoved", "changeEvents", "reasoningOutputTokens", "activity",
-      "activitySessions", "activityRequests", "activityTokens", "activityLines", "activityMetric", "activityGroupUsage", "activityGroupFileChanges",
-      "activityInputTokens", "activityOutputTokens", "activityReasoningTokens", "activityTotalTokens", "activityFiles", "activityLinesAdded", "activityLinesRemoved", "activityChangedLines",
-      "activityCoverage", "activityCoveragePartial", "activityCoverageUnavailable", "activityYear", "activityMonth", "activityDay", "showInHistory", "topFiles",
-      "fileSessions", "fileEvents", "fileListLabel", "fileSelectHint", "openFileHistory", "openFile", "fileHistoryUnavailable", "fileOpenUnavailable", "breakdown", "breakdownMetric", "breakdownGroupUnit", "breakdownOmitted", "breakdownValue", "breakdownPercentage", "sources", "models",
-      "modelSessionCountHint", "modelEffortBreakdown", "modelEffortExpand", "modelEffortCollapse", "modelEffortPanelLabel", "modelEffortCoverage", "modelEffortOmitted",
-      "projects", "searchProject", "tools", "toolCalls", "toolSessions", "toolMetric", "toolOmitted",
-      "activeSessions", "activeSessionMetric", "activeSessionUserRequests", "activeSessionToolCalls", "activeSessionReasoningTokens", "activeSessionTotalTokens",
-      "activeSessionChangedLines", "activeSessionOpen", "activeSessionOpenHint", "sessionOpenFailed",
-      "usageDetails", "inputCacheDetails", "messageComposition", "turnStates", "fileKindBreakdown", "fileKindBreakdownValue",
-      "detail.cachedInputTokens", "detail.cacheReadInputTokens", "detail.cacheCreationInputTokens", "detail.reasoningOutputTokens",
-      "detail.userMessages", "detail.assistantMessages", "detail.developerMessages", "detail.toolCalls", "detail.toolOutputs",
-      "detail.turns", "detail.completedTurns", "detail.interruptedTurns", "detail.rolledBackTurns",
-      "emptyTitle", "emptyHint", "qualityTarget", "qualityAnalyzed", "qualityCacheHits",
-      "qualityRebuilt", "qualityFailed", "qualityUnsupported", "qualityPartial", "qualityToken", "qualityFile", "qualityModel", "qualityTool", "progressCount",
-      "qualityCoverageBadge", "qualityExplanation", "qualityFileExplanation", "qualityNumericOverflow",
-      "qualityAnalysisGroup", "qualityIssuesGroup", "qualityAvailabilityGroup",
-      "source.codex", "source.claude", "checkingLatest", "showingPrevious",
-      "filters", "filterSource", "filterDate", "filterLocation", "filterProject", "filterProjectScope", "filterTags",
-      "filterAll", "filterNone", "filterNotApplicable", "filterScopeAll", "filterScopeCurrentGroup", "filterEditHint",
-      "filterSelectAll", "filterSelectionRequired", "filterRemoveSelection", "filterMoreSelections",
-      "filterAllProjects", "filterAllProjectsHint", "filterNoTagConstraint",
-      "filterFrom", "filterTo", "filterApply", "filterSearchProject", "filterNoOptions", "filterOpen", "filterOpenHint", "filterClose",
-      "filterDateInvalidError", "filterDateOrderError", "filterValidationError", "filterApplyError", "filterStaleError", "filterTagCount",
-      "filterProjectsNone", "filterProjectGroupCount", "filterProjectGroupAndMemberCount", "filterProjectMembers", "filterCurrentProject",
-      "filterProjectSectionCurrent", "filterProjectSectionRelated", "filterProjectSectionProjects",
-      "filterApplyToHistory", "filterApplyToHistorySelectedHint", "filterApplyToHistoryUnselectedHint", "filterPreferenceError",
-      "filter.source", "filter.date", "filter.dateRangeValue", "filter.openStart", "filter.openEnd", "filter.location", "filter.project", "filter.scope", "filter.tags",
-      "filterLocationActive", "filterLocationAll", "filterLocationArchived", "filterLocationActiveChoice", "filterLocationArchivedChoice",
-      "fileSort", "fileSortSessions", "fileSortEvents", "fileSortLines", "fileSortRecent", "fileSortName", "fileSortAscending", "fileSortDescending", "fileSortDirectionHint",
-      "fileProjectUnknown", "fileProjectHint", "fileOtherProject", "fileOtherProjects", "fileLastChanged", "fileRowAria",
-      "fileKind.pdf", "fileKind.word", "fileKind.excel", "fileKind.powerpoint", "fileKind.text", "fileKind.code", "fileKind.archive", "fileKind.image", "fileKind.generic",
-      "progress.loadCache", "progress.collectSessions", "progress.analyzeSessions", "progress.aggregate", "progress.render",
-    ];
-    return Object.fromEntries(keys.map((key) => [key, t(`historyInsights.${key}`)]));
+    return buildWebviewI18n("insights");
   }
 
   private resolveFileHistoryPath(recordedPath: string): string | null {

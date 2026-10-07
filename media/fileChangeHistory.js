@@ -1,6 +1,8 @@
 // File change history webview script.
 (function () {
   const vscode = acquireVsCodeApi();
+  const localization = globalThis.CHVLocaleBridge?.connect("fileHistory", vscode);
+  if (!localization) { vscode.postMessage({ type: "localizationLoadFailed" }); return; }
   const app = document.getElementById("app");
   const restoreCoverEl = document.getElementById("restoreCover");
   const pageSearchBarEl = document.getElementById("pageSearchBar");
@@ -49,7 +51,7 @@
   const RESTORE_COVER_STABLE_FRAMES = 3;
   const MAX_SHIKI_DIFF_CHARACTERS = 200000;
 
-  let i18n = {};
+  let i18n = { ...localization.defaults };
   let dateTime = {};
   let model = null;
   let modelCardIndexById = new Map();
@@ -97,7 +99,7 @@
   let pendingLoadMoreScrollAnchor = null;
 
   window.addEventListener("message", (event) => {
-    const msg = event.data || {};
+    const msg = localization.receive(event.data);
     if (msg.i18n) {
       i18n = msg.i18n;
       updatePageSearchStaticText();
@@ -121,8 +123,12 @@
       return;
     }
     if (msg.type === "i18n") {
+      const restoreFocus = localization.captureFocus();
+      const anchor = captureVisibleCardAnchor();
       updatePageSearchStaticText();
       render();
+      if (anchor) restoreScrollAnchor(anchor, anchor.scrollTop, persistRestoreState, "localeAnchor");
+      requestAnimationFrame(() => requestAnimationFrame(restoreFocus));
       return;
     }
     if (msg.type === "searchHistoryCandidates") {
@@ -166,24 +172,18 @@
       if (visibleAddedCount > 0) {
         requestAnimationFrame(() => {
           const toastKey = model && model.hasMore ? "loadMoreDoneMore" : "loadMoreDone";
-          const fallback =
-            toastKey === "loadMoreDoneMore"
-              ? "Added {0} changes. More history is available."
-              : "Added {0} changes";
+          const fallback = localization.defaults[toastKey];
           showToast(formatTemplate(text(toastKey, fallback), visibleAddedCount), { key: "loadMore" });
         });
       } else if (addedCount > 0) {
         requestAnimationFrame(() => {
           const toastKey = model && model.hasMore ? "loadMoreHiddenSourcesMore" : "loadMoreHiddenSources";
-          const fallback =
-            toastKey === "loadMoreHiddenSourcesMore"
-              ? "Added {0} changes for hidden sources. More history is available."
-              : "Added {0} changes for hidden sources.";
+          const fallback = localization.defaults[toastKey];
           showToast(formatTemplate(text(toastKey, fallback), addedCount), { key: "loadMore" });
         });
       } else if (shouldShowMoreHistoryToast(modelReason, model)) {
         requestAnimationFrame(() => {
-          showToast(text("loadMoreAvailable", "More history is available. Use Load more at the bottom to continue."), {
+          showToast(text("loadMoreAvailable", localization.defaults["loadMoreAvailable"]), {
             key: "loadMore",
           });
         });
@@ -248,7 +248,7 @@
       loadingMore = false;
       render();
       restoreScroll(scrollTop);
-      showToast(msg.message || text("loadMoreCanceled", "Additional loading was cancelled."), { key: "loadMore" });
+      showToast(msg.message || text("loadMoreCanceled", localization.defaults["loadMoreCanceled"]), { key: "loadMore" });
       return;
     }
     if (msg.type === "inlineError") {
@@ -265,7 +265,7 @@
       return;
     }
     if (msg.type === "copied") {
-      showToast(msg.message || text("copied", "Copied."), { key: "copied" });
+      showToast(msg.message || text("copied", localization.defaults["copied"]), { key: "copied" });
     }
   });
 
@@ -338,10 +338,10 @@
         titleRow.appendChild(icon);
       }
       const title = el("h1", {});
-      title.textContent = text("title", "File AI Change History");
+      title.textContent = text("title", localization.defaults["title"]);
       titleRow.appendChild(title);
       const detail = el("p", {});
-      detail.textContent = message || text("loading", "Loading...");
+      detail.textContent = message || text("loading", localization.defaults["loading"]);
       loading.appendChild(titleRow);
       loading.appendChild(detail);
       wrap.appendChild(loading);
@@ -352,9 +352,9 @@
     renderShell((wrap) => {
       const panel = el("section", { className: "statePanel errorPanel" });
       const title = el("h1", {});
-      title.textContent = message || text("loadFailed", "Failed to load.");
+      title.textContent = message || text("loadFailed", localization.defaults["loadFailed"]);
       const btn = el("button", { type: "button", className: "primaryBtn" });
-      btn.textContent = text("reload", "Reload");
+      btn.textContent = text("reload", localization.defaults["reload"]);
       btn.addEventListener("click", () => vscode.postMessage({ type: "reload" }));
       panel.appendChild(title);
       panel.appendChild(btn);
@@ -363,11 +363,15 @@
   }
 
   function render(modelReason) {
+    if (model) for (const card of model.cards) {
+      if (card.unknownDate) card.localDate = card.dateTimeLabel = text("unknownDate", localization.defaults.unknownDate);
+      if (card.sessionTitleFallback) card.sessionTitle = card.sessionTitleFallback.date ? formatTemplate(text("sessionTitleWithDate", localization.defaults.sessionTitleWithDate), card.sessionTitleFallback.source, card.sessionTitleFallback.date) : text("untitledSession", localization.defaults.untitledSession);
+    }
     renderShell((wrap) => {
       if (staleReason && !dismissedStale) wrap.appendChild(renderStaleBanner());
 
       if (!model) {
-        wrap.appendChild(renderEmptyState(text("emptyTitle", "No changes found"), ""));
+        wrap.appendChild(renderEmptyState(text("emptyTitle", localization.defaults["emptyTitle"]), ""));
         return;
       }
 
@@ -376,12 +380,12 @@
       const allCards = Array.isArray(model.cards) ? model.cards : [];
       const cards = getVisibleCards(allCards);
       if (allCards.length === 0) {
-        content.appendChild(renderEmptyState(text("emptyTitle", "No changes found"), text("emptyHint", "")));
+        content.appendChild(renderEmptyState(text("emptyTitle", localization.defaults["emptyTitle"]), text("emptyHint", localization.defaults["emptyHint"])));
       } else if (cards.length === 0) {
         content.appendChild(
           renderEmptyState(
-            text("emptyFilterTitle", "No changes for selected sources"),
-            text("emptyFilterHint", "Turn on Codex or Claude Code in the header, or load more history."),
+            text("emptyFilterTitle", localization.defaults["emptyFilterTitle"]),
+            text("emptyFilterHint", localization.defaults["emptyFilterHint"]),
           ),
         );
         content.appendChild(renderLoadControls());
@@ -421,23 +425,23 @@
 
   function renderToolbar() {
     const toolbar = el("div", { id: "toolbar" });
-    toolbar.appendChild(toolbarIconButton("btnOpenFile", text("openFile", "Open target file"), OPEN_FILE_ICON_SVG, () => {
+    toolbar.appendChild(toolbarIconButton("btnOpenFile", text("openFile", localization.defaults["openFile"]), OPEN_FILE_ICON_SVG, () => {
       vscode.postMessage({ type: "openFile" });
     }));
-    toolbar.appendChild(toolbarIconButton("btnCopyPath", text("copyPath", "Copy file path"), COPY_ICON_SVG, () => {
+    toolbar.appendChild(toolbarIconButton("btnCopyPath", text("copyPath", localization.defaults["copyPath"]), COPY_ICON_SVG, () => {
       vscode.postMessage({ type: "copyPath" });
     }));
     toolbar.appendChild(renderToolbarInfo());
-    toolbar.appendChild(toolbarIconButton("btnScrollTop", text("top", "Top"), SCROLL_TOP_ICON_SVG, () => {
+    toolbar.appendChild(toolbarIconButton("btnScrollTop", text("top", localization.defaults["top"]), SCROLL_TOP_ICON_SVG, () => {
       scrollToBoundary("top");
     }));
-    toolbar.appendChild(toolbarIconButton("btnScrollBottom", text("bottom", "Bottom"), SCROLL_BOTTOM_ICON_SVG, () => {
+    toolbar.appendChild(toolbarIconButton("btnScrollBottom", text("bottom", localization.defaults["bottom"]), SCROLL_BOTTOM_ICON_SVG, () => {
       scrollToBoundary("bottom");
     }));
-    toolbar.appendChild(toolbarIconButton("btnPageSearch", text("pageSearchTooltip", "Toggle in-page search"), SEARCH_ICON_SVG, () => {
+    toolbar.appendChild(toolbarIconButton("btnPageSearch", text("pageSearchTooltip", localization.defaults["pageSearchTooltip"]), SEARCH_ICON_SVG, () => {
       togglePageSearch();
     }));
-    toolbar.appendChild(toolbarIconButton("btnReload", text("reload", "Reload"), RELOAD_ICON_SVG, () => {
+    toolbar.appendChild(toolbarIconButton("btnReload", text("reload", localization.defaults["reload"]), RELOAD_ICON_SVG, () => {
       requestToolbarReload();
     }));
     return toolbar;
@@ -508,14 +512,14 @@
 
   function updatePageSearchStaticText() {
     if (pageSearchTitleEl instanceof HTMLElement) {
-      pageSearchTitleEl.textContent = text("pageSearchTitle", text("search", "Search"));
+      pageSearchTitleEl.textContent = text("pageSearchTitle", text("search", localization.defaults["search"]));
     }
     if (pageSearchInputEl instanceof HTMLInputElement) {
-      pageSearchInputEl.placeholder = text("pageSearchPlaceholder", text("searchPlaceholder", "Search loaded diffs"));
+      pageSearchInputEl.placeholder = text("pageSearchPlaceholder", text("searchPlaceholder", localization.defaults["searchPlaceholder"]));
     }
-    updateStaticButtonLabel(btnPageSearchPrevEl, text("pageSearchPrevTooltip", "Previous match"));
-    updateStaticButtonLabel(btnPageSearchNextEl, text("pageSearchNextTooltip", "Next match"));
-    updateStaticButtonLabel(btnPageSearchCloseEl, text("pageSearchCloseTooltip", "Close search"));
+    updateStaticButtonLabel(btnPageSearchPrevEl, text("pageSearchPrevTooltip", localization.defaults["pageSearchPrevTooltip"]));
+    updateStaticButtonLabel(btnPageSearchNextEl, text("pageSearchNextTooltip", localization.defaults["pageSearchNextTooltip"]));
+    updateStaticButtonLabel(btnPageSearchCloseEl, text("pageSearchCloseTooltip", localization.defaults["pageSearchCloseTooltip"]));
   }
 
   function updateStaticButtonLabel(button, label) {
@@ -569,13 +573,13 @@
     const msg = el("div", {});
     msg.textContent =
       staleReason === "sources"
-        ? text("staleSources", "Source settings changed. Reload to apply.")
+        ? text("staleSources", localization.defaults["staleSources"])
         : staleReason === "association"
-          ? text("staleAssociation", "Project associations changed. Reload to apply them to File AI Change History.")
-        : text("staleIndexToolContent", "Search index content setting changed. Reload to apply.");
+          ? text("staleAssociation", localization.defaults["staleAssociation"])
+        : text("staleIndexToolContent", localization.defaults["staleIndexToolContent"]);
     const close = el("button", { type: "button", className: "iconBtn" });
     close.innerHTML = CLOSE_ICON_SVG;
-    close.title = text("close", "Close");
+    close.title = text("close", localization.defaults["close"]);
     close.setAttribute("aria-label", close.title);
     close.addEventListener("click", () => {
       dismissedStale = true;
@@ -650,7 +654,7 @@
   function syncBookmarkButton(button, bookmarked) {
     if (!(button instanceof HTMLButtonElement)) return;
     const on = bookmarked === true;
-    const label = on ? text("bookmarkRemove", "Remove bookmark") : text("bookmarkAdd", "Add bookmark");
+    const label = on ? text("bookmarkRemove", localization.defaults["bookmarkRemove"]) : text("bookmarkAdd", localization.defaults["bookmarkAdd"]);
     button.classList.toggle("bookmarkBtn-on", on);
     button.title = label;
     button.setAttribute("aria-label", label);
@@ -710,9 +714,9 @@
     appendMeta(meta, card.dateTimeLabel);
     appendMeta(meta, changeTypeLabel(card.changeType));
     const evidence = card.entry && card.entry.evidence;
-    if (evidence === "unconfirmed") appendMeta(meta, text("patchUnconfirmed", ""));
-    else if (evidence === "shared") appendMeta(meta, text("patchShared", ""));
-    else if (card.entry && card.entry.incomplete) appendMeta(meta, text("patchIncomplete", ""));
+    if (evidence === "unconfirmed") appendMeta(meta, text("patchUnconfirmed", localization.defaults["patchUnconfirmed"]));
+    else if (evidence === "shared") appendMeta(meta, text("patchShared", localization.defaults["patchShared"]));
+    else if (card.entry && card.entry.incomplete) appendMeta(meta, text("patchIncomplete", localization.defaults["patchIncomplete"]));
     left.appendChild(meta);
 
     const title = el("h2", {});
@@ -729,7 +733,7 @@
     const openBtn = el("button", { type: "button", className: "secondaryBtn iconTextBtn" });
     openBtn.innerHTML = HISTORY_ICON_SVG;
     const openText = el("span", { className: "btnText" });
-    openText.textContent = text("openInHistory", "Open in History");
+    openText.textContent = text("openInHistory", localization.defaults["openInHistory"]);
     openBtn.appendChild(openText);
     openBtn.title = openText.textContent;
     openBtn.setAttribute("aria-label", openText.textContent);
@@ -741,7 +745,7 @@
     const stats = el("div", { className: "statLine" });
     if (card.moveDisplayPath && card.moveDisplayPath !== card.displayPath) {
       const moved = el("span", { className: "movedText" });
-      moved.textContent = formatTemplate(text("movedTo", "Moved to: {0}"), card.moveDisplayPath);
+      moved.textContent = formatTemplate(text("movedTo", localization.defaults["movedTo"]), card.moveDisplayPath);
       stats.appendChild(moved);
     }
     if (stats.childElementCount > 0) cardEl.appendChild(stats);
@@ -768,7 +772,7 @@
     const hunks = Array.isArray(entry.hunks) ? entry.hunks : [];
     if (hunks.length === 0) {
       const empty = el("div", { className: "emptyDiff" });
-      empty.textContent = text("patchNoDiff", "");
+      empty.textContent = text("patchNoDiff", localization.defaults["patchNoDiff"]);
       wrap.appendChild(empty);
       return wrap;
     }
@@ -782,9 +786,9 @@
 
       const labels = el("div", { className: "patchDiffColumnLabels diffColumnLabels" });
       const before = el("div", { className: "patchDiffColumnLabel patchDiffColumnLabel-before diffColumnLabel" });
-      before.textContent = text("patchBefore", "Before");
+      before.textContent = text("patchBefore", localization.defaults["patchBefore"]);
       const after = el("div", { className: "patchDiffColumnLabel patchDiffColumnLabel-after diffColumnLabel" });
-      after.textContent = text("patchAfter", "After");
+      after.textContent = text("patchAfter", localization.defaults["patchAfter"]);
       labels.appendChild(before);
       labels.appendChild(after);
       hunkEl.appendChild(labels);
@@ -984,7 +988,7 @@
     const wrap = el("section", { className: "loadControls" });
     if (model.hasMore) {
       const btn = el("button", { type: "button", className: "secondaryBtn loadMoreBtn" });
-      btn.textContent = text("loadMore", "Load more");
+      btn.textContent = text("loadMore", localization.defaults["loadMore"]);
       btn.disabled = loadingMore;
       btn.addEventListener("click", () => {
         if (loadingMore) return;
@@ -993,7 +997,7 @@
       wrap.appendChild(btn);
     } else if (model.noMore) {
       const done = el("div", { className: "noMore", "data-page-search-ignore": "true" });
-      done.textContent = text("noMore", "No more history");
+      done.textContent = text("noMore", localization.defaults["noMore"]);
       wrap.appendChild(done);
     }
     return wrap;
@@ -1312,7 +1316,7 @@
     const orderElement = options.orderElement instanceof HTMLElement ? options.orderElement : mark || revealElement;
     const contextTarget = mark || revealElement;
     const card = contextTarget instanceof HTMLElement ? contextTarget.closest(".diffCard") : null;
-    const title = getElementText(card && card.querySelector(".cardTitleBlock h2")) || text("pageSearchTitle", "Find");
+    const title = getElementText(card && card.querySelector(".cardTitleBlock h2")) || text("pageSearchTitle", localization.defaults["pageSearchTitle"]);
     const meta = getElementText(card && card.querySelector(".diffDetailsPath")) || "";
     const cardId = card instanceof HTMLElement ? card.id || "" : "";
     const cardNumber = card instanceof HTMLElement ? normalizePositiveInteger(card.dataset.cardNumber) : 0;
@@ -1364,7 +1368,7 @@
       const value = getElementText(lineNo);
       if (value) {
         const side = block instanceof HTMLElement && block.classList.contains("patchDiffBlock-left") ? "before" : "after";
-        const sideLabel = side === "before" ? text("patchBefore", "Before") : text("patchAfter", "After");
+        const sideLabel = side === "before" ? text("patchBefore", localization.defaults["patchBefore"]) : text("patchAfter", localization.defaults["patchAfter"]);
         const fullLabel = `${sideLabel} L${value}`;
         return { text: fullLabel, compactText: `L${value}`, ariaLabel: fullLabel, kind: "line", side, lineNumber: value };
       }
@@ -1489,7 +1493,7 @@
     const query = pageSearchQuery.trim();
     if (!query && pageSearchResults.length === 0) {
       const empty = el("div", { className: "pageSearchEmpty" });
-      empty.textContent = text("pageSearchTypeToSearch", text("searchPlaceholder", "Search loaded diffs"));
+      empty.textContent = text("pageSearchTypeToSearch", text("searchPlaceholder", localization.defaults["searchPlaceholder"]));
       resultsEl.appendChild(empty);
       return;
     }
@@ -1503,7 +1507,7 @@
 
     if (pageSearchResults.length === 0) {
       const empty = el("div", { className: "pageSearchEmpty" });
-      empty.textContent = text("pageSearchNoMatches", text("searchNoMatches", "No matches"));
+      empty.textContent = text("pageSearchNoMatches", text("searchNoMatches", localization.defaults["searchNoMatches"]));
       resultsEl.appendChild(empty);
       return;
     }
@@ -1585,7 +1589,7 @@
     suggestionsEl.hidden = false;
     if (suggestions.length === 0) {
       const empty = el("div", { className: "pageSearchEmpty" });
-      empty.textContent = text("pageSearchNoHistory", "No recent searches");
+      empty.textContent = text("pageSearchNoHistory", localization.defaults["pageSearchNoHistory"]);
       suggestionsEl.appendChild(empty);
       return;
     }
@@ -1608,7 +1612,7 @@
       item.appendChild(main);
 
       const remove = el("button", { type: "button", className: "pageSearchSuggestionRemove" });
-      const removeLabel = text("pageSearchRemoveHistory", "Remove from history");
+      const removeLabel = text("pageSearchRemoveHistory", localization.defaults["pageSearchRemoveHistory"]);
       remove.title = removeLabel;
       remove.setAttribute("aria-label", removeLabel);
       remove.innerHTML = TRASH_ICON_SVG;
@@ -1757,8 +1761,8 @@
 
   function getPageSearchInvalidMessage(rawInput) {
     const core = getPageSearchCore();
-    if (core && core.getInvalidKind(rawInput) === "regex") return text("pageSearchInvalidRegex", "Invalid regular expression");
-    return text("pageSearchInvalidQuery", "Invalid search query");
+    if (core && core.getInvalidKind(rawInput) === "regex") return text("pageSearchInvalidRegex", localization.defaults["pageSearchInvalidRegex"]);
+    return text("pageSearchInvalidQuery", localization.defaults["pageSearchInvalidQuery"]);
   }
 
   function getPageSearchCore() {
@@ -2229,7 +2233,7 @@
       getScrollRoot,
       getContentElement: () => document.getElementById("contentRoot"),
       getTimeZone,
-      getAriaLabel: () => text("dates", "Dates"),
+      getAriaLabel: () => text("dates", localization.defaults["dates"]),
       getItems: getDateGuideItems,
     });
     return dateGuide;
@@ -2730,8 +2734,8 @@
 
   function formatResultCount(count) {
     return count === 1
-      ? text("resultCountOne", "1 change")
-      : formatTemplate(text("resultCountMany", "{0} changes"), count);
+      ? text("resultCountOne", localization.defaults["resultCountOne"])
+      : formatTemplate(text("resultCountMany", localization.defaults["resultCountMany"]), count);
   }
 
   function countBadge(value, kind) {
@@ -2744,7 +2748,7 @@
 
   function renderCardNumberBadge(cardNumber) {
     const safeNumber = normalizePositiveInteger(cardNumber);
-    const label = formatTemplate(text("cardNumberLabel", "Card {0}"), safeNumber);
+    const label = formatTemplate(text("cardNumberLabel", localization.defaults["cardNumberLabel"]), safeNumber);
     const badge = el("span", { className: "cardNumberBadge", textContent: formatCardNumber(safeNumber) });
     badge.dataset.pageSearchIgnore = "true";
     badge.title = label;
@@ -2821,12 +2825,12 @@
   function changeTypeLabel(value) {
     return (
       {
-        create: text("changeTypeCreate", "Create"),
-        delete: text("changeTypeDelete", "Delete"),
-        move: text("changeTypeMove", "Move"),
-        rename: text("changeTypeRename", "Rename"),
-        update: text("changeTypeUpdate", "Update"),
-      }[value] || text("changeTypeUnknown", "Unknown")
+        create: text("changeTypeCreate", localization.defaults["changeTypeCreate"]),
+        delete: text("changeTypeDelete", localization.defaults["changeTypeDelete"]),
+        move: text("changeTypeMove", localization.defaults["changeTypeMove"]),
+        rename: text("changeTypeRename", localization.defaults["changeTypeRename"]),
+        update: text("changeTypeUpdate", localization.defaults["changeTypeUpdate"]),
+      }[value] || text("changeTypeUnknown", localization.defaults["changeTypeUnknown"])
     );
   }
 

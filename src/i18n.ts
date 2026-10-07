@@ -1,75 +1,70 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { DEFAULT_RUNTIME_MESSAGES } from "./generated/defaultRuntimeMessages";
+import { DEFAULT_LOCALE, LOCALE_CATALOG, resolveLocale, type SupportedLocale } from "./localization/localeCatalog";
 
-type UiLanguageSetting = "auto" | "en" | "ja";
-type ResolvedUiLanguage = Exclude<UiLanguageSetting, "auto">;
+type Bundle = Readonly<Record<string, string>>;
+const bundleCache = new Map<SupportedLocale, Bundle | null>();
+let warned = false;
+let missingKeyWarned = false;
+let currentLocale: SupportedLocale | undefined;
+let localeRevision = 0;
 
-type L10nBundle = Record<string, string>;
-
-const bundleCache: Partial<Record<Exclude<UiLanguageSetting, "auto">, L10nBundle>> = {};
-
-function readUiLanguageSetting(): UiLanguageSetting {
-  const cfg = vscode.workspace.getConfiguration("codexHistoryViewer");
-  const raw = (cfg.get<string>("ui.language") ?? "auto").trim().toLowerCase();
-  if (raw === "en" || raw === "ja" || raw === "auto") return raw;
-  return "auto";
-}
-
-export function resolveUiLanguage(setting: UiLanguageSetting = readUiLanguageSetting()): ResolvedUiLanguage {
-  if (setting === "en" || setting === "ja") return setting;
-
-  const envLang = typeof vscode.env.language === "string" ? vscode.env.language.trim().toLowerCase() : "";
-  if (envLang.startsWith("ja")) return "ja";
-  return "en";
-}
-
-function readBundleFile(lang: Exclude<UiLanguageSetting, "auto">): L10nBundle | null {
-  const fileName = lang === "ja" ? "bundle.l10n.ja.json" : "bundle.l10n.json";
-  const filePath = path.join(__dirname, "..", "l10n", fileName);
+function readBundle(locale: SupportedLocale): Bundle | null {
+  if (bundleCache.has(locale)) return bundleCache.get(locale) ?? null;
+  const entry = LOCALE_CATALOG.find(candidate => candidate.locale === locale);
+  let result: Bundle | null = null;
   try {
-    const raw = fs.readFileSync(filePath, { encoding: "utf8" });
-    const obj = JSON.parse(raw) as unknown;
-    if (!obj || typeof obj !== "object") return null;
-    const out: L10nBundle = {};
-    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
-      if (typeof v === "string") out[k] = v;
-    }
-    return out;
+    if (!entry) throw new Error("Unknown catalog locale");
+    // Only generated filenames can reach the filesystem; settings never become paths.
+    const filename = path.join(__dirname, "..", "l10n", entry.bundleFile);
+    const stat = fs.statSync(filename);
+    if (!stat.isFile() || stat.size > 4 * 1024 * 1024) throw new Error("Invalid bundle size");
+    const bytes = fs.readFileSync(filename);
+    if (createHash("sha256").update(bytes).digest("hex") !== entry.bundleSha256) throw new Error("Invalid bundle digest");
+    const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Object.entries(parsed).some(([key, value]) => !Object.hasOwn(DEFAULT_RUNTIME_MESSAGES, key) || typeof value !== "string" || !value)) throw new Error("Invalid bundle map");
+    if (Object.keys(parsed).length !== Object.keys(DEFAULT_RUNTIME_MESSAGES).length) throw new Error("Incomplete bundle map");
+    result = Object.freeze(parsed as Record<string, string>);
   } catch {
-    return null;
+    // Cache failures too, and report a payload-free diagnostic only once.
+    if (!warned) {
+      warned = true;
+      console.warn("[localization] Bundled language data unavailable");
+      void vscode.window.showWarningMessage(DEFAULT_RUNTIME_MESSAGES["localization.bundleUnavailable"]);
+    }
   }
+  bundleCache.set(locale, result);
+  return result;
 }
 
-function getBundle(lang: Exclude<UiLanguageSetting, "auto">): L10nBundle | null {
-  const cached = bundleCache[lang];
-  if (cached) return cached;
-  const loaded = readBundleFile(lang);
-  if (!loaded) return null;
-  bundleCache[lang] = loaded;
-  return loaded;
+export function resolveUiLanguage(setting: unknown = vscode.workspace.getConfiguration("codexHistoryViewer").get<unknown>("ui.language")): SupportedLocale {
+  const requested = resolveLocale(setting, vscode.env.language);
+  const effective = readBundle(requested) ? requested : DEFAULT_LOCALE;
+  if (effective !== currentLocale) {
+    currentLocale = effective;
+    localeRevision += 1;
+  }
+  return effective;
 }
 
-function formatPlaceholders(template: string, args: Array<string | number | boolean>): string {
-  return template.replace(/\{(\d+)\}/g, (_m, g1) => {
-    const idx = Number(g1);
-    const v = args[idx];
-    return typeof v === "string" || typeof v === "number" || typeof v === "boolean" ? String(v) : `{${g1}}`;
-  });
+export function getLocaleState(): { language: SupportedLocale; localeRevision: number } {
+  const language = resolveUiLanguage();
+  return { language, localeRevision };
 }
 
-// Thin wrapper over VS Code localization with an optional per-extension UI language override.
 export function t(key: string, ...args: Array<string | number | boolean>): string {
-  const lang = resolveUiLanguage();
-  const primary = getBundle(lang);
-  const fallback = lang === "ja" ? getBundle("en") : null;
-  const template = primary?.[key] ?? fallback?.[key];
-  if (typeof template === "string") return formatPlaceholders(template, args);
-
-  const viaVscode = vscode.l10n.t(key, ...args);
-  if (viaVscode !== key) return viaVscode;
-
-  const en = getBundle("en");
-  const enTemplate = en?.[key];
-  return typeof enTemplate === "string" ? formatPlaceholders(enTemplate, args) : viaVscode;
+  const locale = resolveUiLanguage();
+  const template = readBundle(locale)?.[key] ?? DEFAULT_RUNTIME_MESSAGES[key];
+  if (typeof template !== "string") {
+    if (!missingKeyWarned) { missingKeyWarned = true; console.warn("[localization] Unknown runtime message key"); }
+    return key;
+  }
+  return template.replace(/\{(\d+)\}/g, (match, index: string) => {
+    const value = args[Number(index)];
+    return value === undefined ? match : String(value);
+  });
 }

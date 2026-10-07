@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-10-05
-- 対象バージョン: 2.17.0
+- 最終更新: 2026-10-07
+- 対象バージョン: 2.18.0
 
 ## 1. 概要
 
@@ -23,8 +23,11 @@
   - `cliResume/`: CLI 再開のID検証、cwd解決、bounded directory probe、prepare専用dispatch
 - `dist/`: ビルド成果物
 - `media/`: セッションビュー / File AI Change History / History Insights Webview 用の CSS / JS
-- `l10n/`: 実行時 UI / Webview 用のローカライズバンドル
-- `package.nls*.json`: VS Code manifest (`package.json`) 用のローカライズ
+- `localization/locales/`: 翻訳の編集元。manifest と runtime の文言を一言語一ファイルで管理
+- `localization/generated-files.json`: 生成物の所有範囲とhashを持つ上書き防止用の管理台帳。翻訳本文は含めない
+- `l10n/`: 実行時 UI / Webview 用の生成バンドル（Git管理外）
+- `package.nls*.json`: VS Code manifest (`package.json`) 用の生成ローカライズ（Git管理外）
+- `src/generated/` / `media/generated/`: ローカライズの生成コード（Git管理外）
 - `resources/`: アイコン等
 - `docs/`: 補助ドキュメント
 - `SECURITY.md`: セキュリティポリシーと既知アドバイザリへの対応方針
@@ -538,7 +541,9 @@
 - Claude Codeのmaterialized user recordで`isMeta === true`、originなし、text-onlyの完全な単独`<system-reminder>` wrapperを持つものは「内部リマインダー」カードにする。子のSubagentHandback案内もこの分類を使う。検証済みwrapperだけを外し、本文を最大64,000文字のplain textで保持する。入力上限は1Mi文字／128 text block。通常userの引用、余剰自然文、入れ子・破損wrapper、未知origin、画像やtool結果との混在は再分類しない。messageIndexとMarkdown出力を保持し、通常user件数、preview、検索、Resume / Handoff、Branchの人間発言候補から除外する。旧分類はHistory summary algorithm `27`、Search file version `30`、Claude Analysis parser `16`で再計算する
 - Claude Code の assistant message に raw text として残る `<invoke name="...">` は tool invocation attachment として扱う。Markdown の fenced code / inline code / blockquote 内に引用された `<invoke>` は抽出せず、壊れた block や境界が曖昧な block は raw text として残す
 - `<task-notification>` / `<invoke>` の共通 scanner は open / close 候補を tag 種別ごとに一度だけ列挙し、close 欠落や malformed open が大量にある履歴でも open ごとに EOF まで再走査しない
-- Claude Code の `queue-operation` / `attachment.type = "queued_command"` に含まれる task notification / invoke 風 text は、メッセージとして materialize された user / assistant item ではないためカード化しない
+- Claude Code の `queue-operation` や来歴不明の `queued_command` はカード化しない。配信済み `attachment.type = "queued_command"` で `commandMode = "task-notification"`、`origin.kind = "task-notification"`、`origin.producer = "session-task"` が一致する場合だけ、`attachment.prompt` を Webview の内部通知カードにする。peer-send-message、明示的な非meta・humanTurn・転送データは除外し、`rendered` 等は取り込まない。既存の通知詳細表示と本文上限を使用する
+- queued 内部通知は通常メッセージ番号を消費せず、opaque な `notificationId` で表示状態を保持する。source UUID または delivery ID が一致する配信を統合し、同じ source UUID の materialized user record が前後いずれに存在しても queued 側を表示しない。本文や task-id の一致だけでは統合しない。既存メッセージ番号・しおり・ターン・usage・非UI出力は維持する
+- `notificationId` 付きの queued 内部通知は、しおりキーに使う旧互換インデックスからも除外する。従来の materialized 通知は旧順序に含め、通知の出現・重複排除によって後続項目のしおりキーを変えない。
 - Codex の旧 `# Files mentioned by the user:` と現行 `# Files pasted by the user:` block は、message 先頭または IDE context 後ろの本文途中から file reference card に変換し、raw block と `## My request for Codex:` / `## My request:` ヘッダーは除去して前置 context と依頼本文を残す
 - 現行 pasted 形式のlabelはJSON stringとしてdecodeし、label内の`: `とWindows drive prefixを混同しないようpath側から区切る。旧形式と現行形式が連続する場合は出現順に統合し、複数のrequest headerがある場合は本家と同様に最後のheaderより後ろを依頼本文とする
 - 本家が入力欄の空時にpasted blockへ付与する`Pasted text contains the user's request.`は、pasted file行の後ろかつrequest headerの直前に完全一致する場合だけprotocol metadataとして除去する。request本文が空でもattachmentだけのuser messageとして残し、参照先ファイル本文は読み込まない
@@ -558,6 +563,10 @@
 - 本文が空で添付だけの user message も、詳細非表示時に context / empty message と誤判定せず表示する
 - `attachments` は抽出時点から履歴 content の出現順を保つ。Webview 側でも kind 別に並べ替えず、連続する画像だけを image group としてまとめる
 - structured attachment の抽出は source offset で merge し、Claude Code IDE reference、task notification、invoke、image placeholder などを種類別に並べ替えない
+- Claudeの内部タスク通知と従来の通知添付は、状態・概要・結果に加えて、初期状態が閉じた「通知の詳細」でID、種別、出力ファイル、保存された状態、注記、event、worktreeのパス・ブランチと原文を確認できる。worktreeは直接の子要素だけを解析し、値はリンク化せずテキスト表示する。
+- 通知の省略表示は保持上限による欠落を示し、改行の正規化や制御文字の除去だけでは表示しない。内部カードのページ内検索結果は、通知・system reminder・クロスセッションメッセージそれぞれの見出しを使う。
+- 詳細の追加は `includeNotificationDetails` を有効にしたセッションWebview経路に限る。既存の通知判定・件数・採番・本文・コピーとSearch / Markdown / Resume / Handoffへの投影を維持する。内部通知では既存bodyを原文として一度だけ使い、複数通知は同じ親カードの中へ最大16件表示する。
+- 通知詳細の構造化値は1カード64,000文字、従来添付の原文は最大16候補・合計64,000文字、新規表示テキストは1レコード256,000文字以内とする。重複カードは最初の構造化値を維持し、切り詰め前の原文が異なる候補だけを残す。上限による省略を明示し、サロゲートペアを壊さない。開閉用identityを描画fingerprintから分離し、同じ通知の再描画・言語変更で開閉状態を維持する。ページ内検索による一時展開は手動の開閉と区別する。
 - Search / Markdown / Resume / Handoff など画像 payload を読まない経路では、画像実データを読み込まずに MIME type / 推定 label などの軽量 metadata だけを保持する
 - `localimage` / `imageassetpointer` など normalize 後の image-like type も attachment-like 判定に含め、main path と patch detail path の messageIndex を揃える
 - Claude Code の `type: "document"` は document extractor を優先し、image extractor では処理しない。MIME type 欠落時も document と image の二重 attachment にしない
@@ -1145,10 +1154,10 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - `src/settings.ts` / `src/extension.ts`
   - `fileChangeHistory.explorerContextMenu.enabled` と `ui.timeGuide.enabled` を読み取る
   - 設定変更時に既存 Webview へ i18n / stale 状態を通知する
-- `package.json` / `package.nls.*`
+- `package.json` / 生成した `package.nls.*`
   - `Show File AI Change History` コマンド、Explorer context menu、関連設定説明を定義する
-- `l10n/bundle.l10n.*`
-  - ファイル履歴 Webview の表示文字列、エラー、空状態、load more、source 件数、date guide 文字列を管理する
+- `localization/locales/*.json` の `runtime`
+  - ファイル履歴 Webview の表示文字列、エラー、空状態、load more、source 件数、date guide 文字列を管理し、`l10n/bundle.l10n.*` へ生成する
   - hidden source のみが追加された load more 用の toast 文言を英日両方で管理する
 
 ### 4.6 History Insights / Session Analysis / Branch Navigation 実装
@@ -1448,7 +1457,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `ChatPanelManager` は表示詳細を `summary` / `full` で管理し、`summary` では tool 引数 / tool 出力 / patch diff 行を Webview model から省略する
   - `patchEntry` reveal target で開く場合は、`revealMessageIndex` があっても `summary` を維持する
   - `ChatPanelManager` は対応画像の data URI をパネル単位で保持し、Webview からの `requestImageData` に応じて必要な画像データだけ返す
-  - `ChatPanelManager` は usage 行のラベルを Webview i18n として渡し、表示文字列を `l10n/bundle.l10n.*` で管理する
+  - `ChatPanelManager` は usage 行のラベルを Webview i18n として渡し、表示文字列を `localization/locales/*.json` の `runtime` で管理して `l10n/bundle.l10n.*` へ生成する
   - `ChatPanelManager` は Codex / Claude Code turn の永続状態を変更せず、`chatTurnTimelineMode=live` の場合だけ各sourceのactive sessions root、archive 状態、auto-refresh 観測状態、source activity evidence を使って live 表示の `running` を `displayStatus` として付与する
   - `src/chat/liveActivity.ts` は bounded な record signature、`{mtimeMs, size}` fingerprint、process-local observation、bootstrap、reset、monotonic merge、freshness、expiry の pure helper を提供する。継続観測では最後の有効 record 自身の validated top-level timestamp を activity とし、未来値は観測時刻までに clamp する。末尾 record の timestamp が欠損または不正な場合だけ観測時刻を使い、mtime は有効な top-level timestamp がない初回または reset 後だけ fallback に使う
   - `chatModelBuilder.ts` の panel 専用 `buildChatSessionModelWithActivityEvidence()` は、既存の1回の JSONL parse 中に最後の有効 record と最新の有効 top-level timestampだけを収集する。本文、tool output、raw JSON、完全 path を evidence に保持せず、公開 `ChatSessionModel` と既存 `buildChatSessionModel()` の戻り値を変更しない
@@ -1477,7 +1486,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 同一 turn 内でも別々の tool output として記録された画像は、中間生成画像と変換・確認後画像を推測で統合または除外せず、履歴順に個別表示する。本家 UI の正規化済み `ImageView` 限定表示は模倣せず、JSONL に保存された履歴の確認可能性を優先する
   - `transcriptRenderer.ts` は同じCodex tool output / standalone response item投影を使ってtextと画像metadataだけをMarkdown化し、生成画像やtool画像のBase64/data URIは出力しない
   - `chatAttachments.ts` は画像、Claude Code document、Claude Code IDE tag、Codex `Files mentioned by the user` block を統合して抽出する
-  - `chatAttachments.ts` は Claude Code の materialized message 判定を `detectClaudeMaterializedMessageRole()` に集約し、`queue-operation` と `attachment.type = "queued_command"` を通常メッセージの本文化対象から除外する。明示的な人の途中入力は `claudeQueuedInput.ts` の独立した経路で chat / search / transcript / resume / handoff に反映する
+  - `chatAttachments.ts` は Claude Code の materialized message 判定を `detectClaudeMaterializedMessageRole()` に集約し、`queue-operation` と `attachment.type = "queued_command"` を通常メッセージの本文化対象から除外する。明示的な人の途中入力は `claudeQueuedInput.ts` の独立した経路で chat / search / transcript / resume / handoff に反映する。配信済み内部通知は `claudeTaskNotification.ts` で来歴を確認し、`claudeQueuedTaskNotification.ts` で配信と materialized user の重複を解決して Webview だけへ追加する
   - `chatAttachments.ts` は Claude Code task notification / invoke を共通の bounded block scanner と Markdown safe-context map で抽出する。fenced code、inline code、blockquote 内の引用例は抽出せず、外側閉じタグや parameter / result 境界が曖昧な block は raw text として残す
   - bounded block scanner は open / close 候補を candidate 配列として先に列挙し、各 open は次の同種 open までの window だけを見る。close 欠落や malformed open が大量にある場合でも close 探索を EOF まで反復せず、検索インデックス構築や transcript / resume / handoff 生成を二乗時間にしない
   - `chatAttachments.ts` は task notification の `summary` / `result` / `usage` を top-level parser で読み、`<result>` 内の `<status>` / `<usage>` 風 text を top-level field として誤抽出しない。`usage` の数値は 10 進整数だけを受理する
@@ -1485,6 +1494,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - `chatAttachments.ts` は content item を出現順に走査し、image / document attachment の順序を保つ。IDE tag 由来の file / selection reference は clean text 抽出後の attachment として扱う
   - `chatAttachments.ts` は `localimage` / `imageassetpointer` などの image-like type を patch detail 側の attachment-like 判定にも含め、messageIndex のドリフトを防ぐ
   - `claudeCrossSessionMessage.ts` はcross-session inboundのorigin分類とbounded本文検証を一元化する。Chatは専用`crossSessionMessage` item、Searchはassistant roleの検索entry、Markdownは専用sectionへ投影し、Resume / Handoff / previewでは除外する。wrapper文字列だけでは分類しない
+  - クロスセッションメッセージの本文全体は初期状態を閉じた disclosure に表示する。英語の補助説明を切り分けず、本文とコピー内容を維持する。ページ内検索は既存の添付詳細と共通の一時展開を使い、終了時は手動の開閉状態へ戻す。番号への明示的なジャンプでは本文を開く。言語変更と同一履歴の更新では開閉状態を保持し、通常メッセージや system reminder の表示は変更しない
+  - 狭い画面でコンパクトなツールバーも収まらない場合は、ツールバー内を横スクロールして各ボタンへ到達する。検索ボタンなどへのfocusがdocument全体の横位置を動かさず、本文左端の表示を維持する
   - Codex `Files mentioned by the user` block は message 先頭または IDE context 後ろの本文途中から file reference に変換し、raw block は本文に残さない
   - Claude Code `<ide_opened_file>` / `<ide_selection>` は file reference / selection reference に変換し、raw tag は本文に残さない
   - Claude Code text document は表示用抜粋と検索用テキストをそれぞれの上限内で保持し、Save As 用 payload は panel 側 store へ置く
@@ -1632,7 +1643,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - バージョン情報tabにはstar icon付きのsecondary button「GitHub」、heart icon付きのsecondary button「GitHub Sponsorsで支援」の順でaction行を表示し、その下に「セキュリティ情報」／`Security Information`、脆弱性報告、変更履歴、コマンド一覧への関連リンクを表示する。6つの外部導線は、開く対象と外部ブラウザーへ遷移することを説明する英語・日本語の`title` tooltipを持つ。Copyright表示とは同じ行へ置かず、3tab構成を維持してSecurity、CHANGELOG、commandsを独立tabにはしない。セキュリティ情報linkの遷移先文書はGitHub標準の`Security Policy`見出しを維持する。WebviewはSponsorsの固定actionまたはrepositoryを含む5種類の固定resource IDだけをhostへ送り、hostがallowlist内の固定GitHub URLを`vscode.env.openExternal`で開く。WebviewからURLを受け取らず、Star状態や件数、外部widget、外部script、GitHub APIを読み込まない。
 - メンテナンスはユーザー設定初期化、scope別の設定backup、cache／検索index再作成、保存data整理、標準設定への導線を集約する。data整理の名称は既存UIと同じ「このプロジェクトの検索履歴を消去」「見つからないピン留めを解除」「引き継ぎファイルを削除」「ゴミ箱を空にする」を使う。backupはuser、現在のworkspace、明示選択したworkspace folderを別々のversioned UTF-8 JSONとしてexport / importし、extension ID、scope、key、型、enum、範囲、重複、sizeを検証する。別scope用fileは拒否し、import途中失敗時は変更済み値をrollbackする。export時の既定ファイル名にはscope種別、取得可能なworkspace／folder名、安全なUTC日時を含め、user homeの絶対pathをsave dialogの既定URIにする。workspace／folder用backupの説明では、target metadataに絶対pathまたはURIが含まれ得ることをexport前に明示する。
 - LICENSEは開発ツリーの`LICENSE`とVSIX内で改名される`LICENSE.txt`を固定候補として扱い、third-party noticeとともにpackage内の固定URIから`workspace.fs`で非同期かつ上限付きで読む。remote／virtual extension hostでも利用できるようにし、Webviewでは`textContent`だけで表示する。読込中または失敗時も設定編集は継続できる。
-- 実行時文言は `l10n/bundle.l10n.json` / `l10n/bundle.l10n.ja.json` で管理し、英語・日本語のkey parityと静的参照を検査する。廃止UIの未使用keyは残さず、メンテナンスから従来の `@ext:` 絞り込み付きVS Code設定画面を開けなかった場合は専用のlocalized errorを返す。
+- 実行時文言は `localization/locales/en.json` / `localization/locales/ja.json` の `runtime` で管理し、生成したbundleの英語・日本語のkey parityと静的参照を検査する。廃止UIの未使用keyは残さず、メンテナンスから従来の `@ext:` 絞り込み付きVS Code設定画面を開けなかった場合は専用のlocalized errorを返す。
 - パネルは `retainContextWhenHidden` を使い、manifestへ`onWebviewPanel:codexHistoryViewer.settings`を常時宣言したうえで、extension起動時に`webview.restoreAfterReload`が有効な場合だけ`codexHistoryViewer.settings`のserializerを登録する。復元panelには通常openと同じoptions、icon、HTML、handlerを設定し、先に手動openされたpanelがある場合は遅延復元panelを閉じてsingletonを維持する。active page、navigation展開状態、About tabは既存Webview stateから復元し、設定が無効な場合はReload Window後に自動復元しない。
 - 実効値はコントロール自体で示し、「継承値」badgeは表示しない。ユーザーscopeのbooleanは通常オン／オフだけで操作し、保存値が不正な場合を除いてresetを表示しない。選択・数値・パス等のユーザーscopeでは「既定値に戻す」、workspace／workspace-folder scopeでは明示的な上書きを消す「継承に戻す」を表示する。
 - selectの選択肢説明やmulti-selectの折り返しでcontrol列が高くなっても、reset iconは先頭の操作面の真右へ固定する。変更済み設定は行ごとの`modified`をhostで確定し、左端へ絶対配置した幅2pxの疑似要素で表示するため、表示状態によって本文やcontrolを横移動させない。色はVS Code標準設定画面の`settings.modifiedItemIndicator`へ追従し、High Contrast／forced colorsではcontrast色へfallbackする。lineはraw明示値の存在ではなく現在の正規化値とreset後のscope別基準値との差を示し、userはextension既定値、workspaceはuser／既定値、workspace-folderはworkspace／user／既定値を基準にする。全controlで手動復帰時にlineを消し、基準値と同じ有効な明示値ではreset iconも隠すが、raw値は自動削除せず将来の継承固定を維持する。将来基準値との差が生じるか現在値／基準値が不正になればlineとreset iconを再表示する。現在scopeに明示値がない場合は継承値が既定値と異なっても着色しない。
@@ -1640,23 +1651,38 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 ### 4.14 ローカライズ
 
-- `package.nls.json` / `package.nls.ja.json`
-  - VS Code が拡張起動前に解決する `package.json` の `%...%` プレースホルダーを担当する
-  - コマンド名、View 名、設定説明、拡張説明などの manifest 文言を置く
-- `l10n/bundle.l10n.json` / `l10n/bundle.l10n.ja.json`
-  - `src/i18n.ts` の `t(...)` から参照する実行時 UI 文言を担当する
-  - 通知、QuickPick、InputBox、Webview に渡すラベル/tooltip などを置く
-  - code comment card の通常 / 未解析時の表示ラベル (`Code Comment` / `File` / `Lines` / `Code comment (unparsed)` / `(empty directive)`) もここで管理する
-- `package.json` の `codexHistoryViewer.ui.ja.*` / `codexHistoryViewer.ui.en.*`
-  - `codexHistoryViewer.ui.language` に合わせてメニュー文言を切り替えるための alias command
-  - VS Code の表示言語ではなく拡張独自設定に従う必要があるため、例外的に言語別タイトルを直接持つ
-  - More Actionsのsubmenuは親を`.ja` / `.en`に分け、子にも同じ言語のaliasだけを置き、`codexHistoryViewer.uiLang`で同じ言語だけを表示する。表示対象のbase setterは公開済みcommand IDとの後方互換性のため維持する
-  - More Actionsのsubmenu内は親がカテゴリを示すため、子commandのtitleはカテゴリ接頭辞を付けず、選択値と現在値を表す末尾の`✓`だけを表示する。ルート直下の並び替えは対象を含むラベルを維持する
-- 実行時の View タイトルは `runtime.view.*` キーを使う
-  - `package.nls.*` の `view.*` と同名にしないことで、manifest 用キーと実行時キーの責務を分ける
-- TypeScript 内に UI 表示用の日本語を直書きしない
-  - 新しい UI 文言は `t("...")` と `l10n/bundle.l10n*.json` に追加する
-  - ソースコードコメントは英語で記述する
+翻訳の正本は `localization/locales/<locale>.json` とする。初期同梱は `en` / `ja`。`localization/catalog.config.json` の `defaultLocale` が既定言語を指定し、現在は英語である。外部ディレクトリやワークスペースの翻訳ファイルは実行時に読み込まない。
+
+- `schemaVersion: 1`、`locale`、`nativeName`、`manifest`、`runtime` を記載する。`completeness` は省略時 `partial`、`order` は省略時100、`aliases` は省略時空配列。
+- `locale` とファイル名は一致する小文字の正規言語タグとする。韓国語は `ko`、フランス語は `fr`、中国語の簡体字・繁体字は例えば `zh-hans` / `zh-hant`。別名が必要なら `aliases` に記載し、他言語や別名との衝突を禁止する。
+- 同梱一覧にない言語も追加できる。ファイル名と `locale` の不一致、大文字名、不正な言語タグはエラーになる。構文が正しいタグのIANA登録やICUへの収録は必須にせず、名前が取得できなければ `nativeName` を使う。
+- `nativeName` は `한국어` など自言語での名前。設定の「韓国語」「Korean」などは、ビルド時に `Intl.DisplayNames` で全対応言語について生成する。取得できない名前は `nativeName`、次に言語IDへ戻す。既存言語のファイルへ新言語名を追記する必要はない。
+- `completeness` の省略または `partial` 指定では欠落したキーを英語で補完し、`complete` は欠落をエラーにする。補完元の既定言語は `complete` 必須で、既存英日にも引き続き明記する。省略時の正規化はメモリー内だけで行い、原本は書き換えず、明示的な `partial` と同じ生成物を得る。これは翻訳ファイルの検証方針であり、利用者向け設定ではない。`null` などの不正な `completeness` 値、訳文の空文字、未知キー、型不正、プレースホルダーの過不足は省略時も拒否する。
+- `manifest` はコマンド名・設定説明など、`runtime` は `t(...)` で参照する通知・QuickPick・Webviewの文言を担当する。新しい文言は英日正本へ追加し、Webviewでは `localization/webview-keys.json` に対応を記載する。動的キーは `localization/key-usage.json` で許容集合を管理する。
+
+追加言語はこの1ファイルを置いて再ビルド・配布することで反映する。インストール済み拡張へのファイル追加だけでは静的manifestは更新されない。Node / ICUによる名前の差を防ぐため、生成環境は `.node-version` の Node 24.13.0 / ICU 77.1 に固定する。
+
+`scripts/generate-localization.mjs` は、設定の言語enum、`package.nls*.json`、`l10n/bundle.l10n*.json`、`src/generated/*`、`media/generated/localization.js` を生成する。翻訳本文を含む生成JSON・TS・JSはGit管理外とし、直接編集しない。翻訳正本、UI定義、`package.json` と、翻訳本文を含まない `localization/generated-files.json` を管理対象とする。台帳は所有ファイルとhashを記録し、所有外ファイルや手編集された生成物を上書きしない。削除した言語の所有済み生成物だけを除去する。台帳自体がない、または壊れている場合は生成を停止し、無条件に上書きしない。全入力の検証後に一時ファイルから置換し、所有記録を最後に更新する。重複JSONキー、不正UTF-8、BOM、CRLF、危険なプロパティ・パス、リンク、サイズ上限超過を拒否する。
+
+- `npm run generate:l10n` は生成、`npm run check:l10n` は書き込みを伴わない整合性検査。`compile` / `build:webview` / `package` / `typecheck` / `lint` / `vscode:prepublish` は生成を先行する。生成物のないcheckout直後も、通常の型検査やビルドで必要なファイルが揃う。`check:l10n` 単独では欠損を補わず、先に `generate:l10n` が必要と案内する。
+- 生成は `.l10n-build/lock` で排他し、競合時は最大30秒待機する。PIDだけで残存ロックを削除しない。異常終了後は生成・watchプロセスが存在しないことを確認してから、このロックディレクトリだけを除去し再生成する。
+- ロックで停止した場合は上記の復旧手順をエラーにも表示する。文字化け検査では `???` を拒否し、従来の日本語固有の検出パターンは日本語系 locale にだけ適用する。他言語には日本語の文字パターンを適用しない。
+- `watch` / `watch:webview` は翻訳入力の変更で自分のコンパイラを停止し、生成に成功してから再起動する。不正な入力のままコンパイルを続けない。
+- 生成元 `localization/` と作業領域はVSIXへ含めず、生成したmanifest・bundle・catalog・Webview資産を同梱する。`.gitignore` と `.vscodeignore` は用途が異なり、Git管理外の生成物も配布対象とする。
+
+独自メニューの定義・転送先は `localization/ui-contributions.json` から生成する。既存の `codexHistoryViewer.ui.ja.*` / `.en.*` とbase command ID、転送引数、並び順は維持する。追加言語にも同じaliasを展開する。タイトルは固定言語のNLSキーで全NLSファイルへ同じ値を生成し、`codexHistoryViewer.uiLang` の条件で選ぶ。これによりVS Codeの表示言語と独自設定が異なっても独自メニューは設定に従う。標準設定画面と通常のCommand Palette文言はVS Code側のNLS解決に従う。
+
+`src/localization/localeCatalog.ts` が対応言語・別名・環境言語の解決を共有する。既存設定の読み取りは別名や大文字を正規化し、未知の保存値は環境言語、次に英語へフォールバックする。保存値は勝手に書き換えない。専用設定画面の書き込みと設定バックアップの読み込みは `auto` または同梱言語の正規IDだけを受理する。
+
+`src/i18n.ts` はcatalog内の固定ファイルとSHA-256が一致する同梱bundleだけを読み、成功・失敗をキャッシュする。読めない場合はコンパイル済み英語と英語のmenu contextへ揃え、本文やパスを含めない診断とローカライズ済み通知を一度出す。`vscode.l10n` の暗黙fallbackには依存しない。
+
+4種類のWebviewは共通bootstrap、fingerprint、既定文言、実効言語のHTML `lang` を使う。bootstrapの欠落・不一致はHostへ本文を含まない失敗通知を送り、スクリプト不要の英語エラー表示へ切り替える。`localeRevision` はデータのrevisionと分離し、非同期処理後の送信時に最新文言を付ける。古い言語の応答で文言を巻き戻さず、有効な履歴更新は受け取る。言語変更では履歴を再解析せず、スクロール、入力、詳細開閉、検索、フィルターの編集中状態を保持する。日付の表示用formatterは実効言語を使い、数値解析・保存形式・タイムゾーン処理用の固定localeは維持する。
+
+Chat の言語投影には履歴 source を渡し、Codex Fork と Claude 分岐の文言を区別する。一部未読込の注記は `noticeKind: historyIncomplete` で識別し、送信時と再描画時に訳文を更新する。Agent Runs は言語変更時にキャッシュ済みの関係から表示名を再投影し、同じ関係の generation と操作対象を維持する。
+
+自動復元ではWebviewのreadyが起動時の履歴インデックスより先に届く場合がある。チャットとファイル変更履歴は共通の初回履歴更新の完了を待ってからセッション一覧を取得する。待機中に閉じた、または別の読み込み世代へ移ったパネルでは旧要求を実行しない。
+
+実行時のViewタイトルは `runtime.view.*`、manifestのタイトルは `view.*` と責務を分ける。表示文字列をソースへ直書きせず、ソースコメントは英語で記述する。
 
 ### 4.15 診断ログ
 
@@ -1719,8 +1745,8 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 密集時だけ `dateGuideLens` を表示し、近辺 item を拡大表示する
   - レンズは右側の元レール hover 位置へ追従し、active item の tooltip とクリック移動対象を同期する
   - レンズ内 hover 時は active item tooltip の二重表示を抑制する
-- `l10n/bundle.l10n.json` / `l10n/bundle.l10n.ja.json`
-  - しおり追加 / 解除 tooltip を実行時 Webview 文言として管理する
+- `localization/locales/en.json` / `localization/locales/ja.json` の `runtime`
+  - しおり追加 / 解除 tooltip を実行時 Webview 文言として管理し、bundleへ生成する
 
 ### 4.17 CLI 再開
 
@@ -1746,7 +1772,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 ### 5.1 セットアップ
 
-依存関係のインストール、テスト、リリース作業には Node.js 22.12.0 以降を使用する。直接同梱する KaTeX 0.18.9 のCLI用依存 `commander@15` が Node.js 22.12.0 以降を要求し、パッケージ作成用の `@vscode/vsce@4.0.0` も Node.js 22 以降を要求するためである。これらの開発用ツールはVSIXへ含めず、VS Code拡張の実行環境要件は変更しない。
+開発・生成・検証・パッケージ作成には `.node-version` に指定した Node.js 24.13.0 / ICU 77.1 を使用する。ローカライズ生成時の言語名を再現可能にするための固定であり、KaTeX のCLI用依存 `commander@15` の Node.js 22.12.0 以上、`@vscode/vsce@4.0.0` の Node.js 22 以上という下限も満たす。これらの開発用ツールはVSIXへ含めず、VS Code拡張の実行環境要件は変更しない。
 
 TypeScript は `6.0.3` を使用し、`module` / `moduleResolution` は `Node16` とする。package は CommonJS のままであり、拡張の出力形式も維持する。TypeScript 6で非推奨となった旧Node解決方式は使用しない。Compiler APIの互換性を維持するため、安定した同APIを提供しないTypeScript 7への移行は保留する。VS Codeの型定義は対応下限の `1.90.0` に合わせて `~1.90.0` とし、Nodeの型定義は実行環境に合わせて20系を維持する。
 
@@ -1777,6 +1803,8 @@ KaTeX 0.18.0 では一部の内部 CSS class に `katex-` prefix が追加され
 
 ### 5.2 ビルド
 
+ローカライズの生成JSON・TS・JSはGit管理外で、取得直後には存在しない。`compile` / `build:webview` / `watch` は生成を先に実行する。翻訳は `localization/locales/*.json` だけを編集し、生成先のファイルを手編集しない。生成だけが必要なら `npm run generate:l10n` を実行する。翻訳追加・変更のレビューには、正本と併せて自動更新された `localization/generated-files.json`、必要な場合は `package.json` の生成対象部分を含める。
+
 Mermaid 11.17.2 の配布済み JavaScript は js-yaml 4.3.0 を内包するため、通常の依存更新だけでは内包版の脆弱性を解消できない。2.14.2 では build-time の直接依存に公式修正版 `js-yaml@4.3.2` を exact pin し、`scripts/mermaid-yaml-dependency.mjs` の esbuild plugin が YAML 専用モジュールを置き換える。公開する `JSON_SCHEMA`／`load` と既存の描画制限を維持し、`node_modules` の配布ファイルは書き換えない。修正版のコードと既存のライセンス表記を Webview bundle／`THIRD_PARTY_NOTICES.txt` に含める。
 
 `build:webview`、`watch:webview`、`compile`、prepublish による build では、package manifest・lockfile・インストール済み version と、置換元／先の SHA-256 を確認する。置換が適用されない場合も build は失敗する。watch の rebuild でも同じ検証を行う。Mermaid／js-yaml の次回更新時は plugin の適合性を再検証し、上流が修正版を内包した場合はこの置換を廃止できるか判断する。version や hash だけを機械的に変更してはならない。`npm audit` に加え、実際の bundle 入力と内包コードを検査する。
@@ -1790,6 +1818,8 @@ npm run watch
 ```
 
 ### 5.2.1 検証
+
+`typecheck` と `lint` は不足・変更されたローカライズ資産を生成してから検査する。生成処理は手編集を上書きせず、不正な翻訳入力でも停止する。生成を伴わない整合性検査には `npm run check:l10n` を使う。
 
 ```powershell
 # TypeScript の型を検証します
@@ -1810,7 +1840,7 @@ git diff --check
 
 - リリース用 VSIX の生成時は必ず `--out` で出力ファイルを明示する。出力先を指定しない package 処理は禁止し、既存のリリース用 VSIX は上書き・削除・移動・改名しない
 - リリース用 VSIX の生成と外部への公開は、それぞれ明示的に依頼された場合のみ行う。生成時は既存ファイルと衝突しない出力先を指定し、リリース済み VSIX を置換しない
-- `scripts.package` は `vsce package --allow-missing-repository` を実行する。VS Code prepublish は compile より前に `check:katex` を実行し、依存パッケージと同梱物が不一致なら VSIX 作成を中止する
+- `scripts.package` はローカライズを生成・検査した後に `vsce package --allow-missing-repository` を実行する。VS Code prepublish も生成・検査を行い、compile より前に `check:katex` を実行して、依存パッケージと同梱物が不一致なら VSIX 作成を中止する。直接VSCEを呼ぶ場合も、manifest読込前に `generate:l10n` / `check:l10n` を実行する
 - 公開配布を前提にする場合は `repository` を正しく設定することを推奨する
 - README用の `media/screenshot*.png` は配布VSIXへ含めない。README内の画像はpackage時にremote URLへ変換されるため、`.vscodeignore`で除外する
 - ローカル最終確認用の `.root-review-*` は `.gitignore` と `.vscodeignore` の双方で除外する。リリース前は完成したVSIXを展開し、private docs、source map、別VSIX、レビュー用一時ファイル等の開発専用ファイルが混入していないことを確認する
@@ -2667,7 +2697,7 @@ git diff --check
 - Claude Code の `<task-notification>` が task notification card になり、`summary`、`result`、`usage` が表示され、raw tag が本文に残らない
 - Claude Code の assistant `<invoke>` が tool invocation card になり、tool 名、description、parameter を確認できる
 - fenced code、inline code、blockquote 内に引用された `<task-notification>` / `<invoke>` はカード化されず、本文として残る
-- `queue-operation` と `attachment.type = "queued_command"` に含まれる task notification は、chat / search / Markdown / Resume / Handoff でカード化されない
+- `queue-operation` と来歴不明の `queued_command` に含まれる task notification はカード化されない。検証済み来歴を持つ配信済み queued 内部通知だけが Webview に一度表示され、保存された worktree 等を詳細で確認できる。queued 通知の search / Markdown / Resume / Handoff への出力は追加しない
 - task notification の `taskId` / `toolUseId` / `outputFile` / `systemPreamble` / `note` / `rawStatus`、invoke の `harnessPreamble` が Webview model に含まれない
 - `<result>` 内の `<status>` / `<usage>` 風 text や `</task-notification>` literal で、壊れた task notification card や本文欠落が起きない
 - close 欠落 / sparse close の `<invoke` / `<task-notification>` が大量にある synthetic message でも、structured attachment 抽出時間が二乗に伸びない
@@ -2767,8 +2797,8 @@ git diff --check
 - Webview 復元設定の説明から、実験的な設定であることと、復元遅延によって同じ履歴を再度開いたときにタブが重複する場合があることが分かる
 - diff カードを最大幅にした状態が、再読み込み後も同じ diff グループで維持される
 - ローカルファイルリンク（相対パス・行番号指定）が VS Code 内で正しく開く
-- `package.nls.*` と `l10n/bundle.l10n.*` のキー所有が混ざっていない
-- `SECURITY.md` に v1.4.3 / 2026-04-30 のセキュリティ方針と `markdown-it` アドバイザリ対応が記載されている
+- `localization/locales/*.json` の `manifest` / `runtime` のキー所有が混ざらず、生成された `package.nls.*` / `l10n/bundle.l10n.*` と一致している
+- READMEの最新版・What's New、CHANGELOG、SECURITYの対象版・日付が今回のリリース内容と一致し、過去の依存更新・アドバイザリ対応の記録を維持している
 - ソースコードコメントに日本語が残っていない
 
 ## GFMタスクリストとセッションファイルサイズ

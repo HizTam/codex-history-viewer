@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.18.0] - 2026-10-07
+
+### Added
+
+- Added detailed views for Claude Code task notifications.
+
+### Changed
+
+- Improved multilingual support.
+- Cross-session message bodies now start collapsed and expand when searching or navigating to a message.
+
+### Fixed
+
+- Fixed some Claude Code task notifications not appearing in the Session Viewer. Duplicate notifications are also prevented when the same notification is recorded in multiple formats.
+- Fixed the Session Viewer shifting horizontally when using toolbar buttons in narrow views.
+
 ## [2.17.0] - 2026-10-05
 
 ### Added

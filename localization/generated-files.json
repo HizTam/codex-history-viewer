@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "files": {
+    "l10n/bundle.l10n.ja.json": "05f8c6a3e9cfa737692bbec7f0b2c121c84e4ffe68d8b0ddbe16cacbbea7c121",
+    "package.nls.ja.json": "f9189dd00327c5c37970103bcf59ff621559d9ddd09ac5bfb03cfc98754ada2c",
+    "l10n/bundle.l10n.json": "3a76a8d932b42fc6c7ee36566643cccefeecae85f9cf7cdd371d839d2bd81c8a",
+    "package.nls.en.json": "d387c23d0d0bb83a6f6624eff2214838d84ff87569cb1d567b5a88542697dd91",
+    "package.nls.json": "d387c23d0d0bb83a6f6624eff2214838d84ff87569cb1d567b5a88542697dd91",
+    "src/generated/localeCatalog.ts": "fa506562687d12b6986ffde965b0d081aa142401cbc629737120eafd4e5de431",
+    "src/generated/defaultRuntimeMessages.ts": "ba0ab2e16b5e379f42e46feb97597698cb58080ae2029cfa6c909ac9ca2d1f3b",
+    "src/generated/uiCommandAliases.ts": "a26347a9a023d8ffbc5e442d0b159a63b2fe6da59083a5fce82bdb96c60727f2",
+    "src/generated/webviewI18n.ts": "c0f433008830cc897001ef7d6e744d1742739fd9faa6545da150af2f218f293c",
+    "media/generated/localization.js": "4c3f99e4adcd0ceeb4472ee543a3b65fd321787b99e524cee6c1ef377f209106"
+  },
+  "packageHash": "0632f217ac7e79e6a5d7625bf610e76188419a3a7c24403c10471ca499f1c286"
+}

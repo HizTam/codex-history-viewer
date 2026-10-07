@@ -4,6 +4,7 @@ import { isClaudeInternalUserRecord, isClaudeTaskNotificationRecord, projectClau
 import { extractClaudeSystemReminder } from "./claudeSystemReminder";
 import { extractClaudeProgress } from "./claudeProgress";
 import { ClaudeQueuedInputTracker } from "./claudeQueuedInput";
+import { ClaudeQueuedTaskNotificationTracker } from "./claudeQueuedTaskNotification";
 import * as path from "node:path";
 import { extractClaudeTerminalOutput } from "./claudeTerminalOutput";
 import type {
@@ -108,6 +109,7 @@ export interface ChatSessionModelBuildOptions {
   claudeSessionsRoot?: string;
   images?: ImagesConfig;
   includeDetails?: boolean;
+  includeNotificationDetails?: boolean;
   turnTimelineMode?: ChatTurnTimelineMode;
   sessionInventory?: readonly SessionSummary[];
   historyPlan?: CodexLogicalHistoryPlan;
@@ -294,6 +296,7 @@ export async function createChatTimelineRecordAccumulator(
   const claudeTurnState = source === "claude" && turnState ? createClaudeTurnBuildState(turnState) : undefined;
   const activityEvidence = collectActivityEvidence ? createChatSourceActivityEvidence() : undefined;
   const queuedInputs = new ClaudeQueuedInputTracker();
+  const queuedNotifications = new ClaudeQueuedTaskNotificationTracker();
   let messageIndex = 0;
   let finalizedResult: ChatTimelineBuildResult | undefined;
 
@@ -407,6 +410,11 @@ export async function createChatTimelineRecordAccumulator(
       return;
     }
     if (source !== "claude") return;
+    const queuedNotification = queuedNotifications.accept(obj, lineIndex, options.includeNotificationDetails === true);
+    if (queuedNotification) {
+      items.push({ type: "taskNotification", source: "claude", ...queuedNotification, timestampIso: readTimestampIso(obj) });
+      return;
+    }
     const queuedInput = queuedInputs.accept(obj, lineIndex);
     if (queuedInput) {
       items.push({ type: "claudeQueuedInput", source: "claude", ...queuedInput,
@@ -447,6 +455,7 @@ export async function createChatTimelineRecordAccumulator(
       for (let i = items.length - 1; i >= 0; i--) {
         const item = items[i]!;
         if (item.type === "claudeQueuedInput" && !queuedInputs.isVisible(item.inputId)) items.splice(i, 1);
+        if (item.type === "taskNotification" && item.notificationId && !queuedNotifications.isVisible(item.notificationId)) items.splice(i, 1);
         if (item.type === "patchGroup" && !item.entries.length && !item.incomplete) items.splice(i, 1);
       }
     }
@@ -1083,7 +1092,7 @@ async function indexClaudeTimelineRecord(
       source: "claude",
       messageIndex: nextMessageIndex(),
       timestampIso: readTimestampIso(obj),
-      ...projectClaudeTaskNotification(obj),
+      ...projectClaudeTaskNotification(obj, options.includeNotificationDetails === true),
     });
     return true;
   }
@@ -1160,6 +1169,7 @@ async function indexClaudeTimelineRecord(
     role,
     pastedPrompt,
     record: obj,
+    includeNotificationDetails: options.includeNotificationDetails === true,
   });
   const attachments = extracted.attachments;
   const text = normalizeText(extracted.text);

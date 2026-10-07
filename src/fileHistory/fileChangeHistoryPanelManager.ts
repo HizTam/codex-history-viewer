@@ -1,3 +1,5 @@
+import { resolveUiLanguage } from "../i18n";
+import { buildWebviewI18n, postLocalizedMessage, localizationBootstrap } from "../localization/webviewLocalization";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { ChatPanelManager } from "../chat/chatPanelManager";
@@ -95,6 +97,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
   private readonly bookmarkStore: BookmarkStore;
   private readonly searchHistoryStore: SearchHistoryStore;
   private readonly logger?: DebugLogger;
+  private readonly initialHistoryReady: Promise<unknown>;
   private readonly bookmarkSubscription: vscode.Disposable;
   private readonly panelsByKey = new Map<string, vscode.WebviewPanel>();
   private readonly stateByPanel = new WeakMap<vscode.WebviewPanel, FileChangeHistoryPanelState>();
@@ -112,6 +115,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     bookmarkStore: BookmarkStore,
     searchHistoryStore: SearchHistoryStore,
     logger?: DebugLogger,
+    initialHistoryReady: Promise<unknown> = Promise.resolve(),
   ) {
     this.extensionUri = extensionUri;
     this.historyService = historyService;
@@ -122,6 +126,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     this.bookmarkStore = bookmarkStore;
     this.searchHistoryStore = searchHistoryStore;
     this.logger = logger;
+    this.initialHistoryReady = initialHistoryReady;
     const extensionIcon = vscode.Uri.joinPath(extensionUri, "resources", "extension-icon.svg");
     this.panelIconPath = {
       light: extensionIcon,
@@ -157,7 +162,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       const state = this.stateByPanel.get(panel);
       if (state) panel.title = t("fileChangeHistory.panelTitle", state.target.fileName);
       if (!this.readyByPanel.get(panel)) continue;
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "fileHistory", {
         type: "i18n",
         i18n: this.buildI18n(),
         timeGuideEnabled: config.timeGuideEnabled,
@@ -169,7 +174,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     for (const panel of this.panelsByKey.values()) {
       if (!this.readyByPanel.get(panel)) continue;
       const candidates = this.getSearchHistoryCandidates(this.resolvePanelSearchHistoryProjectKey(panel));
-      void panel.webview.postMessage({ type: "searchHistoryCandidates", candidates });
+      void postLocalizedMessage(panel.webview, "fileHistory", { type: "searchHistoryCandidates", candidates });
     }
   }
 
@@ -210,11 +215,11 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
   private async sendBookmarkState(panel: vscode.WebviewPanel): Promise<void> {
     const targets = this.bookmarkTargetsByPanel.get(panel);
     if (!targets || targets.size === 0) {
-      await panel.webview.postMessage({ type: "bookmarkState", keys: [] });
+      await postLocalizedMessage(panel.webview, "fileHistory", { type: "bookmarkState", keys: [] });
       return;
     }
     const keys = Array.from(this.bookmarkStore.getKeysForTargets(Array.from(targets.values())).values());
-    await panel.webview.postMessage({ type: "bookmarkState", keys });
+    await postLocalizedMessage(panel.webview, "fileHistory", { type: "bookmarkState", keys });
   }
 
   private refreshAllSearchHistoryCandidates(): void {
@@ -233,7 +238,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
         staleReason: reason,
       });
       if (!this.readyByPanel.get(panel)) continue;
-      void panel.webview.postMessage({
+      void postLocalizedMessage(panel.webview, "fileHistory", {
         type: "stale",
         reason,
         i18n: this.buildI18n(),
@@ -265,7 +270,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     panel.reveal(vscode.ViewColumn.Active, false);
 
     if (this.readyByPanel.get(panel)) {
-      await panel.webview.postMessage({ type: "resetUi" });
+      await postLocalizedMessage(panel.webview, "fileHistory", { type: "resetUi" });
       await this.sendLoading(panel, "syncIndex");
       void this.loadInitial(panel);
     }
@@ -312,7 +317,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       await this.handleMessage(panel, msg);
     });
     panel.onDidChangeViewState(() => {
-      void panel.webview.postMessage({ type: "viewState", visible: panel.visible });
+      void postLocalizedMessage(panel.webview, "fileHistory", { type: "viewState", visible: panel.visible });
     });
   }
 
@@ -400,8 +405,12 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     targetCardCount = FILE_CHANGE_HISTORY_PAGE_SIZE,
     reason: "initial" | "reload" = "initial",
   ): Promise<void> {
+    // A restored Webview can become ready before activation publishes the first inventory.
+    const pendingGeneration = this.stateByPanel.get(panel)?.generation;
+    if (pendingGeneration === undefined) return;
+    await this.initialHistoryReady;
     const state = this.stateByPanel.get(panel);
-    if (!state || state.loading) return;
+    if (!state || state.generation !== pendingGeneration || state.loading) return;
     const generation = state.generation;
     const config = Object.freeze({ ...getConfig() });
     const historyIndex = this.historyService.getIndex();
@@ -543,7 +552,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
             totalMs: elapsedMs(totalStartedAt),
           }),
         );
-        await panel.webview.postMessage({ type: "cancelled", message: t("fileChangeHistory.cancelled") });
+        await postLocalizedMessage(panel.webview, "fileHistory", { type: "cancelled", message: t("fileChangeHistory.cancelled") });
       } else {
         this.logger?.debug(
           formatDebugFields(`fileChangeHistory ${reason} fail`, {
@@ -551,7 +560,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
             error: sanitizeDebugError(error),
           }),
         );
-        await panel.webview.postMessage({
+        await postLocalizedMessage(panel.webview, "fileHistory", {
           type: "error",
           message: t("fileChangeHistory.error.loadFailed", formatError(error)),
         });
@@ -585,7 +594,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     );
     this.stateByPanel.set(panel, { ...state, loading: true, loadMoreCancellation: cancellation });
     try {
-      await panel.webview.postMessage({ type: "loadMoreStarted" });
+      await postLocalizedMessage(panel.webview, "fileHistory", { type: "loadMoreStarted" });
       const loaded = await this.fileChangeHistoryService.loadCards({
         target: state.target,
         candidates: state.candidates,
@@ -654,7 +663,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
             totalMs: elapsedMs(startedAt),
           }),
         );
-        await panel.webview.postMessage({
+        await postLocalizedMessage(panel.webview, "fileHistory", {
           type: "loadMoreCancelled",
           message: t("fileChangeHistory.loadMoreCanceled"),
         });
@@ -666,7 +675,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
           error: sanitizeDebugError(error),
         }),
       );
-      await panel.webview.postMessage({
+      await postLocalizedMessage(panel.webview, "fileHistory", {
         type: "loadMoreFailed",
         message: t("fileChangeHistory.error.loadFailed", formatError(error)),
       });
@@ -799,7 +808,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     const state = this.stateByPanel.get(panel);
     if (!state) return;
     await vscode.env.clipboard.writeText(state.target.fsPath);
-    await panel.webview.postMessage({ type: "copied", message: t("fileChangeHistory.copied") });
+    await postLocalizedMessage(panel.webview, "fileHistory", { type: "copied", message: t("fileChangeHistory.copied") });
   }
 
   private async openHistory(panel: vscode.WebviewPanel, cardId: string): Promise<void> {
@@ -830,7 +839,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       });
     } catch (error) {
       void vscode.window.showErrorMessage(t("fileChangeHistory.error.openHistoryFailed", formatError(error)));
-      await panel.webview.postMessage({
+      await postLocalizedMessage(panel.webview, "fileHistory", {
         type: "inlineError",
         cardId,
         message: t("fileChangeHistory.error.openHistoryFailed", formatError(error)),
@@ -858,7 +867,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
   }
 
   private async sendLoading(panel: vscode.WebviewPanel, phase: string): Promise<void> {
-    await panel.webview.postMessage({
+    await postLocalizedMessage(panel.webview, "fileHistory", {
       type: "loading",
       phase,
       title: t("fileChangeHistory.title"),
@@ -896,7 +905,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       hasMore: state.hasMore,
       noMore: cards.length > 0 && !state.hasMore,
     };
-    await panel.webview.postMessage({
+    await postLocalizedMessage(panel.webview, "fileHistory", {
       type: "model",
       model,
       sourceIcons: this.buildSourceIcons(panel.webview),
@@ -992,14 +1001,14 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     ].join("; ");
 
     return `<!DOCTYPE html>
-<html lang="en">
+<html lang="${resolveUiLanguage()}">
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="stylesheet" href="${sharedTimeGuideCssUri}">
   <link rel="stylesheet" href="${cssUri}">
-  <title>${t("fileChangeHistory.title")}</title>
+  <title>${t("fileChangeHistory.title").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]!)}</title>
 </head>
 <body>
   <div id="app"></div>
@@ -1023,6 +1032,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     <div id="pageSearchResults" role="listbox" aria-live="polite"></div>
   </div>
   <div id="restoreCover" aria-hidden="true" hidden></div>
+  ${localizationBootstrap(webview, this.extensionUri, nonce)}
   <script nonce="${nonce}" src="${codeLanguageSupportUri}"></script>
   <script nonce="${nonce}" src="${shikiBundleUri}"></script>
   <script nonce="${nonce}" src="${sharedTimeGuideJsUri}"></script>
@@ -1038,78 +1048,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
   }
 
   private buildI18n(): Record<string, string> {
-    return {
-      title: t("fileChangeHistory.title"),
-      openFile: t("fileChangeHistory.openFile"),
-      copyPath: t("fileChangeHistory.copyPath"),
-      reload: t("fileChangeHistory.reload"),
-      loading: t("fileChangeHistory.loading"),
-      search: t("fileChangeHistory.search"),
-      searchPlaceholder: t("fileChangeHistory.searchPlaceholder"),
-      searchCaseInsensitive: t("fileChangeHistory.searchCaseInsensitive"),
-      searchNoMatches: t("fileChangeHistory.searchNoMatches"),
-      pageSearchTitle: t("chat.pageSearch.title"),
-      pageSearchTooltip: t("chat.pageSearch.tooltip"),
-      pageSearchPlaceholder: t("chat.pageSearch.placeholder"),
-      pageSearchPrevTooltip: t("chat.pageSearch.prevTooltip"),
-      pageSearchNextTooltip: t("chat.pageSearch.nextTooltip"),
-      pageSearchCloseTooltip: t("chat.pageSearch.closeTooltip"),
-      pageSearchNoMatches: t("chat.pageSearch.noMatches"),
-      pageSearchTypeToSearch: t("chat.pageSearch.typeToSearch"),
-      pageSearchInvalidQuery: t("chat.pageSearch.invalidQuery"),
-      pageSearchInvalidRegex: t("chat.pageSearch.invalidRegex"),
-      pageSearchNoHistory: t("chat.pageSearch.noHistory"),
-      pageSearchRemoveHistory: t("chat.pageSearch.removeHistory"),
-      patchBefore: t("chat.patch.before"),
-      patchAfter: t("chat.patch.after"),
-      patchNoDiff: t("chat.patch.noDiff"),
-      openInHistory: t("fileChangeHistory.openInHistory"),
-      bookmarkAdd: t("chat.tooltip.bookmarkAdd"),
-      bookmarkRemove: t("chat.tooltip.bookmarkRemove"),
-      loadFailed: t("fileChangeHistory.error.loadFallback"),
-      loadMore: t("fileChangeHistory.loadMore"),
-      loadMoreCanceled: t("fileChangeHistory.loadMoreCanceled"),
-      noMore: t("fileChangeHistory.noMore"),
-      emptyTitle: t("fileChangeHistory.empty.title"),
-      emptyHint: t("fileChangeHistory.empty.hint"),
-      emptyFilterTitle: t("fileChangeHistory.empty.filterTitle"),
-      emptyFilterHint: t("fileChangeHistory.empty.filterHint"),
-      sourceCounts: t("fileChangeHistory.sourceCounts"),
-      sourceCountsCodexOnly: t("fileChangeHistory.sourceCounts.codexOnly"),
-      sourceCountsClaudeOnly: t("fileChangeHistory.sourceCounts.claudeOnly"),
-      resultCountOne: t("fileChangeHistory.resultCount.one"),
-      resultCountMany: t("fileChangeHistory.resultCount.many"),
-      cardNumberLabel: t("fileChangeHistory.cardNumberLabel"),
-      added: t("fileChangeHistory.added"),
-      removed: t("fileChangeHistory.removed"),
-      movedTo: t("fileChangeHistory.movedTo"),
-      changeTypeCreate: t("fileChangeHistory.changeType.create"),
-      changeTypeDelete: t("fileChangeHistory.changeType.delete"),
-      changeTypeMove: t("fileChangeHistory.changeType.move"),
-      changeTypeRename: t("fileChangeHistory.changeType.rename"),
-      changeTypeUpdate: t("fileChangeHistory.changeType.update"),
-      changeTypeUnknown: t("fileChangeHistory.changeType.unknown"),
-      patchUnconfirmed: t("chat.patch.unconfirmed"),
-      patchShared: t("chat.patch.shared"),
-      patchIncomplete: t("chat.patch.incomplete"),
-      top: t("fileChangeHistory.guide.top"),
-      bottom: t("fileChangeHistory.guide.bottom"),
-      prevMatch: t("fileChangeHistory.guide.prevMatch"),
-      nextMatch: t("fileChangeHistory.guide.nextMatch"),
-      dates: t("fileChangeHistory.guide.dates"),
-      prevCard: t("fileChangeHistory.prevCard"),
-      nextCard: t("fileChangeHistory.nextCard"),
-      close: t("fileChangeHistory.close"),
-      staleIndexToolContent: t("fileChangeHistory.stale.indexToolContent"),
-      staleSources: t("fileChangeHistory.stale.sources"),
-      staleAssociation: t("fileChangeHistory.stale.association"),
-      loadMoreDone: t("fileChangeHistory.loadMoreDone"),
-      loadMoreDoneMore: t("fileChangeHistory.loadMoreDoneMore"),
-      loadMoreAvailable: t("fileChangeHistory.loadMoreAvailable"),
-      loadMoreHiddenSources: t("fileChangeHistory.loadMoreHiddenSources"),
-      loadMoreHiddenSourcesMore: t("fileChangeHistory.loadMoreHiddenSourcesMore"),
-      copied: t("fileChangeHistory.copied"),
-    };
+    return buildWebviewI18n("fileHistory");
   }
 
   private buildSourceIcons(webview: vscode.Webview): { codex: SourceIconUris; claude: SourceIconUris } {
