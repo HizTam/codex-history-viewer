@@ -54,6 +54,8 @@
   let i18n = { ...localization.defaults };
   let dateTime = {};
   let model = null;
+  // Locale changes must redraw the current screen, including pre-model states.
+  let viewState = { kind: "loading", phase: "generic" };
   let modelCardIndexById = new Map();
   let modelCardById = new Map();
   let sourceIcons = {};
@@ -61,6 +63,7 @@
   let staleReason = null;
   let dismissedStale = false;
   let loadingMore = false;
+  const toastMessageProviders = new WeakMap();
   let bookmarkedKeys = new Set();
   let timeGuideEnabled = false;
   let debugLoggingEnabled = false;
@@ -103,6 +106,7 @@
     if (msg.i18n) {
       i18n = msg.i18n;
       updatePageSearchStaticText();
+      refreshLocalizedToasts();
     }
     if (msg.dateTime && typeof msg.dateTime === "object") dateTime = msg.dateTime;
     if (msg.searchHistoryCandidates) {
@@ -146,7 +150,9 @@
       return;
     }
     if (msg.type === "loading") {
-      renderLoading(msg.message || "");
+      const phase = ["syncIndex", "collectCandidates", "parseSessions", "render"].includes(msg.phase) ? msg.phase : "generic";
+      viewState = { kind: "loading", phase };
+      render();
       return;
     }
     if (msg.type === "model") {
@@ -156,6 +162,7 @@
       pendingReloadScrollAnchor = null;
       pendingLoadMoreScrollAnchor = null;
       model = msg.model || null;
+      viewState = { kind: "content" };
       rebuildModelCardIndex();
       bookmarkedKeys = normalizeBookmarkKeys(msg.bookmarks);
       const modelReason = typeof msg.reason === "string" ? msg.reason : "";
@@ -230,7 +237,8 @@
       model = null;
       modelCardIndexById = new Map();
       modelCardById = new Map();
-      renderError(msg.message || "");
+      viewState = { kind: "error", ...normalizeLoadError(msg) };
+      render();
       return;
     }
     if (msg.type === "loadMoreFailed") {
@@ -239,7 +247,7 @@
       loadingMore = false;
       render();
       restoreScroll(scrollTop);
-      showToast(msg.message || "", { key: "loadMore" });
+      showToast(getLoadErrorText(normalizeLoadError(msg)), { key: "loadMore" });
       return;
     }
     if (msg.type === "loadMoreCancelled") {
@@ -248,18 +256,20 @@
       loadingMore = false;
       render();
       restoreScroll(scrollTop);
-      showToast(msg.message || text("loadMoreCanceled", localization.defaults["loadMoreCanceled"]), { key: "loadMore" });
+      showToast(text("loadMoreCanceled", localization.defaults["loadMoreCanceled"]), { key: "loadMore" });
       return;
     }
     if (msg.type === "inlineError") {
-      showToast(msg.message || "", { key: "inlineError" });
+      const error = normalizeInlineError(msg);
+      showToast(() => getInlineErrorText(error), { key: "inlineError" });
       return;
     }
     if (msg.type === "cancelled") {
       const scrollTop = getScrollRoot().scrollTop;
       pendingLoadMoreScrollAnchor = null;
       loadingMore = false;
-      showToast(msg.message || "", { key: "cancelled" });
+      viewState = { kind: "content" };
+      showToast(text("cancelled", localization.defaults.cancelled), { key: "cancelled" });
       render();
       restoreScroll(scrollTop);
       return;
@@ -353,7 +363,7 @@
       const panel = el("section", { className: "statePanel errorPanel" });
       const title = el("h1", {});
       title.textContent = message || text("loadFailed", localization.defaults["loadFailed"]);
-      const btn = el("button", { type: "button", className: "primaryBtn" });
+      const btn = el("button", { id: "retryLoad", type: "button", className: "primaryBtn" });
       btn.textContent = text("reload", localization.defaults["reload"]);
       btn.addEventListener("click", () => vscode.postMessage({ type: "reload" }));
       panel.appendChild(title);
@@ -363,6 +373,21 @@
   }
 
   function render(modelReason) {
+    if (viewState.kind === "loading") {
+      const messages = {
+        generic: text("loading", localization.defaults.loading),
+        syncIndex: text("progressSyncIndex", localization.defaults.progressSyncIndex),
+        collectCandidates: text("progressCollectCandidates", localization.defaults.progressCollectCandidates),
+        parseSessions: text("progressParseSessions", localization.defaults.progressParseSessions),
+        render: text("progressRender", localization.defaults.progressRender),
+      };
+      renderLoading(messages[viewState.phase] || messages.generic);
+      return;
+    }
+    if (viewState.kind === "error") {
+      renderError(getLoadErrorText(viewState));
+      return;
+    }
     if (model) for (const card of model.cards) {
       if (card.unknownDate) card.localDate = card.dateTimeLabel = text("unknownDate", localization.defaults.unknownDate);
       if (card.sessionTitleFallback) card.sessionTitle = card.sessionTitleFallback.date ? formatTemplate(text("sessionTitleWithDate", localization.defaults.sessionTitleWithDate), card.sessionTitleFallback.source, card.sessionTitleFallback.date) : text("untitledSession", localization.defaults.untitledSession);
@@ -398,6 +423,33 @@
       body.appendChild(content);
       wrap.appendChild(body);
     }, { preservePageSearchIndex: modelReason !== "reload" });
+  }
+
+  function normalizeLoadError(msg) {
+    return {
+      errorKind: "loadFailed",
+      detail: typeof msg.detail === "string" ? msg.detail : "",
+      // Only older hosts provide a preformatted message.
+      legacyMessage: msg.errorKind === undefined && typeof msg.message === "string" ? msg.message : "",
+    };
+  }
+
+  function getLoadErrorText(state) {
+    if (state.detail) return formatTemplate(text("loadFailedDetail", localization.defaults.loadFailedDetail), state.detail);
+    return state.legacyMessage || text("loadFailed", localization.defaults.loadFailed);
+  }
+
+  function normalizeInlineError(msg) {
+    return {
+      detail: msg.errorKind === "openHistoryFailed" && typeof msg.detail === "string" ? msg.detail : "",
+      // Older hosts have no structured error kind; preserve their message as a fallback.
+      legacyMessage: msg.errorKind === undefined && typeof msg.message === "string" ? msg.message : "",
+    };
+  }
+
+  function getInlineErrorText(state) {
+    if (state.detail) return formatTemplate(text("openHistoryFailedDetail", localization.defaults.openHistoryFailedDetail), state.detail);
+    return state.legacyMessage || text("openHistoryFailed", localization.defaults.openHistoryFailed);
   }
 
   function renderShell(renderContent, options) {
@@ -2687,7 +2739,9 @@
     const toastKey = normalizeToastKey(options.key);
     if (toastKey) removeExistingToastByKey(container, toastKey);
     const toast = el("div", { className: "fchToast" });
-    toast.textContent = String(message || "");
+    const messageProvider = typeof message === "function" ? message : null;
+    toast.textContent = String((messageProvider ? messageProvider() : message) || "");
+    if (messageProvider) toastMessageProviders.set(toast, messageProvider);
     if (toastKey) toast.dataset.toastKey = toastKey;
     container.appendChild(toast);
     setTimeout(() => {
@@ -2698,6 +2752,16 @@
         // Ignore rare failures to remove the toast node.
       }
     }, 2400);
+  }
+
+  function refreshLocalizedToasts() {
+    // Update live text in place without recreating a notification or extending its lifetime.
+    for (const toast of document.querySelectorAll(".fchToast")) {
+      const messageProvider = toastMessageProviders.get(toast);
+      if (!messageProvider) continue;
+      const message = String(messageProvider() || "");
+      if (toast.textContent !== message) toast.textContent = message;
+    }
   }
 
   function normalizeToastKey(value) {

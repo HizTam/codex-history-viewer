@@ -212,7 +212,8 @@ export async function deleteSessionsWithConfirmation(params: {
 async function confirmDeletionScope(count: number, includesRevisions: boolean): Promise<"selected" | "conversation" | null> {
   if (!includesRevisions) {
     const message = count === 1 ? t("app.deleteConfirmSingle") : t("app.deleteConfirmMulti", count);
-    return await vscode.window.showWarningMessage(message, { modal: true }, "OK") === "OK" ? "selected" : null;
+    const choice = await vscode.window.showWarningMessage(message, { modal: true }, { id: "confirm", title: t("common.ok") });
+    return choice?.id === "confirm" ? "selected" : null;
   }
   const selectedLabel = count === 1 ? t("app.deleteThisHistoryOnly") : t("app.deleteSelectedHistoriesOnly");
   const allLabel = t("app.deleteAllRevisions");

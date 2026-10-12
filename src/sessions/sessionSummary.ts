@@ -1,9 +1,8 @@
 import { readClaudeAgentMetadata, claudeAgentIdentity, parseClaudeAgentPath } from "../agents/claudeAgentMetadata";
 import { resolveClaudeAgentHistory } from "./claudeAgentHistory";
-import { createSessionReadStream } from "../utils/sessionFileReader";
+import { createSessionReadStream, readJsonlLines } from "../utils/sessionFileReader";
 import * as path from "node:path";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
-import * as readline from "node:readline";
 import { formatTimeHmInTimeZone, toYmdInTimeZone, ymdToString } from "../utils/dateUtils";
 import { normalizeCacheKey, statSafe } from "../utils/fsUtils";
 import {
@@ -27,6 +26,7 @@ import {
   type ClaudePastedPromptResolver,
 } from "../chat/claudePastedPrompt";
 import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
+import { isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
 import type { ChatAttachment } from "../chat/chatTypes";
 import type {
   PreviewMessage,
@@ -59,14 +59,14 @@ export async function tryReadSessionMeta(
   performanceProbe?.add("segmentCount");
   performanceProbe?.add("streamOpenCount");
   const stream = createSessionReadStream(fsPath);
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const lines = readJsonlLines(stream);
 
   const claudeMeta: SessionMetaInfo = { historySource: "claude" };
   let scanned = 0;
   let hasParsedRecord = false;
 
   try {
-    for await (const line of rl) {
+    for await (const line of lines) {
       if (performanceProbe) observeEstimatedJsonlLine(performanceProbe, line);
       if (!line) continue;
       scanned += 1;
@@ -91,7 +91,6 @@ export async function tryReadSessionMeta(
       if (scanned >= META_SCAN_LINE_LIMIT) break;
     }
   } finally {
-    rl.close();
     stream.destroy();
   }
 
@@ -312,7 +311,7 @@ async function appendPreviewMessage(
   }
 
   const role = detectClaudeMessageRole(obj);
-  if (!role || isClaudeInternalUserRecord(obj)) return;
+  if (!role || isClaudeInternalUserRecord(obj) || isClaudeCompactSummaryRecord(obj)) return;
 
   const rawContent = getClaudeMessageContent(obj);
   const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
@@ -372,9 +371,9 @@ async function scanPhysicalSessionSummary(
   performanceProbe?.add("streamOpenCount");
   const agentProjection = await resolveClaudeAgentHistory(fsPath, { token, cancellationErrorFactory, performanceProbe, claudeSessionsRoot });
   const stream = createSessionReadStream(fsPath, { token });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const lines = readJsonlLines(stream, { token, cancellationErrorFactory });
   try {
-    for await (const line of rl) {
+    for await (const line of lines) {
       throwIfSummaryScanCancelled(token, cancellationErrorFactory);
       physicalLineIndex += 1;
       if (performanceProbe) {
@@ -439,7 +438,6 @@ async function scanPhysicalSessionSummary(
       }
     }
   } finally {
-    rl.close();
     stream.destroy();
   }
 

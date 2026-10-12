@@ -1,7 +1,6 @@
 import { resolveClaudeAgentHistory } from "./claudeAgentHistory";
 import { open, stat, type FileHandle } from "node:fs/promises";
 import * as path from "node:path";
-import * as readline from "node:readline";
 import type {
   CodexHistoryBaseMetadata,
   SessionSource,
@@ -11,7 +10,7 @@ import { normalizeCacheKey } from "../utils/fsUtils";
 import { stableTextSha256 } from "../utils/stableTextHash";
 import type { PerformanceProbe } from "../performance/performanceCounters";
 import { CodexRollbackTracker, type CodexRollbackProjection } from "./codexRollbackHistory";
-import { createSessionReadStream, isCompressedSessionFile, readCompressedBytes, resolveSessionFilePath } from "../utils/sessionFileReader";
+import { createSessionReadStream, isCompressedSessionFile, readCompressedBytes, readJsonlLines, resolveSessionFilePath } from "../utils/sessionFileReader";
 
 const MAX_HISTORY_ID_LENGTH = 256;
 const MAX_HISTORY_DEPTH = 32;
@@ -304,10 +303,13 @@ async function* readSessionJsonlEntries(
     const stream = createSessionReadStream(physicalPath, {
       endByteOffset: readEndByteOffset, token: options.token, cancellationErrorFactory: options.cancellationErrorFactory,
     });
-    const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+    const lines = readJsonlLines(stream, {
+      ...options,
+      cancellationErrorFactory: options.cancellationErrorFactory ?? (() => new SessionJsonlReadCancelledError()),
+    });
     let physicalLineIndex = 0;
     try {
-      for await (const line of rl) {
+      for await (const line of lines) {
         throwIfCancelled(options.token, options.cancellationErrorFactory);
         lineIndex += 1;
         physicalLineIndex += 1;
@@ -350,7 +352,6 @@ async function* readSessionJsonlEntries(
         }
       }
     } finally {
-      rl.close();
       stream.destroy();
     }
   }

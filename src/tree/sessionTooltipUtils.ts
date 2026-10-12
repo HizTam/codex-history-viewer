@@ -215,7 +215,7 @@ function appendSessionMetadataLines(
   projectAlias?: string,
   projectDisplayCwd?: string | null,
 ): void {
-  md.appendMarkdown(`Source: ${sourceName(session.source)}  \n`);
+  md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.source"))}: ${sourceName(session.source)}  \n`);
   if (session.storage.archiveState === "archived") {
     md.appendMarkdown(
       `${escapeForMarkdown(t("tree.tooltip.location"))}: ${escapeForMarkdown(t("session.location.archived"))}  \n`,
@@ -240,10 +240,10 @@ function appendSessionMetadataLines(
     md.appendMarkdown(`${escapeForMarkdown(session.cwdShort)}  \n`);
   }
   if (annotation && annotation.tags.length > 0) {
-    md.appendMarkdown(`Tags: ${escapeForMarkdown(annotation.tags.join(", "))}  \n`);
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.tags"))}: ${escapeForMarkdown(annotation.tags.join(", "))}  \n`);
   }
   if (annotation && annotation.note.length > 0) {
-    md.appendMarkdown(`Note: ${escapeForMarkdown(annotation.note)}  \n`);
+    md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.note"))}: ${escapeForMarkdown(annotation.note)}  \n`);
   }
 }
 

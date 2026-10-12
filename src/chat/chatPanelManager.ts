@@ -17,6 +17,7 @@ import {
   type SearchHistoryStore,
 } from "../services/searchHistoryStore";
 import { type BookmarkStore, type BookmarkTarget } from "../services/bookmarkStore";
+import { isSafeSentFilePath } from "./claudeSentFiles";
 import { createTimelineBookmarkTargetBuilder } from "../services/bookmarkTargetResolver";
 import { isClaudeProgressId } from "./claudeProgress";
 import { isClaudeQueuedInputId } from "./claudeQueuedInput";
@@ -344,6 +345,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly readyByPanel = new WeakMap<vscode.WebviewPanel, boolean>();
   private readonly imageDataByPanel = new WeakMap<vscode.WebviewPanel, Map<string, SaveableChatImage>>();
   private readonly documentDataByPanel = new WeakMap<vscode.WebviewPanel, Map<string, SaveableChatDocument>>();
+  private readonly sentFileTargetsByPanel = new WeakMap<vscode.WebviewPanel, Map<string, string>>();
   private readonly fileHistoryTargetsByPanel = new WeakMap<vscode.WebviewPanel, Map<string, string>>();
   private readonly patchEntryDetailRequestsByPanel = new WeakMap<vscode.WebviewPanel, Set<string>>();
   private readonly branchSnapshotByPanel = new WeakMap<vscode.WebviewPanel, BranchNavigationSnapshot>();
@@ -362,6 +364,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly userMessageIndexesByPanel = new WeakMap<vscode.WebviewPanel, Set<number>>();
   private readonly titleRefreshSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private readonly panelTitlePresentationByPanel = new WeakMap<vscode.WebviewPanel, string>();
+  private readonly placeholderTitlePanels = new WeakSet<vscode.WebviewPanel>();
   private readonly panelIconPresentationByPanel = new WeakMap<vscode.WebviewPanel, string>();
   private readonly sessionModelReuseCapablePanels = new WeakSet<vscode.WebviewPanel>();
   private readonly deliveredSessionModelFingerprintByPanel = new WeakMap<vscode.WebviewPanel, string>();
@@ -485,6 +488,10 @@ export class ChatPanelManager implements vscode.Disposable {
       this.liveSessionObservationByPath.clear();
     }
     const send = (panel: vscode.WebviewPanel): void => {
+      if (this.placeholderTitlePanels.has(panel)) {
+        const placeholderTitle = t("chat.initialTitle");
+        if (panel.title !== placeholderTitle) panel.title = placeholderTitle;
+      }
       if (!this.readyByPanel.get(panel)) return;
       void postLocalizedMessage(panel.webview, "chat", {
         type: "i18n",
@@ -1245,6 +1252,7 @@ export class ChatPanelManager implements vscode.Disposable {
     this.liveExpiryRefreshPendingByPanel.delete(panel);
     this.imageDataByPanel.delete(panel);
     this.documentDataByPanel.delete(panel);
+    this.sentFileTargetsByPanel.delete(panel);
     this.fileHistoryTargetsByPanel.delete(panel);
     this.patchEntryDetailRequestsByPanel.delete(panel);
     this.bookmarkTargetsByPanel.delete(panel);
@@ -1336,12 +1344,13 @@ export class ChatPanelManager implements vscode.Disposable {
   private createPanel(params: { kind: ChatPanelKind }): vscode.WebviewPanel {
     const panel = vscode.window.createWebviewPanel(
       "codexHistoryViewer.chat",
-      "Codex Session",
+      t("chat.initialTitle"),
       { viewColumn: vscode.ViewColumn.Active, preserveFocus: params.kind === "reusable" },
       this.buildWebviewPanelOptions(),
     );
 
     this.initializePanel(panel);
+    this.placeholderTitlePanels.add(panel);
     return panel;
   }
 
@@ -1990,6 +1999,10 @@ export class ChatPanelManager implements vscode.Disposable {
       }
       case "openAttachment": {
         await this.openAttachmentTargetFromPanel(panel, msg);
+        return;
+      }
+      case "openSentFile": {
+        await this.openSentFileFromPanel(panel, msg);
         return;
       }
       case "loadPatchEntryDetails": {
@@ -3928,6 +3941,10 @@ export class ChatPanelManager implements vscode.Disposable {
     this.pruneLiveSessionObservations();
     this.imageDataByPanel.set(panel, collectSaveableImages(model));
     this.documentDataByPanel.set(panel, collectSaveableDocuments(model));
+    this.sentFileTargetsByPanel.set(panel, new Map(model.items.flatMap(item => item.type === "tool"
+      ? (item.attachments ?? []).flatMap(attachment => attachment.type === "fileReference" &&
+        attachment.source === "claudeSendUserFile" && attachment.id && isSafeSentFilePath(attachment.path)
+        ? [[attachment.id, attachment.path] as const] : []) : [])));
     this.fileHistoryTargetsByPanel.set(panel, new Map(model.items.flatMap(item => item.type === "patchGroup"
       ? item.entries.map(entry => [entry.id, entry.movePath || entry.path] as const) : [])));
     const annotation = this.annotationStore.get(nextState.fsPath);
@@ -3958,7 +3975,7 @@ export class ChatPanelManager implements vscode.Disposable {
       panel,
       new Set(
         webviewModel.items.flatMap((item) =>
-          item.type === "message" && item.role === "user" && typeof item.messageIndex === "number"
+          item.type === "message" && item.role === "user" && !item.isContext && typeof item.messageIndex === "number"
             ? [item.messageIndex]
             : [],
         ),
@@ -4507,6 +4524,31 @@ export class ChatPanelManager implements vscode.Disposable {
     });
   }
 
+  private async openSentFileFromPanel(panel: vscode.WebviewPanel, msg: any): Promise<void> {
+    const state = this.stateByPanel.get(panel);
+    if (!this.isCurrentPanelSessionRequest(state, msg, "openSentFile") ||
+      !this.isCurrentSessionInfoAction(panel, state, msg)) return;
+    const id = typeof msg?.attachmentId === "string" ? msg.attachmentId : "";
+    const filePath = this.sentFileTargetsByPanel.get(panel)?.get(id);
+    if (!isSafeSentFilePath(filePath)) return;
+    const isCurrent = () => this.isCurrentSessionInfoAction(panel, state, msg) &&
+      this.sentFileTargetsByPanel.get(panel)?.get(id) === filePath;
+    try {
+      const target = await resolveLocalFileLinkTarget(filePath, {
+        literalPath: true,
+        baseDirs: collectChatLocalLinkBaseDirs(state, ...(vscode.workspace.workspaceFolders ?? []).map(folder => folder.uri.fsPath)),
+        projectPathMappings: buildChatProjectPathMappings(state),
+        claudeSessionFsPath: state.historySource === "claude" ? state.fsPath : undefined,
+      });
+      if (!isCurrent()) return;
+      if (!target || !(await openFileWithVsCodeOpenCommand(target.fsPath))) {
+        if (isCurrent()) void vscode.window.showErrorMessage(t("chat.attachment.openFailed", filePath));
+      }
+    } catch {
+      if (isCurrent()) void vscode.window.showErrorMessage(t("chat.attachment.openFailed", filePath));
+    }
+  }
+
   private async openAttachmentTargetFromPanel(panel: vscode.WebviewPanel, msg: any): Promise<void> {
     const state = this.stateByPanel.get(panel);
     if (!state) return;
@@ -5037,6 +5079,7 @@ export class ChatPanelManager implements vscode.Disposable {
     session: SessionSummary,
     kind: ChatPanelKind,
   ): void {
+    this.placeholderTitlePanels.delete(panel);
     const title = buildPanelTitle(session);
     if (this.panelTitlePresentationByPanel.get(panel) !== title) {
       panel.title = title;
@@ -5593,6 +5636,7 @@ function toSummaryToolItem(item: ChatToolItem): ChatToolItem {
     name: item.name,
     callId: item.callId,
     attachments: item.attachments?.map((attachment) => toWebviewAttachment(attachment)),
+    sentFiles: item.sentFiles ? { ...item.sentFiles } : undefined,
     execution: item.execution ? { ...item.execution } : undefined,
     presentation: item.presentation ? { ...item.presentation } : undefined,
     ...(hasHeavyDetails ? { detailsOmitted: true } : {}),
@@ -5685,6 +5729,7 @@ async function buildChatPerformanceStats(fsPath: string, model: ChatSessionModel
       continue;
     }
     if (item.type === "tool") {
+      stats.messageChars += (item.sentFiles?.caption?.length ?? 0) + (item.sentFiles?.notice?.length ?? 0);
       stats.imageCount += Array.isArray(item.attachments)
         ? item.attachments.filter((attachment) => attachment?.type === "image").length
         : 0;
@@ -5910,7 +5955,7 @@ async function openFileWithVsCodeOpenCommand(fsPath: string): Promise<boolean> {
 }
 
 function formatError(error: unknown): string {
-  return error instanceof Error && error.message ? error.message : String(error ?? "Unknown error");
+  return error instanceof Error && error.message ? error.message : String(error ?? t("common.unknownError"));
 }
 
 function isCodexForkNavigationSnapshot(

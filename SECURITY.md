@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-10-07
+Last updated: 2026-10-12
 
 ## Supported Versions
 
@@ -17,9 +17,9 @@ Use the latest published release of Codex History Viewer whenever possible. Olde
 | 1.2.2 through 2.7.x | Does not include all current Markdown and KaTeX dependency security updates; upgrade to 2.15.0 or later. |
 | 1.2.1 and earlier | Do not install or redistribute historical VSIX files. |
 
-## Dependencies Shipped in 2.18.0
+## Dependencies Shipped in 2.18.1
 
-Version 2.18.0 retains the dependency versions shipped in 2.17.0.
+Version 2.18.1 retains the dependency versions shipped in 2.18.0.
 
 | Component | Bundled version | Use |
 | --- | --- | --- |
@@ -114,6 +114,12 @@ Saved progress updates and thinking text use the existing untrusted-content rend
 Queued text is displayed as additional user input only when its saved origin explicitly identifies a human and its fields pass validation. Internal notifications, forwarded input, metadata-only records, and rendered system-reminder wrappers are excluded. Accepted text is rendered as plain text and may be included in search, clipboard content, Markdown output, and generated Resume and Handoff context. Raw correlation identifiers remain in the extension host; cards and search navigation use derived identifiers.
 
 Delivered internal task notifications are accepted only when their saved origin identifies a supported task notification, and remain separate from human input. Notification details and raw text are displayed as bounded plain text. Recorded output-file and worktree paths are not opened, linked, or read to display these details.
+
+### Files sent by Claude Code
+
+Recorded file names, descriptions, and delivery notices are treated as untrusted content and displayed as bounded plain text. File contents, including images, are not loaded automatically for these cards. URL schemes, control characters, and oversized paths are not accepted as local-file links.
+
+Opening a file requires an explicit click. The extension host resolves the target from an attachment identifier in the current session model and validates the session and its revision; it does not accept an arbitrary path supplied by the Webview. Requests from stale cards or another session are rejected. File names containing `#` are resolved literally rather than treated as line-number fragments.
 
 ### Bundled translations
 

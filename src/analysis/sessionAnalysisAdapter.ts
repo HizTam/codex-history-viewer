@@ -37,6 +37,7 @@ import {
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { stableTextSha256 } from "../utils/stableTextHash";
 import { extractCompactUserText, safeDisplayPath } from "../utils/textUtils";
+import { isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
 import {
   normalizeSessionAnalysisGraphIdentifier,
   normalizeSessionAnalysisProjectCwd,
@@ -1018,6 +1019,7 @@ async function buildRawClaudeRecord(
   if (
     role === "user" &&
     !isCrossSessionInbound &&
+    !isClaudeCompactSummaryRecord(obj) &&
     obj?.isMeta !== true &&
     !extractClaudeRequestInterruptionContent(controlContent) &&
     !extractClaudeLocalCommandOutputContent(controlContent) &&

@@ -35,10 +35,11 @@ import type {
 import type { ChatTurnTimelineMode, ImagesConfig } from "../settings";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import {
-  extractCompactUserText,
   isBoilerplateUserMessageText,
 } from "../utils/textUtils";
 import { buildToolPresentation } from "../tools/toolSemantics";
+import { extractClaudeCompactUserText, isClaudeCompactSummaryRecord } from "./claudeCompactSummary";
+import { buildClaudeSentFiles, updateClaudeSentFilesResult } from "./claudeSentFiles";
 import {
   assignAttachmentIds,
   detectClaudeMaterializedMessageRole,
@@ -577,7 +578,7 @@ async function readPatchEntryDetails(
     const parsed = parseClaudeMessageContent(rawContent);
     claudeChanges.acceptResults(obj);
     const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, { enabled: false }, { role, pastedPrompt, record: obj });
-    const compactUserText = role === "user" ? extractCompactUserText(normalizeText(extracted.text)) : null;
+    const compactUserText = role === "user" ? extractClaudeCompactUserText(obj, normalizeText(extracted.text)) : null;
     const turnResolution = resolveClaudeRecordTurnId(
       obj,
       role,
@@ -646,6 +647,7 @@ async function indexCodexTimelineRecord(
   if (payloadType === "message") {
     const role = obj?.payload?.role as ChatRole | undefined;
     if (role !== "developer" && role !== "user" && role !== "assistant") return true;
+    if (role === "user") resetMemoryCitationState(memoryCitationState, false);
 
     if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) {
       appendOrMergeCodexInterruption(items, interruptionState, buildCodexInterruptionFromRaw(obj, turnId));
@@ -669,7 +671,9 @@ async function indexCodexTimelineRecord(
     if (role === "assistant") {
       const split = splitTrailingMemoryCitationBlock(text);
       text = normalizeText(split.text);
-      memoryCitation = takePendingMemoryCitation(memoryCitationState) ?? split.memoryCitation;
+      const pendingCitation = takePendingMemoryCitation(memoryCitationState, text, obj?.payload?.phase,
+        turnId ?? memoryCitationState.activeTurnId);
+      memoryCitation = split.memoryCitation ?? pendingCitation;
     }
     if (!text && attachments.length === 0 && !memoryCitation) return true;
 
@@ -731,7 +735,8 @@ async function indexCodexTimelineRecord(
     };
     items.push(item);
     observeCodexItemTurn(turnState, turnId, ts);
-    if (role === "assistant") memoryCitationState.lastAssistantItemIndex = items.length - 1;
+    if (role === "assistant") rememberAssistantCitationTarget(memoryCitationState, item, items.length - 1,
+      obj?.payload?.phase, turnId ?? memoryCitationState.activeTurnId);
     if (role === "user" || role === "assistant") closeCodexInterruptionWindow(interruptionState);
     return true;
   }
@@ -903,11 +908,13 @@ function indexCodexEventRecord(
     };
     items.push(item);
     observeCodexItemTurn(turnState, turnId, timestampIso);
-    memoryCitationState.lastAssistantItemIndex = items.length - 1;
+    rememberAssistantCitationTarget(memoryCitationState, item, items.length - 1, payloadPhase,
+      turnId ?? memoryCitationState.activeTurnId);
     closeCodexInterruptionWindow(interruptionState);
     return true;
   }
   if (payloadType === "turn_aborted") {
+    resetMemoryCitationState(memoryCitationState, true);
     const turnId = resolveCodexTurnIdForItem(obj, turnState);
     appendOrMergeCodexInterruption(items, interruptionState, buildCodexInterruptionFromEvent(obj, turnId));
     observeCodexItemTurn(turnState, turnId, readTimestampIso(obj));
@@ -915,6 +922,7 @@ function indexCodexEventRecord(
     return true;
   }
   if (payloadType === "thread_rolled_back") {
+    resetMemoryCitationState(memoryCitationState, true);
     const explicitTurnId = readCodexRecordTurnId(obj);
     const turnId = explicitTurnId ?? turnState?.activeTurnId;
     const rolledBack = mergeCodexRollbackIntoInterruption(items, interruptionState, obj, turnId);
@@ -927,15 +935,22 @@ function indexCodexEventRecord(
     });
     return true;
   }
-  if (payloadPhase === "final_answer") {
+  if (payloadType === "agent_message" && typeof obj?.payload?.message === "string" && !memoryCitationState.closed) {
     const memoryCitation = normalizeMemoryCitationPayload(obj?.payload?.memory_citation);
-    if (
-      memoryCitation &&
-      !attachMemoryCitationToLastAssistant(items, memoryCitationState, memoryCitation, currentMessageIndex())
-    ) {
-      memoryCitationState.pendingFinalAnswer = memoryCitation;
+    const eventTurnId = readCodexRecordTurnId(obj) ?? memoryCitationState.activeTurnId;
+    if (memoryCitation && (!eventTurnId || !memoryCitationState.activeTurnId || eventTurnId === memoryCitationState.activeTurnId)) {
+      const fact: MemoryCitationFact = {
+        text: normalizeText(splitTrailingMemoryCitationBlock(obj.payload.message).text),
+        phase: normalizeCitationPhase(payloadPhase),
+        turnId: eventTurnId,
+        citation: memoryCitation,
+      };
+      if (!attachMemoryCitationToLastAssistant(items, memoryCitationState, fact, currentMessageIndex())) {
+        memoryCitationState.pending = fact;
+      }
     }
   }
+  if (payloadType === "task_complete") resetMemoryCitationState(memoryCitationState, true);
 
   if (payloadType === "token_count") {
     const usageItem = buildCodexUsageItem(
@@ -1042,8 +1057,8 @@ function indexCodexEventRecord(
     // Finalize any pending patch groups before the next turn begins.
     flushPendingPatchGroups(items, pendingPatchGroups, turnState);
     startCodexTurn(turnState, turnId, readTimestampIso(obj), lineIndex);
-    memoryCitationState.pendingFinalAnswer = undefined;
-    memoryCitationState.lastAssistantItemIndex = undefined;
+    resetMemoryCitationState(memoryCitationState, false);
+    memoryCitationState.activeTurnId = turnId;
     return true;
   }
 
@@ -1173,7 +1188,7 @@ async function indexClaudeTimelineRecord(
   });
   const attachments = extracted.attachments;
   const text = normalizeText(extracted.text);
-  const compactUserText = role === "user" ? extractCompactUserText(text) : null;
+  const compactUserText = role === "user" ? extractClaudeCompactUserText(obj, text) : null;
   const turnResolution = resolveClaudeRecordTurnId(
     obj,
     role,
@@ -1220,7 +1235,7 @@ async function indexClaudeTimelineRecord(
   let pendingMessage: ChatMessageItem | undefined;
   if (text || attachments.length > 0) {
     const requestText = role === "user" ? compactUserText ?? text : undefined;
-    const isContext = role === "user" ? !compactUserText && attachments.length === 0 : false;
+    const isContext = role === "user" && (isClaudeCompactSummaryRecord(obj) || (!compactUserText && attachments.length === 0));
     const idx = nextMessageIndex();
     assignAttachmentIds(attachments, `m${idx}`);
     const modelMeta = role === "assistant" ? extractClaudeMessageModelMeta(obj) : {};
@@ -1267,6 +1282,7 @@ async function indexClaudeTimelineRecord(
       timestampIso: ts,
       name,
       callId,
+      ...buildClaudeSentFiles(name, argumentsText, callId || `line:${lineIndex}:tool:${toolCallIndex}`),
       ...(includeDetails && argumentsText ? { argumentsText } : {}),
       ...(!includeDetails && hasText(argumentsText) ? { detailsOmitted: true } : {}),
     };
@@ -1340,9 +1356,21 @@ interface ChatMessageModelMeta {
   effort?: string;
 }
 
+interface MemoryCitationMatch {
+  text: string;
+  phase?: string;
+  turnId?: string;
+}
+
+interface MemoryCitationFact extends MemoryCitationMatch {
+  citation: ChatMemoryCitation;
+}
+
 interface MemoryCitationBuildState {
-  pendingFinalAnswer?: ChatMemoryCitation;
-  lastAssistantItemIndex?: number;
+  pending?: MemoryCitationFact;
+  lastAssistant?: MemoryCitationMatch & { itemIndex: number };
+  activeTurnId?: string;
+  closed?: boolean;
 }
 
 interface UsageBuildState {
@@ -1490,7 +1518,7 @@ function isClaudeHumanTurnStart(
   attachments: readonly ChatAttachment[],
   toolResults: readonly { callId?: string }[],
 ): boolean {
-  if (obj?.isMeta === true || obj?.isSidechain === true) return false;
+  if (obj?.isMeta === true || obj?.isSidechain === true || isClaudeCompactSummaryRecord(obj)) return false;
   if (compactUserText) return true;
   if (toolResults.length > 0) return false;
   return attachments.some((attachment) => attachment.type === "image" || attachment.type === "document");
@@ -2259,24 +2287,53 @@ function readTimestampIso(obj: any): string | undefined {
   return timestamp || undefined;
 }
 
-function takePendingMemoryCitation(state: MemoryCitationBuildState): ChatMemoryCitation | undefined {
-  const citation = state.pendingFinalAnswer;
-  state.pendingFinalAnswer = undefined;
-  return citation;
+function normalizeCitationPhase(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= 64 ? value : undefined;
+}
+
+function citationMessagesMatch(left: MemoryCitationMatch, right: MemoryCitationMatch): boolean {
+  return left.text === right.text && (!left.phase || !right.phase || left.phase === right.phase) &&
+    (!left.turnId || !right.turnId || left.turnId === right.turnId);
+}
+
+function resetMemoryCitationState(state: MemoryCitationBuildState, closed: boolean): void {
+  state.pending = undefined;
+  state.lastAssistant = undefined;
+  state.closed = closed;
+}
+
+function rememberAssistantCitationTarget(
+  state: MemoryCitationBuildState, item: ChatMessageItem, itemIndex: number, phase: unknown, turnId?: string,
+): void {
+  state.closed = false;
+  state.lastAssistant = { itemIndex, text: item.text, phase: normalizeCitationPhase(phase), turnId };
+}
+
+function takePendingMemoryCitation(
+  state: MemoryCitationBuildState, text: string, phase: unknown, turnId?: string,
+): ChatMemoryCitation | undefined {
+  const pending = state.pending;
+  // A pending event may match the next response, but must never drift to a later message.
+  state.pending = undefined;
+  return pending && citationMessagesMatch(pending, { text, phase: normalizeCitationPhase(phase), turnId })
+    ? pending.citation : undefined;
 }
 
 function attachMemoryCitationToLastAssistant(
   items: ChatTimelineItem[],
   state: MemoryCitationBuildState,
-  citation: ChatMemoryCitation,
+  fact: MemoryCitationFact,
   currentMessageIndex: number,
 ): boolean {
-  const index = state.lastAssistantItemIndex;
+  const target = state.lastAssistant;
+  if (!target || !citationMessagesMatch(target, fact)) return false;
+  const index = target.itemIndex;
   if (typeof index !== "number" || index < 0 || index >= items.length) return false;
   const item = items[index];
   if (!item || item.type !== "message" || item.role !== "assistant") return false;
   if (item.messageIndex !== currentMessageIndex) return false;
-  item.memoryCitation = citation;
+  item.memoryCitation ??= fact.citation;
+  state.pending = undefined;
   return true;
 }
 
@@ -2909,6 +2966,8 @@ function attachOrPushToolOutput(
     else if (hasText(outputText)) tool.detailsOmitted = true;
     if (attachments.length > 0) tool.attachments = [...(tool.attachments ?? []), ...attachments];
     mergeToolExecutionIntoItem(tool, execution ?? extractToolExecutionFromText(outputText));
+    updateClaudeSentFilesResult(tool, outputText,
+      ["error", "failed", "interrupted", "cancelled"].includes(tool.execution?.status ?? ""));
     if (!tool.timestampIso) tool.timestampIso = timestampIso;
     if (typeof tool.messageIndex !== "number" && typeof fallbackMessageIndex === "number") {
       tool.messageIndex = fallbackMessageIndex;

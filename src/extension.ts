@@ -1200,7 +1200,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (sourceSummary) parts.push(sourceSummary);
     const displayTargetSummary = buildHistoryDisplayTargetSummary();
     if (displayTargetSummary) parts.push(displayTargetSummary);
-    if (historyTagFilter.length > 0) parts.push(`tags: ${historyTagFilter.map((tag) => `#${tag}`).join(", ")}`);
+    if (historyTagFilter.length > 0) parts.push(t("tree.filter.tags", historyTagFilter.map((tag) => `#${tag}`).join(", ")));
     if (historyCompressionFilter !== "all") parts.push(t(`history.filter.compression.${historyCompressionFilter}`));
     return parts.join(" / ");
   };
@@ -1675,7 +1675,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const displayTargetSummary = buildPinnedDisplayTargetSummary();
     if (displayTargetSummary) parts.push(displayTargetSummary);
     if (pinnedTagFilter.length > 0) {
-      parts.push(`tags: ${pinnedTagFilter.map((tag) => `#${tag}`).join(", ")}`);
+      parts.push(t("tree.filter.tags", pinnedTagFilter.map((tag) => `#${tag}`).join(", ")));
     }
     return parts.join(" / ");
   };
@@ -5171,8 +5171,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           total > OPEN_MULTI_LIMIT
             ? t("app.openMultiConfirmLimit", total, OPEN_MULTI_LIMIT)
             : t("app.openMultiConfirm", total);
-        const choice = await vscode.window.showWarningMessage(msg, { modal: true }, "OK");
-        if (choice !== "OK") return;
+        const choice = await vscode.window.showWarningMessage(msg, { modal: true }, { id: "confirm", title: t("common.ok") });
+        if (choice?.id !== "confirm") return;
         for (const it of limited) {
           await chatPanels.openSessionPreferExisting(it.session, {
             fallbackKind: "session",
@@ -5246,8 +5246,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           total > OPEN_MULTI_LIMIT
             ? t("app.openMultiConfirmLimit", total, OPEN_MULTI_LIMIT)
             : t("app.openMultiConfirm", total);
-        const choice = await vscode.window.showWarningMessage(msg, { modal: true }, "OK");
-        if (choice !== "OK") return;
+        const choice = await vscode.window.showWarningMessage(msg, { modal: true }, { id: "confirm", title: t("common.ok") });
+        if (choice?.id !== "confirm") return;
         for (const it of limited) {
           await transcriptProvider.openSessionTranscript(it.session, {
             preview: false,
@@ -6033,9 +6033,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const choice = await vscode.window.showWarningMessage(
         t("pins.removeMissingConfirm", missingPaths.length),
         { modal: true },
-        "OK",
+        { id: "confirm", title: t("common.ok") },
       );
-      if (choice !== "OK") return;
+      if (choice?.id !== "confirm") return;
 
       const { unpinned } = await pinStore.unpinMany(missingPaths);
       refreshViews();
@@ -6061,8 +6061,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       const confirmMessage = t("trash.deleteConfirm");
-      const choice = await vscode.window.showWarningMessage(confirmMessage, { modal: true }, "OK");
-      if (choice !== "OK") return;
+      const choice = await vscode.window.showWarningMessage(confirmMessage, { modal: true }, { id: "confirm", title: t("common.ok") });
+      if (choice?.id !== "confirm") return;
 
       const result = await emptyTrashAndCleanupLegacy(context.globalStorageUri);
       await refreshStorageStats();
@@ -6095,9 +6095,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const choice = await vscode.window.showWarningMessage(
         t("handoff.cleanupConfirm", handoffCount, formatBytesForUi(handoffBytes)),
         { modal: true },
-        "OK",
+        { id: "confirm", title: t("common.ok") },
       );
-      if (choice !== "OK") return;
+      if (choice?.id !== "confirm") return;
 
       const result = await cleanupHandoffs(context.globalStorageUri, { mode: "all" });
       await refreshStorageStats();
@@ -7728,8 +7728,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       if (sessions.length === 1) {
-        const choice = await vscode.window.showWarningMessage(t("app.promoteConfirm"), { modal: true }, "OK");
-        if (choice !== "OK") return;
+        const choice = await vscode.window.showWarningMessage(t("app.promoteConfirm"), { modal: true }, { id: "confirm", title: t("common.ok") });
+        if (choice?.id !== "confirm") return;
 
         const promoted = await promoteSessionCopyToToday(sessions[0]!, historyService, getConfig());
         await vscode.window.showInformationMessage(t("app.promoteDone"));
@@ -7756,9 +7756,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const choice = await vscode.window.showWarningMessage(
         t("app.promoteConfirmMulti", sessions.length),
         { modal: true },
-        "OK",
+        { id: "confirm", title: t("common.ok") },
       );
-      if (choice !== "OK") return;
+      if (choice?.id !== "confirm") return;
 
       const latestConfig = getConfig();
       let succeeded = 0;

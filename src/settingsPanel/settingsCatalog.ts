@@ -360,7 +360,6 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
     }
   ),
   definition("agentRuns.enabled", "session", "session.navigation", "switch", "application", false, {
-    experimental: true,
     resourceImpact: true
   }),
   definition(
@@ -370,7 +369,7 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
     "switch",
     "application",
     false,
-    { experimental: true, resourceImpact: true }
+    { resourceImpact: true }
   ),
   definition("images.enabled", "session", "session.images", "switch", "application", true, {
     resourceImpact: true

@@ -17,6 +17,7 @@ import {
 import type { ChatAttachment } from "../chat/chatTypes";
 import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
 import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
+import { isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "./projectPathMapper";
 import { normalizeProjectKey } from "../utils/fsUtils";
 import { readSessionJsonlLines } from "../sessions/codexHistoryBase";
@@ -93,6 +94,7 @@ export interface HandoffPathRewriteMetadata {
 type HandoffRole = "user" | "assistant" | "developer";
 
 interface HandoffMessage {
+  isContext?: boolean;
   inputId?: string;
   role: HandoffRole;
   text: string;
@@ -426,6 +428,7 @@ async function collectClaudeMessage(
   messages.push({
     role,
     text,
+    ...(isClaudeCompactSummaryRecord(obj) ? { isContext: true } : {}),
   });
   return true;
 }
@@ -613,7 +616,7 @@ function buildTranscriptExcerpt(
 }
 
 function renderMessageBlock(message: HandoffMessage, pathRewrite: HandoffPathRewriteMetadata): string {
-  const lines = [`### ${message.role}`];
+  const lines = [`### ${message.isContext ? "context" : message.role}`];
   lines.push("");
   lines.push(rewriteHandoffFreeText(message.text, pathRewrite));
   return lines.join("\n");
@@ -655,7 +658,7 @@ function buildDiffSection(diffBlocks: readonly HandoffDiffBlock[], pathRewrite: 
 function findLatestUserMessage(messages: readonly HandoffMessage[]): string | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i]!;
-    if (message.role === "user" && message.text.trim().length > 0) return message.text.trim();
+    if (message.role === "user" && !message.isContext && message.text.trim().length > 0) return message.text.trim();
   }
   return null;
 }

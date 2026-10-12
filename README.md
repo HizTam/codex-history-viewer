@@ -1,8 +1,8 @@
-# Codex History Viewer
+# Codex History Viewer - Codex and Claude Code
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.18.0** (2026-10-07).
+Latest release: **2.18.1** (2026-10-12).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -24,12 +24,13 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - View sessions in the Session Viewer with Markdown, including individually copyable tables, GFM task lists, Mermaid diagrams, code highlighting, math rendering, tool cards, and file-change diffs.
 - Manage the extension's primary settings from a categorized settings page, with supported User, Workspace, and Workspace Folder targets, scope-specific JSON backups, maintenance actions, and project resource links.
 - Enable an opt-in turn timeline for Codex and Claude Code sessions to see turn boundaries, turn summaries, completed-turn folding, and running state in live mode.
-- Use Agent Runs to distinguish Codex and Claude Code sub-agent sessions and inspect parent, sibling, and descendant relationships in a right-side tree. (Experimental.)
-- Use Branch Navigation to inspect and switch between locally forked Codex histories, histories before and after Codex prompt edits, and Claude Code **Fork conversation** histories in their respective session views. (Experimental; disabled by default.)
+- Use Agent Runs to distinguish Codex and Claude Code sub-agent sessions and inspect parent, sibling, and descendant relationships in a right-side tree. (Disabled by default.)
+- Use Branch Navigation to inspect and switch between locally forked Codex histories, histories before and after Codex prompt edits, and Claude Code **Fork conversation** histories in their respective session views. (Disabled by default.)
 - Show Codex / Claude Code request interruptions as dedicated timeline cards.
 - Identify commands entered in Claude Code's shell mode with a **Terminal input** badge and view their results in **Terminal output** cards.
 - Read progress updates and expandable thinking text saved in Claude Code histories, with search, bookmarks, copying, and Markdown export.
 - Inspect Claude Code task notifications with expandable details.
+- View files sent by Claude Code with their names, descriptions, and delivery status, and open local files from their names.
 - Open File AI Change History for a workspace file, including directly from a Session Viewer diff card, to review Codex / Claude Code diffs that touched that file.
 - Bookmark important history cards and use date-guide markers to revisit them quickly.
 - Optionally display Claude Code extension bookmarks as read-only marks in a different color from this extension's own bookmarks.
@@ -113,6 +114,8 @@ Claude Code peer and coordinator messages received from other sessions render as
 
 Claude Code internal task notifications and agent reminders appear as **Task notification** and **Internal reminder** cards. Task notifications include an expandable **Notification details** section. Notifications are displayed without duplicating the same notification recorded in another format or changing existing message numbers. Their text remains readable and copyable, while they are excluded from ordinary user-message search, counts, previews, and request extraction for Resume and Handoff.
 
+Claude Code conversation compaction summaries are retained as context, available with **Show details** and in Markdown transcripts. They are excluded from ordinary user-message search, previews, and request counts.
+
 Codex page-selection context is likewise kept out of ordinary user messages; its raw text remains available in the detail view.
 
 Progress updates and thinking text saved in Claude Code histories also appear in the timeline without enabling **Show details**. Progress updates are shown directly, while thinking text is expandable. Both support search, bookmarks, copying, and Markdown export.
@@ -127,7 +130,7 @@ When restoration is enabled, multiple temporary session tabs retain their histor
 
 Restoring a long Codex history also loads its referenced earlier history when available. If a referenced file is missing or unreadable, the viewer shows an incomplete-history notice even when **Show details** is off.
 
-The session timeline can keep the current user prompt visible at the top while you scroll. Codex memory citation information is rendered as a collapsible section instead of being left as raw metadata in the message body. Session runtime context and local-command output are likewise shown as collapsed cards instead of raw user messages.
+The session timeline can keep the current user prompt visible at the top while you scroll. Codex memory citation information recorded for intermediate and final responses is rendered as a collapsible section instead of being left as raw metadata in the message body. Session runtime context and local-command output are likewise shown as collapsed cards instead of raw user messages.
 
 ## Attachments and References
 
@@ -135,6 +138,7 @@ The Session Viewer keeps attachments and file references out of the message body
 
 - Supported images from Codex / Claude Code sessions, including Codex tool-output and image-generation images, are loaded on demand and can be previewed or saved. Separately recorded intermediate and final images remain visible in history order.
 - Claude Code PDF, text, and generic documents render as document cards. Text document previews open inside the card, and embedded payloads are saved on demand.
+- Files sent by Claude Code show their names, descriptions, and recorded delivery status, including pending results, success, delivery warnings, and errors. Clicking a valid file name opens the local file in VS Code. File contents are not loaded automatically, including images.
 - Claude Code pasted text and automatically truncated long input render as text document cards when the local prompt-history record can be matched unambiguously. Pasted-image placeholders use the corresponding session image metadata. If the auxiliary record cannot be verified, the primary session text remains visible.
 - Claude Code IDE opened-file and selection markers render as file/selection reference cards instead of raw inline tags.
 - Codex mentioned- and pasted-file blocks render as file reference cards while only an explicit request remains as message text. Attachment-only pasted requests remain card-only, including blocks that appear after IDE context.
@@ -142,6 +146,8 @@ The Session Viewer keeps attachments and file references out of the message body
 - On Windows, Claude Code scratchpad links under the current user's local Claude temporary directory can still open when the generated relative link crosses drives.
 - Card metadata such as path, MIME type, and size is available from tooltips instead of taking over the session timeline.
 - Markdown transcripts, resume text, and handoff files use clean text plus attachment summaries instead of repeating raw tags or file blocks.
+
+For files sent by Claude Code, Search includes recorded file paths and descriptions when tool-call content is enabled, and recorded results when tool-output content is enabled. Sending a file counts as a tool call in History Insights; it does not create a file-change entry in History Insights or File AI Change History.
 
 ## Search
 
@@ -245,9 +251,9 @@ The snapshot also preserves History's compression condition when other filters a
 
 Selecting a date cell opens its sessions in History. The History and Search actions on each project row apply that project while preserving the other snapshot conditions. The Search action reruns the current search when one is available, then opens the Search view. Frequently changed file entries can open the existing File AI Change History view or the corresponding workspace file.
 
-## Agent Runs (Experimental)
+## Agent Runs
 
-Agent Runs supports Codex and Claude Code sessions, including Claude Code child and descendant agents and delegated worker forks. Both sources use the existing `codexHistoryViewer.agentRuns.enabled` setting. If Agent Runs is already enabled for Codex, it also applies to Claude Code without another setting change.
+Agent Runs supports Codex and Claude Code sessions, including Claude Code child and descendant agents and delegated worker forks. Both sources use the existing `codexHistoryViewer.agentRuns.enabled` setting, which is disabled by default. If Agent Runs is already enabled for Codex, it also applies to Claude Code without another setting change.
 
 When Agent Runs is enabled and its relationship data is ready, sub-agent sessions with an available parent are omitted from History. They remain reachable from the parent session's Agent Runs panel, Search, and explicit Pinned entries. Sub-agent sessions whose parent cannot be resolved safely remain visible in History.
 
@@ -261,9 +267,9 @@ Codex and Claude Code sub-agent histories are included in Search, History Insigh
 
 Use **Open Parent Session** to open a sub-agent's parent session.
 
-Relationships use explicit agent metadata and leave the original history files unchanged. Ordinary conversation forks remain part of [Branch Navigation](#branch-navigation-experimental).
+Relationships use explicit agent metadata and leave the original history files unchanged. Ordinary conversation forks remain part of [Branch Navigation](#branch-navigation).
 
-## Branch Navigation (Experimental)
+## Branch Navigation
 
 Branch Navigation recognizes locally forked Codex session histories, including histories created with **Fork locally** in the Codex app or **Continue in new task** in the Codex extension, and Claude Code histories created with **Fork conversation**. It lets you move between Fork destinations without leaving their respective session views.
 
@@ -273,7 +279,7 @@ Branch Navigation also includes histories before and after Codex prompt edits wi
 
 Inline controls at a branch point switch to the previous or next route. The shared route-tree action shows the shared history, branch points, and the start and end of each route. Selecting a route node switches the same session view to the corresponding stored session and message position.
 
-Enable `codexHistoryViewer.branchNavigation.enabled` to use this feature. For Codex, local Forks require the parent and child to remain in the same working directory; histories before and after prompt edits are linked only when their stored history relationship can be verified. For Claude Code, Branch Navigation only navigates stored session history and does not invoke **Rewind code** or rewind workspace files. Navigation never creates, modifies, merges, or deletes Forks or changes stored session files. (Experimental; disabled by default.)
+Enable `codexHistoryViewer.branchNavigation.enabled` to use this feature. For Codex, local Forks require the parent and child to remain in the same working directory; histories before and after prompt edits are linked only when their stored history relationship can be verified. For Claude Code, Branch Navigation only navigates stored session history and does not invoke **Rewind code** or rewind workspace files. Navigation never creates, modifies, merges, or deletes Forks or changes stored session files. (Disabled by default.)
 
 ## Configuration
 
@@ -285,8 +291,8 @@ Common settings include:
 - `codexHistoryViewer.sessionsRoot`: Codex sessions root.
 - `codexHistoryViewer.claude.sessionsRoot`: Claude Code sessions root.
 - `codexHistoryViewer.claude.nativeBookmarks.enabled`: automatically display Claude Code extension bookmarks as read-only marks. Disabled by default; requires the Claude Code source and `codexHistoryViewer.ui.timeGuide.enabled`.
-- `codexHistoryViewer.agentRuns.enabled`: enable the experimental Agent Runs feature for Codex and Claude Code. This is one shared setting; an existing enabled value applies to both sources. The default for an unconfigured installation is `false`.
-- `codexHistoryViewer.branchNavigation.enabled`: enable the experimental Branch Navigation feature for locally forked Codex histories and Claude Code Fork conversation histories. Disabled by default.
+- `codexHistoryViewer.agentRuns.enabled`: enable Agent Runs for Codex and Claude Code. This is one shared setting; an existing enabled value applies to both sources. Disabled by default and marked as affecting resource usage.
+- `codexHistoryViewer.branchNavigation.enabled`: enable Branch Navigation for locally forked Codex histories, histories before and after Codex prompt edits, and Claude Code Fork conversation histories. Disabled by default and marked as affecting resource usage.
 - `codexHistoryViewer.codex.archivedSessions.enabled`: include Codex archived sessions.
 - `codexHistoryViewer.codex.compressedSessions.enabled`: include compressed Codex histories (`.jsonl.zst`). Experimental, disabled by default, and marked as affecting resource usage.
 - `codexHistoryViewer.handoff.enabled`: show cross-agent handoff actions.
@@ -342,13 +348,17 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.18.0
+## What's New in 2.18.1
 
-- Added detailed views for Claude Code task notifications.
-- Improved multilingual support.
-- Cross-session message bodies now start collapsed and expand when searching or navigating to a message.
-- Fixed some Claude Code task notifications not appearing in the Session Viewer. Duplicate notifications are also prevented when the same notification is recorded in multiple formats.
-- Fixed the Session Viewer shifting horizontally when using toolbar buttons in narrow views.
+- Added support for displaying files sent by Claude Code. File names, descriptions, and delivery status are shown, and clicking a file name opens the local file.
+- Changed the extension display name to **Codex History Viewer - Codex and Claude Code**.
+- Improved UI localization.
+- Removed the experimental designation from Agent Runs and Branch Navigation.
+- Fixed tool cards, Branch Navigation dialogs, and diff-detail error messages remaining in the previous language after changing the display language.
+- Fixed loading and error views in File AI Change History becoming blank and losing the reload button when changing the display language.
+- Fixed Claude Code conversation compaction summaries being treated as ordinary user messages in the Session Viewer, search, and statistics.
+- Fixed memory citations missing from some intermediate Codex responses.
+- Fixed history records containing certain Unicode characters being skipped, causing content to be missing from the Session Viewer, Search, History Insights, File AI Change History, and other features.
 
 ## Changelog
 

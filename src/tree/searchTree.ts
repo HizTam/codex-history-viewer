@@ -359,7 +359,7 @@ function buildSearchSessionTooltip(
   appendSessionTooltipTitleLines(md, node.session);
   appendSessionTooltipDateLines(md, node.session);
   appendCodexAgentTooltipLines(md, agentPresentation);
-  md.appendMarkdown(`Source: ${sourceName(node.session.source)}  \n`);
+  md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.source"))}: ${sourceName(node.session.source)}  \n`);
   if (node.session.storage.archiveState === "archived") {
     md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.location"))}: ${escapeForMarkdown(t("session.location.archived"))}  \n`);
   }
@@ -380,8 +380,8 @@ function buildSearchSessionTooltip(
   } else if (node.session.cwdShort) {
     md.appendMarkdown(`${escapeForMarkdown(node.session.cwdShort)}  \n`);
   }
-  if (tags.length > 0) md.appendMarkdown(`Tags: ${escapeForMarkdown(tags.join(", "))}  \n`);
-  if (note.trim().length > 0) md.appendMarkdown(`Note: ${escapeForMarkdown(note.trim())}  \n`);
+  if (tags.length > 0) md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.tags"))}: ${escapeForMarkdown(tags.join(", "))}  \n`);
+  if (note.trim().length > 0) md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.note"))}: ${escapeForMarkdown(note.trim())}  \n`);
   md.appendMarkdown(`${escapeForMarkdown(t("tree.tooltip.searchSession", node.hits.length))}\n`);
   if (mode === "compact") return md;
 
@@ -389,7 +389,7 @@ function buildSearchSessionTooltip(
   const max = 5;
   for (const h of node.hits.slice(0, max)) {
     md.appendMarkdown(
-      `- ${escapeForMarkdown(formatLocationLabel(h))} **${formatRoleLabel(h.role, h.source)}** ${escapeForMarkdown(h.snippet)}\n`,
+      `- ${escapeForMarkdown(formatLocationLabel(h))} **${escapeForMarkdown(formatRoleLabel(h.role, h.source))}** ${escapeForMarkdown(h.snippet)}\n`,
     );
   }
   if (node.hits.length > max) {
@@ -403,7 +403,7 @@ function buildSearchSessionTooltip(
 function buildSearchHitTooltip(node: SearchHitNode, hidden = false): vscode.MarkdownString {
   const md = new vscode.MarkdownString(undefined, true);
   md.isTrusted = false;
-  md.appendMarkdown(`**${escapeForMarkdown(formatLocationLabel(node.hit))} ${formatRoleLabel(node.hit.role, node.hit.source)}**  \n`);
+  md.appendMarkdown(`**${escapeForMarkdown(formatLocationLabel(node.hit))} ${escapeForMarkdown(formatRoleLabel(node.hit.role, node.hit.source))}**  \n`);
   md.appendMarkdown(`${escapeForMarkdown(node.hit.snippet)}\n`);
   if (hidden) {
     md.appendMarkdown(`\n${escapeForMarkdown(t("tree.tooltip.visibility", t("tree.description.hidden")))}  \n`);
@@ -417,13 +417,13 @@ function formatRoleLabel(
   source?: SearchHit["source"],
 ): string {
   if (role !== "tool") return role;
-  if (source === "annotationTag") return "tag";
-  if (source === "annotationNote") return "note";
-  if (source === "customTitle") return "custom title";
-  if (source === "originalTitle") return "original title";
-  if (source === "toolArguments") return "tool.args";
-  if (source === "toolOutput") return "tool.output";
-  return "tool";
+  if (source === "annotationTag") return t("search.hitKind.annotationTag");
+  if (source === "annotationNote") return t("search.hitKind.annotationNote");
+  if (source === "customTitle") return t("search.hitKind.customTitle");
+  if (source === "originalTitle") return t("search.hitKind.originalTitle");
+  if (source === "toolArguments") return t("search.hitKind.toolArguments");
+  if (source === "toolOutput") return t("search.hitKind.toolOutput");
+  return t("search.hitKind.tool");
 }
 
 function formatLocationLabel(hit: {

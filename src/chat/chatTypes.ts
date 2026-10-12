@@ -76,6 +76,13 @@ export type ChatDocumentAttachmentReason = "unsupported" | "missing" | "tooLarge
 export type ChatDocumentKind = "pdf" | "text" | "generic";
 export type ChatFileKind = FilePresentationKind;
 
+// UI-only provenance; label remains the source of filenames and non-UI output.
+export type ChatAttachmentDisplayLabel =
+  | { kind: "document"; documentKind: ChatDocumentKind }
+  | { kind: "fileReference" | "selection" }
+  | { kind: "pastedText" | "truncatedText"; id: number; additionalLineCount?: string }
+  | { kind: "image"; id: number };
+
 export type ChatAttachment =
   | ChatImageAttachment
   | ChatDocumentAttachment
@@ -93,6 +100,7 @@ export interface ChatImageAttachment {
   dataOmitted?: boolean;
   mimeType?: string;
   label?: string;
+  displayLabel?: ChatAttachmentDisplayLabel;
   reason?: ChatImageAttachmentReason;
 }
 
@@ -113,6 +121,7 @@ export interface ChatDocumentAttachment {
   documentKind: ChatDocumentKind;
   source: "embeddedBase64" | "embeddedText" | "reference";
   label?: string;
+  displayLabel?: ChatAttachmentDisplayLabel;
   mimeType?: string;
   byteLength?: number;
   previewText?: string;
@@ -124,8 +133,9 @@ export interface ChatDocumentAttachment {
 export interface ChatFileReferenceAttachment {
   id?: string;
   type: "fileReference";
-  source: "codexFilesMentioned" | "codexFilesPasted" | "claudeIdeOpenedFile";
+  source: "codexFilesMentioned" | "codexFilesPasted" | "claudeIdeOpenedFile" | "claudeSendUserFile";
   label?: string;
+  displayLabel?: ChatAttachmentDisplayLabel;
   path?: string;
   line?: number;
   endLine?: number;
@@ -137,6 +147,7 @@ export interface ChatSelectionReferenceAttachment {
   type: "selectionReference";
   source: "claudeIdeSelection";
   label?: string;
+  displayLabel?: ChatAttachmentDisplayLabel;
   path?: string;
   line?: number;
   endLine?: number;
@@ -341,11 +352,19 @@ export interface ChatToolItem {
   argumentsText?: string;
   outputText?: string;
   attachments?: ChatAttachment[];
+  sentFiles?: ChatSentFilesPresentation;
   detailsOmitted?: boolean;
   execution?: ChatToolExecution;
   presentation?: ChatToolPresentation;
   bookmarkKey?: string;
   isBookmarked?: boolean;
+}
+
+export interface ChatSentFilesPresentation {
+  status: "pending" | "success" | "warning" | "error";
+  caption?: string;
+  notice?: string;
+  truncated?: boolean;
 }
 
 export interface ChatToolExecution {

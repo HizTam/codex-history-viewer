@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { projectCodexFollowupContent } from "../sessions/codexFollowup";
 import type {
   ChatAttachment,
+  ChatAttachmentDisplayLabel,
   ChatDocumentAttachment,
   ChatDocumentKind,
   ChatFileKind,
@@ -1245,6 +1246,7 @@ function buildClaudePastedPromptSpans(
 
 function createClaudePastedTextAttachment(entry: ClaudePastedPromptEntry): ChatDocumentAttachment {
   const label = entry.label || entry.placeholder;
+  const displayLabel = buildPastedDisplayLabel(entry);
   if (entry.content === undefined) {
     return {
       type: "document",
@@ -1252,6 +1254,7 @@ function createClaudePastedTextAttachment(entry: ClaudePastedPromptEntry): ChatD
       documentKind: "text",
       source: "reference",
       label,
+      ...(displayLabel ? { displayLabel } : {}),
       mimeType: "text/plain",
       reason: "missing",
     };
@@ -1266,6 +1269,7 @@ function createClaudePastedTextAttachment(entry: ClaudePastedPromptEntry): ChatD
       documentKind: "text",
       source: "embeddedText",
       label,
+      ...(displayLabel ? { displayLabel } : {}),
       mimeType: "text/plain",
       byteLength,
       previewText,
@@ -1279,6 +1283,7 @@ function createClaudePastedTextAttachment(entry: ClaudePastedPromptEntry): ChatD
     documentKind: "text",
     source: "embeddedText",
     label,
+    ...(displayLabel ? { displayLabel } : {}),
     mimeType: "text/plain",
     byteLength,
     previewText,
@@ -1291,11 +1296,13 @@ function createClaudePlaceholderImageAttachment(
   entry: ClaudePastedPromptEntry,
   reason: ChatImageAttachmentReason,
 ): ChatImageAttachment {
+  const displayLabel = buildPastedDisplayLabel(entry);
   return {
     type: "image",
     status: "unavailable",
     source: "reference",
     label: entry.label || entry.placeholder,
+    ...(displayLabel ? { displayLabel } : {}),
     reason,
   };
 }
@@ -1322,7 +1329,11 @@ function materializeClaudePastedImages(
     if (id === undefined) return attachment;
     const image = imagesById.get(id);
     const placeholderLabel = attachment.type === "image" ? attachment.label : undefined;
-    return image ? { ...image, label: placeholderLabel || image.label } : attachment;
+    return image ? {
+      ...image,
+      label: placeholderLabel || image.label,
+      ...(attachment.type === "image" && attachment.displayLabel ? { displayLabel: attachment.displayLabel } : {}),
+    } : attachment;
   });
   for (let index = 0; index < images.length; index += 1) {
     if (!consumedImages.has(index)) result.push(images[index]!);
@@ -1376,13 +1387,38 @@ export function sanitizeAttachmentForChannel(
   attachment: ChatAttachment,
   channel: AttachmentOutputChannel,
 ): ChatAttachment {
-  if (attachment.type === "image") return sanitizeImageAttachmentForChannel(attachment, channel);
-  if (attachment.type === "document") return sanitizeDocumentAttachmentForChannel(attachment, channel);
-  if (attachment.type === "fileReference") return { ...attachment };
-  if (attachment.type === "selectionReference") return { ...attachment };
+  if (attachment.type === "image" || attachment.type === "document" ||
+      attachment.type === "fileReference" || attachment.type === "selectionReference") {
+    const { displayLabel: rawDisplayLabel, ...original } = attachment;
+    const displayLabel = channel === "webview" ? normalizeAttachmentDisplayLabel(rawDisplayLabel) : undefined;
+    const result = original.type === "image" ? sanitizeImageAttachmentForChannel(original, channel)
+      : original.type === "document" ? sanitizeDocumentAttachmentForChannel(original, channel) : original;
+    return displayLabel ? { ...result, displayLabel } : result;
+  }
   if (attachment.type === "notification") return sanitizeNotificationAttachmentForChannel(attachment, channel);
   if (attachment.type === "invoke") return sanitizeInvokeAttachmentForChannel(attachment, channel);
   return assertNeverChatAttachment(attachment);
+}
+
+function buildPastedDisplayLabel(entry: ClaudePastedPromptEntry): ChatAttachmentDisplayLabel | undefined {
+  return normalizeAttachmentDisplayLabel({ kind: entry.displayKind, id: entry.id, additionalLineCount: entry.additionalLineCount });
+}
+
+function normalizeAttachmentDisplayLabel(value: unknown): ChatAttachmentDisplayLabel | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  if (raw.kind === "document" && (raw.documentKind === "pdf" || raw.documentKind === "text" || raw.documentKind === "generic")) {
+    return { kind: raw.kind, documentKind: raw.documentKind };
+  }
+  if (raw.kind === "selection" || raw.kind === "fileReference") return { kind: raw.kind };
+  if (raw.kind !== "image" && raw.kind !== "pastedText" && raw.kind !== "truncatedText") return undefined;
+  if (typeof raw.id !== "number" || !Number.isSafeInteger(raw.id) || raw.id < 1 || raw.id > 0x7fffffff) return undefined;
+  if (raw.kind === "image") return { kind: raw.kind, id: raw.id };
+  const count = raw.additionalLineCount;
+  if (count === undefined && raw.kind === "pastedText") return { kind: raw.kind, id: raw.id };
+  if (typeof count !== "string" || count.length > 4096 || !/^\d+$/u.test(count) ||
+      !Number.isSafeInteger(Number(count)) || Number(count) < (raw.kind === "pastedText" ? 1 : 0)) return undefined;
+  return { kind: raw.kind, id: raw.id, additionalLineCount: count };
 }
 
 function assertNeverChatAttachment(attachment: never): never {
@@ -1870,6 +1906,7 @@ function buildClaudeOpenedFileAttachment(body: string): ChatFileReferenceAttachm
     type: "fileReference",
     source: "claudeIdeOpenedFile",
     label: pathText ? path.basename(pathText) || pathText : DEFAULT_FILE_REFERENCE_LABEL,
+    ...(!pathText ? { displayLabel: { kind: "fileReference" as const } } : {}),
     ...(pathText ? { path: pathText, fileKind: inferFileKind(pathText) } : { fileKind: "generic" as ChatFileKind }),
   };
 }
@@ -1884,6 +1921,7 @@ function buildClaudeSelectionAttachment(body: string): ChatSelectionReferenceAtt
     type: "selectionReference",
     source: "claudeIdeSelection",
     label: pathText ? path.basename(pathText) || pathText : "Selection",
+    ...(!pathText ? { displayLabel: { kind: "selection" as const } } : {}),
     ...(pathText ? { path: pathText } : {}),
     ...(lineMatch?.[1] ? { line: Number(lineMatch[1]) } : {}),
     ...(lineMatch?.[2] ? { endLine: Number(lineMatch[2]) } : {}),
@@ -1918,6 +1956,19 @@ function extractClaudeOpenedFilePath(body: string): string | undefined {
 }
 
 function extractClaudeDocumentAttachment(item: Record<string, unknown>): ChatDocumentAttachment {
+  const result = extractClaudeDocumentData(item);
+  const hasSourceName = readStringField(item, "title") || readStringField(item, "name") || readStringField(item, "file_name");
+  if (!hasSourceName) {
+    // Use the same inference as the original label, even for unsupported payloads.
+    const source = readObjectField(item, "source");
+    const mimeType = normalizeMimeType(readStringField(item, "media_type") || readStringField(item, "mime_type") ||
+      readStringField(source, "media_type") || readStringField(source, "mime_type"));
+    result.displayLabel = { kind: "document", documentKind: inferDocumentKind(mimeType, undefined) };
+  }
+  return result;
+}
+
+function extractClaudeDocumentData(item: Record<string, unknown>): ChatDocumentAttachment {
   const source = readObjectField(item, "source");
   const sourceType = normalizeType(readStringField(source, "type"));
   const label = readStringField(item, "title") || readStringField(item, "name") || readStringField(item, "file_name");

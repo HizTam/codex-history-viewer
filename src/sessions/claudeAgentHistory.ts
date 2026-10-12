@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import * as readline from "node:readline";
-import { createSessionReadStream } from "../utils/sessionFileReader";
+import { createSessionReadStream, readJsonlLines } from "../utils/sessionFileReader";
 import { hasClaudeAgentPathShape, isSafeClaudeFile, parseClaudeAgentPath, type ClaudeAgentPath } from "../agents/claudeAgentMetadata";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import type { SessionJsonlReadOptions } from "./codexHistoryBase";
@@ -253,10 +252,10 @@ async function scanRecords(fsPath: string, options: SessionJsonlReadOptions): Pr
   const records: RecordEntry[] = [];
   let partial = (await fs.stat(fsPath)).size > MAX_SCAN_BYTES;
   const stream = createSessionReadStream(fsPath, { token: options.token, cancellationErrorFactory: options.cancellationErrorFactory, endByteOffset: MAX_SCAN_BYTES });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const lines = readJsonlLines(stream, options);
   let lineIndex = 0;
   try {
-    for await (const line of rl) {
+    for await (const line of lines) {
       checkCancelled(options);
       lineIndex += 1;
       if (lineIndex > MAX_SCAN_RECORDS) { partial = true; break; }
@@ -270,7 +269,6 @@ async function scanRecords(fsPath: string, options: SessionJsonlReadOptions): Pr
       }
     }
   } finally {
-    rl.close();
     stream.destroy();
   }
   return { records, partial };

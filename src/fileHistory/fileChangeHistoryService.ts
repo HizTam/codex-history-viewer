@@ -1,7 +1,7 @@
 import { resolveClaudeAgentHistory } from "../sessions/claudeAgentHistory";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as readline from "node:readline";
+import { readJsonlLines } from "../utils/sessionFileReader";
 import * as vscode from "vscode";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import type {
@@ -420,12 +420,12 @@ async function parseClaudeSession(
   throwIfCancelled(token);
   const agentProjection = await resolveClaudeAgentHistory(session.fsPath, { token, claudeSessionsRoot: session.storage.rootPath });
   const stream = fs.createReadStream(session.fsPath, { encoding: "utf8" });
-  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+  const lines = readJsonlLines(stream, { token, cancellationErrorFactory: () => new vscode.CancellationError() });
   let messageIndex = 0;
   let lineIndex = 0;
 
   try {
-    for await (const line of rl) {
+    for await (const line of lines) {
       throwIfCancelled(token);
       lineIndex += 1;
       if (agentProjection && !agentProjection.ownLines.has(lineIndex)) continue;
@@ -462,7 +462,6 @@ async function parseClaudeSession(
       }
     }
   } finally {
-    rl.close();
     stream.close();
   }
 

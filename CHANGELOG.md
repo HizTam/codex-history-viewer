@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.18.1] - 2026-10-12
+
+### Added
+
+- Added support for displaying files sent by Claude Code. File names, descriptions, and delivery status are shown, and clicking a file name opens the local file.
+
+### Changed
+
+- Changed the extension display name to **Codex History Viewer - Codex and Claude Code**.
+- Improved UI localization.
+- Removed the experimental designation from Agent Runs and Branch Navigation.
+
+### Fixed
+
+- Fixed tool cards, Branch Navigation dialogs, and diff-detail error messages remaining in the previous language after changing the display language.
+- Fixed loading and error views in File AI Change History becoming blank and losing the reload button when changing the display language.
+- Fixed Claude Code conversation compaction summaries being treated as ordinary user messages in the Session Viewer, search, and statistics.
+- Fixed memory citations missing from some intermediate Codex responses.
+- Fixed history records containing certain Unicode characters being skipped, causing content to be missing from the Session Viewer, Search, History Insights, File AI Change History, and other features.
+
 ## [2.18.0] - 2026-10-07
 
 ### Added

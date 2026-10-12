@@ -1,4 +1,3 @@
-import { t } from "../i18n";
 import type { ChatToolItem } from "../chat/chatTypes";
 import type { ChatToolPresentation, NormalizedToolKind } from "./toolTypes";
 
@@ -15,6 +14,7 @@ const TOOL_KIND_ALIASES: Record<NormalizedToolKind, readonly string[]> = {
   webSearch: ["web_search", "search_query", "image_query", "websearch"],
   webFetch: ["web_fetch", "fetch", "open", "open_url"],
   imageGeneration: ["image_generation", "image_generation_call", "imagegen"],
+  sendFile: ["senduserfile"],
   agent: ["agent", "spawn_agent", "send_input", "wait_agent", "resume_agent", "close_agent", "update_plan"],
   wait: ["wait", "functions_wait"],
   unknown: [],
@@ -44,17 +44,15 @@ export function buildToolPresentation(tool: ChatToolItem): ChatToolPresentation 
   const parsedArgs = parseToolPayload(tool.argumentsText);
   const parsedOutput = parseToolPayload(tool.outputText);
   const toolKind = resolveToolKind(normalizedName);
-  const fallbackTitle = getLocalizedTitle(toolKind);
   const primaryFallback = normalizeInlineText(tool.name) || "tool";
 
   switch (toolKind) {
     case "bash":
       return {
         toolKind,
-        title: fallbackTitle,
         primaryText: firstNonEmpty(extractCommand(parsedArgs), primaryFallback),
-        secondaryText: buildShellSecondary(parsedArgs),
-        badgeText: buildShellBadge(parsedOutput, tool.outputText),
+        secondary: buildShellSecondary(parsedArgs),
+        badge: buildShellBadge(parsedOutput, tool.outputText),
         severity: detectShellSeverity(parsedOutput, tool.outputText),
         messageIndex: tool.messageIndex,
       };
@@ -62,9 +60,8 @@ export function buildToolPresentation(tool: ChatToolItem): ChatToolPresentation 
       const filePath = extractFilePath(parsedArgs);
       return {
         toolKind,
-        title: fallbackTitle,
         primaryText: firstNonEmpty(filePath, primaryFallback),
-        secondaryText: buildReadSecondary(parsedArgs),
+        secondary: buildReadSecondary(parsedArgs),
         relatedFilePath: filePath,
         messageIndex: tool.messageIndex,
       };
@@ -73,10 +70,9 @@ export function buildToolPresentation(tool: ChatToolItem): ChatToolPresentation 
       const filePath = extractFilePath(parsedArgs);
       return {
         toolKind,
-        title: fallbackTitle,
         primaryText: firstNonEmpty(filePath, primaryFallback),
-        secondaryText: buildWriteSecondary(parsedArgs),
-        badgeText: buildWriteBadge(normalizedName),
+        secondary: buildShellSecondary(parsedArgs),
+        badge: buildWriteBadge(normalizedName),
         relatedFilePath: filePath,
         messageIndex: tool.messageIndex,
       };
@@ -85,10 +81,9 @@ export function buildToolPresentation(tool: ChatToolItem): ChatToolPresentation 
       const filePath = extractFilePath(parsedArgs);
       return {
         toolKind,
-        title: fallbackTitle,
         primaryText: firstNonEmpty(filePath, primaryFallback),
-        secondaryText: buildEditSecondary(parsedArgs),
-        badgeText: buildEditBadge(normalizedName),
+        secondary: buildEditSecondary(parsedArgs),
+        badge: buildEditBadge(normalizedName),
         relatedFilePath: filePath,
         messageIndex: tool.messageIndex,
       };
@@ -96,23 +91,20 @@ export function buildToolPresentation(tool: ChatToolItem): ChatToolPresentation 
     case "grep":
       return {
         toolKind,
-        title: fallbackTitle,
         primaryText: firstNonEmpty(extractString(parsedArgs, QUERY_KEYS), primaryFallback),
-        secondaryText: buildScopedSecondary(parsedArgs),
+        ...buildScopedSecondary(parsedArgs),
         messageIndex: tool.messageIndex,
       };
     case "glob":
       return {
         toolKind,
-        title: fallbackTitle,
         primaryText: firstNonEmpty(extractString(parsedArgs, QUERY_KEYS), primaryFallback),
-        secondaryText: buildScopedSecondary(parsedArgs),
+        ...buildScopedSecondary(parsedArgs),
         messageIndex: tool.messageIndex,
       };
     case "webSearch":
       return {
         toolKind,
-        title: fallbackTitle,
         primaryText: firstNonEmpty(
           extractString(parsedArgs, QUERY_KEYS),
           extractStringArray(parsedArgs, ["queries"]),
@@ -124,38 +116,34 @@ export function buildToolPresentation(tool: ChatToolItem): ChatToolPresentation 
     case "webFetch":
       return {
         toolKind,
-        title: fallbackTitle,
         primaryText: firstNonEmpty(extractString(parsedArgs, URL_KEYS), primaryFallback),
         messageIndex: tool.messageIndex,
       };
     case "imageGeneration":
       return {
         toolKind,
-        title: fallbackTitle,
         primaryText: firstNonEmpty(extractString(parsedArgs, ["prompt", "revised_prompt"]), primaryFallback),
         messageIndex: tool.messageIndex,
       };
     case "agent":
       return {
         toolKind,
-        title: fallbackTitle,
         primaryText: firstNonEmpty(extractAgentPrimary(parsedArgs), primaryFallback),
         secondaryText: buildAgentSecondary(parsedArgs),
         messageIndex: tool.messageIndex,
       };
+    case "sendFile":
     case "exec":
     case "wait":
       // Describe the operation without guessing its target or duplicating the call ID tag.
       return {
         toolKind,
-        title: fallbackTitle,
         primaryText: primaryFallback,
         messageIndex: tool.messageIndex,
       };
     default:
       return {
         toolKind: "unknown",
-        title: getLocalizedTitle("unknown"),
         primaryText: primaryFallback,
         secondaryText: buildUnknownSecondary(tool),
         messageIndex: tool.messageIndex,
@@ -172,45 +160,14 @@ function resolveToolKind(normalizedName: string): NormalizedToolKind {
   return "unknown";
 }
 
-function getLocalizedTitle(toolKind: NormalizedToolKind): string {
-  switch (toolKind) {
-    case "bash":
-      return t("chat.toolCard.title.bash");
-    case "read":
-      return t("chat.toolCard.title.read");
-    case "write":
-      return t("chat.toolCard.title.write");
-    case "edit":
-      return t("chat.toolCard.title.edit");
-    case "exec":
-      return t("chat.toolCard.title.exec");
-    case "grep":
-      return t("chat.toolCard.title.grep");
-    case "glob":
-      return t("chat.toolCard.title.glob");
-    case "webSearch":
-      return t("chat.toolCard.title.webSearch");
-    case "webFetch":
-      return t("chat.toolCard.title.webFetch");
-    case "imageGeneration":
-      return t("chat.toolCard.title.imageGeneration");
-    case "agent":
-      return t("chat.toolCard.title.agent");
-    case "wait":
-      return t("chat.toolCard.title.wait");
-    default:
-      return t("chat.toolCard.title.unknown");
-  }
-}
-
-function buildShellSecondary(parsedArgs: JsonLikeRecord | null): string | undefined {
+function buildShellSecondary(parsedArgs: JsonLikeRecord | null): ChatToolPresentation["secondary"] {
   const cwd = extractString(parsedArgs, WORKDIR_KEYS);
-  return cwd ? `CWD: ${cwd}` : undefined;
+  return cwd ? { kind: "cwd", value: cwd.slice(0, MAX_PRESENTATION_LIST_CHARS) } : undefined;
 }
 
-function buildShellBadge(parsedOutput: JsonLikeRecord | null, outputText: string | undefined): string | undefined {
+function buildShellBadge(parsedOutput: JsonLikeRecord | null, outputText: string | undefined): ChatToolPresentation["badge"] {
   const exitCode = extractExitCode(parsedOutput, outputText);
-  return typeof exitCode === "number" && exitCode !== 0 ? t("chat.toolCard.badge.exitCode", exitCode) : undefined;
+  return typeof exitCode === "number" && exitCode !== 0 ? { kind: "exitCode", exitCode } : undefined;
 }
 
 function detectShellSeverity(
@@ -222,55 +179,46 @@ function detectShellSeverity(
   return undefined;
 }
 
-function buildReadSecondary(parsedArgs: JsonLikeRecord | null): string | undefined {
+function buildReadSecondary(parsedArgs: JsonLikeRecord | null): ChatToolPresentation["secondary"] {
   const lineStart = extractNumber(parsedArgs, ["line", "lineStart", "start_line", "lineno"]);
   const lineEnd = extractNumber(parsedArgs, ["lineEnd", "end_line"]);
   if (typeof lineStart === "number" && typeof lineEnd === "number" && lineEnd >= lineStart) {
-    return t("chat.toolCard.meta.linesRange", lineStart, lineEnd);
+    return { kind: "linesRange", start: lineStart, end: lineEnd };
   }
   if (typeof lineStart === "number") {
-    return t("chat.toolCard.meta.line", lineStart);
+    return { kind: "line", line: lineStart };
   }
   return undefined;
 }
 
-function buildWriteSecondary(parsedArgs: JsonLikeRecord | null): string | undefined {
-  const workdir = extractString(parsedArgs, WORKDIR_KEYS);
-  return workdir ? `CWD: ${workdir}` : undefined;
+function buildWriteBadge(normalizedName: string): ChatToolPresentation["badge"] {
+  if (normalizedName.includes("create")) return { kind: "created" };
+  if (normalizedName.includes("delete")) return { kind: "deleted" };
+  if (normalizedName.includes("rename") || normalizedName.includes("move")) return { kind: "renamed" };
+  return { kind: "modified" };
 }
 
-function buildWriteBadge(normalizedName: string): string | undefined {
-  if (normalizedName.includes("create")) return t("chat.toolCard.badge.created");
-  if (normalizedName.includes("delete")) return t("chat.toolCard.badge.deleted");
-  if (normalizedName.includes("rename") || normalizedName.includes("move")) return t("chat.toolCard.badge.renamed");
-  return t("chat.toolCard.badge.modified");
-}
-
-function buildEditSecondary(parsedArgs: JsonLikeRecord | null): string | undefined {
+function buildEditSecondary(parsedArgs: JsonLikeRecord | null): ChatToolPresentation["secondary"] {
   const oldText = extractString(parsedArgs, ["old_string", "oldText", "beforeText"]);
   const newText = extractString(parsedArgs, ["new_string", "newText", "afterText"]);
   if (oldText && newText) {
-    return t("chat.toolCard.meta.replaceSnippet", shortenInlineText(oldText), shortenInlineText(newText));
+    return { kind: "replaceSnippet", before: shortenInlineText(oldText), after: shortenInlineText(newText) };
   }
 
   const patchText = extractString(parsedArgs, ["patch", "patchText"]);
-  if (patchText) return t("chat.toolCard.meta.patchReady");
+  if (patchText) return { kind: "patchReady" };
   return undefined;
 }
 
-function buildEditBadge(normalizedName: string): string | undefined {
-  if (normalizedName.includes("apply_patch")) return t("chat.toolCard.badge.patched");
-  if (normalizedName.includes("delete")) return t("chat.toolCard.badge.deleted");
-  if (normalizedName.includes("rename") || normalizedName.includes("move")) return t("chat.toolCard.badge.renamed");
-  return t("chat.toolCard.badge.modified");
+function buildEditBadge(normalizedName: string): ChatToolPresentation["badge"] {
+  if (normalizedName.includes("apply_patch")) return { kind: "patched" };
+  return buildWriteBadge(normalizedName);
 }
 
-function buildScopedSecondary(parsedArgs: JsonLikeRecord | null): string | undefined {
+function buildScopedSecondary(parsedArgs: JsonLikeRecord | null): Pick<ChatToolPresentation, "secondary" | "secondaryText"> {
   const filePath = extractFilePath(parsedArgs);
-  if (filePath) return filePath;
-
-  const cwd = extractString(parsedArgs, WORKDIR_KEYS);
-  return cwd ? `CWD: ${cwd}` : undefined;
+  if (filePath) return { secondaryText: filePath };
+  return { secondary: buildShellSecondary(parsedArgs) };
 }
 
 function extractAgentPrimary(parsedArgs: JsonLikeRecord | null): string | undefined {
@@ -367,12 +315,13 @@ function extractExitCode(parsedOutput: JsonLikeRecord | null, outputText: string
     parsedOutput?.code ??
     parsedOutput?.status_code;
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && /^-?\d+$/u.test(value.trim())) return Number(value.trim());
+  if (typeof value === "string" && /^-?\d+$/u.test(value.trim()) && Number.isFinite(Number(value))) return Number(value);
 
   const text = typeof outputText === "string" ? outputText : "";
   const match = text.match(/\bExit code:\s*(-?\d+)\b/u);
   if (!match) return undefined;
-  return Number(match[1]);
+  const exitCode = Number(match[1]);
+  return Number.isFinite(exitCode) ? exitCode : undefined;
 }
 
 function parseToolPayload(text: string | undefined): JsonLikeRecord | null {

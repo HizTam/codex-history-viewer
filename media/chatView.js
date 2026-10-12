@@ -588,7 +588,7 @@
   const patchEntrySummaryById = new Map();
   const patchEntryDetailsById = new Map();
   const patchEntryDetailsLoading = new Set();
-  const patchEntryDetailsFailed = new Map();
+  const patchEntryDetailsFailed = new Set();
   const deferredPatchBodyRequests = new WeakMap();
   let webviewState = typeof vscode.getState === "function" ? vscode.getState() || {} : {};
   expandedClaudeProgressIds = new Set(Array.isArray(webviewState.claudeProgressExpanded)
@@ -697,25 +697,25 @@
 
   // Resume UI remains hidden until the host supplies localized session data.
   setResumeActionHidden(true);
-  setToolbarIconButton(btnPinToggle, PIN_ICON_SVG, "Pin");
-  setToolbarIconButton(btnCustomTitle, CUSTOM_TITLE_ICON_SVG, "Custom title");
-  setToolbarIconButton(btnMarkdown, MARKDOWN_ICON_SVG, "Markdown");
-  setToolbarIconButton(btnCopyResume, COPY_ICON_SVG, "Copy prompt");
+  setToolbarIconButton(btnPinToggle, PIN_ICON_SVG, localization.defaults.pinTooltip);
+  setToolbarIconButton(btnCustomTitle, CUSTOM_TITLE_ICON_SVG, localization.defaults.customTitleTooltip);
+  setToolbarIconButton(btnMarkdown, MARKDOWN_ICON_SVG, localization.defaults.markdownTooltip);
+  setToolbarIconButton(btnCopyResume, COPY_ICON_SVG, localization.defaults.copyResumeTooltip);
   // Scroll buttons stay icon-only in the toolbar.
-  setToolbarIconButton(btnToggleDetails, DETAILS_OFF_ICON_SVG, "Details");
-  setToolbarIconButton(btnPathMode, PATH_RECORDED_ICON_SVG, "Recorded path");
-  setToolbarIconButton(btnScrollTop, SCROLL_TOP_ICON_SVG, "Top");
-  setToolbarIconButton(btnScrollBottom, SCROLL_BOTTOM_ICON_SVG, "Bottom");
-  setToolbarIconButton(btnPageSearch, SEARCH_ICON_SVG, "Find");
-  setToolbarIconButton(btnPerformanceMode, PERFORMANCE_NORMAL_ICON_SVG, "Performance");
-  setToolbarIconButton(btnAutoRefresh, AUTO_REFRESH_ICON_SVG, "Auto refresh");
+  setToolbarIconButton(btnToggleDetails, DETAILS_OFF_ICON_SVG, localization.defaults.detailsOnTooltip);
+  setToolbarIconButton(btnPathMode, PATH_RECORDED_ICON_SVG, localization.defaults.pathModeRecordedTooltip);
+  setToolbarIconButton(btnScrollTop, SCROLL_TOP_ICON_SVG, localization.defaults.scrollTopTooltip);
+  setToolbarIconButton(btnScrollBottom, SCROLL_BOTTOM_ICON_SVG, localization.defaults.scrollBottomTooltip);
+  setToolbarIconButton(btnPageSearch, SEARCH_ICON_SVG, localization.defaults.pageSearchTooltip);
+  setToolbarIconButton(btnPerformanceMode, PERFORMANCE_NORMAL_ICON_SVG, localization.defaults.performanceAutoNormal);
+  setToolbarIconButton(btnAutoRefresh, AUTO_REFRESH_ICON_SVG, localization.defaults.autoRefreshOffTooltip);
   setToolbarIconButton(btnBranchMap, BRANCH_MAP_ICON_SVG, "");
   setToolbarIconButton(btnAgentRuns, AGENT_RUNS_ICON_SVG, "");
   // Reload is icon-only (tooltip is set via i18n).
-  setToolbarIconButton(btnReload, RELOAD_ICON_SVG, "Reload");
-  setToolbarIconButton(btnPageSearchPrev, NAV_UP_ICON_SVG, "Previous match");
-  setToolbarIconButton(btnPageSearchNext, NAV_DOWN_ICON_SVG, "Next match");
-  setToolbarIconButton(btnPageSearchClose, CLOSE_ICON_SVG, "Close search");
+  setToolbarIconButton(btnReload, RELOAD_ICON_SVG, localization.defaults.reloadTooltip);
+  setToolbarIconButton(btnPageSearchPrev, NAV_UP_ICON_SVG, localization.defaults.pageSearchPrevTooltip);
+  setToolbarIconButton(btnPageSearchNext, NAV_DOWN_ICON_SVG, localization.defaults.pageSearchNextTooltip);
+  setToolbarIconButton(btnPageSearchClose, CLOSE_ICON_SVG, localization.defaults.pageSearchCloseTooltip);
 
   if (btnResumeInCodex instanceof HTMLElement) {
     btnResumeInCodex.addEventListener("click", handleResumePrimaryClick);
@@ -1613,7 +1613,9 @@
       updateToolbar();
       bumpPageSearchContentRevisionAndQueueRefresh();
       renderBranchTimelinePreservingViewState();
-      requestAnimationFrame(() => requestAnimationFrame(restoreFocus));
+      // The branch dialog restores its stable focus key after rebuilding its nodes.
+      if (branchOverlayOpen) renderBranchOverlay();
+      else requestAnimationFrame(() => requestAnimationFrame(restoreFocus));
       if (isImagePreviewOpen()) syncImagePreviewControls();
       if (agentRunsOverlayOpen) renderAgentRunsOverlay();
       return;
@@ -8021,7 +8023,7 @@
     if (element.closest("[data-page-search-ignore='true']")) return false;
     if (element.closest(".turnMarker, .runningTurnAnchorRow, .runningTurnFallbackChip")) return false;
     if (element.closest("script, style, textarea, input, select")) return false;
-    if (element.closest("button") && !element.closest(".patchGroupFilePath")) return false;
+    if (element.closest("button") && !element.closest(".patchGroupFilePath, button.toolSentFileName")) return false;
     if (element.closest("mark.pageSearchMatch")) return false;
     if (element.closest("[hidden]")) return false;
     if (!showDetails && element.closest(".row.developer, .row.usage, .row.environment")) return false;
@@ -8605,7 +8607,10 @@
 
   function describeToolCardSearchContext(card) {
     const title = getElementText(card.querySelector(".toolCardTitle"));
-    const metaText = getElementText(card.querySelector(".toolCardMetaLine"));
+    const metaText = Array.from(card.querySelectorAll(".toolCardMetaLine .toolCardMetaTag"))
+      .map((tag) => getElementText(tag))
+      .filter(Boolean)
+      .join(" · ");
     return {
       title: title || getSafeUiText(i18n.roleMessage, localization.defaults.roleMessage),
       meta: metaText,
@@ -8920,15 +8925,15 @@
     const displayCwd = typeof meta.displayCwd === "string" ? meta.displayCwd : "";
     if (cwd && displayCwd && cwd !== displayCwd) {
       if (getEffectivePathMode() === "relocated") {
-        metaLines.push(`CWD: ${displayCwd}`);
+        metaLines.push(formatTemplate(i18n.metaCwd || localization.defaults.metaCwd, displayCwd));
         metaLines.push(`${i18n.originalCwd || localization.defaults.originalCwd}: ${cwd}`);
       } else {
-        metaLines.push(`CWD: ${cwd}`);
+        metaLines.push(formatTemplate(i18n.metaCwd || localization.defaults.metaCwd, cwd));
         metaLines.push(`${i18n.relocatedCwd || localization.defaults.relocatedCwd}: ${displayCwd}`);
       }
       return;
     }
-    if (cwd) metaLines.push(`CWD: ${cwd}`);
+    if (cwd) metaLines.push(formatTemplate(i18n.metaCwd || localization.defaults.metaCwd, cwd));
   }
 
   function renderSessionMetadata(metaLines) {
@@ -8984,12 +8989,12 @@
       return;
     }
     const metaLines = [];
-    if (model.meta && model.meta.timestampIso) metaLines.push(`Start: ${formatIsoYmdHm(model.meta.timestampIso)}`);
+    if (model.meta && model.meta.timestampIso) metaLines.push(formatTemplate(i18n.metaStart || localization.defaults.metaStart, formatIsoYmdHm(model.meta.timestampIso)));
     appendCwdMetaLines(metaLines, model.meta);
-    if (model.meta && model.meta.originator) metaLines.push(`Originator: ${model.meta.originator}`);
-    if (model.meta && model.meta.cliVersion) metaLines.push(`CLI: ${model.meta.cliVersion}`);
-    if (model.meta && model.meta.modelProvider) metaLines.push(`Model Provider: ${model.meta.modelProvider}`);
-    if (model.meta && model.meta.source) metaLines.push(`Source: ${model.meta.source}`);
+    if (model.meta && model.meta.originator) metaLines.push(formatTemplate(i18n.metaOriginator || localization.defaults.metaOriginator, model.meta.originator));
+    if (model.meta && model.meta.cliVersion) metaLines.push(formatTemplate(i18n.metaCli || localization.defaults.metaCli, model.meta.cliVersion));
+    if (model.meta && model.meta.modelProvider) metaLines.push(formatTemplate(i18n.metaModelProvider || localization.defaults.metaModelProvider, model.meta.modelProvider));
+    if (model.meta && model.meta.source) metaLines.push(formatTemplate(i18n.metaSource || localization.defaults.metaSource, model.meta.source));
     if (model.compressed) metaLines.push(i18n.sessionCompressed);
     if (model.sessionLocation && model.sessionLocation.archiveState === "archived") {
       metaLines.push(i18n.sessionLocationArchived || localization.defaults.sessionLocationArchived);
@@ -11583,7 +11588,7 @@
     }
     if (item.isContext) {
       const ctxTag = el("span", { className: "tag context" });
-      ctxTag.textContent = "context";
+      ctxTag.textContent = i18n.contextTag || localization.defaults.contextTag;
       metaTags.appendChild(ctxTag);
     }
     if (typeof item.timestampIso === "string") {
@@ -12182,7 +12187,22 @@
     appendAttachmentBadge(card, getAttachmentKindLabel(attachment), tooltip);
 
     const body = el("div", { className: "messageAttachmentBody" });
-    const title = el("div", { className: "messageAttachmentTitle" });
+    const isSentFile = attachment.source === "claudeSendUserFile" && attachment.path && attachment.id;
+    const sentFileRequest = isSentFile ? {
+      type: "openSentFile", attachmentId: attachment.id,
+      fsPath: model && model.fsPath,
+    } : null;
+    const openFile = () => {
+      // Cards may survive an unchanged-model refresh; retain their target but use the current revision.
+      if (sentFileRequest) vscode.postMessage({ ...sentFileRequest, revision: sessionInfoSnapshot && sessionInfoSnapshot.revision });
+      else vscode.postMessage({ type: "openAttachment", fsPath: attachment.path, line: sanitizePositiveNumber(attachment.line) });
+    };
+    const title = el(isSentFile ? "button" : "div", { className: "messageAttachmentTitle" });
+    if (isSentFile) {
+      title.type = "button";
+      title.classList.add("toolSentFileName");
+      title.addEventListener("click", openFile);
+    }
     title.textContent = label;
     title.title = tooltip;
     body.appendChild(title);
@@ -12190,13 +12210,7 @@
 
     if (attachment.path) {
       const actions = el("div", { className: "messageAttachmentActions" });
-      actions.appendChild(createAttachmentActionButton(i18n.attachmentOpen || localization.defaults.attachmentOpen, () => {
-        vscode.postMessage({
-          type: "openAttachment",
-          fsPath: attachment.path,
-          line: sanitizePositiveNumber(attachment.line),
-        });
-      }, PATCH_JUMP_ICON_SVG));
+      actions.appendChild(createAttachmentActionButton(i18n.attachmentOpen || localization.defaults.attachmentOpen, openFile, PATCH_JUMP_ICON_SVG));
       card.appendChild(actions);
     }
     return card;
@@ -12575,6 +12589,8 @@
   }
 
   function getAttachmentLabel(attachment) {
+    const generatedLabel = resolveAttachmentDisplayLabel(attachment && attachment.displayLabel);
+    if (generatedLabel) return generatedLabel;
     const label = attachment && typeof attachment.label === "string" ? attachment.label.trim() : "";
     if (label) return label;
     if (attachment?.type === "document") return i18n.attachmentDocument || localization.defaults.attachmentDocument;
@@ -12582,6 +12598,34 @@
     if (attachment?.type === "notification") return i18n.taskNotificationTitle || localization.defaults.taskNotificationTitle;
     if (attachment?.type === "invoke") return attachment.toolName || i18n.invokeTitle || localization.defaults["invokeTitle"];
     return i18n.attachmentFileReference || localization.defaults.attachmentFileReference;
+  }
+
+  function resolveAttachmentDisplayLabel(value) {
+    if (!value || typeof value !== "object") return "";
+    switch (value.kind) {
+      case "document":
+        if (value.documentKind === "pdf") return i18n.attachmentAutoPdf || localization.defaults.attachmentAutoPdf;
+        if (value.documentKind === "text") return i18n.attachmentAutoText || localization.defaults.attachmentAutoText;
+        return value.documentKind === "generic" ? i18n.attachmentAutoDocument || localization.defaults.attachmentAutoDocument : "";
+      case "fileReference": return i18n.attachmentAutoFileReference || localization.defaults.attachmentAutoFileReference;
+      case "selection": return i18n.attachmentSelection || localization.defaults.attachmentSelection;
+      case "image":
+      case "pastedText":
+      case "truncatedText": {
+        if (!Number.isSafeInteger(value.id) || value.id < 1 || value.id > 0x7fffffff) return "";
+        if (value.kind === "image") return formatTemplate(i18n.attachmentAutoImage || localization.defaults.attachmentAutoImage, value.id);
+        const count = value.additionalLineCount;
+        if (value.kind === "pastedText" && count === undefined) {
+          return formatTemplate(i18n.attachmentPastedText || localization.defaults.attachmentPastedText, value.id);
+        }
+        if (typeof count !== "string" || count.length > 4096 || !/^\d+$/u.test(count) ||
+            !Number.isSafeInteger(Number(count)) || Number(count) < (value.kind === "pastedText" ? 1 : 0)) return "";
+        return formatTemplate(value.kind === "pastedText"
+          ? i18n.attachmentPastedTextLines || localization.defaults.attachmentPastedTextLines
+          : i18n.attachmentTruncatedTextLines || localization.defaults.attachmentTruncatedTextLines, value.id, count);
+      }
+      default: return "";
+    }
   }
 
   function getDocumentKind(attachment) {
@@ -12679,14 +12723,16 @@
     return wrap;
   }
 
-  function getImageAttachmentLabel(value) {
+  function getImageAttachmentLabel(value, displayLabel) {
+    const generatedLabel = resolveAttachmentDisplayLabel(displayLabel);
+    if (generatedLabel) return generatedLabel;
     const label = typeof value === "string" ? value.trim() : "";
     if (label && label !== "Image attachment" && label !== "image-attachment") return label;
     return getSafeUiText(i18n.imageAttachmentLabel, localization.defaults.imageAttachmentLabel);
   }
 
   function renderMessageImage(image, previewImages, previewIndex) {
-    const label = getImageAttachmentLabel(image.label);
+    const label = getImageAttachmentLabel(image.label, image.displayLabel);
     const imageId = getImageId(image);
     const src = getImageSrc(image);
 
@@ -12879,14 +12925,13 @@
 
     withPageSearchContentMutation(
       () => {
-        const failedMessage = getSafeUiText(msg.message, i18n.patchDetailsLoadFailed || localization.defaults.patchDetailsLoadFailed);
         const wasLoading = patchEntryDetailsLoading.has(entryId);
-        const hadSameFailure = patchEntryDetailsFailed.get(entryId) === failedMessage;
+        const hadSameFailure = patchEntryDetailsFailed.has(entryId);
         // True no-op re-delivery of an identical failure: don't re-render the error body
         // (which would destroy existing page-search marks) and don't advance the revision.
         if (!wasLoading && hadSameFailure) return false;
         patchEntryDetailsLoading.delete(entryId);
-        patchEntryDetailsFailed.set(entryId, failedMessage);
+        patchEntryDetailsFailed.add(entryId);
         refreshPatchEntryDetails(entryId);
         return true;
       },
@@ -12920,7 +12965,9 @@
     if (!cached || !isSafeDataImageSrc(cached.src)) return;
     if (lazyImageObserver) lazyImageObserver.unobserve(frame);
 
-    const label = getImageAttachmentLabel(frame.dataset.imageLabel || cached.label);
+    const currentImage = findCurrentImageAttachment(imageId);
+    const label = currentImage ? getImageAttachmentLabel(currentImage.label, currentImage.displayLabel)
+      : getImageAttachmentLabel(frame.dataset.imageLabel || cached.label);
     const img = el("img", { className: "messageImage", alt: label, loading: "lazy" });
     img.src = cached.src;
     img.title = label;
@@ -12929,6 +12976,16 @@
     frame.title = i18n.imageOpenPreview || label;
     frame.setAttribute("aria-label", i18n.imageOpenPreview || label);
     frame.replaceChildren(img);
+  }
+
+  function findCurrentImageAttachment(imageId) {
+    if (!imageId || !model || !Array.isArray(model.items)) return null;
+    for (const item of model.items) {
+      const attachments = Array.isArray(item.attachments) ? item.attachments : [];
+      const found = attachments.find((attachment) => attachment.type === "image" && attachment.id === imageId);
+      if (found) return found;
+    }
+    return null;
   }
 
   function updateImageFailureElements(imageId) {
@@ -13057,6 +13114,17 @@
     const preview = ensureImagePreview();
     const actualSize = !!(imagePreview && imagePreview.actualSize);
     const hasImages = !!(imagePreview && Array.isArray(imagePreview.images) && imagePreview.images.length > 0);
+    if (hasImages) {
+      for (const image of imagePreview.images) image.label = getImageAttachmentLabel(image.sourceLabel, image.displayLabel);
+      const current = getCurrentPreviewImage();
+      if (current) preview.image.alt = preview.image.title = current.label;
+      for (const thumb of preview.thumbnailStrip.querySelectorAll(".imagePreviewThumb")) {
+        const image = imagePreview.images[Number(thumb.dataset.previewIndex)];
+        if (!image) continue;
+        thumb.title = image.label;
+        thumb.setAttribute("aria-label", image.label);
+      }
+    }
     preview.overlay.classList.toggle("imagePreviewOverlay-actual", actualSize);
     preview.gallery.hidden = !hasImages;
     const label = actualSize
@@ -13094,12 +13162,14 @@
   }
 
   function toPreviewImage(image) {
-    const label = getImageAttachmentLabel(image.label);
+    const label = getImageAttachmentLabel(image.label, image.displayLabel);
     const imageId = getImageId(image);
     return {
       imageId,
       src: getImageSrc(image),
       label,
+      sourceLabel: image.label,
+      displayLabel: image.displayLabel,
     };
   }
 
@@ -13764,9 +13834,7 @@
     const entryId = getPatchEntryId(entry);
     const wrap = el("div", { className: "patchEntryDetailsStatus" });
     const message = el("span", {});
-    message.textContent =
-      (entryId && patchEntryDetailsFailed.get(entryId)) ||
-      getSafeUiText(i18n.patchDetailsLoadFailed, localization.defaults.patchDetailsLoadFailed);
+    message.textContent = getSafeUiText(i18n.patchDetailsLoadFailed, localization.defaults.patchDetailsLoadFailed);
     wrap.appendChild(message);
     const retry = el("button", { type: "button", className: "patchEntryDetailsRetry" });
     retry.textContent = getSafeUiText(i18n.patchDetailsRetry, localization.defaults.patchDetailsRetry);
@@ -14486,11 +14554,15 @@
   function renderTool(item, cardKey) {
     const row = el("div", { className: "row tool" });
     const presentation = resolveToolPresentation(item);
+    const sentFiles = item.sentFiles && typeof item.sentFiles === "object" ? item.sentFiles : null;
     const bubble = el("div", { className: "bubble tool toolCard" });
     applyTimelineCardWidthState(bubble, cardKey);
     applyBookmarkMetadata(bubble, item);
     bubble.classList.add(`toolCard-kind-${presentation.toolKind}`);
     if (presentation.severity) bubble.classList.add(`toolCard-severity-${presentation.severity}`);
+    if (sentFiles && (sentFiles.status === "warning" || sentFiles.status === "error")) {
+      bubble.classList.add(`toolCard-severity-${sentFiles.status}`);
+    }
     if (showDetails) bubble.classList.add("toolCard-expanded");
 
     const header = el("div", { className: "toolCardHeader" });
@@ -14503,13 +14575,29 @@
     titleWrap.appendChild(title);
     header.appendChild(titleWrap);
     const headerActions = el("div", { className: "toolCardHeaderActions" });
+    const sentFileHeaderStatuses = sentFiles ? new Set() : null;
+    if (sentFiles) {
+      let statusKey = normalizeToolStatusKey(sentFiles.status);
+      const executionStatus = normalizeToolStatusKey(item.execution?.status);
+      // Keep non-success classification while displaying the recorded interruption reason.
+      if (statusKey === "error" && (executionStatus === "interrupted" || executionStatus === "cancelled")) statusKey = executionStatus;
+      if (statusKey === "pending") statusKey = "unconfirmed";
+      const status = statusKey === "warning" ? i18n.sentFilesWarning || localization.defaults.sentFilesWarning
+        : normalizeToolStatus(statusKey);
+      if (status) {
+        headerActions.appendChild(el("span", { className: "toolCardBadge", textContent: status }));
+        sentFileHeaderStatuses.add(statusKey);
+      }
+    }
     if (presentation.badgeText) {
       const badge = el("span", { className: "toolCardBadge" });
       badge.textContent = presentation.badgeText;
       headerActions.appendChild(badge);
     }
-    if (item.execution && (item.execution.status === "staged" || item.execution.status === "unconfirmed")) {
+    if (item.execution && (item.execution.status === "staged" || item.execution.status === "unconfirmed")
+      && !sentFileHeaderStatuses?.has(item.execution.status)) {
       headerActions.appendChild(el("span", { className: "toolCardBadge", textContent: normalizeToolStatus(item.execution.status) }));
+      sentFileHeaderStatuses?.add(item.execution.status);
     }
     appendBookmarkButton(headerActions, item);
     headerActions.appendChild(createTimelineCardWidthButton(cardKey, bubble));
@@ -14522,7 +14610,17 @@
       primary.title = presentation.primaryText;
     }
     primary.textContent = presentation.primaryText;
-    bubble.appendChild(primary);
+    if (!sentFiles || !Array.isArray(item.attachments) || item.attachments.length === 0) bubble.appendChild(primary);
+
+    if (sentFiles && typeof sentFiles.caption === "string" && sentFiles.caption) {
+      bubble.appendChild(el("div", { className: "toolCardSecondary toolSentFileNotice", textContent: sentFiles.caption }));
+    }
+    if (sentFiles && typeof sentFiles.notice === "string" && sentFiles.notice) {
+      bubble.appendChild(el("div", { className: "toolCardSecondary toolSentFileNotice", textContent: sentFiles.notice }));
+    }
+    if (sentFiles && sentFiles.truncated) {
+      bubble.appendChild(el("div", { className: "toolCardSecondary", textContent: i18n.sentFilesMoreDetails || localization.defaults.sentFilesMoreDetails }));
+    }
 
     if (presentation.secondaryText) {
       const secondary = el("div", { className: "toolCardSecondary" });
@@ -14549,7 +14647,7 @@
     if (typeof item.timestampIso === "string") {
       appendToolMetaTag(metaTags, formatIsoYmdHms(item.timestampIso), item.timestampIso);
     }
-    if (showDetails) appendToolExecutionMetaTags(metaTags, item && item.execution);
+    if (showDetails) appendToolExecutionMetaTags(metaTags, item && item.execution, sentFileHeaderStatuses);
     if (metaTags.childElementCount > 0) {
       metaLine.appendChild(metaTags);
       bubble.appendChild(metaLine);
@@ -14579,13 +14677,16 @@
   function shouldRenderToolCard(item) {
     const hasImageAttachment = Array.isArray(item?.attachments)
       && item.attachments.some((attachment) => attachment?.type === "image");
-    return toolDisplayMode === "compactCards" || showDetails || hasImageAttachment;
+    return toolDisplayMode === "compactCards" || showDetails || hasImageAttachment || !!item?.sentFiles;
   }
 
-  function appendToolExecutionMetaTags(container, execution) {
+  function appendToolExecutionMetaTags(container, execution, displayedStatuses) {
     if (!execution || typeof execution !== "object") return;
     const status = normalizeToolStatus(execution.status);
-    if (status) appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolStatus, localization.defaults.toolStatus), status));
+    // Compare status codes, never localized labels; delivery warnings still differ from execution success.
+    if (status && !displayedStatuses?.has(normalizeToolStatusKey(execution.status))) {
+      appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolStatus, localization.defaults.toolStatus), status));
+    }
     if (typeof execution.exitCode === "number" && Number.isFinite(execution.exitCode)) {
       appendToolMetaTag(container, formatTemplate(getSafeUiText(i18n.toolExitCode, localization.defaults.toolExitCode), String(Math.trunc(execution.exitCode))));
     }
@@ -14596,17 +14697,25 @@
     if (errorText) appendToolMetaTag(container, errorText, errorText);
   }
 
-  function normalizeToolStatus(value) {
+  function normalizeToolStatusKey(value) {
     const status = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (status === "failed") return "error";
+    if (status === "timed_out") return "timeout";
+    if (status === "canceled") return "cancelled";
+    return status;
+  }
+
+  function normalizeToolStatus(value) {
+    const status = normalizeToolStatusKey(value);
     if (!status) return "";
     if (status === "success") return getSafeUiText(i18n.toolStatusSuccess, localization.defaults.toolStatusSuccess);
     if (status === "staged") return i18n.toolStatusStaged;
     if (status === "unconfirmed") return i18n.toolStatusUnconfirmed;
     if (status === "completed") return getSafeUiText(i18n.toolStatusCompleted, localization.defaults.toolStatusCompleted);
-    if (status === "error" || status === "failed") return getSafeUiText(i18n.toolStatusError, localization.defaults.toolStatusError);
-    if (status === "timeout" || status === "timed_out") return getSafeUiText(i18n.toolStatusTimeout, localization.defaults.toolStatusTimeout);
+    if (status === "error") return getSafeUiText(i18n.toolStatusError, localization.defaults.toolStatusError);
+    if (status === "timeout") return getSafeUiText(i18n.toolStatusTimeout, localization.defaults.toolStatusTimeout);
     if (status === "interrupted") return getSafeUiText(i18n.toolStatusInterrupted, localization.defaults.toolStatusInterrupted);
-    if (status === "cancelled" || status === "canceled") return getSafeUiText(i18n.toolStatusCancelled, localization.defaults.toolStatusCancelled);
+    if (status === "cancelled") return getSafeUiText(i18n.toolStatusCancelled, localization.defaults.toolStatusCancelled);
     return status;
   }
 
@@ -14703,6 +14812,7 @@
   }
 
   function getToolIconSvg(toolKind) {
+    if (toolKind === "sendFile") return TOOL_ICON_SVGS.read;
     return TOOL_ICON_SVGS[toolKind] || TOOL_ICON_SVGS.unknown;
   }
 
@@ -14710,20 +14820,36 @@
     const raw = item && item.presentation && typeof item.presentation === "object" ? item.presentation : null;
     const toolKind =
       raw && typeof raw.toolKind === "string" && raw.toolKind.trim().length > 0 ? raw.toolKind.trim() : "unknown";
+    const titles = {
+      bash: i18n.toolTitleBash || localization.defaults.toolTitleBash,
+      read: i18n.toolTitleRead || localization.defaults.toolTitleRead,
+      write: i18n.toolTitleWrite || localization.defaults.toolTitleWrite,
+      edit: i18n.toolTitleEdit || localization.defaults.toolTitleEdit,
+      exec: i18n.toolTitleExec || localization.defaults.toolTitleExec,
+      grep: i18n.toolTitleGrep || localization.defaults.toolTitleGrep,
+      glob: i18n.toolTitleGlob || localization.defaults.toolTitleGlob,
+      webSearch: i18n.toolTitleWebSearch || localization.defaults.toolTitleWebSearch,
+      webFetch: i18n.toolTitleWebFetch || localization.defaults.toolTitleWebFetch,
+      imageGeneration: i18n.toolTitleImageGeneration || localization.defaults.toolTitleImageGeneration,
+      sendFile: i18n.toolTitleSendFile || localization.defaults.toolTitleSendFile,
+      agent: i18n.toolTitleAgent || localization.defaults.toolTitleAgent,
+      wait: i18n.toolTitleWait || localization.defaults.toolTitleWait,
+      unknown: i18n.toolTitleUnknown || localization.defaults.toolTitleUnknown,
+    };
     const title =
       raw && typeof raw.title === "string" && raw.title.trim().length > 0
         ? raw.title.trim()
-        : i18n.tool || localization.defaults.tool;
+        : Object.hasOwn(titles, toolKind) ? titles[toolKind] : titles.unknown;
     const primaryText =
       raw && typeof raw.primaryText === "string" && raw.primaryText.trim().length > 0
         ? raw.primaryText.trim()
         : item.name || "function_call";
-    const secondaryText =
+    const secondaryText = resolveToolSecondary(raw && raw.secondary) || (
       raw && typeof raw.secondaryText === "string" && raw.secondaryText.trim().length > 0
         ? raw.secondaryText.trim()
-        : "";
-    const badgeText =
-      raw && typeof raw.badgeText === "string" && raw.badgeText.trim().length > 0 ? raw.badgeText.trim() : "";
+        : "");
+    const badgeText = resolveToolBadge(raw && raw.badge) || (
+      raw && typeof raw.badgeText === "string" && raw.badgeText.trim().length > 0 ? raw.badgeText.trim() : "");
     const severity =
       raw && (raw.severity === "info" || raw.severity === "warning" || raw.severity === "error")
         ? raw.severity
@@ -14733,6 +14859,41 @@
         ? raw.relatedFilePath.trim()
         : "";
     return { toolKind, title, primaryText, secondaryText, badgeText, severity, relatedFilePath };
+  }
+
+  function resolveToolSecondary(value) {
+    if (!value || typeof value !== "object") return "";
+    const isText = (text) => typeof text === "string" && text.length > 0 && text.length <= 4096;
+    switch (value.kind) {
+      case "cwd":
+        return isText(value.value) ? formatTemplate(i18n.toolMetaCwd || localization.defaults.toolMetaCwd, value.value) : "";
+      case "line":
+        return Number.isFinite(value.line) ? formatTemplate(i18n.toolMetaLine || localization.defaults.toolMetaLine, value.line) : "";
+      case "linesRange":
+        return Number.isFinite(value.start) && Number.isFinite(value.end) && value.end >= value.start
+          ? formatTemplate(i18n.toolMetaLinesRange || localization.defaults.toolMetaLinesRange, value.start, value.end) : "";
+      case "replaceSnippet":
+        return isText(value.before) && isText(value.after)
+          ? formatTemplate(i18n.toolMetaReplaceSnippet || localization.defaults.toolMetaReplaceSnippet, value.before, value.after) : "";
+      case "patchReady":
+        return i18n.toolMetaPatchReady || localization.defaults.toolMetaPatchReady;
+      default:
+        return "";
+    }
+  }
+
+  function resolveToolBadge(value) {
+    if (!value || typeof value !== "object") return "";
+    switch (value.kind) {
+      case "created": return i18n.toolBadgeCreated || localization.defaults.toolBadgeCreated;
+      case "deleted": return i18n.toolBadgeDeleted || localization.defaults.toolBadgeDeleted;
+      case "modified": return i18n.toolBadgeModified || localization.defaults.toolBadgeModified;
+      case "patched": return i18n.toolBadgePatched || localization.defaults.toolBadgePatched;
+      case "renamed": return i18n.toolBadgeRenamed || localization.defaults.toolBadgeRenamed;
+      case "exitCode": return Number.isFinite(value.exitCode)
+        ? formatTemplate(i18n.toolBadgeExitCode || localization.defaults.toolBadgeExitCode, value.exitCode) : "";
+      default: return "";
+    }
   }
 
   function appendToolMetaTag(container, text, title) {
@@ -14781,7 +14942,7 @@
     applyBookmarkMetadata(bubble, item);
     const title = el("div", { className: "metaLine" });
     const titleText = el("span", {});
-    titleText.textContent = noteTitle ? String(noteTitle) : "note";
+    titleText.textContent = noteTitle ? String(noteTitle) : i18n.noteTitle || localization.defaults.noteTitle;
     title.appendChild(titleText);
     const headerActions = el("div", { className: "messageNav cardHeaderActions" });
     appendBookmarkButton(headerActions, item);
@@ -15564,6 +15725,23 @@
     const finish = () => {
       if (typeof onRestored === "function") onRestored();
     };
+    if (!Number.isSafeInteger(messageIndex) || messageIndex < 1) {
+      finish();
+      return;
+    }
+    // Explicit navigation must reveal messages hidden by the details filter.
+    const revealRequiresDetails = !showDetails && Array.isArray(model?.items) && model.items.some(
+      (item) => item.type === "message" && item.messageIndex === messageIndex && !canRenderMessage(item),
+    );
+    if (revealRequiresDetails) {
+      withPageSearchContentMutation(() => {
+        showDetails = true;
+        return true;
+      });
+      selectedMessageIndex = messageIndex;
+      syncPageSearchRoleFilters({ reset: false });
+      updateToolbar();
+    }
     ensureTurnExpandedForReveal(getTurnIdForMessageIndex(messageIndex), { render: false });
     expandedMessageIndexes.add(messageIndex);
     expandCrossSessionMessageForReveal(messageIndex);
@@ -15576,6 +15754,15 @@
     elTarget.classList.add("highlight");
     if (isUserMessageIndex(messageIndex)) suppressStickyUserUntilUserScroll();
     elTarget.scrollIntoView({ block: "center" });
+    if (revealRequiresDetails) {
+      if (!detailsLoaded) {
+        // Keep the revealed card in place when the existing full-details reload completes.
+        const anchor = captureTimelineScrollAnchorFromElement(elTarget);
+        pendingDetailScrollAnchor = anchor ? { ...anchor, targetShowDetails: true } : null;
+      }
+      persistRestoreState();
+      requestFullDetailsIfNeeded({ restoreByCard: true });
+    }
     finish();
     setTimeout(() => {
       elTarget.classList.remove("highlight");

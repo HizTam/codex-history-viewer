@@ -38,9 +38,10 @@ export async function resolveLocalFileLinkTarget(
     projectPathMappings?: readonly ProjectPathMapping[];
     claudeSessionFsPath?: string;
     allowMissing?: boolean;
+    literalPath?: boolean;
   },
 ): Promise<LinkedFileTarget | null> {
-  const parsed = splitPathAndLocation(rawFsPath);
+  const parsed = options?.literalPath ? parseLiteralLocalFilePath(rawFsPath) : splitPathAndLocation(rawFsPath);
   if (!parsed) return null;
 
   const requestedLine = sanitizePositiveInteger(options?.requestedLine);
@@ -104,6 +105,15 @@ export async function resolveLocalFileLinkTarget(
   }
 
   return null;
+}
+
+// Tool-provided filenames are literal paths, including extensionless names and #L fragments.
+function parseLiteralLocalFilePath(value: string): ParsedLocalFileLink | null {
+  const text = value.trim();
+  if (!text || text.length > 4_096 || /[\u0000-\u001f\u007f\u2028\u2029]/u.test(text)) return null;
+  if (isAbsolutePathLike(text)) return { fsPath: text, kind: "absolute" };
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/u.test(text)) return null;
+  return { fsPath: text, kind: "relative" };
 }
 
 export async function openLinkedFileInEditor(target: LinkedFileTarget): Promise<boolean> {

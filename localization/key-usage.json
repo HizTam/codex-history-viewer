@@ -135,16 +135,6 @@
       ]
     },
     {
-      "file": "src/fileHistory/fileChangeHistoryPanelManager.ts",
-      "expression": "`fileChangeHistory.progress.${phase}`",
-      "keys": [
-        "fileChangeHistory.progress.syncIndex",
-        "fileChangeHistory.progress.collectCandidates",
-        "fileChangeHistory.progress.parseSessions",
-        "fileChangeHistory.progress.render"
-      ]
-    },
-    {
       "file": "src/insights/historyInsightsPanelManager.ts",
       "expression": "key",
       "keys": [

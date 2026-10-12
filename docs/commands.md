@@ -149,7 +149,7 @@ The **File AI Change History** icon on Session Viewer diff cards opens the same 
 | Show History Insights | `codexHistoryViewer.showHistoryInsights` | Opens an analytics snapshot for the sessions matching the current History conditions. It is available from the History view header and the Command Palette. |
 | Open Parent Session | `codexHistoryViewer.openCodexAgentParent` | Opens the available parent of a selected Codex or Claude Code agent session. When Agent Runs is enabled, this action appears only in the context menu for an agent whose parent can be resolved; it is hidden from the Command Palette. |
 
-Codex automatic approval reviews (Guardian) with explicit parent metadata use the same Agent Runs actions and visibility rules as other Codex agent sessions. Agent Runs remains experimental. Codex and Claude Code share the existing `codexHistoryViewer.agentRuns.enabled` setting, so an enabled setting also applies to Claude Code.
+Codex automatic approval reviews (Guardian) with explicit parent metadata use the same Agent Runs actions and visibility rules as other Codex agent sessions. Codex and Claude Code share the existing `codexHistoryViewer.agentRuns.enabled` setting, so an enabled setting also applies to Claude Code. Agent Runs is disabled by default.
 
 Codex and Claude Code sub-agent histories are included in Search, History Insights, and File AI Change History whether Agent Runs is enabled or disabled, subject to each feature's filters. Disabling Agent Runs hides the relationship controls while keeping these histories available.
 
@@ -169,13 +169,17 @@ Custom titles, pins, and hidden state continue to follow the conversation. Notes
 
 In a Session Viewer displaying a previous history, editing notes or tags updates that history, while custom-title actions update the shared conversation title. An unavailable explicit target does not redirect the action to another open conversation. File AI Change History rechecks the conversation when its main history changes, including when it previously had no matching changes.
 
-When `codexHistoryViewer.branchNavigation.enabled` is enabled, Branch Navigation lets you move between the histories before and after an edit. On cards in the Session Viewer's history selector and previews on the previous/next buttons, **Before edit** and **After edit** identify revisions of the same conversation, while **Fork** identifies a separate conversation. Navigation does not modify the stored session files.
+Branch Navigation is disabled by default. Enable `codexHistoryViewer.branchNavigation.enabled` to move between the histories before and after an edit. On cards in the Session Viewer's history selector and previews on the previous/next buttons, **Before edit** and **After edit** identify revisions of the same conversation, while **Fork** identifies a separate conversation. Navigation does not modify the stored session files.
 
 Commands entered in Claude Code's shell mode appear as user messages with a **Terminal input** badge. Their results appear in collapsed **Terminal output** cards.
 
 For history search, commands use the User role. Terminal output uses the Tool role and is included only when `codexHistoryViewer.search.indexToolContent` is set to **Messages + Tool Calls + Results** (`toolCallsAndOutputs`). History Insights counts commands as user requests, excluding their output. **Open Session as Markdown** includes the displayed output, while generated resume excerpts and handoff files omit terminal output. These display and extraction rules leave the original session files unchanged.
 
 Saved Claude Code progress updates are displayed directly, while thinking text is expandable. Both support search, bookmarks, copying, and **Open Session as Markdown** without enabling **Show details**. Progress text does not change the tool records used for diff cards or File AI Change History.
+
+Files sent by Claude Code show file names, descriptions, and delivery status in the Session Viewer. Click a valid file name to open the local file in VS Code; this card action has no Command Palette command. File contents are not loaded automatically. Recorded paths and descriptions follow the tool-call search setting, and results follow the tool-output search setting. Sending a file alone is not a file change.
+
+Claude Code conversation compaction summaries are available with **Show details** and **Open Session as Markdown** as context. Opening a session at a specific message, including an existing bookmark's position, turns on details if that message would otherwise be hidden. These summaries are excluded from ordinary user-message search, previews, and request counts, and are not treated as the current request in **Copy Quick Prompt** or Handoff.
 
 User text sent while Claude Code was running appears as **Additional user input** when its human origin is recorded. These cards also support search, bookmarks, copying, and **Open Session as Markdown** without enabling **Show details**. Repeated delivery records and matching ordinary user messages appear only once, and existing message numbers and bookmarks are preserved.
 

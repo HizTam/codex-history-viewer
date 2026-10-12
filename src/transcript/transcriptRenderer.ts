@@ -1,5 +1,6 @@
 import { isClaudeTaskNotificationRecord, projectClaudeTaskNotification } from "../chat/claudeTaskNotification";
 import { extractClaudeSystemReminder } from "../chat/claudeSystemReminder";
+import { isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
 import { extractClaudeProgress } from "../chat/claudeProgress";
 import { ClaudeQueuedInputTracker } from "../chat/claudeQueuedInput";
 import * as path from "node:path";
@@ -451,7 +452,7 @@ async function renderClaudeRecord(
     if (!messagePending || firstTextBlock > blockIndex) return;
     messagePending = false;
     appendProgressThrough(firstTextBlock);
-    const ctx = role !== "assistant" && isBoilerplateUserMessage(text) ? " (context)" : "";
+    const ctx = role !== "assistant" && (isBoilerplateUserMessage(text) || isClaudeCompactSummaryRecord(obj)) ? " (context)" : "";
     msgIndex += 1;
     messageLineMap.set(msgIndex, lines.length + 1);
     lines.push(`## [#${msgIndex}] ${capitalize(role)}${ctx}`);

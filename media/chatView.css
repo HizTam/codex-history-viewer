@@ -3887,6 +3887,29 @@ body.vscode-high-contrast-light .branchTreeViewport {
   overflow-wrap: anywhere;
 }
 
+.toolSentFileName {
+  border: 0;
+  background: transparent;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.toolSentFileName:hover {
+  text-decoration: underline;
+}
+
+.toolSentFileName:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.toolSentFileNotice {
+  overflow-wrap: anywhere;
+}
+
 .toolCardMetaLine {
   display: flex;
   align-items: flex-start;

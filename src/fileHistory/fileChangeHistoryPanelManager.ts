@@ -552,7 +552,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
             totalMs: elapsedMs(totalStartedAt),
           }),
         );
-        await postLocalizedMessage(panel.webview, "fileHistory", { type: "cancelled", message: t("fileChangeHistory.cancelled") });
+        await postLocalizedMessage(panel.webview, "fileHistory", { type: "cancelled" });
       } else {
         this.logger?.debug(
           formatDebugFields(`fileChangeHistory ${reason} fail`, {
@@ -562,7 +562,8 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
         );
         await postLocalizedMessage(panel.webview, "fileHistory", {
           type: "error",
-          message: t("fileChangeHistory.error.loadFailed", formatError(error)),
+          errorKind: "loadFailed",
+          detail: getErrorDetail(error),
         });
       }
     } finally {
@@ -665,7 +666,6 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
         );
         await postLocalizedMessage(panel.webview, "fileHistory", {
           type: "loadMoreCancelled",
-          message: t("fileChangeHistory.loadMoreCanceled"),
         });
         return;
       }
@@ -677,7 +677,8 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       );
       await postLocalizedMessage(panel.webview, "fileHistory", {
         type: "loadMoreFailed",
-        message: t("fileChangeHistory.error.loadFailed", formatError(error)),
+        errorKind: "loadFailed",
+        detail: getErrorDetail(error),
       });
     } finally {
       cancellation.dispose();
@@ -799,7 +800,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       try {
         await vscode.window.showTextDocument(uri, { viewColumn: vscode.ViewColumn.Active, preview: false });
       } catch (error) {
-        void vscode.window.showErrorMessage(t("fileChangeHistory.error.openFailed", formatError(error)));
+        void vscode.window.showErrorMessage(t("fileChangeHistory.error.openFailed", getErrorDetail(error) ?? state.target.fsPath));
       }
     }
   }
@@ -838,11 +839,15 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
         viewColumn: vscode.ViewColumn.Active,
       });
     } catch (error) {
-      void vscode.window.showErrorMessage(t("fileChangeHistory.error.openHistoryFailed", formatError(error)));
+      const detail = getErrorDetail(error);
+      void vscode.window.showErrorMessage(detail
+        ? t("fileChangeHistory.error.openHistoryFailed", detail)
+        : t("fileChangeHistory.error.openHistoryFallback"));
       await postLocalizedMessage(panel.webview, "fileHistory", {
         type: "inlineError",
         cardId,
-        message: t("fileChangeHistory.error.openHistoryFailed", formatError(error)),
+        errorKind: "openHistoryFailed",
+        detail,
       });
     }
   }
@@ -871,7 +876,6 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       type: "loading",
       phase,
       title: t("fileChangeHistory.title"),
-      message: t(`fileChangeHistory.progress.${phase}`),
       i18n: this.buildI18n(),
       dateTime: this.buildDateTime(),
       extensionIcon: this.buildExtensionIcon(panel.webview),
@@ -1222,8 +1226,10 @@ function randomNonce(): string {
   return out;
 }
 
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error ?? "unknown");
+function getErrorDetail(error: unknown): string | undefined {
+  // Do not stringify arbitrary objects or expose stack traces in Webview messages.
+  const detail = error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
+  return typeof detail === "string" && detail.trim() ? detail : undefined;
 }
 
 function formatFileChangeHistoryWebviewDebugMessage(msg: any): string {

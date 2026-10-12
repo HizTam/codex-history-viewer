@@ -30,12 +30,15 @@ const CLAUDE_PLACEHOLDER_RE =
   /\[(Pasted text|Image|Audio|\.\.\.Truncated text) #([1-9]\d{0,9})(?: \+(\d+) lines)?(\.{0,3})\]/gu;
 
 export type ClaudePastedPromptEntryType = "text" | "image";
+type PlaceholderDisplayKind = "pastedText" | "truncatedText" | "image";
 
 export interface ClaudePastedPromptEntry {
   id: number;
   type: ClaudePastedPromptEntryType;
   placeholder: string;
   label: string;
+  displayKind?: PlaceholderDisplayKind;
+  additionalLineCount?: string;
   content?: string;
   unavailable?: true;
 }
@@ -72,6 +75,8 @@ interface ParsedPlaceholder {
   type: "text" | "image" | "audio";
   placeholder: string;
   label: string;
+  displayKind?: PlaceholderDisplayKind;
+  additionalLineCount?: string;
   start: number;
   end: number;
 }
@@ -519,6 +524,8 @@ function matchHistoryEntry(
       type: placeholder.type,
       placeholder: placeholder.placeholder,
       label: placeholder.label,
+      displayKind: placeholder.displayKind,
+      additionalLineCount: placeholder.additionalLineCount,
       ...(placeholder.type === "text" && content !== undefined ? { content } : {}),
       ...(placeholder.type === "text" && content === undefined ? { unavailable: true as const } : {}),
     });
@@ -629,6 +636,7 @@ function buildImageOnlyResolution(
       type: "image" as const,
       placeholder: placeholder.placeholder,
       label: placeholder.label,
+      displayKind: placeholder.displayKind,
     })),
     imagePasteIds,
   };
@@ -681,6 +689,9 @@ function parsePlaceholders(text: string): ParsedPlaceholder[] | null {
       type,
       placeholder: match[0],
       label: `${baseLabel} #${id}${lineLabel}`,
+      // Retain numeric spelling without changing placeholder matching or raw labels.
+      displayKind: type === "image" ? "image" : type === "text" ? truncated ? "truncatedText" : "pastedText" : undefined,
+      additionalLineCount: rawLineCount,
       start: match.index,
       end: match.index + match[0].length,
     });

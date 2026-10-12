@@ -111,6 +111,40 @@ export function createSessionReadStream(fsPath: string, options: SessionFileRead
   return Readable.from(readCompressedBytes(fsPath, options), { objectMode: false }).setEncoding("utf8");
 }
 
+// JSONL uses physical LF/CRLF boundaries; Unicode separators inside JSON strings are data.
+export async function* readJsonlLines(input: Readable, options: SessionFileReadOptions = {}): AsyncGenerator<string> {
+  const fragments: string[] = [];
+  try {
+    input.setEncoding("utf8");
+    throwIfReadCancelled(options);
+    for await (const chunk of input) {
+      throwIfReadCancelled(options);
+      const text = chunk as string;
+      let start = 0;
+      let end: number;
+      while ((end = text.indexOf("\n", start)) !== -1) {
+        throwIfReadCancelled(options);
+        const tail = text.slice(start, end);
+        let line: string;
+        if (fragments.length) {
+          fragments.push(tail);
+          line = fragments.join("");
+          fragments.length = 0;
+        } else {
+          line = tail;
+        }
+        yield line.endsWith("\r") ? line.slice(0, -1) : line;
+        start = end + 1;
+      }
+      if (start < text.length) fragments.push(text.slice(start));
+    }
+    throwIfReadCancelled(options);
+    if (fragments.length) yield fragments.join("");
+  } finally {
+    input.destroy();
+  }
+}
+
 export async function* readCompressedBytes(fsPath: string, options: SessionFileReadOptions = {}): AsyncGenerator<Buffer> {
   if (options.endByteOffset !== undefined && (!Number.isSafeInteger(options.endByteOffset) || options.endByteOffset < 0)) {
     throw new Error("Invalid session read boundary.");

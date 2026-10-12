@@ -1,4 +1,5 @@
 import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
+import { isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
 import { extractClaudeProgress, isClaudeProgressId } from "../chat/claudeProgress";
 import { ClaudeQueuedInputTracker, isClaudeQueuedInputId } from "../chat/claudeQueuedInput";
 import * as path from "node:path";
@@ -58,7 +59,7 @@ import {
   readCodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
 
-const SEARCH_INDEX_FILE_VERSION = 33;
+const SEARCH_INDEX_FILE_VERSION = 34;
 const SEARCH_STAT_CONCURRENCY = 8;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
@@ -1178,7 +1179,9 @@ async function indexClaudeRecord(obj: any, state: BuildState, lineIndex: number)
   if (messageText || extracted.attachments.length > 0) {
     state.messageIndex += 1;
     const anchor = Math.max(1, state.messageIndex);
-    if (messageText) state.messages.push({ messageIndex: anchor, role, source: "message", text: messageText });
+    if (messageText && !isClaudeCompactSummaryRecord(obj)) {
+      state.messages.push({ messageIndex: anchor, role, source: "message", text: messageText });
+    }
   }
 
   const anchor = Math.max(1, state.messageIndex);
