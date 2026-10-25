@@ -1,4 +1,5 @@
 import type { SupportedLocale } from "../localization/localeCatalog";
+import type { RemoteCodexModel } from "./remoteCodexController";
 export type SettingsPanelValue = boolean | number | string | readonly string[];
 
 export type SettingsTargetKind = "global" | "workspace" | "workspaceFolder";
@@ -161,6 +162,7 @@ export interface SettingsPanelSnapshot {
   pages: readonly SettingsPageModel[];
   settings: readonly SettingsSettingModel[];
   maintenanceCards: readonly SettingsMaintenanceCardModel[];
+  remoteCodex?: RemoteCodexModel;
   about: SettingsAboutModel;
   labels: SettingsPanelLabels;
 }

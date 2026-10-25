@@ -802,7 +802,117 @@
       }
       container.append(card);
     }
+    if (snapshot.remoteCodex) {
+      container.append(createRemoteCodexCard(snapshot.remoteCodex, actionPending));
+    }
     return container;
+  }
+
+  function createRemoteCodexCard(model, actionPending) {
+    const card = element("section", "maintenance-card remote-codex-card");
+    const labels = model.labels;
+    const busy = actionPending || model.busy;
+    card.append(element("h3", "card-title", labels.section));
+    const body = element("div", "remote-codex-body");
+    const heading = element("div", "remote-codex-heading");
+    heading.append(element("h4", "maintenance-label", labels.title),
+      badge(snapshot.labels.codexBadge, "source codex"),
+      badge(snapshot.labels.experimental, "experimental"), badge(labels.caution, "invalid"));
+    body.append(heading, element("p", "maintenance-description", labels.dependency));
+    if (model.disabledReason) {
+      body.append(element("p", "setting-status error", model.disabledReason));
+    }
+    const scanButton = button(labels.scan, "action-button");
+    scanButton.disabled = busy || Boolean(model.disabledReason);
+    setFocusIdentity(scanButton, "remoteCodex", "scan");
+    scanButton.addEventListener("click", () => postRemoteCodexAction("scanRemoteCodex"));
+    body.append(scanButton);
+    if (model.stopResult) {
+      const result = element("p", "remote-codex-result setting-status" + (model.stopResult.failed ? " error" : ""), model.stopResult.message);
+      result.setAttribute("role", "status");
+      body.append(result);
+    }
+    if (model.activity) {
+      const activity = element("p", "maintenance-description remote-codex-activity", model.activity);
+      activity.setAttribute("role", "status");
+      body.append(activity);
+    }
+    if (model.scanError) {
+      const error = element("p", "setting-status error remote-codex-scan-error", model.scanError);
+      error.setAttribute("role", "status");
+      body.append(error);
+    }
+    if (model.scanned) {
+      body.append(element("p", "maintenance-description", model.notice),
+        element("p", "maintenance-description", model.historyUpdated));
+    }
+    if (model.candidates.length > 0) {
+      if (model.stale) {
+        body.append(element("p", "maintenance-description remote-codex-stale", labels.stale));
+      }
+      const choices = element("fieldset", "remote-codex-choices");
+      choices.setAttribute("aria-busy", String(Boolean(busy)));
+      choices.append(element("legend", "maintenance-label", labels.candidates));
+      for (const candidate of model.candidates) {
+        const row = element("div", "remote-codex-candidate");
+        const candidateHeading = element("div", "remote-codex-candidate-heading");
+        const stopButton = button(labels.stop, "action-button danger remote-codex-stop");
+        stopButton.disabled = busy || model.stale || Boolean(model.disabledReason || candidate.blockedReason);
+        stopButton.setAttribute("aria-label", candidate.stopLabel);
+        setFocusIdentity(stopButton, "remoteCodex", candidate.token, "stop");
+        stopButton.addEventListener("click", () => postRemoteCodexAction("stopRemoteCodex", candidate.token));
+        const connection = element("span", "remote-codex-connection", candidate.connection);
+        connection.classList.toggle("current", candidate.currentHost);
+        candidateHeading.append(element("strong", "", candidate.title), connection, stopButton);
+        const details = element("dl", "remote-codex-details");
+        details.id = `remote-codex-details-${candidate.token}`;
+        for (const detail of candidate.details) {
+          const field = element("div", "remote-codex-field");
+          field.append(element("dt", "", detail.label), element("dd", "", detail.value));
+          details.append(field);
+        }
+        row.append(candidateHeading, details);
+        // Keep shared warnings accessible without repeating long text in every candidate row.
+        const describedBy = [details.id, "remote-codex-shared-warning"];
+        if (candidate.currentHost) {
+          describedBy.push("remote-codex-current-warning");
+        }
+        if (candidate.blockedReason) {
+          const reason = element("p", "maintenance-description remote-codex-blocked", candidate.blockedReason);
+          reason.id = `remote-codex-blocked-${candidate.token}`;
+          row.append(reason);
+          describedBy.push(reason.id);
+        }
+        stopButton.setAttribute("aria-describedby", describedBy.join(" "));
+        choices.append(row);
+      }
+      body.append(choices, element("p", "maintenance-description remote-codex-history-hint", labels.historyHint));
+    } else if (model.scanned) {
+      body.append(element("p", "maintenance-description", labels.empty));
+    }
+    const warning = element("p", "maintenance-description", labels.warning);
+    warning.id = "remote-codex-shared-warning";
+    body.append(warning);
+    if (model.currentHostWarning) {
+      const currentWarning = element("p", "maintenance-description remote-codex-warning", model.currentHostWarning);
+      currentWarning.id = "remote-codex-current-warning";
+      body.append(currentWarning);
+    }
+    card.append(body);
+    return card;
+  }
+
+  function postRemoteCodexAction(type, token) {
+    if (!snapshot || pendingRequests.size > 0) {
+      return;
+    }
+    const requestId = allocateRequestId();
+    pendingRequests.set(requestId, { actionId: type });
+    globalStatus = "";
+    globalStatusIsError = false;
+    // Only the opaque token is returned; process identities remain in the host.
+    vscode.postMessage({ type, requestId, token });
+    render();
   }
 
   function createAboutContent() {
@@ -1152,6 +1262,14 @@
     );
     if (target instanceof HTMLElement && !target.disabled) {
       target.focus({ preventScroll: true });
+      return;
+    }
+    if (focusMemory.kind === "remoteCodex") {
+      // Refreshed tokens do not identify the previous button; return to a safe action.
+      const scan = candidates.find((candidate) => candidate.dataset.focusKind === "remoteCodex" && candidate.dataset.focusId === "scan");
+      if (scan instanceof HTMLElement && !scan.disabled) {
+        scan.focus({ preventScroll: true });
+      }
       return;
     }
     if (focusMemory.kind === "setting") {

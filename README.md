@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.18.1** (2026-10-12).
+Latest release: **2.19.0** (2026-10-25).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -285,6 +285,8 @@ Enable `codexHistoryViewer.branchNavigation.enabled` to use this feature. For Co
 
 Run **Open Settings** from **Control** or the Command Palette to open the categorized settings page. Settings can be edited at the User, Workspace, or Workspace Folder level when supported by their scope. The **Maintenance** page can reset managed user settings, export or import scope-specific JSON settings backups, rebuild the history cache or search index, run cleanup actions, and open the standard VS Code settings for advanced editing.
 
+On Linux Remote SSH, **Open Settings > Maintenance > Troubleshooting** includes the experimental **Stop a remote Codex App Server for VS Code** action. To use it, enable the Codex history source and run the extension on the remote workspace host in a trusted workspace. It requires Python 3.9 or later on the remote host and Linux pidfd support. Stopping a server may interrupt all conversations and running tasks it handles.
+
 Common settings include:
 
 - `codexHistoryViewer.sources.enabled`: enable `codex` (Codex), `claude` (Claude Code), or both. VS Code Settings and `settings.json` use the stored identifiers `codex` and `claude`.
@@ -348,17 +350,13 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.18.1
+## What's New in 2.19.0
 
-- Added support for displaying files sent by Claude Code. File names, descriptions, and delivery status are shown, and clicking a file name opens the local file.
-- Changed the extension display name to **Codex History Viewer - Codex and Claude Code**.
-- Improved UI localization.
-- Removed the experimental designation from Agent Runs and Branch Navigation.
-- Fixed tool cards, Branch Navigation dialogs, and diff-detail error messages remaining in the previous language after changing the display language.
-- Fixed loading and error views in File AI Change History becoming blank and losing the reload button when changing the display language.
-- Fixed Claude Code conversation compaction summaries being treated as ordinary user messages in the Session Viewer, search, and statistics.
-- Fixed memory citations missing from some intermediate Codex responses.
-- Fixed history records containing certain Unicode characters being skipped, causing content to be missing from the Session Viewer, Search, History Insights, File AI Change History, and other features.
+- Updated Node.js used for development and builds to 24.22.1 to address the Brotli vulnerability CVE-2026-111497.
+- Updated Markdown and diagram rendering dependencies to address known vulnerabilities, including the Markdown denial-of-service vulnerability CVE-2026-111758.
+- Added an experimental feature for Linux Remote SSH environments to inspect and individually stop remote Codex App Servers for VS Code. Available under **Open Settings > Maintenance > Troubleshooting**.
+
+**Note:** The remote server feature requires Python 3.9 or later on the remote host and Linux pidfd support.
 
 ## Changelog
 
@@ -366,7 +364,7 @@ See [CHANGELOG](CHANGELOG.md).
 
 ## Security
 
-See [SECURITY](SECURITY.md) for details. Use Codex History Viewer v2.15.0 or later. Do not install or redistribute v1.2.1 or earlier VSIX files.
+Use Codex History Viewer v2.19.0 or later. See [SECURITY](SECURITY.md) for the Markdown and diagram-rendering security updates and the development/build Node.js update addressing Brotli CVE-2026-111497. Do not install or redistribute v1.2.1 or earlier VSIX files.
 
 ## Privacy
 

@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-10-12
-- 対象バージョン: 2.18.1
+- 最終更新: 2026-10-25
+- 対象バージョン: 2.19.0
 
 ## 1. 概要
 
@@ -1656,10 +1656,27 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - メンテナンスはユーザー設定初期化、scope別の設定backup、cache／検索index再作成、保存data整理、標準設定への導線を集約する。data整理の名称は既存UIと同じ「このプロジェクトの検索履歴を消去」「見つからないピン留めを解除」「引き継ぎファイルを削除」「ゴミ箱を空にする」を使う。backupはuser、現在のworkspace、明示選択したworkspace folderを別々のversioned UTF-8 JSONとしてexport / importし、extension ID、scope、key、型、enum、範囲、重複、sizeを検証する。別scope用fileは拒否し、import途中失敗時は変更済み値をrollbackする。export時の既定ファイル名にはscope種別、取得可能なworkspace／folder名、安全なUTC日時を含め、user homeの絶対pathをsave dialogの既定URIにする。workspace／folder用backupの説明では、target metadataに絶対pathまたはURIが含まれ得ることをexport前に明示する。
 - LICENSEは開発ツリーの`LICENSE`とVSIX内で改名される`LICENSE.txt`を固定候補として扱い、third-party noticeとともにpackage内の固定URIから`workspace.fs`で非同期かつ上限付きで読む。remote／virtual extension hostでも利用できるようにし、Webviewでは`textContent`だけで表示する。読込中または失敗時も設定編集は継続できる。
 - 実行時文言は `localization/locales/en.json` / `localization/locales/ja.json` の `runtime` で管理し、生成したbundleの英語・日本語のkey parityと静的参照を検査する。廃止UIの未使用keyは残さず、メンテナンスから従来の `@ext:` 絞り込み付きVS Code設定画面を開けなかった場合は専用のlocalized errorを返す。
+
 - パネルは `retainContextWhenHidden` を使い、manifestへ`onWebviewPanel:codexHistoryViewer.settings`を常時宣言したうえで、extension起動時に`webview.restoreAfterReload`が有効な場合だけ`codexHistoryViewer.settings`のserializerを登録する。復元panelには通常openと同じoptions、icon、HTML、handlerを設定し、先に手動openされたpanelがある場合は遅延復元panelを閉じてsingletonを維持する。active page、navigation展開状態、About tabは既存Webview stateから復元し、設定が無効な場合はReload Window後に自動復元しない。
 - 実効値はコントロール自体で示し、「継承値」badgeは表示しない。ユーザーscopeのbooleanは通常オン／オフだけで操作し、保存値が不正な場合を除いてresetを表示しない。選択・数値・パス等のユーザーscopeでは「既定値に戻す」、workspace／workspace-folder scopeでは明示的な上書きを消す「継承に戻す」を表示する。
 - selectの選択肢説明やmulti-selectの折り返しでcontrol列が高くなっても、reset iconは先頭の操作面の真右へ固定する。変更済み設定は行ごとの`modified`をhostで確定し、左端へ絶対配置した幅2pxの疑似要素で表示するため、表示状態によって本文やcontrolを横移動させない。色はVS Code標準設定画面の`settings.modifiedItemIndicator`へ追従し、High Contrast／forced colorsではcontrast色へfallbackする。lineはraw明示値の存在ではなく現在の正規化値とreset後のscope別基準値との差を示し、userはextension既定値、workspaceはuser／既定値、workspace-folderはworkspace／user／既定値を基準にする。全controlで手動復帰時にlineを消し、基準値と同じ有効な明示値ではreset iconも隠すが、raw値は自動削除せず将来の継承固定を維持する。将来基準値との差が生じるか現在値／基準値が不正になればlineとreset iconを再表示する。現在scopeに明示値がない場合は継承値が既定値と異なっても着色しない。
 - 専用設定画面のCodex／Claude Code再開操作は、履歴ソースと同じ2項目のmulti-selectとして表示する。Hostは保存済み`extension`／`cli`／`both`を表示用配列へ展開し、Webviewから受け取る1～2件の既知かつ重複しない選択を既存enumへ戻してから検証・保存する。manifest、VS Code標準設定画面、backup、再開処理が扱う永続値は変更しない。
+
+#### 4.13.2 リモートの Codex App Server の停止
+
+- 設定の「メンテナンス → トラブルシューティング」に、「Codex」「実験的」「要注意」のバッジを付けた操作「リモートの VS Code 用 Codex App Server の停止」を配置する。Remote SSH かつ Codex 履歴ソースが有効な場合だけ表示し、Linux の Workspace Extension Host、信頼済みワークスペースでのみ操作できる。Codex ソースの無効化で既存候補を失効させ、取得中・確認待ちの操作も拒否する。ローカル、WSL、コンテナーは対象外。
+- `RemoteCodexController` が表示モデル、候補トークン、確認ダイアログを管理し、既存の設定操作キューで直列化する。Webview とコントローラーでも処理中の重複操作を拒否する。Webview は PID やパスではなく一時トークンを送る。トークンは 5 分で失効し、再調査・設定変更・パネル破棄・停止試行で無効になる。再生成や復元時に停止候補を復元しない。
+- `RemoteCodexAppServerService` はリモート Extension Host の PATH を順に調べ、`/usr/local/bin/python3`、`/usr/bin/python3`、`/bin/python3` も補助候補にする。空・相対 PATH、ワークスペース内の候補、リンク先がワークスペース内の候補は除外する。実ファイルと実行権限を確認し、解決した絶対パスから同梱の `resources/helpers/remote_codex_app_server.py` を isolated mode で起動する。探索の上限は 10 秒、プローブは候補ごとに最大 3 秒で、Python 3.9 以上と Linux pidfd 対応（カーネル 5.3 以上）を確認する。`which` やシェルは使わず、非対応候補の次も確認する。能力確認を通過した Python にだけ本操作を一度送る。追加の Python パッケージは不要で、非対応時は通常の PID kill に fallback しない。Python のインストールは利用者が行う。参照する PATH は対話ターミナルのシェル設定と異なる場合がある。
+- 同一ユーザーの `.vscode-server` / `.vscode-server-insiders` 配下にある `openai.chatgpt-*` の Linux バイナリーで、既知の stdio `app-server` 起動引数と、標準入力・出力の匿名パイプまたはソケットを確認できるプロセスだけを候補にする。Node.js の `stdio: "pipe"` は Linux 上で `socket:[inode]` になるため、`pipe:[inode]` と両方を受理する。通常ファイル、端末、`/dev/null`、ネットワーク待受・daemon の起動引数、カスタムインストール先は対象外。現 Extension Host 配下は「この VS Code で使用中」の注意表示付きで選択・停止できる。親系譜を確認できない候補は表示するが停止できない。古いプロセスを自動で残留と判定しない。
+- 候補を 3 段の表組で表示する。上段は PID・接続元・各項目の「停止…」ボタン、中段は起動日時・履歴更新、下段は親 PID・拡張ビルドとする。ラジオボタンと共通の停止ボタンは置かない。Host がラベルと値を分けた表示モデルを渡し、Webview は定義リストと CSS Grid で整列する。カード内の表示幅が狭い場合は項目単位で縦に並べる。接続元バッジは「この VS Code」「この接続外」「系譜不明」で示し、「この接続外」を残留・未使用とは判定しない。停止ボタンはアクセシブル名に PID を含め、共通の注意・各候補の詳細・該当する警告を `aria-describedby` で参照する。再調査でトークンが変わった後のフォーカスは再調査ボタンへ戻す。
+- 設定された Codex 履歴フォルダー全体の最終更新を一覧の上に表示する。候補ごとの履歴日時は、そのフォルダー内の履歴を候補が書き込み用に開いていると確認できた場合だけ表示する。履歴本文は読まない。確認できない日時や走査上限は不明として扱い、更新日時を停止の安全性の根拠にしない。履歴更新の定義、共通の注意、現在の Host の警告は一覧下に各 1 回表示し、系譜不明の停止できない理由は候補内に残す。
+- 対象の「停止…」を押した後、そのサーバーが扱うすべての会話や実行中タスクを中断する可能性をモーダルで確認する。現在の Host の場合は見出しでも使用元を明示する。Host が確認後に作る `allowCurrentHost: true` がなければ、ヘルパーは現在の Host 配下の停止を拒否する。Webview からこの許可フラグは受け付けず、親系譜不明は許可の有無にかかわらず拒否する。確認待ち中も世代・設定・信頼・期限を再確認する。
+- 停止試行後は、成功・未終了・結果不明・失敗のいずれでも同じ接続・設定が有効な間に 1 回だけ候補を自動再調査する。確認キャンセル・不正トークン・期限切れ・設定や接続の変更時は自動再調査しない。停止と調査の結果を分離し、対象 PID を付けた停止結果を再調査後も維持する。初回調査は手動とし、定期調査や停止要求の自動再送は行わない。
+- 停止・再調査中は操作を無効にし、直前の一覧と調査日時を表示用に残す。トークンの有効性は表示情報と分離して失効させ、調査成功時だけ新しいトークンと一覧へ置き換える。調査失敗時は前回の一覧である旨と調査エラーを表示し、停止を無効のまま再調査ボタンを使えるようにする。正常な調査で 0 件の場合は対象なしを表示する。途中の状態は設定パネルへ配信し、パネル破棄・設定変更後の遅延結果では候補を復活させない。
+- 活動種別・調査エラー・停止結果は翻訳前の意味情報で保持し、表示モデルを作る時に現在言語へ投影する。言語変更だけで候補や結果を消去せず、処理中も remote 操作に限って snapshot を再配信する。既表示のネイティブ確認ダイアログは作り直さず、元のボタンラベルとの照合と確認後の安全検証を維持する。
+- 内部識別情報の `hostRelation` は `currentHost` / `otherHost` / `unknownParent` とする。実行直前に PID、開始 tick、UID、実行ファイルと inode、親 PID、引数、Host との関係を照合し、pidfd に対して SIGTERM を送る。最大 45 秒で終了を確認できなければ未終了と表示する。結果不明時も再送せず、一括停止、強制終了、ロックファイル削除は行わない。終了後は利用したい Codex アプリまたは拡張で会話を開き直す・再試行するよう案内する。会話単位の解放や復旧は保証しない。
+- 「この VS Code」のサーバーを停止すると本家 Codex 拡張がエラーを表示し、その画面の「もう一度試す」でこの VS Code ウィンドウ全体が再読み込みされる旨を、一覧下、現在の Host の確認ダイアログ、停止成功メッセージに明記する。本家の `codex-app-server-restart` は `workbench.action.reloadWindow` を実行する。本拡張から再読み込みを自動実行しない。
+
 
 ### 4.14 ローカライズ
 
@@ -1672,7 +1689,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - `completeness` の省略または `partial` 指定では欠落したキーを英語で補完し、`complete` は欠落をエラーにする。補完元の既定言語は `complete` 必須で、既存英日にも引き続き明記する。省略時の正規化はメモリー内だけで行い、原本は書き換えず、明示的な `partial` と同じ生成物を得る。これは翻訳ファイルの検証方針であり、利用者向け設定ではない。`null` などの不正な `completeness` 値、訳文の空文字、未知キー、型不正、プレースホルダーの過不足は省略時も拒否する。
 - `manifest` はコマンド名・設定説明など、`runtime` は `t(...)` で参照する通知・QuickPick・Webviewの文言を担当する。新しい文言は英日正本へ追加し、Webviewでは `localization/webview-keys.json` に対応を記載する。動的キーは `localization/key-usage.json` で許容集合を管理する。
 
-追加言語はこの1ファイルを置いて再ビルド・配布することで反映する。インストール済み拡張へのファイル追加だけでは静的manifestは更新されない。Node / ICUによる名前の差を防ぐため、生成環境は `.node-version` の Node 24.13.0 / ICU 77.1 に固定する。
+追加言語はこの1ファイルを置いて再ビルド・配布することで反映する。インストール済み拡張へのファイル追加だけでは静的manifestは更新されない。Node / ICUによる名前の差を防ぐため、生成環境は `.node-version` の Node 24.22.1 / ICU 78.3 に固定する。
 
 `scripts/generate-localization.mjs` は、設定の言語enum、`package.nls*.json`、`l10n/bundle.l10n*.json`、`src/generated/*`、`media/generated/localization.js` を生成する。翻訳本文を含む生成JSON・TS・JSはGit管理外とし、直接編集しない。翻訳正本、UI定義、`package.json` と、翻訳本文を含まない `localization/generated-files.json` を管理対象とする。台帳は所有ファイルとhashを記録し、所有外ファイルや手編集された生成物を上書きしない。削除した言語の所有済み生成物だけを除去する。台帳自体がない、または壊れている場合は生成を停止し、無条件に上書きしない。全入力の検証後に一時ファイルから置換し、所有記録を最後に更新する。重複JSONキー、不正UTF-8、BOM、CRLF、危険なプロパティ・パス、リンク、サイズ上限超過を拒否する。
 
@@ -1798,7 +1815,7 @@ UI の辞書管理と日本語への翻訳は区別する。`From` / `To`、メ�
 
 ### 5.1 セットアップ
 
-開発・生成・検証・パッケージ作成には `.node-version` に指定した Node.js 24.13.0 / ICU 77.1 を使用する。ローカライズ生成時の言語名を再現可能にするための固定であり、KaTeX のCLI用依存 `commander@15` の Node.js 22.12.0 以上、`@vscode/vsce@4.0.0` の Node.js 22 以上という下限も満たす。これらの開発用ツールはVSIXへ含めず、VS Code拡張の実行環境要件は変更しない。
+開発・生成・検証・パッケージ作成には `.node-version` に指定した公式 Node.js 24.22.1 / ICU 78.3 を選択して使用する。CVE-2026-111497 の修正を含む同じ24系の版へ更新し、ローカライズ生成時の言語名の再現性を固定する。作業前に `node --version` が `.node-version` と一致することを確認する。KaTeX のCLI用依存 `commander@15` の Node.js 22.12.0 以上、`@vscode/vsce@4.0.0` の Node.js 22 以上という下限も満たす。これらの開発用ツールはVSIXへ含めず、VS Code拡張の実行環境要件は変更しない。
 
 TypeScript は `6.0.3` を使用し、`module` / `moduleResolution` は `Node16` とする。package は CommonJS のままであり、拡張の出力形式も維持する。TypeScript 6で非推奨となった旧Node解決方式は使用しない。Compiler APIの互換性を維持するため、安定した同APIを提供しないTypeScript 7への移行は保留する。VS Codeの型定義は対応下限の `1.90.0` に合わせて `~1.90.0` とし、Nodeの型定義は実行環境に合わせて20系を維持する。
 
@@ -1819,19 +1836,25 @@ npm run sync:katex
 
 `check:katex` は `package.json`、`package-lock.json`、`node_modules/katex` の version と、JavaScript、CSS、LICENSE、全 woff2 の内容を照合する。`media/vendor/katex/**` は `.gitattributes` で Git の text 変換対象から外し、`core.autocrlf` による byte 差を防ぐ。`THIRD_PARTY_NOTICES.txt` では直接同梱する KaTeX を独立した項目として明示し、既存方針どおり公開 notice には version を重複記載せず exact version は package manifest と lockfile で管理する。`npm audit` は手動同梱物の実体を検査しないため、この確認の代用にはならない。lint と VS Code prepublish は `check:katex` を自動実行し、不一致時はファイルを変更せず失敗する。
 
-配布する Markdown renderer は `markdown-it@14.3.2` とする。14.3.1 の linkification 修正に加え、15.0.2 の smartquotes に関する二次計算量のセキュリティ修正を v14 へ backport した版を使用する。v15 は package 構成と linkification の既定値を含む破壊的変更があるため採用せず、既存の fuzzy email / `mailto:` 自動検出無効化と link validation を維持する。
+配布する Markdown renderer は `markdown-it@14.3.3` とする。従来の linkification / smartquotes 修正に加え、複数行参照定義による DoS（CVE-2026-111758）と inline HTML parser の修正を含む v14 の保守版を使う。参照定義の問題は html:false でも到達する。v15 は package 構成と linkification の既定値を含む破壊的変更があるため採用せず、既存の fuzzy email / `mailto:` 自動検出無効化と link validation を維持する。
 
-Session Viewerでは`typographer`を有効にしていないため、smartquotes修正の取り込みと本拡張での攻撃再現は区別する。Mermaid 11.17.2へ同梱するDOMPurifyは3.4.16で、既存のSVG検証と描画制限を維持する。現在の配布依存バージョンと公開向けの説明は`SECURITY.md`、著作権・ライセンスの表記は`THIRD_PARTY_NOTICES.txt`に合わせる。
+Session Viewer では typographer を有効にせず html:false を維持する。Mermaid 11.17.2 へ同梱する DOMPurify は scoped override で 3.4.17 に固定し、既存の SVG 検証と描画制限を維持する。現在の配布依存バージョンと公開向けの説明は SECURITY.md、著作権・ライセンスの表記は THIRD_PARTY_NOTICES.txt に合わせる。
 
 KaTeX 0.18.0 では一部の内部 CSS class に `katex-` prefix が追加された。Chat Webview の独自 CSS は公開 class の `.katex` と `.katex-display` だけを参照し、内部 API も使用しない。今後も KaTeX が生成する HTML と stylesheet の class を一致させるため、JavaScript と CSS を別versionへ分離せず、同じ package から同時に同期する。内部 class へ依存する独自 selector や HTML 後処理は追加しない。
 
-直接同梱する `media/vendor/katex` とは別に、Mermaid 11.17.2 は diagram math 用に `katex@^0.16.47` を依存関係として持ち、現在の lockfile では Mermaid 配下の `katex@0.16.47` として解決される。`sync:katex` / `check:katex` の対象は root の exact dependency と `media/vendor/katex` だけとし、Mermaid の対応範囲外となる 0.18.x へ override しない。Mermaid側の KaTeX は lockfile、`npm audit`、Webview bundle再生成後の差分で検証する。
+Mermaid 11.17.2 の diagram math は、scoped override の `$katex` 参照で root の exact 0.18.9 に統一する。Mermaid が使う renderToString と公開 options の互換性、既存の 0.18.9 CSS / fonts との一致を確認した構成であり、旧 0.16.47 の prototype 汚染を前提とする問題を持ち込まない。`sync:katex` / `check:katex` は root と直接同梱資産の byte 一致を引き続き検査する。図中数式は raw renderer の生成と製品 SVG 安全化後を区別し、既存の foreignObject 除去と Host の保存検証を維持する。
+
+開発用 VSCE 4.0.0 配下の @azure/identity には @azure/msal-node 7.1.1 を scoped override する。認証要求のパラメーター転送に関する修正を取り込み、identity の使用 API と既定 form_post の互換性を確認した構成とする。MSAL と Node 実体は VSIX へ同梱しない。
+
+`npm run check:renderer` は manifest、lock、installed package、Mermaid / identity からの実解決を照合する。lint と prepublish にも組み込み、Markdown / DOMPurify / KaTeX / MSAL の未承認版や古い nested renderer を検出したら失敗する。依存更新時は scoped override、検証対象版、lock、実 bundle、関連文書を同時にレビューする。
 
 ### 5.2 ビルド
 
 ローカライズの生成JSON・TS・JSはGit管理外で、取得直後には存在しない。`compile` / `build:webview` / `watch` は生成を先に実行する。翻訳は `localization/locales/*.json` だけを編集し、生成先のファイルを手編集しない。生成だけが必要なら `npm run generate:l10n` を実行する。翻訳追加・変更のレビューには、正本と併せて自動更新された `localization/generated-files.json`、必要な場合は `package.json` の生成対象部分を含める。
 
 Mermaid 11.17.2 の配布済み JavaScript は js-yaml 4.3.0 を内包するため、通常の依存更新だけでは内包版の脆弱性を解消できない。2.14.2 では build-time の直接依存に公式修正版 `js-yaml@4.3.2` を exact pin し、`scripts/mermaid-yaml-dependency.mjs` の esbuild plugin が YAML 専用モジュールを置き換える。公開する `JSON_SCHEMA`／`load` と既存の描画制限を維持し、`node_modules` の配布ファイルは書き換えない。修正版のコードと既存のライセンス表記を Webview bundle／`THIRD_PARTY_NOTICES.txt` に含める。
+
+Webview build / watch は write:false / metafile:true でメモリ上に生成し、YAML adapter と renderer 依存の実入力検査を通過した単一 bundle だけを同一ディレクトリの一時ファイルから反映する。検証・書き込み・置換が失敗した場合は以前の bundle を保持してエラーを返す。watch は manifest / lock / 対象 package 情報の変更も再検証し、前回の成功状態を流用しない。
 
 `build:webview`、`watch:webview`、`compile`、prepublish による build では、package manifest・lockfile・インストール済み version と、置換元／先の SHA-256 を確認する。置換が適用されない場合も build は失敗する。watch の rebuild でも同じ検証を行う。Mermaid／js-yaml の次回更新時は plugin の適合性を再検証し、上流が修正版を内包した場合はこの置換を廃止できるか判断する。version や hash だけを機械的に変更してはならない。`npm audit` に加え、実際の bundle 入力と内包コードを検査する。
 

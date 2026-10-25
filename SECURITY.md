@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-10-12
+Last updated: 2026-10-25
 
 ## Supported Versions
 
@@ -8,32 +8,46 @@ Use the latest published release of Codex History Viewer whenever possible. Olde
 
 | Version | Security status |
 | --- | --- |
-| 2.15.0 and later | Recommended. Includes the Markdown smartquotes security backport, updated KaTeX and DOMPurify, the patched js-yaml dependency used by Mermaid, and the rendering safeguards noted below. |
-| 2.14.2 | Includes the js-yaml replacement and earlier rendering safeguards, but predates the dependency updates in 2.15.0; upgrade to 2.15.0 or later. |
-| 2.13.0 through 2.14.1 | Includes the earlier renderer dependency updates and mitigations, but not the js-yaml replacement introduced in 2.14.2; upgrade to 2.15.0 or later. |
-| 2.11.0 through 2.12.0 | Includes the Mermaid and DOMPurify dependency updates and the earlier Markdown rendering mitigations, but bundles the older KaTeX and Markdown renderer versions noted below; upgrade to 2.15.0 or later. |
-| 2.10.0 | Bundles Mermaid and DOMPurify versions covered by the advisories noted below; upgrade to 2.15.0 or later. |
-| 2.8.0 through 2.9.x | Includes the earlier Markdown rendering mitigations and does not include Mermaid rendering, but bundles the older KaTeX and Markdown renderer versions noted below; upgrade to 2.15.0 or later. |
-| 1.2.2 through 2.7.x | Does not include all current Markdown and KaTeX dependency security updates; upgrade to 2.15.0 or later. |
+| 2.19.0 and later | Recommended. Updates Markdown and diagram-rendering dependencies and uses a patched development/build Node.js toolchain for CVE-2026-111497. |
+| 2.15.0 through 2.18.x | Predates the Markdown reference-parsing and diagram dependency updates in 2.19.0; upgrade to 2.19.0 or later. Source builds also require a patched Node.js toolchain. |
+| 2.14.2 | Includes the js-yaml replacement and earlier rendering safeguards, but predates the dependency updates in 2.15.0; upgrade to 2.19.0 or later. |
+| 2.13.0 through 2.14.1 | Includes the earlier renderer dependency updates and mitigations, but not the js-yaml replacement introduced in 2.14.2; upgrade to 2.19.0 or later. |
+| 2.11.0 through 2.12.0 | Includes the Mermaid and DOMPurify dependency updates and the earlier Markdown rendering mitigations, but bundles the older KaTeX and Markdown renderer versions noted below; upgrade to 2.19.0 or later. |
+| 2.10.0 | Bundles Mermaid and DOMPurify versions covered by the advisories noted below; upgrade to 2.19.0 or later. |
+| 2.8.0 through 2.9.x | Includes the earlier Markdown rendering mitigations and does not include Mermaid rendering, but bundles the older KaTeX and Markdown renderer versions noted below; upgrade to 2.19.0 or later. |
+| 1.2.2 through 2.7.x | Does not include all current Markdown and KaTeX dependency security updates; upgrade to 2.19.0 or later. |
 | 1.2.1 and earlier | Do not install or redistribute historical VSIX files. |
 
-## Dependencies Shipped in 2.18.1
+## Dependencies Shipped in 2.19.0
 
-Version 2.18.1 retains the dependency versions shipped in 2.18.0.
+Version 2.19.0 updates the Markdown renderer and the sanitizer and math renderer used by Mermaid.
 
 | Component | Bundled version | Use |
 | --- | --- | --- |
-| markdown-it | 14.3.2 | Markdown rendering in the Session Viewer. |
+| markdown-it | 14.3.3 | Markdown rendering in the Session Viewer. |
 | KaTeX | 0.18.9 | Directly vendored math renderer, CSS, and fonts. |
 | Mermaid | 11.17.2 | Diagram rendering. |
-| KaTeX used by Mermaid | 0.16.47 | Diagram math, kept within Mermaid's supported dependency range. |
-| DOMPurify | 3.4.16 | Included in the generated diagram-rendering bundle. |
+| KaTeX used by Mermaid | 0.18.9 | Diagram math, using the same version as the directly vendored renderer. |
+| DOMPurify | 3.4.17 | Included in the generated diagram-rendering bundle. |
 | js-yaml | 4.3.2 | Replaces Mermaid's embedded YAML parser at build time. |
 | @hpcc-js/wasm-zstd | 1.16.1 | Portable WebAssembly support for compressed Codex histories. |
+| fzstd | 0.1.1 | Embedded in the portable Zstandard loader to unpack its WebAssembly payload. |
 
-Exact resolved dependencies are recorded in `package-lock.json`. Third-party license notices are included in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt), with the portable Zstandard licenses in [resources/licenses/wasm-zstd.txt](resources/licenses/wasm-zstd.txt).
+Resolved npm dependencies are recorded in `package-lock.json`. Embedded components are also listed in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt), with the portable Zstandard component versions and full licenses in [resources/licenses/wasm-zstd.txt](resources/licenses/wasm-zstd.txt).
 
 ## Security Notes
+
+### Brotli CVE-2026-111497 and the development toolchain
+
+Codex History Viewer v2.19.0 pins Node.js used for development and builds to **24.22.1**, which includes the [Node.js security fix for CVE-2026-111497](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases#nodejs-brotli-decoder-out-of-bounds-write-permits-remote-code-execution-cve-2026-111497---high). The vulnerability can cause memory corruption when an affected runtime decompresses attacker-controlled Brotli data. Source builds must use the version specified in `.node-version`.
+
+This notice concerns the development/build runtime. Installed extensions run on the host runtime supplied by VS Code or the remote VS Code Server, whose security updates are provided independently. Compressed Codex histories (`.jsonl.zst`) are decoded using bundled Zstandard WebAssembly.
+
+### Remote Codex App Server maintenance (experimental)
+
+The remote server maintenance feature is available in trusted Linux Remote SSH workspaces with the Codex history source enabled. Discovery is user-initiated and limited to supported, same-user Codex App Server processes from standard VS Code Server extension installations. Each stop requires confirmation, and the process identity and host ancestry are checked again before requesting normal termination through a Linux pidfd. Targets with unverifiable ancestry remain protected. The feature does not perform bulk or forced termination.
+
+Stopping a server can interrupt every conversation or running task handled by that server. Stopping the server used by the current VS Code causes the official Codex extension to show an error; its **Try again** action reloads the entire VS Code window. The confirmation dialog warns about the effects of stopping the selected server.
 
 ### KaTeX math rendering
 
@@ -41,19 +55,23 @@ Codex History Viewer v1.3.0 introduced KaTeX-based rendering for inline and bloc
 
 KaTeX 0.16.8 is within the affected ranges for the [`\edef` expansion-limit bypass (GHSA-64fm-8hw2-v72w)](https://github.com/KaTeX/KaTeX/security/advisories/GHSA-64fm-8hw2-v72w) and the [Unicode subscript/superscript expansion-limit bypass (GHSA-cvr6-37gx-v8wc)](https://github.com/KaTeX/KaTeX/security/advisories/GHSA-cvr6-37gx-v8wc), both fixed in 0.16.10. Malicious untrusted math input can use these issues to consume memory, block the main thread, or overflow the stack. It also predates the [`\htmlData` attribute-name validation fix (GHSA-cg87-wmx4-v546)](https://github.com/KaTeX/KaTeX/security/advisories/GHSA-cg87-wmx4-v546) released in 0.16.21.
 
-The Session Viewer renders session math as untrusted input with `trust: false`. This prevents trusted-only commands such as `\htmlData` from being enabled, but it does not replace the expansion-limit fixes. Codex History Viewer v2.13.0 updates the direct `media/vendor/katex` renderer to `katex@0.18.5`, which also includes the [own-property checks introduced in KaTeX 0.18.2](https://github.com/KaTeX/KaTeX/pull/4260) to prevent polluted prototypes from influencing renderer settings or inherited macros. Release-time byte-for-byte verification ensures that the vendored JavaScript, CSS, license, and fonts cannot silently remain on an older installed version.
+The Session Viewer renders session math as untrusted input with `trust: false`. This prevents trusted-only commands such as `\htmlData` from being enabled, but it does not replace the expansion-limit fixes. Codex History Viewer v2.13.0 updates the direct `media/vendor/katex` renderer to `katex@0.18.5`, which also includes the [own-property checks introduced in KaTeX 0.18.2](https://github.com/KaTeX/KaTeX/pull/4260) to prevent polluted prototypes from influencing renderer settings or inherited macros.
 
 Codex History Viewer v2.15.0 further updates the direct renderer to [`katex@0.18.9`](https://github.com/KaTeX/KaTeX/releases/tag/v0.18.9), with matching vendored assets and the same untrusted-input settings.
 
-Mermaid 11.17.2 separately declares `katex@^0.16.47` for diagram math, which resolves to `katex@0.16.47` inside the generated Mermaid bundle. This separate dependency is newer than the 0.16.10 and 0.16.21 security fixes described above and is intentionally kept within Mermaid's supported dependency range instead of being overridden with KaTeX 0.18.x.
+Earlier releases used Mermaid 11.17.2's separate `katex@0.16.47` dependency. That version is covered by [GHSA-238p-pmpm-9mq7](https://github.com/KaTeX/KaTeX/security/advisories/GHSA-238p-pmpm-9mq7): existing prototype pollution elsewhere can influence inherited renderer settings. KaTeX does not itself create that pollution.
 
-Users of Codex History Viewer v1.3.0 through v2.12.0 should upgrade to v2.15.0 or later before opening untrusted session files containing math expressions.
+Version 2.19.0 also updates Mermaid's math renderer to `katex@0.18.9`. Existing SVG validation and export restrictions remain enabled, including removal of `foreignObject` content from displayed diagrams.
+
+Users of Codex History Viewer v1.3.0 through v2.12.0 should upgrade to v2.19.0 or later before opening untrusted session files containing math expressions.
 
 ### Mermaid diagram rendering and export
 
-Codex History Viewer v2.10.0 introduced fenced Mermaid rendering in the Session Viewer and bundled `mermaid@11.16.0` with `dompurify@3.4.12`. These dependency versions are covered by upstream advisories for prototype pollution (`GHSA-c4c3-pg64-4m4v`, `GHSA-3rrr-jr9j-h3q3`), CSS injection (`GHSA-6x64-9x62-f2gx`), denial of service (`GHSA-2v8p-3f2j-5mp7`, `GHSA-rhh3-jpg6-66xh`), and XSS (`GHSA-55q2-fjhq-7xh7`). Codex History Viewer v2.11.0 updates the bundled dependencies to `mermaid@11.16.1` and `dompurify@3.4.13`, and v2.13.0 further updates Mermaid to `11.17.2`. Version 2.15.0 retains Mermaid 11.17.2 and updates the bundled sanitizer to [`dompurify@3.4.16`](https://github.com/cure53/DOMPurify/releases/tag/3.4.16). Users of v2.10.0 should upgrade to v2.15.0 or later.
+Codex History Viewer v2.10.0 introduced fenced Mermaid rendering in the Session Viewer and bundled `mermaid@11.16.0` with `dompurify@3.4.12`. These dependency versions are covered by upstream advisories for prototype pollution (`GHSA-c4c3-pg64-4m4v`, `GHSA-3rrr-jr9j-h3q3`), CSS injection (`GHSA-6x64-9x62-f2gx`), denial of service (`GHSA-2v8p-3f2j-5mp7`, `GHSA-rhh3-jpg6-66xh`), and XSS (`GHSA-55q2-fjhq-7xh7`). Codex History Viewer v2.11.0 updates the bundled dependencies to `mermaid@11.16.1` and `dompurify@3.4.13`, and v2.13.0 further updates Mermaid to `11.17.2`. Version 2.15.0 retains Mermaid 11.17.2 and updates the bundled sanitizer to [`dompurify@3.4.16`](https://github.com/cure53/DOMPurify/releases/tag/3.4.16). Users of v2.10.0 should upgrade to v2.19.0 or later.
 
-Mermaid source from session files is treated as untrusted input. Rendering uses fixed security settings, disables HTML labels, and removes frontmatter configuration overrides, initialization directives, and click directives before the source reaches Mermaid. These controls reduce exposure to unsafe diagram content but do not replace dependency updates.
+Version 2.19.0 updates the bundled sanitizer to [DOMPurify 3.4.17](https://github.com/cure53/DOMPurify/releases/tag/3.4.17), which fixes `GHSA-cg2g-xh64-v4q7`, `GHSA-mrv2-3pqr-j5jr`, and `GHSA-c6gr-qvv4-5v3f`. These concern template handling with shadow roots and DOM-returning modes, in-place sanitization, and XHTML parsing. The diagram renderer does not enable those modes, but the patched dependency is bundled as well as the existing rendering safeguards.
+
+Mermaid source from session files is treated as untrusted input. Rendering uses fixed security settings with `htmlLabels: false` and removes frontmatter configuration overrides, initialization directives, and click directives before the source reaches Mermaid. These controls reduce exposure to unsafe diagram content but do not replace dependency updates.
 
 Generated SVG is parsed and validated before it is inserted into the Session Viewer. Executable or externally loaded content, event-handler attributes, unsafe URLs, and unsafe CSS are rejected. XML Base attributes are removed so that internal fragment references cannot be resolved as external resources. SVG export is independently validated again by the extension host, which rejects XML Base attributes and link elements without trusting the Session Viewer's sanitizer. PNG export is bounded by dimension and pixel-count limits, and files are written only to a location selected through the VS Code save dialog.
 
@@ -65,9 +83,9 @@ Mermaid 11.17.2 embeds `js-yaml@4.3.0` in its distributed JavaScript. This embed
 
 js-yaml 4.3.0 is within the affected ranges for the [empty merge-source CPU limit bypass (GHSA-2883-xcg3-v3hh)](https://github.com/advisories/GHSA-2883-xcg3-v3hh), fixed in 4.3.2, and [quadratic CPU consumption while resolving ordered maps (GHSA-5p4m-2wfm-xmqj)](https://github.com/advisories/GHSA-5p4m-2wfm-xmqj), fixed in 4.3.1. These are upstream YAML parsing denial-of-service issues. The Session Viewer's configuration filtering, input limits, and Mermaid's use of `JSON_SCHEMA` restrict exposure; the affected dependency version alone does not establish that either advisory's payload is reachable through the viewer.
 
-Codex History Viewer v2.14.2 replaces Mermaid's embedded copy with `js-yaml@4.3.2` when building the Session Viewer bundle, retaining Mermaid 11.17.2 and the existing rendering safeguards. The build validates pinned package versions and source hashes and fails if the expected replacement is not applied. Release verification checks the emitted bundle itself, including that the patched parser is present and the old embedded implementation is absent.
+Codex History Viewer v2.14.2 replaces Mermaid's embedded copy with `js-yaml@4.3.2`, retaining Mermaid 11.17.2 and the existing rendering safeguards.
 
-Users of v2.14.1 or earlier should upgrade to v2.15.0 or later to receive the current dependency fixes. Existing rendering safeguards remain enabled and are not a substitute for dependency updates.
+Users of v2.14.1 or earlier should upgrade to v2.19.0 or later to receive the current dependency fixes. Existing rendering safeguards remain enabled and are not a substitute for dependency updates.
 
 ### markdown-it GHSA-38c4-r59v-3vqw / CVE-2026-2327
 
@@ -75,7 +93,7 @@ Codex History Viewer uses `markdown-it` to render Markdown content in the Sessio
 
 The `markdown-it` ReDoS advisory GHSA-38c4-r59v-3vqw / CVE-2026-2327 affects `markdown-it` versions `>=13.0.0 <14.1.1`. Codex History Viewer v1.2.2 and later bundle `markdown-it@14.1.1` or newer, which includes the upstream fix.
 
-Do not install or redistribute Codex History Viewer v1.2.1 or earlier from local VSIX files, because those historical packages may bundle `markdown-it@14.1.0`. If you installed an older VSIX manually, upgrade to v2.15.0 or later.
+Do not install or redistribute Codex History Viewer v1.2.1 or earlier from local VSIX files, because those historical packages may bundle `markdown-it@14.1.0`. If you installed an older VSIX manually, upgrade to v2.19.0 or later.
 
 ### linkify-it GHSA-v245-v573-v5vm / CVE-2026-59887
 
@@ -83,7 +101,7 @@ The browser distribution used through Codex History Viewer v2.7.x was based on `
 
 Codex History Viewer v2.8.0 updates the distributed browser implementation to `markdown-it@14.3.0` with `linkify-it@5.0.2`. It also keeps defense-in-depth initialization: Markdown auto-linking starts in a fail-closed state, both fuzzy email detection and the `mailto:` auto-detection schema are disabled, and only then is ordinary URL linkification enabled. Explicit Markdown mail links such as `[mail](mailto:user@example.com)` and `<user@example.com>` remain available.
 
-Upgrade older installations to v2.15.0 or later. Do not open untrusted or unusually large history files in versions that do not include this mitigation.
+Upgrade older installations to v2.19.0 or later. Do not open untrusted or unusually large history files in versions that do not include this mitigation.
 
 ### markdown-it 14.3.1 linkification performance fixes
 
@@ -96,6 +114,12 @@ Codex History Viewer v2.13.0 updates the distributed browser implementation from
 The [`markdown-it@14.3.2` release](https://github.com/markdown-it/markdown-it/blob/14.3.2/CHANGELOG.md) backports the [15.0.2 security fix](https://github.com/markdown-it/markdown-it/blob/15.0.2/CHANGELOG.md#1502---2026-09-11) for quadratic processing of mismatched quote types. The upstream fix also bounds the stack of unmatched opening quotes.
 
 Codex History Viewer v2.15.0 ships the updated browser renderer. The Session Viewer keeps markdown-it's optional `typographer` setting disabled, and retains link validation and the existing linkification safeguards.
+
+### markdown-it 14.3.3 reference and inline HTML parsing fixes
+
+Version 2.19.0 ships `markdown-it@14.3.3`, addressing [CVE-2026-111758 / GHSA-gfr2-rv44-r23c](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-gfr2-rv44-r23c) and [GHSA-vfgh-jcmw-g37q](https://github.com/markdown-it/markdown-it/security/advisories/GHSA-vfgh-jcmw-g37q).
+
+The reference-definition issue can cause quadratic processing of an unclosed multi-line label or title with default options, including with `html: false`. It can block the Session Viewer's rendering thread when a history contains crafted Markdown. The inline HTML issue requires `html: true`, which the viewer does not enable. Both fixes are included while retaining the existing safe linkification and URL validation. Upgrade to 2.19.0 or later before opening untrusted histories.
 
 ### Compressed Codex histories
 

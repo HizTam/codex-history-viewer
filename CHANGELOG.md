@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.19.0] - 2026-10-25
+
+### Added
+
+- Added an experimental feature for Linux Remote SSH environments to inspect and individually stop remote Codex App Servers for VS Code. It is available under **Open Settings > Maintenance > Troubleshooting**. The candidate list is automatically rescanned after a stop attempt.
+
+Note: This feature requires Python 3.9 or later on the remote host and Linux pidfd support.
+
+### Security
+
+- Updated Node.js used for development and builds to **24.22.1** to address the Brotli vulnerability **CVE-2026-111497**.
+- Updated **markdown-it to 14.3.3** to address **CVE-2026-111758** and the inline HTML parsing denial-of-service advisory.
+- Updated the diagram renderer's **DOMPurify to 3.4.17** and **KaTeX to 0.18.9**, with dependency checks to prevent older renderer versions from being bundled.
+
 ## [2.18.1] - 2026-10-12
 
 ### Added

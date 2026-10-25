@@ -824,6 +824,131 @@ button:disabled {
   font-weight: 600;
 }
 
+.remote-codex-body {
+  container: remote-codex / inline-size;
+  display: grid;
+  gap: 12px;
+  padding: 15px 17px;
+}
+
+.remote-codex-body > .action-button {
+  justify-self: start;
+}
+
+.remote-codex-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.remote-codex-heading h4 {
+  margin: 0;
+}
+
+.remote-codex-choices {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--panel-border);
+}
+
+.remote-codex-choices legend {
+  margin-left: 10px;
+  padding: 0 4px;
+}
+
+.remote-codex-candidate + .remote-codex-candidate {
+  border-top: 1px solid var(--panel-border);
+}
+
+.remote-codex-candidate-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+}
+
+.remote-codex-candidate-heading strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.remote-codex-stop {
+  flex-shrink: 0;
+}
+
+.remote-codex-result {
+  white-space: pre-line;
+}
+
+.remote-codex-result,
+.remote-codex-scan-error {
+  margin: 0;
+  text-align: left;
+}
+
+.remote-codex-connection {
+  max-width: 100%;
+  margin-left: auto;
+  padding: 1px 7px;
+  border: 1px solid var(--panel-border);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.remote-codex-connection.current {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+  border-color: currentColor;
+}
+
+.remote-codex-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 20px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.remote-codex-field {
+  display: grid;
+  grid-template-columns: 6.5em minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  overflow-wrap: anywhere;
+}
+
+.remote-codex-field dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.remote-codex-field dd {
+  min-width: 0;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.remote-codex-blocked {
+  margin: 0;
+  padding: 0 12px 10px;
+}
+
+.remote-codex-warning {
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+}
+
+@container remote-codex (max-width: 640px) {
+  .remote-codex-details {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .action-button {
   min-width: 104px;
   min-height: 31px;

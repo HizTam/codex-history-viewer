@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.18.1",
+  "version": "2.19.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -6595,16 +6595,17 @@
     }
   },
   "scripts": {
-    "vscode:prepublish": "npm run -s generate:l10n && npm run -s check:l10n && npm run check:katex && npm run compile",
+    "vscode:prepublish": "npm run -s generate:l10n && npm run -s check:l10n && npm run check:renderer && npm run check:katex && npm run compile",
     "clean:dist": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build:webview": "npm run -s generate:l10n && node scripts/build-webview-shiki.mjs",
     "compile": "npm run clean:dist && npm run build:webview && tsc -p . && npm run build:zstd",
     "watch:webview": "node scripts/watch-localization.mjs --webview",
     "watch": "node scripts/watch-localization.mjs",
     "package": "npm run -s generate:l10n && npm run -s check:l10n && vsce package --allow-missing-repository",
-    "lint": "npm run -s generate:l10n && npm run -s check:l10n && npm run -s check:katex && node --check media/codeLanguageSupport.js && node --check media/pageSearchCore.js && node --check media/chatView.js && node --check media/fileChangeHistory.js && node --check media/historyInsights.js && node --check media/settingsPanel.js && node --check media/localizationBridge.js && node --check media/generated/localization.js",
+    "lint": "npm run -s generate:l10n && npm run -s check:l10n && npm run -s check:renderer && npm run -s check:katex && node --check media/codeLanguageSupport.js && node --check media/pageSearchCore.js && node --check media/chatView.js && node --check media/fileChangeHistory.js && node --check media/historyInsights.js && node --check media/settingsPanel.js && node --check media/localizationBridge.js && node --check media/generated/localization.js",
     "check:l10n": "node scripts/check-l10n-garbled.js",
     "check:katex": "node scripts/sync-katex-vendor.mjs --check",
+    "check:renderer": "node scripts/check-renderer-dependencies.mjs",
     "sync:katex": "node scripts/sync-katex-vendor.mjs --write",
     "typecheck": "npm run -s generate:l10n && npm run -s check:l10n && tsc -p . --noEmit",
     "build:zstd": "node scripts/build-zstd.mjs",
@@ -6612,8 +6613,17 @@
   },
   "dependencies": {
     "@hpcc-js/wasm-zstd": "1.16.1",
-    "markdown-it": "^14.3.2",
+    "markdown-it": "^14.3.3",
     "mermaid": "11.17.2"
+  },
+  "overrides": {
+    "mermaid": {
+      "dompurify": "3.4.17",
+      "katex": "$katex"
+    },
+    "@azure/identity": {
+      "@azure/msal-node": "7.1.1"
+    }
   },
   "devDependencies": {
     "@shikijs/langs": "^4.4.3",

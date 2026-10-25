@@ -1,9 +1,10 @@
 Codex History Viewer includes code from the third-party packages listed below.
 
-Package versions are intentionally omitted from this public notice. Exact resolved
-versions are recorded in package-lock.json and verified by the project's dependency
-inventory tests. Identical MIT license text is reproduced once; later MIT sections
-refer to that text while retaining their package-specific copyright notices.
+Package versions are intentionally omitted from this public notice. Resolved npm
+package versions are recorded in package-lock.json. Embedded components are also
+identified from upstream distributions and their source and license records.
+Identical MIT license text is reproduced once; later MIT sections refer to that
+text while retaining their package-specific copyright notices.
 
 ===============================================================================
 Portable Zstandard runtime
@@ -12,16 +13,23 @@ Portable Zstandard runtime
 Packages:
   @hpcc-js/wasm-zstd
   Zstandard (embedded WebAssembly)
+  fzstd (embedded JavaScript loader dependency)
 Sources:
   https://github.com/hpcc-systems/hpcc-js-wasm
   https://github.com/facebook/zstd
+  https://github.com/101arrowz/fzstd
 Licenses:
   @hpcc-js/wasm-zstd: Apache-2.0
   Zstandard: BSD-3-Clause
+  fzstd: MIT
+
+fzstd copyright notice:
+  Copyright (c) 2020 Arjun Barrett
 
 The portable runtime is bundled into dist/vendor/zstd.cjs for compressed Codex
 history reading and import format conversion. The WebAssembly payload is included
-in the bundle. Full copyright notices and license texts for both components are
+in the bundle. Its JavaScript loader uses fzstd to unpack the embedded WebAssembly
+payload. Full copyright notices and license texts for all three components are
 reproduced in resources/licenses/wasm-zstd.txt.
 
 ===============================================================================

@@ -2,6 +2,7 @@ import { build, context } from "esbuild";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { mermaidYamlDependencyPlugin } from "./mermaid-yaml-dependency.mjs";
+import { rendererDependencyGuardPlugin } from "./renderer-dependency-guard.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
@@ -18,7 +19,12 @@ const buildOptions = {
   platform: "browser",
   target: ["chrome114"],
   logLevel: "info",
-  plugins: [mermaidYamlDependencyPlugin(rootDir)],
+  write: false,
+  metafile: true,
+  plugins: [
+    mermaidYamlDependencyPlugin(rootDir),
+    rendererDependencyGuardPlugin(rootDir, path.join(rootDir, "media", "chatViewShiki.bundle.js")),
+  ],
 };
 
 if (process.argv.includes("--watch")) {

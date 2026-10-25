@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "files": {
-    "l10n/bundle.l10n.ja.json": "4bf38dad350ac38c5aecf5a8ac455797476e1b5237a578bd58a691521d375328",
+    "l10n/bundle.l10n.ja.json": "e3c89cf9e2d2d7b78f75381235b5a88b88c2f3d6de2d9e006a258fc4a3d605a6",
     "package.nls.ja.json": "436b0aa3c2707f7c75786faf66cac0835489bdc4aa5c6f02dbedaae3f47cfbf3",
-    "l10n/bundle.l10n.json": "f012de10c150bfae0c3ec0e9cb482b67ad02d04bc9061bcf3e23a05a4ef65e5f",
+    "l10n/bundle.l10n.json": "a25128c217095e62790f63a495b5a2be6d091848f56842ee1c2330797f417766",
     "package.nls.en.json": "a6f5429433899efc5fda44f9fd2513192506bdb4bf1009bb00b72cc15bde6fc0",
     "package.nls.json": "a6f5429433899efc5fda44f9fd2513192506bdb4bf1009bb00b72cc15bde6fc0",
-    "src/generated/localeCatalog.ts": "833c720a76fa4d6abeb8bae977edea6019dafbf2ee07f2a434695ab1cc63a6ac",
-    "src/generated/defaultRuntimeMessages.ts": "c1ca48e3a285b322bc47fe98cf3e610c59cb05a73c6c33d3662ee0c5d60bfc48",
+    "src/generated/localeCatalog.ts": "208ad618a61a5e53d388c227982ad27ece92170f7b9eeaab3c98c190043831c3",
+    "src/generated/defaultRuntimeMessages.ts": "5166efa53b27099e9bc33c1ffa5f25ac10198a6383744064dcf2ff620d3838d1",
     "src/generated/uiCommandAliases.ts": "a26347a9a023d8ffbc5e442d0b159a63b2fe6da59083a5fce82bdb96c60727f2",
     "src/generated/webviewI18n.ts": "224da05eaa7309036e61981b04da20a4d42dea6a12bc3ac8c2cd755ff7042d71",
-    "media/generated/localization.js": "4c2748257ce8b2d9627c4817571c50ceb4bb832c3af58c15993829d4aa4004f3"
+    "media/generated/localization.js": "a7c5a6cb04e42d6c2f6f3b2ddac1dc0a45a1856f3d2143727eb8d5f8f76dc17b"
   },
   "packageHash": "0632f217ac7e79e6a5d7625bf610e76188419a3a7c24403c10471ca499f1c286"
 }

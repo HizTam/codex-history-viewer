@@ -121,7 +121,7 @@ function displayName(display, selected) {
 function calculate() {
   const requiredNode = fs.readFileSync(safePath(".node-version"), "utf8").trim();
   if (process.versions.node !== requiredNode) fail("Localization generation requires Node " + requiredNode + " (current: " + process.versions.node + "); use the version in .node-version. See DEVELOPMENT.ja.md.");
-  if (process.versions.icu !== "77.1") fail("Localization generation requires ICU 77.1 (current: " + process.versions.icu + "); use the official Node build specified in .node-version. See DEVELOPMENT.ja.md.");
+  if (process.versions.icu !== "78.3") fail("Localization generation requires ICU 78.3 (current: " + process.versions.icu + "); use the official Node build specified in .node-version. See DEVELOPMENT.ja.md.");
   const config = parseJson("localization/catalog.config.json");
   fields(config, ["schemaVersion", "defaultLocale"], "catalog");
   const defaultLocale = localeId(config.defaultLocale);

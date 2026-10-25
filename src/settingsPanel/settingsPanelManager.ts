@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { getExtensionVersion } from "../extensionVersion";
 import { resolveUiLanguage, t } from "../i18n";
+import { RemoteCodexController } from "./remoteCodexController";
 import {
   SETTINGS_DEFINITIONS,
   cloneSettingValue,
@@ -149,6 +150,7 @@ interface SettingsImportChange extends StoredSettingValue {
 }
 
 export class SettingsPanelManager implements vscode.Disposable {
+  private readonly remoteCodex: RemoteCodexController;
   private panel: vscode.WebviewPanel | undefined;
   private readonly disposables: vscode.Disposable[] = [];
   private panelDisposables: vscode.Disposable[] = [];
@@ -169,10 +171,20 @@ export class SettingsPanelManager implements vscode.Disposable {
   private disposed = false;
 
   public constructor(private readonly context: vscode.ExtensionContext) {
+    this.remoteCodex = new RemoteCodexController(context);
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration(CONFIGURATION_SECTION)) {
-          this.scheduleSnapshot();
+          if (event.affectsConfiguration("codexHistoryViewer.sessionsRoot") ||
+              event.affectsConfiguration("codexHistoryViewer.sources.enabled")) {
+            this.remoteCodex.reset();
+          }
+          if (event.affectsConfiguration("codexHistoryViewer.ui.language") && this.remoteCodex.isOperationActive) {
+            // Refresh retained remote status without exposing intermediate settings-import state.
+            void this.publishSnapshot(undefined, true);
+          } else {
+            this.scheduleSnapshot();
+          }
         }
       }),
       vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -281,6 +293,7 @@ export class SettingsPanelManager implements vscode.Disposable {
   }
 
   private disposePanelSubscriptions(): void {
+    this.remoteCodex.reset();
     for (const disposable of this.panelDisposables.splice(0)) {
       disposable.dispose();
     }
@@ -292,6 +305,24 @@ export class SettingsPanelManager implements vscode.Disposable {
     }
 
     switch (message.type) {
+      case "scanRemoteCodex":
+      case "stopRemoteCodex": {
+        if (!isSafeRequestId(message.requestId) ||
+            (message.type === "stopRemoteCodex" &&
+             (typeof message.token !== "string" || !/^[a-f0-9]{48}$/.test(message.token)))) {
+          await this.postActionFailed(undefined, t("settingsPanel.error.invalidRequest"), generation);
+          return;
+        }
+        const action = message.type;
+        const requestId = message.requestId;
+        this.enqueueOperation(async () => {
+          const result = await this.remoteCodex.run(action, message.token, () => this.isCurrentPanelGeneration(generation),
+            () => this.publishSnapshot(generation, true));
+          await this.publishSnapshot(generation, true);
+          await this.postMessage({ type: result.failed ? "actionFailed" : "actionCompleted", requestId, message: result.message }, generation);
+        }, requestId, generation);
+        return;
+      }
       case "ready":
         await this.publishSnapshot(generation);
         return;
@@ -1468,6 +1499,7 @@ export class SettingsPanelManager implements vscode.Disposable {
       pages,
       settings,
       maintenanceCards: this.buildMaintenanceCards(),
+      remoteCodex: this.remoteCodex.model(),
       about: this.buildAboutModel(),
       labels: {
         target: t("settingsPanel.target"),

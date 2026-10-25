@@ -76,13 +76,17 @@ function validateDependencies(rootDir) {
   return readVerifiedModule(rootDir, patchedModule, patchedSha256);
 }
 
-export function mermaidYamlDependencyPlugin(rootDir) {
+export function mermaidYamlDependencyWatchFiles(rootDir) {
   if (typeof rootDir !== "string" || !path.isAbsolute(rootDir)) {
     throw new Error("The Mermaid YAML adapter requires an absolute project directory.");
   }
+  return Object.freeze(watchedFiles.map(file => path.resolve(rootDir, file)));
+}
+
+export function mermaidYamlDependencyPlugin(rootDir) {
+  const watchFiles = mermaidYamlDependencyWatchFiles(rootDir);
   const embeddedPath = path.resolve(rootDir, embeddedModule);
   const patchedPath = path.resolve(rootDir, patchedModule);
-  const watchFiles = watchedFiles.map(file => path.resolve(rootDir, file));
   return {
     name: "mermaid-patched-yaml",
     setup(build) {
