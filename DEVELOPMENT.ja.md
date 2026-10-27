@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-10-25
-- 対象バージョン: 2.19.0
+- 最終更新: 2026-10-27
+- 対象バージョン: 2.20.0
 
 ## 1. 概要
 
@@ -111,7 +111,7 @@
 - ページ内検索は、通常表示の送信ファイル名ボタンも対象にする。ツールのロールフィルターと可視性規則を維持し、他の操作ボタンは除外する。検索強調中もファイル名のクリック・キーボード操作は同じHost検証を通る。
 - ページ内検索のツールカード補足情報は、個々の表示タグを` · `で区切る。送信ファイルカードは、ヘッダーに表示済みの状態コードと同じ詳細状態タグを省く。配信警告と実行成功など異なる状態、終了コード・所要時間・エラー詳細は残す。非成功の送信結果で実行状態に中断・キャンセルが記録されていれば、ヘッダーにもそのラベルを使う。
 - Codexの `agent_message.memory_citation` は `partial_answer` を含むphaseで利用する。本文と判明しているphase／turnが一致するassistantへだけ結合し、イベント先行にも対応する。本文内の引用を優先し、user入力・turn開始／終了／中断を越えて保留引用を持ち越さない。
-- 派生cacheはHistory summary algorithm `28`、Search index `34`、Codex Analysis parser `18`、Claude Analysis parser `17`へ更新する。元履歴のsize／mtimeが変わらない場合も再解析する。履歴や注釈を変更しない。以前Unicode改行で読み落としていた発言が復旧すると番号が変わり得るため、その場合の旧しおりを番号だけで推測して付け替えない。
+- Unicode改行などの互換対応時に、派生cacheはHistory summary algorithm `28`、Search index `34`、Codex Analysis parser `18`、Claude Analysis parser `17`へ更新した。元履歴のsize／mtimeが変わらない場合も再解析する。履歴や注釈を変更しない。以前Unicode改行で読み落としていた発言が復旧すると番号が変わり得るため、その場合の旧しおりを番号だけで推測して付け替えない。
 
 ### 3.1 ビュー
 
@@ -137,7 +137,7 @@
   - ヘッダー操作: プロジェクト表示、絞り込み、絞り込み解除、タグ絞り込み、タグ絞り込み解除、表示対象切替、ソース切替、再読み込み、エクスポート、Undo。表示順はtoolbarに置かずMore Actionsへフラット表示し、セッションの表示対象は1階層のサブメニューへまとめる
   - 表示対象は `通常のみ` / `通常＋アーカイブ` / `アーカイブのみ` / `非表示のみ` / `すべて` の5種類とし、`History` / `Search` の絞り込み、ソース、表示対象とは独立して状態を保持する
   - 欠損ピンも表示対象
-  - 欠損ピンは日付スコープまたは現在プロジェクト絞り込みでは非表示にし、プロジェクト別表示では `CWD なし` 配下に集約する
+  - 欠損ピンは日付スコープまたは詳細なプロジェクト (`cwd`) の絞り込みでは非表示にする。現在のプロジェクトグループという範囲だけでは除外せず、プロジェクト別表示では `CWD なし` 配下に集約する
   - `History` / `Search` からのドラッグ&ドロップで追加可能
   - Codex アーカイブ済みセッションのピンは、Pinned 独自のソースと表示対象が含めるときだけ表示する
   - 公式側でアーカイブされてパスが変わったピンは、session identity で追従する
@@ -184,6 +184,25 @@
   - Codex archived sessions root は、Codex source と archived sessions が有効な場合だけ表示する
   - 拡張機能バージョン
   - `Current project` と `Sessions root` 系のパスは行右側のコピーアイコンからクリップボードへコピーできる
+
+#### 履歴・ピン留めの起動時表示
+
+専用設定画面の「履歴一覧」に「履歴の起動時表示」「ピン留めの起動時表示」を配置する。いずれもユーザー設定で、ワークスペースごとの前回状態とは独立して保存する。
+
+| 設定キー（`codexHistoryViewer.` 以下） | 選択肢 | 既定値 |
+| --- | --- | --- |
+| `history.startupMode` / `pinned.startupMode` | `restore` / `defaults` | `restore` |
+| `history.defaultViewMode` | `date` / `sessionsList` | `date`（日付別） |
+| `history.defaultProjectDisplay` / `pinned.defaultProjectDisplay` | `list` / `project` | `list`（一覧表示） |
+| `history.defaultProjectScope` / `pinned.defaultProjectScope` | `currentGroup` / `all` | `all`（全てのプロジェクトグループ） |
+
+「前回の状態を復元」は保存済みの有効な値を優先し、未保存項目には設定の既定値を使用する。既存版が自動保存した初期値も前回状態として維持し、手動選択の有無を推測しない。「毎回設定値から開始」は起動するたびに指定した表示単位（履歴のみ）、プロジェクト表示、プロジェクト範囲を適用する。プロジェクトの詳細絞り込みも指定範囲へ置き換えるが、日付、ソース、タグ、セッションの表示対象、圧縮状態、並び順は維持する。ピン留めの並び順・日付別階層に新しい設定は追加しない。
+
+設定変更の反映は次の Reload Window または VS Code 再起動時で、ビューの再表示や通常の再読み込みでは起動設定を再適用しない。起動後の手動変更と、設定値から開始した結果は従来の workspaceState へ保存する。後で復元モードへ戻すと、直近の起動結果または手動変更を復元する。
+
+表示形式の正本は`src/types/historyViewMode.ts`の`date` / `sessionsList`とし、旧`latest`は読み取り時に`sessionsList`へ正規化する。共通parseは有効値と欠損・不正値を区別し、通常の設定読取は不正時に`date`、起動時の保存値欠損はユーザー既定値、Insightsの不正snapshotは全体拒否という既存境界を維持する。新規保存・設定backup出力・旧backupのimportはcanonical値を使い、rawの競合tokenと補償rollbackは正規化しない。既存の保存キー・command IDは維持し、globalの旧設定を起動時に自動書換しない。
+
+初回の利用可能な履歴 index を取得してから、既存のプロジェクト解決規則で現在のグループを確定する。起動時の関連キーはビューごとの queue と補償 transaction で保存し、成功後に provider、context、検索条件へ反映する。起動待機中の明示操作は同値の選択も優先し、古い起動設定で上書きしない。検索は起動状態の終端と先行する状態更新を待ってから条件を固定する。破損した履歴フィルタは既存の `none` を維持し、現在のグループを指定してワークスペースがない場合は、保存済みプロジェクト条件を保持して実効 scope を `all` とする。保存失敗は部分的に公開せず、失敗と再読み込みによる再試行を案内する。
 
 ### 3.1.1 History Insights
 
@@ -365,10 +384,10 @@
 
 | 対象 | 実装の定数 | 現行値 |
 | --- | --- | ---: |
-| History summary | `SUMMARY_CACHE_ALGO_VERSION` | 27 |
-| Search index | `SEARCH_INDEX_FILE_VERSION` | 32 |
-| Codex Analysis | `SESSION_ANALYSIS_CODEX_PARSER_VERSION` | 17 |
-| Claude Code Analysis | `SESSION_ANALYSIS_CLAUDE_PARSER_VERSION` | 16 |
+| History summary | `SUMMARY_CACHE_ALGO_VERSION` | 29 |
+| Search index | `SEARCH_INDEX_FILE_VERSION` | 35 |
+| Codex Analysis | `SESSION_ANALYSIS_CODEX_PARSER_VERSION` | 18 |
+| Claude Code Analysis | `SESSION_ANALYSIS_CLAUDE_PARSER_VERSION` | 18 |
 | Codex Branch Navigation | `CODEX_FORK_NAVIGATION_ALGORITHM_VERSION` | 6 |
 
 - 履歴キャッシュ:
@@ -431,7 +450,7 @@
   - 用途: History Insights の統計と Claude Code Branch Navigation の構造化 occurrence を共用する差分解析キャッシュ。履歴キャッシュや検索インデックスの代替にはしない
   - History Insights、Claude Code Branch Navigation、または `Rebuild Cache` を要求したときだけ lazy load / lazy build し、拡張機能の起動や通常の History / Search 表示を待たせない
   - セッションごとの `cacheKey`、source、`mtime`、`size`、parser version と、sessions root / 有効ソースを含む cache context を検証し、変更された entry だけを再解析する
-  - 現行source parser versionはCodex `18` / Claude Code `17`とする。Claudeの編集結果とBash差分を反映しないversion 12 entryは再解析する。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析する
+  - 現行source parser versionはCodex `18` / Claude Code `18`とする。再送メタデータを通常発言として扱っていたClaude version 17以下のentryは再解析し、有効なCodex entryは保持する。Claudeの編集結果とBash差分を反映しないversion 12 entryは再解析する。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析する
   - 既存 Chat model builder と同じ抽出結果を使って message index、turn、usage、file change、ツール名別呼び出し回数を集計し、解析側で独自の message index を採番しない
   - 同一セッションの重複解析を共有し、全体の更新、保存、clear は直列化する。進捗通知とキャンセルに対応する
   - 破損 JSON は削除して次回要求時に再生成し、権限エラーなどの read error では既存ファイルを削除しない
@@ -553,6 +572,8 @@
 - Claude Codeのmaterialized user recordで`isMeta === true`、originなし、text-onlyの完全な単独`<system-reminder>` wrapperを持つものは「内部リマインダー」カードにする。子のSubagentHandback案内もこの分類を使う。検証済みwrapperだけを外し、本文を最大64,000文字のplain textで保持する。入力上限は1Mi文字／128 text block。通常userの引用、余剰自然文、入れ子・破損wrapper、未知origin、画像やtool結果との混在は再分類しない。messageIndexとMarkdown出力を保持し、通常user件数、preview、検索、Resume / Handoff、Branchの人間発言候補から除外する。旧分類はHistory summary algorithm `27`、Search file version `30`、Claude Analysis parser `16`で再計算する
 - Claude Code の assistant message に raw text として残る `<invoke name="...">` は tool invocation attachment として扱う。Markdown の fenced code / inline code / blockquote 内に引用された `<invoke>` は抽出せず、壊れた block や境界が曖昧な block は raw text として残す
 - `<task-notification>` / `<invoke>` の共通 scanner は open / close 候補を tag 種別ごとに一度だけ列挙し、close 欠落や malformed open が大量にある履歴でも open ごとに EOF まで再走査しない
+- Claude Codeの既知の再送メタデータ `api-request` / `api-request-blob` / `api-request-shape` は、共通の型判定で通常発言・ツールから除外する。Chatのusage・turn・遅延差分詳細とAnalysisのGraphも、状態更新前に同じ判定を使う。未知recordや未知queue-operationの従来fallback、raw activity観測と物理ordinalは維持する。
+- 再送メタデータ除外のためSummary algorithmは `29`、Search file versionは `35`、Claude Analysis parserは `18`とする。元履歴のmtime／sizeが同じでも旧結果を再計算する。ファイル名・外側schema・Codex parser `18`・Fork algorithm `6`・保存済み注釈は変更しない。
 - Claude Code の `queue-operation` や来歴不明の `queued_command` はカード化しない。配信済み `attachment.type = "queued_command"` で `commandMode = "task-notification"`、`origin.kind = "task-notification"`、`origin.producer = "session-task"` が一致する場合だけ、`attachment.prompt` を Webview の内部通知カードにする。peer-send-message、明示的な非meta・humanTurn・転送データは除外し、`rendered` 等は取り込まない。既存の通知詳細表示と本文上限を使用する
 - queued 内部通知は通常メッセージ番号を消費せず、opaque な `notificationId` で表示状態を保持する。source UUID または delivery ID が一致する配信を統合し、同じ source UUID の materialized user record が前後いずれに存在しても queued 側を表示しない。本文や task-id の一致だけでは統合しない。既存メッセージ番号・しおり・ターン・usage・非UI出力は維持する
 - `notificationId` 付きの queued 内部通知は、しおりキーに使う旧互換インデックスからも除外する。従来の materialized 通知は旧順序に含め、通知の出現・重複排除によって後続項目のしおりキーを変えない。
@@ -910,7 +931,9 @@
 - `sessionsRoot`
 - `codex.archivedSessions.enabled`
 - `codex.archivedSessionsRoot`
+- `codex.compressedSessions.enabled`
 - `claude.sessionsRoot`
+- `claude.nativeBookmarks.enabled`
 - `agentRuns.enabled`
 - `branchNavigation.enabled`
 - `handoff.enabled`
@@ -926,6 +949,13 @@
 - `webview.restoreAfterReload`
 - `history.dateBasis`
 - `history.titleSource`
+- `history.startupMode`
+- `history.defaultViewMode`
+- `history.defaultProjectDisplay`
+- `history.defaultProjectScope`
+- `pinned.startupMode`
+- `pinned.defaultProjectDisplay`
+- `pinned.defaultProjectScope`
 - `sessionRow.showTimestamp`
 - `sessionRow.showProject`
 - `autoRefresh.enabled`
@@ -1360,9 +1390,10 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 有効なV2 importはJSONLとmetadataへの全書き込み前に事前計画し、modalで`すべて復元` / `セッションデータのみ` / 既存重複対象がある場合の`メタデータのみ` / キャンセルを選ぶ。キャンセル時は何も変更せず、`メタデータのみ`はJSONLを変更しない
   - metadata保存成功後のHistory再読込に失敗してもrestore失敗へ読み替えず、確定済みmetadataを維持して手動refreshを案内する
 - View / filter state
+  - 起動時表示の既定値はユーザー設定、前回状態は既存のworkspaceState、起動中の保留・終端はExtension Hostが所有する。`src/types/viewStartupState.ts`は保存値・既定値・解決済みcurrent groupから起動候補を決定する純粋helperで、index読込や永続化は行わない
   - Historyの日付 / `ProjectSelection` / source / tag / `displayTarget` / compressionは`HistoryFilterStateV3`として`workspaceState`に保存する。compressionは`all` / `compressed` / `uncompressed`で、旧データの未指定は`all`として扱う。`ProjectSelection`がHistory / Searchの実効project集合の正本で、project display / project scope / view modeはV3の対象集合に含めず独立して保存する。`historyProjectScope=currentGroup`は、V3 selectionが現在workspaceのcanonical group 1件と一致する場合だけ有効なtoolbar由来状態とする
   - 初回は`HistoryFilterStateV2`とarchive preferenceからV3へ移行する。V2のsourceがClaudeのみの場合は、V2本体の実効値`archiveLocation=all`ではなく、別保存されていたCodex用archive preferenceを5状態preferenceへ引き継ぐ。Reload時はV3とproject scopeを両方復元し、current-group不変条件を検証する。不一致ならV3 selectionを安全な明示条件として維持してscopeだけ`all`へ正規化し、scopeが`all`でも明示selectionは保持する。scopeが`all`のときにV3 selectionから`currentGroup`を推測しない
-  - V3が破損している場合は旧条件へfallbackせず`ProjectSelection.none`、`displayTarget=activeVisible`、scope=`all`を使う。破損値から意図しない非表示セッションを露出させない
+  - V3が破損している場合は旧条件へfallbackせず`ProjectSelection.none`、`displayTarget=activeVisible`、scope=`all`を使う。明示的な`null`も破損とし、キー未保存は`undefined`だけで判定する。破損値から意図しない非表示セッションを露出させない
   - date / source / tag / display targetだけの変更ではproject selectionを維持し、現在workspace groupとの一致が続く場合だけ`currentGroup` scopeも維持する。不一致またはworkspaceなしならselectionを変えずscopeだけ`all`へ正規化する。明示project選択、History InsightsからのHistory適用、drill-downではscopeを`all`へする。clearはscopeが`currentGroup`なら現在group selectionを維持する
   - display target preferenceと`HistoryFilterStateV3`、または`ProjectSelection`とdisplay / scopeのように複数keyの値を同時更新する場合は、変更するkeyを同じ補償transactionへ含める。成功済みkeyの旧値を保持し、後段失敗時に逆順で補償ロールバックする。初回V3移行時もV3、必要なdisplay target preference、display、scope、一度限りのlegacy project filter補正を1 transactionにまとめる。保存完了前にin-memory state、provider、context、view descriptionを変更しない
   - Historyのproject stateとfilter stateの更新は共通queueで直列化し、source / tagなど変更対象以外のfieldはqueue内の最新確定stateから合成する。association再読込と実際の関連付け追加 / 解除 / 種類変更後もselectionとscopeの整合性を再検証し、変更時はV3とscopeを同じtransactionで保存する。拡張自身の関連付け操作では変更前scopeが`currentGroup`なら現在workspace groupを再選択してscopeを維持し、外部変更を取り込む通常refreshで不一致ならselectionを維持してscopeだけ`all`へする。V3修復を保存できなければ関連付けを操作前snapshotへ戻し、復元にも失敗した場合はReloadを案内する。保存成功後の派生view / Search更新だけが失敗した場合は確定stateを維持し、再試行導線を出す
@@ -1595,7 +1626,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - Codex archived sessions root は、Codex source が無効な場合や archived sessions が無効な場合は表示しない
   - Current project 表示は、プロジェクト別名がある場合に alias label を使う
 - History / Pinned / Search ツリー: `src/tree/*`
-  - History は `date` / `latest` の表示モードを持ち、`latest` ではセッションをフラット表示して現在の表示順を適用する
+  - History は `date` / `sessionsList` の表示モードを持ち、`sessionsList` ではセッションをフラット表示して現在の表示順を適用する
   - プロジェクト別名がある場合は、Project node、session description、tooltip、Search の session 行表示に alias を反映する
   - Project node の contextValue は CWD 有無で `codexHistoryViewer.project.withCwd` / `codexHistoryViewer.project.noCwd` に分け、CWD なしには alias menu を出さない
   - archived Codex session は description / tooltip / icon 色で通常履歴と区別する
@@ -1637,9 +1668,11 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 #### 4.13.1 専用設定画面
 
+設定の反映時期はcatalogの`applyTiming`で明示し、専用設定画面の項目名の横へバッヂを表示する。`windowReload`は起動時表示7項目と拡張機能タブの復元、`sessionReload`は現在のユーザー指示の固定が対象で、値や変更有無から推測しない。バッヂの補足はツールチップと支援技術向けの説明で伝え、対象controlにも関連付ける。起動時表示の本文は項目の役割だけとし、動作条件は選択中の補足へ分ける。VS Code標準設定には短い反映時期の説明を残す。
+
 - `codexHistoryViewer.openSettings` は `SettingsPanelManager` が管理する singleton の editor Webview を開く。既に開いている場合は新規作成せず、既存パネルを表示する。
 - 設定は「一般」「履歴ソース」「履歴一覧」「検索」「セッション表示」「再開・連携」の6カテゴリに分類し、管理用の「メンテナンス」と情報用の「拡張機能情報」を加えた8ページ構成とする。Agent Runs、Branch Navigation、Webview 復元は利用場所に応じたカテゴリへ配置する。2.18.1でAgent RunsとBranch Navigationの「実験的」表示を解除し、圧縮履歴とWebview 復元は維持する。
-- manifest の既存40設定はキー、型、既定値、scopeを変更せず、`sessionRow.showTimestamp` / `sessionRow.showProject` の2設定を追加する。専用設定画面には新規2設定を含む40設定を表示し、`ui.alwaysShowHeaderActions` と `debug.logging.enabled` はbootstrap modelおよび更新許可リストへ含めない。
+- 専用設定画面で扱う設定はcatalogを正本とし、manifestのキー、型、既定値、scopeと照合する。`ui.alwaysShowHeaderActions` と `debug.logging.enabled` はbootstrap modelおよび更新許可リストへ含めない。
 - `codex` / `claude` は保存値として維持し、表示だけを `Codex` / `Claude Code` とする。移行処理は不要で、既存の user / workspace / workspace-folder 設定をそのまま読む。
 - application scope はユーザー、window scope はユーザー／ワークスペース、resource scope はユーザー／ワークスペース／ワークスペースフォルダーで編集できる。未設定値は下位scopeから継承し、現在のscopeより上位に上書きがあれば画面に示す。
 - Webview messageは型、設定キー、scope、値のallowlist・範囲をhostで再検証する。各設定snapshotにopaqueな値トークンを付け、保存直前に対象scopeのraw値を再照合して、外部変更と競合した更新を拒否する。設定更新、一括reset、importの実行中はconfiguration changeによる途中snapshotを保留し、operation完了時の確定snapshotだけを公開する。
@@ -1647,7 +1680,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - HTMLはnonce付きCSPとローカルCSS/JavaScriptだけを許可する。Webview側は表示文字列を`textContent`で構築し、設定値をHTMLとして解釈しない。
 - 左ナビゲーションはicon付きで展開／折りたたみでき、状態をWebview stateへ保持する。狭幅ではheaderから開くdrawerへ切り替え、開いたまま760pxを超えた場合はmodal状態を解除して非表示buttonへfocusを残さない。headerは拡張機能icon、title、version metadataで構成し、通常は製品名を含むtitleとversion／license／copyrightを表示する。wide headerは上padding 14px、row gap 4px、下margin 10px、icon 38px、title 24pxとする。760px以下ではmenu、34px icon、row gap 8px、header下margin 10pxとし、設定対象select直下を詰める。タイトル短縮は760pxのlayout breakpointと分離し、完全title／metadataの実測幅へ8pxのguardを加えた値がtitle blockの利用可能幅を超える場合だけ、localizedな「設定」／`Settings`と`v{version}`へ切り替える。ResizeObserver、window resize、再描画時の同期測定で拡縮、Zoom、言語変更へ追従し、幅が戻れば完全表示へ戻す。空のglobal status行は全幅で配置せず、設定対象の切替中またはrequestへ関連付けられないWebview error時だけmin-height 18pxの行を表示する。エクスポート、インポート、resetなど保守操作の成功／失敗はVS Code標準のinformation／error通知へ出し、cancelは通知しない。保守操作中はbuttonと設定対象selectorを無効化し、header高を変えない。「拡張機能情報」のcontent見出しは置かず、3tabのバージョン情報には同じcurrentColor iconを表示するため、compact headerで隠したlicense／copyrightも情報pageでは確認できる。折りたたみnavigation列は52pxとし、icon色は`foreground`へ追従する。High Contrastは`vscode-high-contrast`／`vscode-high-contrast-light` body classと`forced-colors`の双方でborder、選択outline、switchを補強する。
 - 複数選択はcheckboxの横並びやcomma区切り文字列ではなく、履歴インサイトの絞り込みと同系統のpill chipとpopoverで表示する。個別resetとfolder pickerはtooltip・`aria-label`付きicon buttonとし、操作領域の幅を揃える。
-- 設定label、description、option labelは、セッションビュー、履歴ビュー、コマンドパレット、右クリックメニューで使われる機能名と対応させ、manifest設定の説明とも実際の適用範囲、無効時に残る操作、実験機能の制約を一致させる。例として「セッションを専用タブで開く」「ファイルの AI 更新履歴」「通常表示／軽量表示」「Codex で再開」を説明内でも同じ表記にし、英語UIも`Normal View`／`Lightweight View`へ統一する。非同期復元の遅延／重複、Agent RunsのCodex・Claude Code対応、Branch NavigationのWorktree非対応、CLI再開時のEnter操作、削除設定がHistory／Pinned／Search／コマンドパレットへ適用され、無効時は完全削除になることを明示する。保存keyとenumは変更しない。
+- 設定label、description、option labelは、セッションビュー、履歴ビュー、コマンドパレット、右クリックメニューで使われる機能名と対応させ、manifest設定の説明とも実際の適用範囲、無効時に残る操作、実験機能の制約を一致させる。例として「セッションを専用タブで開く」「ファイルの AI 更新履歴」「通常表示／軽量表示」「Codex で再開」を説明内でも同じ表記にし、英語UIも`Normal View`／`Lightweight View`へ統一する。非同期復元の遅延／重複、Agent RunsのCodex・Claude Code対応、Branch NavigationのWorktree非対応、CLI再開時のEnter操作、削除設定がHistory／Pinned／Search／コマンドパレットへ適用され、無効時は完全削除になることを明示する。表示文言の調整だけでは保存keyやenumを変更しない。
 - セッション表示では初期表示位置、sticky user prompt、performance、tool表示、長文folding、turn timelineを「セッションビュー」cardへ統合し、card内のlabelは「パフォーマンスモード」「ツール表示」と簡潔にする。1種類の履歴ソースだけに適用される設定はcatalogの`sourceBadge`を正本として`Codex`／`Claude Code` badgeを表示する。Agent RunsとBranch Navigationは両履歴ソース対応のため限定badgeを付けず、2.18.1以降はリソース使用量iconだけを維持する。
 - CPU、memory、disk accessなどの使用量へ影響する14設定はcatalogの`resourceImpact`を正本とし、label横へtheme追従のgauge iconを表示する。icon wrapperはlocalized tooltipと`role=img`／`aria-label`を持ち、外部assetやicon fontには依存しない。自動更新3設定、最大検索結果数、検索index内容も対象に含める。
 - OSのファイル管理アプリと区別するため、`fileChangeHistory.explorerContextMenu.enabled` は「VS Code のファイル一覧」と表示する。wide表示は最大1440px、左右24pxの外側padding、約210pxの左navigationとし、header下の左navigationと右contentを独立してscrollさせる。navigation group見出しは11pxとする。同一pageの再描画ではfocusをスクロールさせず左右それぞれのscroll座標を維持し、navigationによるpage切替時だけ右contentを新しいpageの先頭へ移動する。狭幅ではbody scrollとdrawer表示へ戻す。
@@ -2366,7 +2399,7 @@ git diff --check
 - History Insights の解析をキャンセルしても既存表示を stale として安全に保持し、panel を閉じて開き直した場合に旧 panel の進捗、エラー、model、VS Code通知が新しい panel へ混入しない。2秒未満のloadでは通知が出ず、2秒を超える初回load／model保持refreshでは通知からキャンセルできる。完了済みcancel後の新しいopen／条件適用はloadを開始し、snapshot保存中の最後の意図がcancelなら自動loadを抑止、cancel後にretryした場合は再開する
 - 新規 storage では `session-analysis-index.v1.json` は History Insights / Claude Code Branch Navigation / `Rebuild Cache` の初回解析要求まで作成されず、通常の History / Search / Pinned / セッションタイムライン表示を待たせない
 - Session Analysis Index は cache context が一致する限り未変更セッションを再利用し、mtime / size または parser version が変わった entry だけを再解析する。root / source context が変わった場合は新しい context で対象 entry を構築する
-- Session Analysis のsource parser versionはCodex `18` / Claude Code `17`で、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、`history_base`論理履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`を集計しないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析される
+- Session Analysis のsource parser versionはCodex `18` / Claude Code `18`で、再送メタデータを通常発言として扱っていたClaude version 17以下のentry、ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、`history_base`論理履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`を集計しないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析される
 - 破損した `session-analysis-index.v1.json` は次の解析要求で安全に再生成され、read error では既存ファイルを削除しない
 - `Rebuild Cache` は確認後に履歴キャッシュ、検索インデックス、Session Analysis Index を同じ履歴集合から順番に再作成し、進捗とキャンセルが機能する。独立した Session Analysis 再構築コマンドは公開しない
 - `Rebuild Cache` をSession Analysis Index削除前にキャンセルした場合は既存indexが残り、削除後のキャンセルでは不完全なindexが保存されない。削除 / 保存失敗時は成功通知が出ない

@@ -1475,7 +1475,14 @@
         "settingsPanel.setting.codex.compressedSessions.enabled.description",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.label",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.description",
-        "settingsPanel.disabled.nativeBookmarks"
+        "settingsPanel.disabled.nativeBookmarks",
+        "settingsPanel.setting.history.startupMode.label",
+        "settingsPanel.setting.history.defaultViewMode.label",
+        "settingsPanel.setting.history.defaultProjectDisplay.label",
+        "settingsPanel.setting.history.defaultProjectScope.label",
+        "settingsPanel.setting.pinned.startupMode.label",
+        "settingsPanel.setting.pinned.defaultProjectDisplay.label",
+        "settingsPanel.setting.pinned.defaultProjectScope.label"
       ]
     },
     {
@@ -2159,7 +2166,9 @@
         "settingsPanel.setting.codex.compressedSessions.enabled.description",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.label",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.description",
-        "settingsPanel.disabled.nativeBookmarks"
+        "settingsPanel.disabled.nativeBookmarks",
+        "settingsPanel.card.history.startup",
+        "settingsPanel.card.pinned.startup"
       ]
     },
     {
@@ -2501,7 +2510,14 @@
         "settingsPanel.setting.codex.compressedSessions.enabled.description",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.label",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.description",
-        "settingsPanel.disabled.nativeBookmarks"
+        "settingsPanel.disabled.nativeBookmarks",
+        "settingsPanel.setting.history.startupMode.description",
+        "settingsPanel.setting.history.defaultViewMode.description",
+        "settingsPanel.setting.history.defaultProjectDisplay.description",
+        "settingsPanel.setting.history.defaultProjectScope.description",
+        "settingsPanel.setting.pinned.startupMode.description",
+        "settingsPanel.setting.pinned.defaultProjectDisplay.description",
+        "settingsPanel.setting.pinned.defaultProjectScope.description"
       ]
     },
     {
@@ -3527,7 +3543,21 @@
         "settingsPanel.setting.codex.compressedSessions.enabled.description",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.label",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.description",
-        "settingsPanel.disabled.nativeBookmarks"
+        "settingsPanel.disabled.nativeBookmarks",
+        "settingsPanel.option.history.startupMode.restore.label",
+        "settingsPanel.option.history.startupMode.defaults.label",
+        "settingsPanel.option.history.defaultViewMode.date.label",
+        "settingsPanel.option.history.defaultViewMode.sessionsList.label",
+        "settingsPanel.option.history.defaultProjectDisplay.list.label",
+        "settingsPanel.option.history.defaultProjectDisplay.project.label",
+        "settingsPanel.option.history.defaultProjectScope.currentGroup.label",
+        "settingsPanel.option.history.defaultProjectScope.all.label",
+        "settingsPanel.option.pinned.startupMode.restore.label",
+        "settingsPanel.option.pinned.startupMode.defaults.label",
+        "settingsPanel.option.pinned.defaultProjectDisplay.list.label",
+        "settingsPanel.option.pinned.defaultProjectDisplay.project.label",
+        "settingsPanel.option.pinned.defaultProjectScope.currentGroup.label",
+        "settingsPanel.option.pinned.defaultProjectScope.all.label"
       ]
     },
     {
@@ -3869,7 +3899,13 @@
         "settingsPanel.setting.codex.compressedSessions.enabled.description",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.label",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.description",
-        "settingsPanel.disabled.nativeBookmarks"
+        "settingsPanel.disabled.nativeBookmarks",
+        "settingsPanel.option.history.startupMode.restore.description",
+        "settingsPanel.option.history.startupMode.defaults.description",
+        "settingsPanel.option.pinned.startupMode.restore.description",
+        "settingsPanel.option.pinned.startupMode.defaults.description",
+        "settingsPanel.option.history.defaultProjectScope.currentGroup.description",
+        "settingsPanel.option.pinned.defaultProjectScope.currentGroup.description"
       ]
     },
     {
@@ -5761,7 +5797,7 @@
         "viewOptions.section.display",
         "viewOptions.section.scope",
         "viewOptions.view.date",
-        "viewOptions.view.latest",
+        "viewOptions.view.sessionsList",
         "viewOptions.display.list",
         "viewOptions.display.project",
         "viewOptions.scope.currentGroup",

@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "files": {
-    "l10n/bundle.l10n.ja.json": "e3c89cf9e2d2d7b78f75381235b5a88b88c2f3d6de2d9e006a258fc4a3d605a6",
-    "package.nls.ja.json": "436b0aa3c2707f7c75786faf66cac0835489bdc4aa5c6f02dbedaae3f47cfbf3",
-    "l10n/bundle.l10n.json": "a25128c217095e62790f63a495b5a2be6d091848f56842ee1c2330797f417766",
-    "package.nls.en.json": "a6f5429433899efc5fda44f9fd2513192506bdb4bf1009bb00b72cc15bde6fc0",
-    "package.nls.json": "a6f5429433899efc5fda44f9fd2513192506bdb4bf1009bb00b72cc15bde6fc0",
-    "src/generated/localeCatalog.ts": "208ad618a61a5e53d388c227982ad27ece92170f7b9eeaab3c98c190043831c3",
-    "src/generated/defaultRuntimeMessages.ts": "5166efa53b27099e9bc33c1ffa5f25ac10198a6383744064dcf2ff620d3838d1",
+    "l10n/bundle.l10n.ja.json": "51fcf3ef4c8bc8308748498dabcdc5588a8ccab5ba3f7d5f01713d33b3b5f178",
+    "package.nls.ja.json": "2e28caa2755d416d9e840f8e1c2fbf0abee72d73d7bd647b9bf1308c0b115b2a",
+    "l10n/bundle.l10n.json": "b699cfd3d0b74c88f84f9adf7046508f1a9a0a1a6cfc639b6ae7de483e0ba564",
+    "package.nls.en.json": "e3e2839b604e5be0f769e9637365279d885e3244644cbaadadf0d1353b7f9a77",
+    "package.nls.json": "e3e2839b604e5be0f769e9637365279d885e3244644cbaadadf0d1353b7f9a77",
+    "src/generated/localeCatalog.ts": "4f91f4e920500a8a480d966d4f30892d0ac618aecfcb5464784e63a9cf3910c1",
+    "src/generated/defaultRuntimeMessages.ts": "42505958d998e8d2e40f310fc4915eda1c8fe2650f4ec5c9a0f3de1cfb0ae6b9",
     "src/generated/uiCommandAliases.ts": "a26347a9a023d8ffbc5e442d0b159a63b2fe6da59083a5fce82bdb96c60727f2",
     "src/generated/webviewI18n.ts": "224da05eaa7309036e61981b04da20a4d42dea6a12bc3ac8c2cd755ff7042d71",
-    "media/generated/localization.js": "a7c5a6cb04e42d6c2f6f3b2ddac1dc0a45a1856f3d2143727eb8d5f8f76dc17b"
+    "media/generated/localization.js": "13624df11e1e43685b2c4c9233c08389bd9efcda8ab8ffdce3335289c6d10e70"
   },
-  "packageHash": "0632f217ac7e79e6a5d7625bf610e76188419a3a7c24403c10471ca499f1c286"
+  "packageHash": "925e726b5c21961abd66e3467f16ccde25fceb441e60e092d22dc72e015efdcd"
 }

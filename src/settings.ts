@@ -2,6 +2,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { ToolDisplayMode } from "./tools/toolTypes";
+import { normalizeHistoryViewMode, type HistoryViewMode } from "./types/historyViewMode";
+import type { ProjectScopeMode } from "./types/historyProjectScope";
+import type { ProjectDisplayMode, ViewStartupMode } from "./types/viewStartupState";
 
 export type HistoryDateBasis = "started" | "lastActivity";
 export type HistoryTitleSource = "generated" | "nativeWhenAvailable";
@@ -57,6 +60,13 @@ export interface CodexHistoryViewerConfig {
   resumeClaudeMethod: ResumeMethod;
   historyDateBasis: HistoryDateBasis;
   historyTitleSource: HistoryTitleSource;
+  historyStartupMode: ViewStartupMode;
+  historyDefaultViewMode: HistoryViewMode;
+  historyDefaultProjectDisplay: ProjectDisplayMode;
+  historyDefaultProjectScope: ProjectScopeMode;
+  pinnedStartupMode: ViewStartupMode;
+  pinnedDefaultProjectDisplay: ProjectDisplayMode;
+  pinnedDefaultProjectScope: ProjectScopeMode;
   sessionRow: SessionRowConfig;
   autoRefresh: AutoRefreshConfig;
   images: ImagesConfig;
@@ -155,6 +165,19 @@ function parseBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
 
+// Startup settings validate explicit values without coercing unknown input.
+function parseViewStartupMode(value: unknown): ViewStartupMode {
+  return value === "defaults" ? "defaults" : "restore";
+}
+
+function parseDefaultProjectDisplay(value: unknown): ProjectDisplayMode {
+  return value === "project" ? "project" : "list";
+}
+
+function parseDefaultProjectScope(value: unknown): ProjectScopeMode {
+  return value === "currentGroup" ? "currentGroup" : "all";
+}
+
 export function getConfig(): CodexHistoryViewerConfig {
   const cfg = vscode.workspace.getConfiguration("codexHistoryViewer");
   const sessionsRootRaw = (cfg.get<string>("sessionsRoot") ?? "").trim();
@@ -234,6 +257,13 @@ export function getConfig(): CodexHistoryViewerConfig {
     resumeClaudeMethod,
     historyDateBasis,
     historyTitleSource,
+    historyStartupMode: parseViewStartupMode(cfg.get<unknown>("history.startupMode")),
+    historyDefaultViewMode: normalizeHistoryViewMode(cfg.get<unknown>("history.defaultViewMode")),
+    historyDefaultProjectDisplay: parseDefaultProjectDisplay(cfg.get<unknown>("history.defaultProjectDisplay")),
+    historyDefaultProjectScope: parseDefaultProjectScope(cfg.get<unknown>("history.defaultProjectScope")),
+    pinnedStartupMode: parseViewStartupMode(cfg.get<unknown>("pinned.startupMode")),
+    pinnedDefaultProjectDisplay: parseDefaultProjectDisplay(cfg.get<unknown>("pinned.defaultProjectDisplay")),
+    pinnedDefaultProjectScope: parseDefaultProjectScope(cfg.get<unknown>("pinned.defaultProjectScope")),
     sessionRow: {
       showTimestamp: parseBoolean(cfg.get<unknown>("sessionRow.showTimestamp"), true),
       showProject: parseBoolean(cfg.get<unknown>("sessionRow.showProject"), true),

@@ -1450,6 +1450,7 @@ export class SettingsPanelManager implements vscode.Disposable {
       experimental: definitionItem.experimental === true,
       sourceBadge: definitionItem.sourceBadge,
       resourceImpact: definitionItem.resourceImpact === true,
+      applyTiming: definitionItem.applyTiming,
       canReset:
         state.modified &&
         (state.invalid || definitionItem.control !== "switch" || target.kind !== "global"),
@@ -1516,6 +1517,10 @@ export class SettingsPanelManager implements vscode.Disposable {
         codexBadge: t("settingsPanel.sourceBadge.codex"),
         claudeBadge: t("settingsPanel.sourceBadge.claude"),
         resourceImpact: t("settingsPanel.resourceImpact"),
+        windowReloadLabel: t("settingsPanel.applyTiming.windowReload.label"),
+        windowReloadDescription: t("settingsPanel.applyTiming.windowReload.description"),
+        sessionReloadLabel: t("settingsPanel.applyTiming.sessionReload.label"),
+        sessionReloadDescription: t("settingsPanel.applyTiming.sessionReload.description"),
         overridden: t("settingsPanel.overridden"),
         resetSetting:
           target.kind === "global"

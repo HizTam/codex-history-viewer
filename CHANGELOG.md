@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.20.0] - 2026-10-27
+
+### Added
+
+- Added independent startup display settings for History and Pinned. Each view can restore its previous state or start from configured defaults on every startup. ([#18](https://github.com/HizTam/codex-history-viewer/issues/18))
+- Added startup defaults for project display and project scope. History can also start in By Date or Sessions List view.
+
+### Changed
+
+- Renamed the session-list view mode value from `latest` to `sessionsList`. Existing settings and saved view states remain readable.
+
+### Fixed
+
+- Fixed duplicate messages and tool cards in Claude Code history caused by request replay metadata.
+
 ## [2.19.0] - 2026-10-25
 
 ### Added

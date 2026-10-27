@@ -175,7 +175,15 @@ interface StructuredCloseResolution {
   nextSearchIndex: number;
 }
 
+// Request replay metadata can contain full messages without representing a new conversation record.
+export function isClaudeRequestReplayMetadataRecord(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const type = (value as Record<string, unknown>).type;
+  return type === "api-request" || type === "api-request-blob" || type === "api-request-shape";
+}
+
 export function detectClaudeMaterializedMessageRole(obj: any): "user" | "assistant" | null {
+  if (isClaudeRequestReplayMetadataRecord(obj)) return null;
   if (isClaudeQueuedPromptRecord(obj)) return null;
 
   const messageRole = typeof obj?.message?.role === "string" ? obj.message.role : "";

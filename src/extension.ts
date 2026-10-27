@@ -1,9 +1,11 @@
+import { normalizeHistoryViewMode } from "./types/historyViewMode";
 import { UI_COMMAND_ALIASES } from "./generated/uiCommandAliases";
 import { isClaudeProgressId } from "./chat/claudeProgress";
 import { isClaudeQueuedInputId } from "./chat/claudeQueuedInput";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { getExtensionVersion } from "./extensionVersion";
+import { resolveHistoryStartupState, resolvePinnedStartupState, type ProjectDisplayMode } from "./types/viewStartupState";
 import { isCompressedSessionFile } from "./utils/sessionFileReader";
 import { resolveUiLanguage, t } from "./i18n";
 import { getConfig, type CodexHistoryViewerConfig } from "./settings";
@@ -240,7 +242,6 @@ function haveSameImportMappingTargets(
   return leftKeys.length === rightKeys.length && leftKeys.every((value, index) => value === rightKeys[index]);
 }
 
-type ProjectDisplayMode = "list" | "project";
 
 interface CoordinatedCacheRebuildInventory {
   readonly searchSnapshot: HistorySearchIndexSnapshot;
@@ -270,9 +271,38 @@ function createDeferred<T>(): Deferred<T> {
   return Object.freeze({ promise, resolve: resolveValue });
 }
 
-// Extension entry point. Initializes core services and tree views.
+interface ViewStartupLifecycle {
+  historyPending: boolean;
+  pinnedPending: boolean;
+  disposed: boolean;
+  settled: Deferred<void>;
+}
+
+// Always release startup waiters, including activation errors and disposal.
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  const startup: ViewStartupLifecycle = {
+    historyPending: true,
+    pinnedPending: true,
+    disposed: false,
+    settled: createDeferred<void>(),
+  };
+  context.subscriptions.push({ dispose: () => {
+    startup.disposed = true;
+    startup.historyPending = false;
+    startup.pinnedPending = false;
+    startup.settled.resolve(undefined);
+  } });
+  try {
+    await activateExtension(context, startup);
+  } finally {
+    startup.settled.resolve(undefined);
+  }
+}
+
+async function activateExtension(context: vscode.ExtensionContext, startup: ViewStartupLifecycle): Promise<void> {
   const config = getConfig();
+  const cancelHistoryStartup = (): void => { startup.historyPending = false; };
+  const cancelPinnedStartup = (): void => { startup.pinnedPending = false; };
   const HISTORY_FILTER_KEY = "codexHistoryViewer.historyFilter.v1";
   const HISTORY_VIEW_MODE_KEY = "codexHistoryViewer.historyViewMode.v1";
   const HISTORY_SORT_ORDER_KEY = "codexHistoryViewer.historySortOrder.v1";
@@ -598,7 +628,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceCodexEnabled", true);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.sourceClaudeEnabled", true);
   void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historySourceSwitchable", true);
-  let historyViewMode: HistoryViewMode = sanitizeHistoryViewMode(context.workspaceState.get(HISTORY_VIEW_MODE_KEY));
+  const historyViewModeRaw = context.workspaceState.get<unknown>(HISTORY_VIEW_MODE_KEY);
+  let historyViewMode: HistoryViewMode = normalizeHistoryViewMode(historyViewModeRaw);
   const historySortOrderRaw = context.workspaceState.get(HISTORY_SORT_ORDER_KEY);
   let historySortOrderExplicit = isHistorySortOrderValue(historySortOrderRaw);
   let historySortOrder: HistorySortOrder = sanitizeHistorySortOrder(historySortOrderRaw, config.historyDateBasis);
@@ -612,7 +643,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyLegacyGroupedRaw,
   );
   let historyProjectScope: ProjectScopeMode = sanitizeProjectScopeMode(historyProjectScopeRaw);
-  const shouldPersistHistoryProjectMigration = historyProjectDisplayRaw === undefined || historyProjectScopeRaw === undefined;
   const shouldClearHistoryProjectFilterForMigration =
     historyProjectDisplayRaw === undefined && sanitizeProjectGrouped(historyLegacyGroupedRaw) && historyProjectCwd !== null;
   if (shouldClearHistoryProjectFilterForMigration) historyProjectCwd = null;
@@ -645,29 +675,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     pinnedLegacyGroupedRaw,
   );
   let pinnedProjectScope: ProjectScopeMode = sanitizeProjectScopeMode(pinnedProjectScopeRaw);
-  const shouldPersistPinnedProjectMigration = pinnedProjectDisplayRaw === undefined || pinnedProjectScopeRaw === undefined;
   const shouldClearPinnedProjectFilterForMigration =
     pinnedProjectDisplayRaw === undefined && sanitizeProjectGrouped(pinnedLegacyGroupedRaw) && pinnedProjectCwd !== null;
   if (shouldClearPinnedProjectFilterForMigration) pinnedProjectCwd = null;
-  if (shouldPersistPinnedProjectMigration || shouldClearPinnedProjectFilterForMigration) {
-    try {
-      await context.workspaceState.update(PINNED_PROJECT_DISPLAY_KEY, pinnedProjectDisplay);
-      await context.workspaceState.update(PINNED_PROJECT_SCOPE_KEY, pinnedProjectScope);
-      if (shouldClearPinnedProjectFilterForMigration) await context.workspaceState.update(PINNED_PROJECT_FILTER_KEY, "");
-    } catch (error) {
-      logger.debug(`pinned.projectState.migration failed error=${sanitizeDebugError(error)}`);
-    }
-  }
   const resolveHistoryProjectGroupKey = (cwd: string): string | null =>
     projectAssociationStore.getGroupCanonicalProjectKey(cwd) ?? normalizeProjectKey(cwd);
   const historyFilterStateV3Raw = context.workspaceState.get<unknown>(HISTORY_FILTER_STATE_V3_KEY);
   const historyFilterStateV2Raw = context.workspaceState.get<unknown>(HISTORY_FILTER_STATE_V2_KEY);
-  const historyFilterStateRaw = historyFilterStateV3Raw ?? historyFilterStateV2Raw;
+  // Only an absent key is a fresh workspace; explicit null is corrupt saved data.
+  const historyFilterStateRaw = historyFilterStateV3Raw === undefined ? historyFilterStateV2Raw : historyFilterStateV3Raw;
   const displayTargetPreferenceRaw = context.workspaceState.get<unknown>(HISTORY_DISPLAY_TARGET_PREFERENCE_KEY);
   let historyFilterStateCorrupt = false;
   let historyFilterStateToPersist: HistoryFilterStateV3 | null = null;
   let historyDisplayTargetPreferenceToPersist = false;
-  let historyProjectScopeToPersist: ProjectScopeMode | null = null;
   let historyProjectSelection: ProjectSelection;
   if (historyFilterStateRaw === undefined) {
     const legacyScopeCwd = historyProjectScope === "currentGroup"
@@ -686,7 +706,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     historyProjectSelection = restoredProjectState.projects;
     if (historyProjectScope !== restoredProjectState.scope) {
       historyProjectScope = restoredProjectState.scope;
-      historyProjectScopeToPersist = historyProjectScope;
     }
     historyProjectCwd = getSingleProjectSelectionCwd(historyProjectSelection);
     historyDisplayTarget = historyDisplayTargetFromArchiveLocation(archiveLocationFilter);
@@ -725,7 +744,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       historyFilter = { kind: "all" };
       historyProjectSelection = { kind: "none" };
       historyProjectCwd = null;
-      if (historyProjectScope !== "all") historyProjectScopeToPersist = "all";
       historyProjectScope = "all";
       historySourceFilter = resolveConstrainedHistorySourceFilter("all", config);
       historyTagFilter = [];
@@ -743,7 +761,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       historyProjectCwd = getSingleProjectSelectionCwd(historyProjectSelection);
       if (historyProjectScope !== restoredProjectState.scope) {
         historyProjectScope = restoredProjectState.scope;
-        historyProjectScopeToPersist = historyProjectScope;
       }
       historySourceFilter = resolveConstrainedHistorySourceFilter(parsed.source, config);
       historyTagFilter = parsed.tags;
@@ -783,39 +800,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       context.workspaceState.get(ARCHIVE_LOCATION_FILTER_KEY),
       context.workspaceState.get(LEGACY_SHOW_ARCHIVED_SESSIONS_KEY),
     ) !== archiveLocationFilter;
-  if (
-    historyFilterStateToPersist ||
-    historyDisplayTargetPreferenceToPersist ||
-    historyProjectScopeToPersist ||
-    shouldPersistArchiveLocation ||
-    shouldPersistHistoryProjectMigration ||
-    shouldClearHistoryProjectFilterForMigration
-  ) {
-    try {
-      await commitWorkspaceStateTransaction([
-        ...(shouldPersistArchiveLocation
-          ? [{ key: ARCHIVE_LOCATION_FILTER_KEY, value: archiveLocationFilter }]
-          : []),
-        ...(historyFilterStateToPersist
-          ? [{ key: HISTORY_FILTER_STATE_V3_KEY, value: historyFilterStateToPersist }]
-          : []),
-        ...(historyDisplayTargetPreferenceToPersist
-          ? [{ key: HISTORY_DISPLAY_TARGET_PREFERENCE_KEY, value: historyDisplayTarget }]
-          : []),
-        ...(shouldPersistHistoryProjectMigration
-          ? [{ key: HISTORY_PROJECT_DISPLAY_KEY, value: historyProjectDisplay }]
-          : []),
-        ...(shouldPersistHistoryProjectMigration || historyProjectScopeToPersist
-          ? [{ key: HISTORY_PROJECT_SCOPE_KEY, value: historyProjectScope }]
-          : []),
-        ...(shouldClearHistoryProjectFilterForMigration
-          ? [{ key: HISTORY_PROJECT_FILTER_KEY, value: "" }]
-          : []),
-      ]);
-    } catch (error) {
-      logger.debug(`history.filterState.startup persist failed error=${sanitizeDebugError(error)}`);
-    }
-  }
+  // Defer migrations and defaults until the initial index can resolve currentGroup.
   updateArchivedSessionsContext();
   if (historyFilterStateCorrupt) {
     void vscode.window.showWarningMessage(t("history.filterState.invalid"));
@@ -1043,20 +1028,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const syncProjectScopeFiltersToProviders = (): void => {
-    let scopeChanged = false;
-    if (!resolveCurrentWorkspaceFolder()) {
-      if (pinnedProjectScope === "currentGroup") {
+    if (!startup.pinnedPending && !resolveCurrentWorkspaceFolder() && pinnedProjectScope === "currentGroup") {
+      // Serialize normalization with project commands and the startup transaction.
+      void enqueuePinnedFilterTransition(async () => {
+        if (startup.disposed || resolveCurrentWorkspaceFolder() || pinnedProjectScope !== "currentGroup") return;
+        await commitWorkspaceStateTransaction([{ key: PINNED_PROJECT_SCOPE_KEY, value: "all" }]);
+        if (startup.disposed) return;
         pinnedProjectScope = "all";
-        void context.workspaceState.update(PINNED_PROJECT_SCOPE_KEY, pinnedProjectScope);
-        scopeChanged = true;
-      }
+        pinnedProvider.setProjectScopeFilter(null);
+        updatePinnedViewDescription();
+      }).catch((error) => {
+        logger.debug(`pinned.projectScope.normalize failed error=${sanitizeDebugError(error)}`);
+        if (!startup.disposed) void vscode.window.showErrorMessage(t("viewOptions.failed"));
+      });
     }
     historyProvider.setProjectSelection(historyProjectSelection);
     pinnedProvider.setProjectScopeFilter(resolveProjectScopeCwd(pinnedProjectScope));
-    if (scopeChanged) {
-      updateHistoryViewDescription();
-      updatePinnedViewDescription();
-    }
   };
 
   const isCodexSourceEnabled = (sourceFilter: SessionSourceFilter): boolean =>
@@ -1757,6 +1744,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     next: PinnedFilterState | (() => PinnedFilterState),
     opts: { persist: boolean },
   ): Promise<boolean> => enqueuePinnedFilterTransition(async () => {
+    if (startup.disposed) return false;
     const requested = typeof next === "function" ? next() : next;
     const nextFilter = sanitizeDateScope(requested.date);
     const nextProjectCwd = sanitizeProjectCwd(requested.projectCwd);
@@ -1796,6 +1784,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ]);
     }
 
+    if (startup.disposed) return false;
     pinnedFilter = nextFilter;
     pinnedProjectCwd = nextProjectCwd;
     pinnedSourceFilter = nextSource;
@@ -1836,23 +1825,37 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }), opts);
 
   const applyPinnedProjectState = async (
-    next: { projectCwd?: string | null; display?: ProjectDisplayMode; scope?: ProjectScopeMode },
+    next:
+      | { projectCwd?: string | null; display?: ProjectDisplayMode; scope?: ProjectScopeMode }
+      | (() => { projectCwd?: string | null; display?: ProjectDisplayMode; scope?: ProjectScopeMode }),
     opts: { persist: boolean },
   ): Promise<void> => {
-    if ("projectCwd" in next) pinnedProjectCwd = sanitizeProjectCwd(next.projectCwd);
-    if (next.display) pinnedProjectDisplay = sanitizeProjectDisplayMode(next.display);
-    if (next.scope) pinnedProjectScope = sanitizeProjectScopeMode(next.scope);
-    pinnedProvider.setProjectFilter(pinnedProjectCwd);
-    pinnedProvider.setProjectScopeFilter(resolveProjectScopeCwd(pinnedProjectScope));
-    pinnedProvider.setProjectGrouped(pinnedProjectDisplay === "project");
-    pinnedProvider.refresh();
-    updatePinnedViewDescription();
-    statusProvider.refresh();
-    if (opts.persist) {
-      await context.workspaceState.update(PINNED_PROJECT_FILTER_KEY, pinnedProjectCwd ?? "");
-      await context.workspaceState.update(PINNED_PROJECT_DISPLAY_KEY, pinnedProjectDisplay);
-      await context.workspaceState.update(PINNED_PROJECT_SCOPE_KEY, pinnedProjectScope);
-    }
+    cancelPinnedStartup();
+    return enqueuePinnedFilterTransition(async () => {
+      if (startup.disposed) return;
+      const requested = typeof next === "function" ? next() : next;
+      if (requested.scope === "currentGroup" && !resolveProjectScopeCwd("currentGroup")) return;
+      const projectCwd = "projectCwd" in requested ? sanitizeProjectCwd(requested.projectCwd) : pinnedProjectCwd;
+      const display = requested.display ? sanitizeProjectDisplayMode(requested.display) : pinnedProjectDisplay;
+      const scope = requested.scope ? sanitizeProjectScopeMode(requested.scope) : pinnedProjectScope;
+      const writes = [
+        ...(projectCwd !== pinnedProjectCwd ? [{ key: PINNED_PROJECT_FILTER_KEY, value: projectCwd ?? "" }] : []),
+        ...(display !== pinnedProjectDisplay ? [{ key: PINNED_PROJECT_DISPLAY_KEY, value: display }] : []),
+        ...(scope !== pinnedProjectScope ? [{ key: PINNED_PROJECT_SCOPE_KEY, value: scope }] : []),
+      ];
+      if (!writes.length) return;
+      if (opts.persist) await commitWorkspaceStateTransaction(writes);
+      if (startup.disposed) return;
+      pinnedProjectCwd = projectCwd;
+      pinnedProjectDisplay = display;
+      pinnedProjectScope = scope;
+      pinnedProvider.setProjectFilter(pinnedProjectCwd);
+      pinnedProvider.setProjectScopeFilter(resolveProjectScopeCwd(pinnedProjectScope));
+      pinnedProvider.setProjectGrouped(pinnedProjectDisplay === "project");
+      pinnedProvider.refresh();
+      updatePinnedViewDescription();
+      statusProvider.refresh();
+    });
   };
 
   const applyPinnedSortMode = async (nextMode: PinnedSortMode, opts: { persist: boolean }): Promise<void> => {
@@ -1869,28 +1872,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   };
 
-  const clearPinnedFilters = (opts: { persist: boolean }): Promise<boolean> =>
-    applyPinnedFilters({
+  const clearPinnedFilters = (opts: { persist: boolean }): Promise<boolean> => {
+    cancelPinnedStartup();
+    return applyPinnedFilters({
       date: { kind: "all" },
       projectCwd: null,
       source: "all",
       tags: [],
       displayTarget: "activeVisible",
     }, opts);
+  };
 
-  const applyHistoryViewMode = async (nextMode: HistoryViewMode, opts: { persist: boolean }): Promise<void> => {
-    const normalized = sanitizeHistoryViewMode(nextMode);
-    if (historyViewMode === normalized) return;
-
-    const revealIdentity = captureHistoryRevealIdentity();
-    historyViewMode = normalized;
-    historyProvider.setViewMode(historyViewMode);
-    historyProvider.refresh();
-    updateHistoryViewDescription();
-    await revealHistorySelection(revealIdentity);
-    if (opts.persist) {
-      await context.workspaceState.update(HISTORY_VIEW_MODE_KEY, historyViewMode);
-    }
+  const applyHistoryViewMode = async (
+    nextMode: HistoryViewMode | (() => HistoryViewMode),
+    opts: { persist: boolean },
+  ): Promise<void> => {
+    cancelHistoryStartup();
+    return enqueueHistoryStateTransition(async () => {
+      const normalized = normalizeHistoryViewMode(typeof nextMode === "function" ? nextMode() : nextMode);
+      if (startup.disposed || historyViewMode === normalized) return;
+      if (opts.persist) await commitWorkspaceStateTransaction([{ key: HISTORY_VIEW_MODE_KEY, value: normalized }]);
+      if (startup.disposed) return;
+      const revealIdentity = captureHistoryRevealIdentity();
+      historyViewMode = normalized;
+      historyProvider.setViewMode(historyViewMode);
+      historyProvider.refresh();
+      updateHistoryViewDescription();
+      await revealHistorySelection(revealIdentity);
+    });
   };
 
   const applyHistorySortOrder = async (nextOrder: HistorySortOrder, opts: { persist: boolean }): Promise<void> => {
@@ -1963,74 +1972,79 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       | { projectCwd?: string | null; display?: ProjectDisplayMode; scope?: ProjectScopeMode }
       | (() => { projectCwd?: string | null; display?: ProjectDisplayMode; scope?: ProjectScopeMode }),
     opts: { persist: boolean; rerunSearch?: boolean },
-  ): Promise<void> => enqueueHistoryStateTransition(async (rerunAbortEpoch) => {
-    const requested = typeof next === "function" ? next() : next;
-    const previousProjects = historyProjectSelection;
-    const previousProjectScope = historyProjectScope;
-    const previousProjectDisplay = historyProjectDisplay;
-    let nextProjectCwd = historyProjectCwd;
-    let nextProjectSelection = historyProjectSelection;
-    let nextProjectScope = historyProjectScope;
-    let nextProjectDisplay = historyProjectDisplay;
-    if ("projectCwd" in requested) {
-      nextProjectCwd = sanitizeProjectCwd(requested.projectCwd);
-      nextProjectSelection = projectSelectionFromCwds(nextProjectCwd, null, resolveHistoryProjectGroupKey);
-      nextProjectScope = "all";
-    }
-    if (requested.display) nextProjectDisplay = sanitizeProjectDisplayMode(requested.display);
-    if (requested.scope === "currentGroup") {
-      const currentCwd = resolveProjectScopeCwd("currentGroup");
-      if (!currentCwd) return;
-      nextProjectSelection = projectSelectionFromCwds(currentCwd, null, resolveHistoryProjectGroupKey);
-      nextProjectCwd = getSingleProjectSelectionCwd(nextProjectSelection);
-      nextProjectScope = "currentGroup";
-    } else if (
-      requested.scope === "all" &&
-      previousProjectScope === "currentGroup" &&
-      !("projectCwd" in requested)
-    ) {
-      nextProjectSelection = { kind: "all" };
-      nextProjectCwd = null;
-      nextProjectScope = "all";
-    }
-    const projectsChanged = !isSameProjectSelection(previousProjects, nextProjectSelection);
-    const scopeChanged = previousProjectScope !== nextProjectScope;
-    const displayChanged = previousProjectDisplay !== nextProjectDisplay;
-    if (!projectsChanged && !scopeChanged && !displayChanged) return;
-    if (opts.persist) {
-      await commitWorkspaceStateTransaction([
-        ...(projectsChanged
-          ? [{
-              key: HISTORY_FILTER_STATE_V3_KEY,
-              value: createHistoryFilterStateV3({
-                date: historyFilter,
-                projects: nextProjectSelection,
-                source: historySourceFilter,
-                tags: historyTagFilter,
-                compression: historyCompressionFilter,
-                displayTarget: resolveEffectiveHistoryDisplayTargetValue(),
-              }),
-            }]
-          : []),
-        ...(displayChanged
-          ? [{ key: HISTORY_PROJECT_DISPLAY_KEY, value: nextProjectDisplay }]
-          : []),
-        ...(scopeChanged
-          ? [{ key: HISTORY_PROJECT_SCOPE_KEY, value: nextProjectScope }]
-          : []),
-      ]);
-    }
-    const revealIdentity = captureHistoryRevealIdentity();
-    historyProjectCwd = nextProjectCwd;
-    historyProjectSelection = nextProjectSelection;
-    historyProjectScope = nextProjectScope;
-    historyProjectDisplay = nextProjectDisplay;
-    const rerunSearch =
-      opts.rerunSearch !== false &&
-      (projectsChanged || scopeChanged);
-    if (rerunSearch) scheduleHistoryFilterSearchRerun(rerunAbortEpoch);
-    await refreshCommittedHistoryFilterState(revealIdentity);
-  });
+  ): Promise<void> => {
+    cancelHistoryStartup();
+    return enqueueHistoryStateTransition(async (rerunAbortEpoch) => {
+      if (startup.disposed) return;
+      const requested = typeof next === "function" ? next() : next;
+      const previousProjects = historyProjectSelection;
+      const previousProjectScope = historyProjectScope;
+      const previousProjectDisplay = historyProjectDisplay;
+      let nextProjectCwd = historyProjectCwd;
+      let nextProjectSelection = historyProjectSelection;
+      let nextProjectScope = historyProjectScope;
+      let nextProjectDisplay = historyProjectDisplay;
+      if ("projectCwd" in requested) {
+        nextProjectCwd = sanitizeProjectCwd(requested.projectCwd);
+        nextProjectSelection = projectSelectionFromCwds(nextProjectCwd, null, resolveHistoryProjectGroupKey);
+        nextProjectScope = "all";
+      }
+      if (requested.display) nextProjectDisplay = sanitizeProjectDisplayMode(requested.display);
+      if (requested.scope === "currentGroup") {
+        const currentCwd = resolveProjectScopeCwd("currentGroup");
+        if (!currentCwd) return;
+        nextProjectSelection = projectSelectionFromCwds(currentCwd, null, resolveHistoryProjectGroupKey);
+        nextProjectCwd = getSingleProjectSelectionCwd(nextProjectSelection);
+        nextProjectScope = "currentGroup";
+      } else if (
+        requested.scope === "all" &&
+        previousProjectScope === "currentGroup" &&
+        !("projectCwd" in requested)
+      ) {
+        nextProjectSelection = { kind: "all" };
+        nextProjectCwd = null;
+        nextProjectScope = "all";
+      }
+      const projectsChanged = !isSameProjectSelection(previousProjects, nextProjectSelection);
+      const scopeChanged = previousProjectScope !== nextProjectScope;
+      const displayChanged = previousProjectDisplay !== nextProjectDisplay;
+      if (!projectsChanged && !scopeChanged && !displayChanged) return;
+      if (opts.persist) {
+        await commitWorkspaceStateTransaction([
+          ...(projectsChanged
+            ? [{
+                key: HISTORY_FILTER_STATE_V3_KEY,
+                value: createHistoryFilterStateV3({
+                  date: historyFilter,
+                  projects: nextProjectSelection,
+                  source: historySourceFilter,
+                  tags: historyTagFilter,
+                  compression: historyCompressionFilter,
+                  displayTarget: resolveEffectiveHistoryDisplayTargetValue(),
+                }),
+              }]
+            : []),
+          ...(displayChanged
+            ? [{ key: HISTORY_PROJECT_DISPLAY_KEY, value: nextProjectDisplay }]
+            : []),
+          ...(scopeChanged
+            ? [{ key: HISTORY_PROJECT_SCOPE_KEY, value: nextProjectScope }]
+            : []),
+        ]);
+      }
+      if (startup.disposed) return;
+      const revealIdentity = captureHistoryRevealIdentity();
+      historyProjectCwd = nextProjectCwd;
+      historyProjectSelection = nextProjectSelection;
+      historyProjectScope = nextProjectScope;
+      historyProjectDisplay = nextProjectDisplay;
+      const rerunSearch =
+        opts.rerunSearch !== false &&
+        (projectsChanged || scopeChanged);
+      if (rerunSearch) scheduleHistoryFilterSearchRerun(rerunAbortEpoch);
+      await refreshCommittedHistoryFilterState(revealIdentity);
+    });
+  };
 
   const projectCommittedHistoryFilterState = async (
     revealIdentity: HistoryRevealIdentity | null,
@@ -2109,65 +2123,70 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           compression?: HistoryCompressionFilter;
         }),
     opts: { persist: boolean; rerunSearch?: boolean; projectScopePolicy: HistoryProjectScopePolicy },
-  ): Promise<boolean> => enqueueHistoryStateTransition(async (rerunAbortEpoch) => {
-    const requested = typeof next === "function" ? next() : next;
-    const nextDate = sanitizeDateScope(requested.date);
-    const reconciledProjects = reconcileProjectSelection(requested.projects, resolveHistoryProjectGroupKey);
-    const nextProjectState = resolveHistoryProjectFilterState(
-      historyProjectScope,
-      reconciledProjects,
-      resolveCurrentHistoryProjectSelection(historyProjectSelection),
-      opts.projectScopePolicy,
-    );
-    const nextProjects = nextProjectState.projects;
-    const nextProjectScope = nextProjectState.scope;
-    const nextSource = constrainHistorySourceFilter(requested.source);
-    const nextTags = sanitizeTagFilter(requested.tags);
-    const nextCompression = requested.compression ?? historyCompressionFilter;
-    const requestedDisplayTarget = requested.displayTarget ?? historyDisplayTargetFromArchiveLocation(
-      sanitizeArchiveLocationFilter(requested.archiveLocation),
-    );
-    const nextDisplayTarget = resolveEffectiveHistoryDisplayTarget(
-      requestedDisplayTarget,
-      nextSource,
-      getConfig().enableCodexArchivedSessions,
-    );
-    const changed =
-      !isSameDateScope(historyFilter, nextDate) ||
-      !isSameProjectSelection(historyProjectSelection, nextProjects) ||
-      historyProjectScope !== nextProjectScope ||
-      historySourceFilter !== nextSource ||
-      !isSameTagFilter(historyTagFilter, nextTags) ||
-      historyCompressionFilter !== nextCompression ||
-      resolveEffectiveHistoryDisplayTargetValue() !== nextDisplayTarget ||
-      historyDisplayTarget !== requestedDisplayTarget;
-    const persisted = createHistoryFilterStateV3({
-      date: nextDate,
-      projects: nextProjects,
-      source: nextSource,
-      tags: nextTags,
-      compression: nextCompression,
-      displayTarget: nextDisplayTarget,
-    });
-    if (!changed) return false;
-    if (opts.persist) {
-      await commitHistoryFilterState(persisted, requestedDisplayTarget, nextProjectScope);
-    }
+  ): Promise<boolean> => {
+    if (opts.projectScopePolicy !== "preserve") cancelHistoryStartup();
+    return enqueueHistoryStateTransition(async (rerunAbortEpoch) => {
+      if (startup.disposed) return false;
+      const requested = typeof next === "function" ? next() : next;
+      const nextDate = sanitizeDateScope(requested.date);
+      const reconciledProjects = reconcileProjectSelection(requested.projects, resolveHistoryProjectGroupKey);
+      const nextProjectState = resolveHistoryProjectFilterState(
+        historyProjectScope,
+        reconciledProjects,
+        resolveCurrentHistoryProjectSelection(historyProjectSelection),
+        opts.projectScopePolicy,
+      );
+      const nextProjects = nextProjectState.projects;
+      const nextProjectScope = nextProjectState.scope;
+      const nextSource = constrainHistorySourceFilter(requested.source);
+      const nextTags = sanitizeTagFilter(requested.tags);
+      const nextCompression = requested.compression ?? historyCompressionFilter;
+      const requestedDisplayTarget = requested.displayTarget ?? historyDisplayTargetFromArchiveLocation(
+        sanitizeArchiveLocationFilter(requested.archiveLocation),
+      );
+      const nextDisplayTarget = resolveEffectiveHistoryDisplayTarget(
+        requestedDisplayTarget,
+        nextSource,
+        getConfig().enableCodexArchivedSessions,
+      );
+      const changed =
+        !isSameDateScope(historyFilter, nextDate) ||
+        !isSameProjectSelection(historyProjectSelection, nextProjects) ||
+        historyProjectScope !== nextProjectScope ||
+        historySourceFilter !== nextSource ||
+        !isSameTagFilter(historyTagFilter, nextTags) ||
+        historyCompressionFilter !== nextCompression ||
+        resolveEffectiveHistoryDisplayTargetValue() !== nextDisplayTarget ||
+        historyDisplayTarget !== requestedDisplayTarget;
+      const persisted = createHistoryFilterStateV3({
+        date: nextDate,
+        projects: nextProjects,
+        source: nextSource,
+        tags: nextTags,
+        compression: nextCompression,
+        displayTarget: nextDisplayTarget,
+      });
+      if (!changed) return false;
+      if (opts.persist) {
+        await commitHistoryFilterState(persisted, requestedDisplayTarget, nextProjectScope);
+      }
 
-    const revealIdentity = captureHistoryRevealIdentity();
-    historyFilter = nextDate;
-    historyProjectSelection = nextProjects;
-    historyProjectCwd = getSingleProjectSelectionCwd(historyProjectSelection);
-    historyProjectScope = nextProjectScope;
-    historySourceFilter = nextSource;
-    historyTagFilter = nextTags;
-    historyCompressionFilter = nextCompression;
-    historyDisplayTarget = requestedDisplayTarget;
-    archiveLocationFilter = archiveLocationFromHistoryDisplayTarget(historyDisplayTarget);
-    if (opts.rerunSearch !== false) scheduleHistoryFilterSearchRerun(rerunAbortEpoch);
-    await refreshCommittedHistoryFilterState(revealIdentity);
-    return true;
-  });
+      if (startup.disposed) return false;
+      const revealIdentity = captureHistoryRevealIdentity();
+      historyFilter = nextDate;
+      historyProjectSelection = nextProjects;
+      historyProjectCwd = getSingleProjectSelectionCwd(historyProjectSelection);
+      historyProjectScope = nextProjectScope;
+      historySourceFilter = nextSource;
+      historyTagFilter = nextTags;
+      historyCompressionFilter = nextCompression;
+      historyDisplayTarget = requestedDisplayTarget;
+      archiveLocationFilter = archiveLocationFromHistoryDisplayTarget(historyDisplayTarget);
+      if (opts.rerunSearch !== false) scheduleHistoryFilterSearchRerun(rerunAbortEpoch);
+      await refreshCommittedHistoryFilterState(revealIdentity);
+      return true;
+    });
+  };
 
   type HistoryFilterPatch = {
     compression?: HistoryCompressionFilter;
@@ -4118,11 +4137,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const executeSearch = async (request?: SearchRequest, reservedGeneration?: number): Promise<boolean> => {
     const searchGeneration = reservedGeneration ?? searchExecution.beginSearch();
+    // Startup may enqueue its project condition only after the initial index arrives.
+    await startup.settled.promise;
+    if (startup.disposed || !searchExecution.isCurrent(searchGeneration)) return false;
     // Earlier filter intents must commit before this search captures its scope.
     await historyStateTransitionQueue;
-    if (!searchExecution.isCurrent(searchGeneration)) return false;
+    if (startup.disposed || !searchExecution.isCurrent(searchGeneration)) return false;
     historyFilterSearchRerunHandledRevision = historyFilterSearchRerunRequestRevision;
-    const isCurrentSearchGeneration = (): boolean => searchExecution.isCurrent(searchGeneration);
+    const isCurrentSearchGeneration = (): boolean => !startup.disposed && searchExecution.isCurrent(searchGeneration);
     const config: CodexHistoryViewerConfig = Object.freeze({ ...getConfig() });
     const refreshState = getHistorySearchRefreshState();
     const searchScope = captureCurrentHistorySearchScope();
@@ -4205,6 +4227,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const settleSearch = (searchGeneration: number, published: boolean): void => {
     const ownedAtFinish = searchExecution.isCurrent(searchGeneration);
     const settlement = searchExecution.finishSearch(searchGeneration, published);
+    if (startup.disposed) return;
     if (ownedAtFinish && !published) {
       historyFilterSearchAbortEpoch += 1;
       historyFilterSearchRerunHandledRevision = historyFilterSearchRerunRequestRevision;
@@ -4219,6 +4242,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const rerunVisibleSearch = async (): Promise<void> => {
+    if (startup.disposed) return;
     if (searchExecution.requestAutomaticRerun() === "deferred") return;
     if (searchProvider.root && lastSearchRequest) {
       await executeSearch(lastSearchRequest);
@@ -4779,7 +4803,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.showHistoryLatestView", async () => {
-      await applyHistoryViewMode("latest", { persist: true });
+      await applyHistoryViewMode("sessionsList", { persist: true });
     }),
   );
 
@@ -4791,7 +4815,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.toggleHistoryViewMode", async () => {
-      await applyHistoryViewMode(historyViewMode === "latest" ? "date" : "latest", { persist: true });
+      await applyHistoryViewMode(() => historyViewMode === "sessionsList" ? "date" : "sessionsList", { persist: true });
     }),
   );
 
@@ -4855,6 +4879,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       mode: historyViewMode, display: historyProjectDisplay, scope: historyProjectScope,
     });
     if (!selected) return;
+    cancelHistoryStartup();
     if (selected.kind === "view") {
       await applyHistoryViewMode(selected.value, { persist: true });
       return;
@@ -4870,6 +4895,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       display: pinnedProjectDisplay, scope: pinnedProjectScope,
     });
     if (!selected || selected.kind === "view") return;
+    cancelPinnedStartup();
     if (selected.kind === "scope" && selected.value === "currentGroup" && !resolveCurrentWorkspaceFolder()) {
       void vscode.window.showInformationMessage(t("pinned.project.scope.noWorkspace"));
       return;
@@ -5585,14 +5611,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         allDateLabel: t("pinned.filter.all"),
       });
       if (!change) return;
-      const next = {
+      if (change.kind === "project") cancelPinnedStartup();
+      await applyPinnedFilters(() => ({
         date: change.kind === "date" ? change.date : pinnedFilter,
         projectCwd: change.kind === "project" ? change.projectCwd : pinnedProjectCwd,
         source: change.kind === "source" ? change.source : pinnedSourceFilter,
         displayTarget: change.kind === "displayTarget" ? change.displayTarget : pinnedDisplayTarget,
         tags: change.kind === "tags" ? change.tags : pinnedTagFilter,
-      };
-      await applyPinnedFilters(next, { persist: true });
+      }), { persist: true });
     }),
   );
 
@@ -5667,7 +5693,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       await applyPinnedProjectState(
-        { display: "list", scope: pinnedProjectScope === "currentGroup" ? "all" : "currentGroup" },
+        () => ({ display: "list", scope: pinnedProjectScope === "currentGroup" ? "all" : "currentGroup" }),
         { persist: true },
       );
     }),
@@ -5675,14 +5701,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.showPinnedProjectGrouped", async () => {
-      if (pinnedProjectDisplay === "project" && pinnedProjectScope === "all") return;
       await applyPinnedProjectState({ display: "project", scope: "all" }, { persist: true });
     }),
   );
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.clearPinnedProjectMode", async () => {
-      if (pinnedProjectDisplay === "list" && pinnedProjectScope === "all" && !pinnedProjectCwd) return;
       await applyPinnedProjectState({ projectCwd: null, display: "list", scope: "all" }, { persist: true });
     }),
   );
@@ -5690,7 +5714,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.togglePinnedProjectDisplay", async () => {
       await applyPinnedProjectState(
-        { display: pinnedProjectDisplay === "project" ? "list" : "project" },
+        () => ({ display: pinnedProjectDisplay === "project" ? "list" : "project" }),
         { persist: true },
       );
     }),
@@ -5698,15 +5722,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.togglePinnedProjectScope", async () => {
-      if (pinnedProjectScope === "currentGroup") {
-        await applyPinnedProjectState({ scope: "all" }, { persist: true });
-        return;
-      }
-      if (!resolveCurrentWorkspaceFolder()) {
+      cancelPinnedStartup();
+      if (pinnedProjectScope !== "currentGroup" && !resolveCurrentWorkspaceFolder()) {
         void vscode.window.showInformationMessage(t("pinned.project.scope.noWorkspace"));
         return;
       }
-      await applyPinnedProjectState({ scope: "currentGroup" }, { persist: true });
+      await applyPinnedProjectState(() => ({ scope: pinnedProjectScope === "currentGroup" ? "all" : "currentGroup" }), { persist: true });
     }),
   );
 
@@ -7530,6 +7551,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.toggleHistoryProjectScope", async () => {
+      cancelHistoryStartup();
       if (historyProjectScope !== "currentGroup" && !resolveCurrentWorkspaceFolder()) {
         void vscode.window.showInformationMessage(t("history.project.scope.noWorkspace"));
         return;
@@ -7555,6 +7577,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const registerHistoryProjectScopeCommand = (commandId: string, scope: ProjectScopeMode): void => {
     context.subscriptions.push(
       vscode.commands.registerCommand(commandId, async () => {
+        cancelHistoryStartup();
         if (scope === "currentGroup" && !resolveCurrentWorkspaceFolder()) {
           void vscode.window.showInformationMessage(t("history.project.scope.noWorkspace"));
           return;
@@ -8151,7 +8174,207 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }));
   }
 
+  let startupViewsCompleted = false;
+  const reportStartupFailure = (view: "history" | "pinned", error: unknown): void => {
+    logger.debug(`view.startup.${view} failed error=${sanitizeDebugError(error)}`);
+    if (!startup.disposed && !(error instanceof MementoTransactionError && error.rollbackFailed)) {
+      void vscode.window.showErrorMessage(t("app.startupDisplayApplyFailed", view === "history" ? t("runtime.view.history") : t("runtime.view.pinned")));
+    }
+  };
+  const commitStartupState = async (
+    writes: readonly { key: string; value: unknown }[],
+    isContextCurrent: () => boolean,
+  ): Promise<void> => {
+    const previous = writes.map(({ key }) => ({ key, value: context.workspaceState.get<unknown>(key) }));
+    await commitWorkspaceStateTransaction(writes);
+    // A workspace can change while Memento writes are pending. Never publish a stale current group.
+    if (!startup.disposed && !isContextCurrent()) {
+      const contextError = new Error("The startup project context changed before publication.");
+      try {
+        await commitWorkspaceStateTransaction(previous);
+      } catch (error) {
+        if (!startup.disposed && !(error instanceof MementoTransactionError && error.rollbackFailed)) {
+          void vscode.window.showErrorMessage(t("history.filterState.rollbackFailed"));
+        }
+        throw new MementoTransactionError(contextError, [error]);
+      }
+      throw contextError;
+    }
+  };
+  const normalizeFailedHistoryStartup = (failure: unknown): Promise<void> =>
+    enqueueHistoryStateTransition(async () => {
+      if (startup.disposed) return;
+      const restored = restoreHistoryProjectScopeState(
+        historyProjectScope,
+        historyProjectSelection,
+        resolveCurrentHistoryProjectSelection(historyProjectSelection),
+      );
+      if (restored.scope === historyProjectScope) return;
+      if (!(failure instanceof MementoTransactionError && failure.rollbackFailed)) {
+        try {
+          await commitWorkspaceStateTransaction([{ key: HISTORY_PROJECT_SCOPE_KEY, value: restored.scope }]);
+        } catch (error) {
+          logger.debug(`view.startup.history.normalize failed error=${sanitizeDebugError(error)}`);
+        }
+      }
+      if (startup.disposed) return;
+      // Even when storage is unavailable, never label a stale selection as the current group.
+      historyProjectScope = restored.scope;
+      await refreshCommittedHistoryFilterState(null);
+    });
+  const normalizeFailedPinnedStartup = (failure: unknown): Promise<void> =>
+    enqueuePinnedFilterTransition(async () => {
+      if (startup.disposed || pinnedProjectScope !== "currentGroup" || resolveProjectScopeCwd("currentGroup")) return;
+      if (!(failure instanceof MementoTransactionError && failure.rollbackFailed)) {
+        try {
+          await commitWorkspaceStateTransaction([{ key: PINNED_PROJECT_SCOPE_KEY, value: "all" }]);
+        } catch (error) {
+          logger.debug(`view.startup.pinned.normalize failed error=${sanitizeDebugError(error)}`);
+        }
+      }
+      if (startup.disposed) return;
+      pinnedProjectScope = "all";
+      pinnedProvider.setProjectScopeFilter(null);
+      updatePinnedViewDescription();
+    });
+  const finishStartupViews = async (indexAvailable: boolean): Promise<void> => {
+    if (startupViewsCompleted) return;
+    startupViewsCompleted = true;
+    try {
+      if (startup.disposed) return;
+      if (!indexAvailable || !historyService.isCurrentIndexForConfig(getConfig())) {
+        const failure = new Error("The initial history index is unavailable.");
+        // Failed loads still need a valid restored marker before the first tree is published.
+        await normalizeFailedHistoryStartup(failure);
+        await normalizeFailedPinnedStartup(failure);
+        reportStartupFailure("history", failure);
+        return;
+      }
+      try {
+        await enqueueHistoryStateTransition(async () => {
+          if (startup.disposed) return;
+          const requested = startup.historyPending
+            ? resolveHistoryStartupState({
+                startupMode: config.historyStartupMode,
+                viewMode: config.historyDefaultViewMode,
+                display: config.historyDefaultProjectDisplay,
+                scope: config.historyDefaultProjectScope,
+              }, {
+                viewMode: historyViewModeRaw,
+                display: historyProjectDisplayRaw,
+                legacyGrouped: historyLegacyGroupedRaw,
+                scope: historyProjectScopeRaw,
+                projects: historyProjectSelection,
+                corrupt: historyFilterStateCorrupt,
+              }, resolveCurrentHistoryProjectSelection(historyProjectSelection))
+            : {
+                viewMode: historyViewMode,
+                display: historyProjectDisplay,
+                scope: historyProjectScope,
+                projects: historyProjectSelection,
+              };
+          const projectsChanged = !isSameProjectSelection(requested.projects, historyProjectSelection);
+          const nextFilterState = createHistoryFilterStateV3({
+            date: historyFilter,
+            projects: requested.projects,
+            source: historySourceFilter,
+            tags: historyTagFilter,
+            compression: historyCompressionFilter,
+            displayTarget: resolveEffectiveHistoryDisplayTargetValue(),
+          });
+          const writes: { key: string; value: unknown }[] = [];
+          const addChanged = (key: string, value: unknown): void => {
+            if (context.workspaceState.get<unknown>(key) !== value) writes.push({ key, value });
+          };
+          addChanged(HISTORY_VIEW_MODE_KEY, requested.viewMode);
+          addChanged(HISTORY_PROJECT_DISPLAY_KEY, requested.display);
+          addChanged(HISTORY_PROJECT_SCOPE_KEY, requested.scope);
+          if (!historyFilterStateCorrupt && (historyFilterStateToPersist || projectsChanged)) {
+            if (JSON.stringify(context.workspaceState.get(HISTORY_FILTER_STATE_V3_KEY)) !== JSON.stringify(nextFilterState)) {
+              writes.push({ key: HISTORY_FILTER_STATE_V3_KEY, value: nextFilterState });
+            }
+          }
+          if (historyDisplayTargetPreferenceToPersist) addChanged(HISTORY_DISPLAY_TARGET_PREFERENCE_KEY, historyDisplayTarget);
+          if (shouldPersistArchiveLocation) addChanged(ARCHIVE_LOCATION_FILTER_KEY, archiveLocationFilter);
+          if (shouldClearHistoryProjectFilterForMigration) addChanged(HISTORY_PROJECT_FILTER_KEY, "");
+          await commitStartupState(writes, () => requested.scope !== "currentGroup" ||
+            isSameProjectSelection(requested.projects, resolveCurrentHistoryProjectSelection(requested.projects) ?? { kind: "none" }));
+          if (startup.disposed) return;
+          historyViewMode = requested.viewMode;
+          historyProjectDisplay = requested.display;
+          historyProjectScope = requested.scope;
+          historyProjectSelection = requested.projects;
+          historyProjectCwd = getSingleProjectSelectionCwd(requested.projects);
+          historyProvider.setViewMode(historyViewMode);
+          await refreshCommittedHistoryFilterState(null);
+        });
+      } catch (error) {
+        await normalizeFailedHistoryStartup(error);
+        reportStartupFailure("history", error);
+      } finally {
+        startup.historyPending = false;
+      }
+      try {
+        await enqueuePinnedFilterTransition(async () => {
+          if (startup.disposed) return;
+          const currentScopeCwd = resolveProjectScopeCwd("currentGroup");
+          const requested = startup.pinnedPending
+            ? resolvePinnedStartupState({
+                startupMode: config.pinnedStartupMode,
+                display: config.pinnedDefaultProjectDisplay,
+                scope: config.pinnedDefaultProjectScope,
+              }, {
+                display: pinnedProjectDisplayRaw,
+                legacyGrouped: pinnedLegacyGroupedRaw,
+                scope: pinnedProjectScopeRaw,
+                projectCwd: pinnedProjectCwd,
+              }, currentScopeCwd !== null)
+            : { display: pinnedProjectDisplay, scope: pinnedProjectScope, projectCwd: pinnedProjectCwd };
+          if (!currentScopeCwd) requested.scope = "all";
+          const writes: { key: string; value: unknown }[] = [];
+          const addChanged = (key: string, value: unknown): void => {
+            if (context.workspaceState.get<unknown>(key) !== value) writes.push({ key, value });
+          };
+          addChanged(PINNED_PROJECT_DISPLAY_KEY, requested.display);
+          addChanged(PINNED_PROJECT_SCOPE_KEY, requested.scope);
+          if (requested.projectCwd !== pinnedProjectCwd || shouldClearPinnedProjectFilterForMigration) {
+            addChanged(PINNED_PROJECT_FILTER_KEY, requested.projectCwd ?? "");
+          }
+          await commitStartupState(writes, () => requested.scope !== "currentGroup" ||
+            normalizeProjectKey(resolveProjectScopeCwd("currentGroup") ?? "") === normalizeProjectKey(currentScopeCwd ?? ""));
+          if (startup.disposed) return;
+          pinnedProjectDisplay = requested.display;
+          pinnedProjectScope = requested.scope;
+          pinnedProjectCwd = requested.projectCwd;
+          pinnedProvider.setProjectFilter(pinnedProjectCwd);
+          pinnedProvider.setProjectScopeFilter(resolveProjectScopeCwd(pinnedProjectScope));
+          pinnedProvider.setProjectGrouped(pinnedProjectDisplay === "project");
+          pinnedProvider.refresh();
+          updatePinnedViewDescription();
+          statusProvider.refresh();
+        });
+      } catch (error) {
+        await normalizeFailedPinnedStartup(error);
+        reportStartupFailure("pinned", error);
+      } finally {
+        startup.pinnedPending = false;
+      }
+    } finally {
+      startup.historyPending = false;
+      startup.pinnedPending = false;
+      // Drain both queues, including operations received while an earlier save was pending.
+      while (!startup.disposed) {
+        const historyQueue = historyStateTransitionQueue;
+        const pinnedQueue = pinnedFilterTransitionQueue;
+        await Promise.race([Promise.all([historyQueue, pinnedQueue]), startup.settled.promise]);
+        if (historyQueue === historyStateTransitionQueue && pinnedQueue === pinnedFilterTransitionQueue) break;
+      }
+      startup.settled.resolve(undefined);
+    }
+  };
+
   const completeInitialTreeLoad = (): void => {
+    if (startup.disposed) return;
     historyProvider.markInitialLoadComplete();
     pinnedProvider.markInitialLoadComplete();
     refreshViews();
@@ -8187,9 +8410,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   } catch (error) {
     logger.debug(`history.cacheImmediate failed error=${sanitizeDebugError(error)}`);
   }
+  if (startup.disposed) {
+    initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
+    return;
+  }
 
   if (loadedCachedIndex) {
     try {
+      await finishStartupViews(true);
+      if (startup.disposed) {
+        initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
+        return;
+      }
       completeInitialTreeLoad();
       runCodexAgentRunsConfigurationChange("activation.cached");
       runInitialBackgroundRefresh();
@@ -8198,20 +8430,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       throw error;
     }
   } else {
+    let initialIndexAvailable = false;
     try {
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
         async () => {
           await refreshHistoryIndex(false);
+          initialIndexAvailable = true;
         },
       );
     } finally {
       try {
+        await finishStartupViews(initialIndexAvailable);
         completeInitialTreeLoad();
       } finally {
         initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
       }
     }
+    if (startup.disposed) return;
     runCodexAgentRunsConfigurationChange("activation.refreshed");
   }
   await autoRefreshService.configure(getConfig(), computeAutoRefreshConsumerVisible(), vscode.window.state.focused);
@@ -8312,11 +8548,6 @@ function sanitizeHistorySourceFilter(value: unknown): SessionSourceFilter {
   const s = typeof value === "string" ? value.trim().toLowerCase() : "";
   if (s === "codex" || s === "claude") return s;
   return "all";
-}
-
-function sanitizeHistoryViewMode(value: unknown): HistoryViewMode {
-  const s = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return s === "latest" ? "latest" : "date";
 }
 
 function sanitizeHistorySortOrder(value: unknown, historyDateBasis: CodexHistoryViewerConfig["historyDateBasis"]): HistorySortOrder {

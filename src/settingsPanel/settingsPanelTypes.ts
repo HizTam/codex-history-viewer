@@ -4,6 +4,7 @@ export type SettingsPanelValue = boolean | number | string | readonly string[];
 
 export type SettingsTargetKind = "global" | "workspace" | "workspaceFolder";
 export type SettingsSourceBadge = "codex" | "claude";
+export type SettingsApplyTiming = "windowReload" | "sessionReload";
 
 export interface SettingsTargetModel {
   id: string;
@@ -45,6 +46,7 @@ export interface SettingsSettingModel {
   experimental: boolean;
   sourceBadge?: SettingsSourceBadge;
   resourceImpact: boolean;
+  applyTiming?: SettingsApplyTiming;
   canReset: boolean;
   disabledReason?: string;
   overriddenBy?: string;
@@ -141,6 +143,10 @@ export interface SettingsPanelLabels {
   codexBadge: string;
   claudeBadge: string;
   resourceImpact: string;
+  windowReloadLabel: string;
+  windowReloadDescription: string;
+  sessionReloadLabel: string;
+  sessionReloadDescription: string;
   overridden: string;
   resetSetting: string;
   browseFolder: string;

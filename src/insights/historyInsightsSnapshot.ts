@@ -1,3 +1,4 @@
+import { parseHistoryViewMode } from "../types/historyViewMode";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { sanitizeDateScope } from "../types/dateScope";
 import { isValidYyyyMmDd } from "../utils/dateUtils";
@@ -124,14 +125,14 @@ export function sanitizeHistoryInsightsSnapshot(value: unknown): HistoryInsights
   const displayTarget = descriptor.displayTarget === undefined
     ? undefined
     : descriptor.displayTarget;
-  const viewMode = descriptor.viewMode;
+  const viewMode = parseHistoryViewMode(descriptor.viewMode);
   const sortOrder = descriptor.sortOrder;
   if (source !== "all" && source !== "codex" && source !== "claude") return null;
   if (archiveLocation !== "activeOnly" && archiveLocation !== "all" && archiveLocation !== "archivedOnly") return null;
   if (displayTarget !== undefined && !isHistoryDisplayTarget(displayTarget)) return null;
   if (descriptor.compression !== undefined && !isHistoryCompressionFilter(descriptor.compression)) return null;
   if (displayTarget !== undefined && archiveLocationFromHistoryDisplayTarget(displayTarget) !== archiveLocation) return null;
-  if (viewMode !== "date" && viewMode !== "latest") return null;
+  if (viewMode === undefined) return null;
   if (!isHistoryInsightsSortOrder(sortOrder)) return null;
   if (typeof descriptor.projectGrouped !== "boolean") return null;
   const projectCwd = nullableBoundedString(descriptor.projectCwd, 32_768);

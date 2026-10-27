@@ -475,13 +475,20 @@
     const text = element("div", "setting-text");
     const labelLine = element("div", "setting-label-line");
     labelLine.append(element("div", "setting-label", setting.label));
-    appendBadges(labelLine, setting);
+    const timingBadge = appendBadges(labelLine, setting);
     text.append(labelLine, element("p", "setting-description", setting.description));
     header.append(text);
 
     const controlArea = element("div", "setting-control-area");
     const disabled = Boolean(setting.disabledReason);
-    controlArea.append(createControl(setting, disabled));
+    const control = createControl(setting, disabled);
+    const primaryInput = control.querySelector("input, select");
+    if (timingBadge && primaryInput) {
+      // Preserve other descriptions while announcing when this setting takes effect.
+      const describedBy = primaryInput.getAttribute("aria-describedby");
+      primaryInput.setAttribute("aria-describedby", [describedBy, timingBadge.id].filter(Boolean).join(" "));
+    }
+    controlArea.append(control);
     const actionSlot = element("div", "setting-action-slot");
     if (setting.canReset) {
       const reset = iconButton("reset", snapshot.labels.resetSetting, "setting-icon-button");
@@ -515,6 +522,7 @@
   }
 
   function appendBadges(container, setting) {
+    let timingBadge;
     if (setting.sourceBadge === "codex") {
       container.append(badge(snapshot.labels.codexBadge, "source codex"));
     } else if (setting.sourceBadge === "claude") {
@@ -522,6 +530,17 @@
     }
     if (setting.experimental) {
       container.append(badge(snapshot.labels.experimental, "experimental"));
+    }
+    if (setting.applyTiming === "windowReload" || setting.applyTiming === "sessionReload") {
+      const windowReload = setting.applyTiming === "windowReload";
+      const label = windowReload ? snapshot.labels.windowReloadLabel : snapshot.labels.sessionReloadLabel;
+      const description = windowReload ? snapshot.labels.windowReloadDescription : snapshot.labels.sessionReloadDescription;
+      timingBadge = badge(label, "apply-timing");
+      timingBadge.id = "setting-apply-timing-" + setting.key;
+      timingBadge.title = description;
+      timingBadge.setAttribute("role", "img");
+      timingBadge.setAttribute("aria-label", description);
+      container.append(timingBadge);
     }
     if (setting.resourceImpact) {
       container.append(createResourceImpactIndicator());
@@ -532,6 +551,7 @@
     if (setting.overriddenBy) {
       container.append(badge(snapshot.labels.overridden + ": " + setting.overriddenBy, "overridden"));
     }
+    return timingBadge;
   }
 
   function createControl(setting, dependencyDisabled) {
