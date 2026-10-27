@@ -29,6 +29,8 @@ Starting with 2.15.0, the Command Palette groups History and Pinned view options
 
 ## History, Pinned, and Source Filters
 
+Use **Open Settings > History List > History startup display** or **Pinned startup display** to configure each view's startup behavior. These user-level [startup settings](../README.md#startup-display) take effect after **Reload Window** or a VS Code restart. The presentation commands below update the current view and its saved workspace state.
+
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
 | Filter History... | `codexHistoryViewer.filterHistory` | Opens the History filter picker (date range/projects/source/display target/tags/compression). |
@@ -43,7 +45,7 @@ Starting with 2.15.0, the Command Palette groups History and Pinned view options
 | Clear Project Mode | `codexHistoryViewer.clearHistoryProjectMode` | Returns History to the ungrouped session list across all projects and clears an explicit project selection. |
 | Toggle History Project Display | `codexHistoryViewer.toggleHistoryProjectDisplay` | Toggles History between the session list and project-grouped display. |
 | Toggle History Current Project Group Scope | `codexHistoryViewer.toggleHistoryProjectScope` | Toggles History between all projects and the current workspace's associated project group. |
-| Show Sessions List | `codexHistoryViewer.showHistoryLatestView` | Switches History to the flat session-list view while preserving the selected sort order. |
+| Show Sessions List | `codexHistoryViewer.showHistoryLatestView` | Switches History to the flat session-list view (`sessionsList`) while preserving the selected sort order. The existing command ID is retained for compatibility. |
 | Show by Date | `codexHistoryViewer.showHistoryDateView` | Switches History to the date-grouped view. |
 | Toggle History View Format | `codexHistoryViewer.toggleHistoryViewMode` | Toggles History between the flat session-list and date-grouped views while preserving the selected sort order. |
 | Show Codex History Only | `codexHistoryViewer.filterHistorySourceCodex` | Limits History to Codex sessions only. |
@@ -161,7 +163,7 @@ Use the open icon on an Agent Runs node to open that history. An already open ta
 
 ## Session Actions
 
-The toggle immediately to the right of **Custom Title** switches the current viewer between a dedicated tab and a temporary tab. Its tooltip shows the current state: **Dedicated tab** or **Temporary tab**. It preserves the displayed history and its scroll, selection, search, and expanded cards. Other temporary tabs remain unchanged. Selecting a new history reuses the most recently active temporary tab; an already open dedicated tab for that history takes precedence. Multiple temporary tabs survive window restoration when **Restore Webview Tabs After Reload** is enabled, and changing tab mode preserves Branch Navigation. This header control has no Command Palette command and is independent of pinning.
+The toggle immediately to the right of **Custom Title** switches the current viewer between a dedicated tab and a temporary tab. Its tooltip shows the current state: **Dedicated tab** or **Temporary tab**. It preserves the displayed history and its scroll, selection, search, and expanded cards. Other temporary tabs remain unchanged. Selecting a new history reuses the most recently active temporary tab; an already open dedicated tab for that history takes precedence. Multiple temporary tabs survive window restoration when **Restore extension tabs after reload** is enabled, and changing tab mode preserves Branch Navigation. This header control has no Command Palette command and is independent of pinning.
 
 When editing the last prompt in Codex changes the session file for the same conversation, the open Session Viewer keeps displaying its current JSONL file. Auto-refresh and manual reload continue to use that file. When a newer main history is detected, a notice below the header offers **Go to main history**, and the resume button is replaced by the same action. This also covers a first-prompt edit that creates a standalone JSONL without an inherited history reference. This switches the history displayed inside the viewer. Use the usual resume button after switching to resume through the Codex extension or CLI. The notice is available even when Branch Navigation is disabled; switching to the main history has no Command Palette command.
 

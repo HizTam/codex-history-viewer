@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.19.0** (2026-10-25).
+Latest release: **2.20.0** (2026-10-27).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -16,6 +16,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 
 - **Revisit past Codex CLI and Claude Code sessions** that are no longer easy to access from the active editor flow.
 - Browse sessions in a year / month / day tree, a sortable session list, or project views with related project groups.
+- Choose independent startup defaults for History and Pinned, or restore each workspace's previous view state.
 - Open History Insights to review activity, token usage, file changes, and breakdowns by source, model, project, and tool.
 - Optionally include Codex `archived_sessions`, hide sessions without changing provider files, and switch among active, archived, and hidden display targets.
 - Optionally read compressed Codex histories (`.jsonl.zst`) in History, Search, the Session Viewer, History Insights, and File AI Change History. (Experimental; disabled by default.)
@@ -64,7 +65,9 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 
 ## History and Pinned Organization
 
-History and Pinned separate project organization into display and scope controls. Display can switch between **List** and **Project** views, while scope can switch between **All** and **Current Project Group**. Project matching is case-insensitive across platforms. Project views preserve the existing layout choice: session-list history becomes `Project -> Session`, while date-grouped history becomes `Project -> Year -> Month -> Day -> Session`.
+History and Pinned separate project organization into display and scope controls. Display can switch between **List View** and **Project View**, while scope can switch between **All Project Groups** and **Current Project Group**. Project matching is case-insensitive across platforms. Project views preserve the existing layout choice: session-list history becomes `Project -> Session`, while date-grouped history becomes `Project -> Year -> Month -> Day -> Session`.
+
+To choose each view's startup behavior and defaults, see [Startup Display](#startup-display).
 
 Project folders can have extension-local aliases from the History or Pinned project context menu. Aliases are stored in VS Code extension state without changing Codex or Claude Code history files. When set, aliases appear in project headings, session descriptions, tooltips, filter summaries, Status, and Search scope/session display while the original path remains available in detailed metadata.
 
@@ -124,7 +127,7 @@ Progress updates and thinking text saved in Claude Code histories also appear in
 
 To display bookmarks from the Claude Code extension, enable **Open Settings > History Sources > Claude Code > Display Claude Code bookmarks**. This setting is disabled by default and requires the Claude Code source and **Show date guide and bookmarks** to be enabled. Matching cards in main Claude Code session histories and their date-guide markers show blue read-only marks, separately from this extension's yellow bookmarks. These marks cannot be removed here; add or remove them in the Claude Code extension and the changes are reflected automatically. The two sets of bookmarks remain independent.
 
-Session tabs preserve useful state across reload and auto-refresh, including scroll position, selected message, expanded cards/diffs, detail visibility, diff wrapping, and in-page search state. The experimental opt-in **Restore Webview Tabs After Reload** setting can also restore session tabs, File AI Change History, History Insights, and the dedicated settings page after **Developer: Reload Window** or VS Code restart. It is disabled by default because VS Code can defer tab restoration and may occasionally create duplicate tabs when the same history is opened again.
+Session tabs preserve useful state across reload and auto-refresh, including scroll position, selected message, expanded cards/diffs, detail visibility, diff wrapping, and in-page search state. The experimental opt-in **Restore extension tabs after reload** setting can also restore session tabs, File AI Change History, History Insights, and the dedicated settings page after **Developer: Reload Window** or VS Code restart. It is disabled by default because VS Code can defer tab restoration and may occasionally create duplicate tabs when the same history is opened again.
 
 When restoration is enabled, multiple temporary session tabs retain their histories and tab modes across restart.
 
@@ -316,12 +319,30 @@ Common settings include:
 - `codexHistoryViewer.ui.timeGuide.enabled`: enable compact date guides and bookmark controls.
 - `codexHistoryViewer.ui.language`: choose `auto`, `en`, or `ja`.
 
+### Startup Display
+
+Under **Open Settings > History List**, use **History startup display** or **Pinned startup display** to configure each view independently. These are User settings shared across workspaces.
+
+**Restore previous state** (`restore`, the default) restores the state saved for the current workspace and uses configured defaults only for items without a saved value. **Start from configured defaults** (`defaults`) reapplies that view's defaults on every startup, replacing its project filters with the configured scope. Date, source, tag, and other non-project filters, plus the sort order, are preserved.
+
+All keys below use the `codexHistoryViewer.` prefix:
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| `history.startupMode` / `pinned.startupMode` | `restore` / `defaults` | `restore` |
+| `history.defaultViewMode` | `date` (**By Date**) / `sessionsList` (**Sessions List**) | `date` |
+| `history.defaultProjectDisplay` / `pinned.defaultProjectDisplay` | `list` (**List View**) / `project` (**Project View**) | `list` |
+| `history.defaultProjectScope` / `pinned.defaultProjectScope` | `all` (**All Project Groups**) / `currentGroup` (**Current Project Group**) | `all` |
+
+Changes to these settings take effect after **Developer: Reload Window** or a VS Code restart. Manual view changes remain available and are saved even when starting from configured defaults.
+
 ### Suggested Settings
 
-The defaults are designed for regular use. These settings are useful starting points when you want a lighter UI, richer search, or more active refresh behavior:
+The defaults are designed for regular use. These settings are useful starting points for consistent startup views, a lighter UI, richer search, or more active refresh behavior:
 
 | Situation                                            | Suggested settings                                                                                                                                        |
 | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The same starting view in every workspace            | Set `codexHistoryViewer.history.startupMode` or `codexHistoryViewer.pinned.startupMode` to `defaults`, then choose its project display and scope defaults in [Startup Display](#startup-display). |
 | Large sessions or many diffs                         | Keep `codexHistoryViewer.chat.performanceMode` set to `auto`, or use `simplified` if session views feel heavy.                                            |
 | Turn boundaries without live effects                 | Set `codexHistoryViewer.chat.turnTimeline.mode` to `basic`.                                                                                               |
 | Live turn tracking                                   | Set `codexHistoryViewer.chat.turnTimeline.mode` to `live`.                                                                                                |
@@ -350,13 +371,10 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.19.0
+## What's New in 2.20.0
 
-- Updated Node.js used for development and builds to 24.22.1 to address the Brotli vulnerability CVE-2026-111497.
-- Updated Markdown and diagram rendering dependencies to address known vulnerabilities, including the Markdown denial-of-service vulnerability CVE-2026-111758.
-- Added an experimental feature for Linux Remote SSH environments to inspect and individually stop remote Codex App Servers for VS Code. Available under **Open Settings > Maintenance > Troubleshooting**.
-
-**Note:** The remote server feature requires Python 3.9 or later on the remote host and Linux pidfd support.
+- Added independent startup display settings for History and Pinned. Each view can restore its previous state or start from configured defaults on every startup.
+- Added startup defaults for project display and project scope. History can also start in By Date or Sessions List view.
 
 ## Changelog
 

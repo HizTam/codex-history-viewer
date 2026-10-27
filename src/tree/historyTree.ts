@@ -1,3 +1,4 @@
+import { normalizeHistoryViewMode, type HistoryViewMode } from "../types/historyViewMode";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { matchesHistoryCompression, type HistoryCompressionFilter } from "../types/historyFilterState";
@@ -86,7 +87,8 @@ import type {
 import { CodexAgentRunsService } from "../agents/codexAgentRunsService";
 import { SessionIconResolver } from "../ui/sessionIconResolver";
 
-export type HistoryViewMode = "date" | "latest";
+export type { HistoryViewMode } from "../types/historyViewMode";
+
 export type HistorySortOrder =
   | "createdDesc"
   | "createdAsc"
@@ -176,7 +178,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.hiddenSessionStore = hiddenSessionStore;
     this.projectAliasStore = projectAliasStore;
     this.projectAssociationStore = projectAssociationStore;
-    this.viewMode = viewMode;
+    this.viewMode = normalizeHistoryViewMode(viewMode);
     this.sortOrder = normalizeHistorySortOrder(sortOrder);
     this.filter = filter;
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
@@ -668,7 +670,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   private formatSessionRowDatePrefix(session: SessionSummary, axis: SessionDateAxis): string {
-    const shouldShowFullDate = this.viewMode === "latest" || this.isDateAxisDifferentFromBasis(axis);
+    const shouldShowFullDate = this.viewMode === "sessionsList" || this.isDateAxisDifferentFromBasis(axis);
     if (shouldShowFullDate) return formatSessionDateTimeForAxis(session, axis);
 
     const parts = getSessionDatePartsForAxis(session, axis);
@@ -940,7 +942,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
     if (element instanceof ProjectNode) {
       const sessions = this.getProjectSessions(element.key);
-      if (this.viewMode === "latest") return sessions.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+      if (this.viewMode === "sessionsList") return sessions.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
 
       const filter = this.filter;
       switch (filter.kind) {
@@ -1069,7 +1071,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     if (this.projectGrouped) {
       return this.buildProjectChildren(element, shouldFilterSessions);
     }
-    if (this.viewMode === "latest") {
+    if (this.viewMode === "sessionsList") {
       if (element) return [];
       const nodes = this.getSortedSessions().map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
       return this.withFilteredEmptyFallback(nodes, shouldFilterSessions);
@@ -1221,10 +1223,6 @@ function normalizeTagKey(value: string): string {
 
 function normalizeSourceFilter(value: SessionSourceFilter): SessionSourceFilter {
   return value === "codex" || value === "claude" ? value : "all";
-}
-
-function normalizeHistoryViewMode(value: HistoryViewMode): HistoryViewMode {
-  return value === "latest" ? "latest" : "date";
 }
 
 function formatInsightsDateRangeLabel(range: HistoryInsightsDateRange): string {

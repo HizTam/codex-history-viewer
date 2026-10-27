@@ -59,7 +59,7 @@ export async function promptViewPresentation(
   if (pane === "history") {
     section("view");
     choice({ kind: "view", value: "date" }, current.mode);
-    choice({ kind: "view", value: "latest" }, current.mode);
+    choice({ kind: "view", value: "sessionsList" }, current.mode);
   }
   section("display");
   choice({ kind: "display", value: "list" }, current.display);

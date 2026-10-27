@@ -59,7 +59,7 @@ import {
   readCodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
 
-const SEARCH_INDEX_FILE_VERSION = 34;
+const SEARCH_INDEX_FILE_VERSION = 35;
 const SEARCH_STAT_CONCURRENCY = 8;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;

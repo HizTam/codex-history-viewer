@@ -574,6 +574,12 @@ Copyright (c) 2023 Anthony Fu <https://github.com/antfu>
 Copyright (c) Microsoft Corporation
 
 ===============================================================================
+ansi-sequence-parser (embedded in @shikijs/core)
+Source: https://github.com/blake-mealey/ansi-sequence-parser
+License: MIT (full text in the first MIT section above)
+===============================================================================
+
+===============================================================================
 JavaScript regular-expression runtime components used by Shiki
 ===============================================================================
 

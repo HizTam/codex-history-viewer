@@ -1,5 +1,7 @@
 import { SUPPORTED_LOCALES, matchLocale } from "../localization/localeCatalog";
+import { parseHistoryViewMode } from "../types/historyViewMode";
 import type {
+  SettingsApplyTiming,
   SettingsControlKind,
   SettingsPanelValue,
   SettingsSourceBadge,
@@ -33,6 +35,7 @@ export interface SettingsDefinition {
   experimental?: boolean;
   sourceBadge?: SettingsSourceBadge;
   resourceImpact?: boolean;
+  applyTiming?: SettingsApplyTiming;
   minimum?: number;
   maximum?: number;
   step?: number;
@@ -129,7 +132,8 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
   }),
   definition("delete.useTrash", "general", "general.safety", "switch", "application", true),
   definition("webview.restoreAfterReload", "general", "general.startup", "switch", "window", false, {
-    experimental: true
+    experimental: true,
+    applyTiming: "windowReload"
   }),
 
   definition("sources.enabled", "sources", "sources.load", "multi", "application", ["codex"], {
@@ -200,6 +204,34 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
     }
   ),
   definition("ui.timeGuide.enabled", "history", "history.behavior", "switch", "application", false),
+  definition("history.startupMode", "history", "history.startup", "select", "application", "restore", {
+    applyTiming: "windowReload",
+    options: ["restore", "defaults"].map((value) => option("history.startupMode", value, true))
+  }),
+  definition("history.defaultViewMode", "history", "history.startup", "select", "application", "date", {
+    applyTiming: "windowReload",
+    options: ["date", "sessionsList"].map((value) => option("history.defaultViewMode", value))
+  }),
+  definition("history.defaultProjectDisplay", "history", "history.startup", "select", "application", "list", {
+    applyTiming: "windowReload",
+    options: ["list", "project"].map((value) => option("history.defaultProjectDisplay", value))
+  }),
+  definition("history.defaultProjectScope", "history", "history.startup", "select", "application", "all", {
+    applyTiming: "windowReload",
+    options: ["currentGroup", "all"].map((value) => option("history.defaultProjectScope", value, value === "currentGroup"))
+  }),
+  definition("pinned.startupMode", "history", "pinned.startup", "select", "application", "restore", {
+    applyTiming: "windowReload",
+    options: ["restore", "defaults"].map((value) => option("pinned.startupMode", value, true))
+  }),
+  definition("pinned.defaultProjectDisplay", "history", "pinned.startup", "select", "application", "list", {
+    applyTiming: "windowReload",
+    options: ["list", "project"].map((value) => option("pinned.defaultProjectDisplay", value))
+  }),
+  definition("pinned.defaultProjectScope", "history", "pinned.startup", "select", "application", "all", {
+    applyTiming: "windowReload",
+    options: ["currentGroup", "all"].map((value) => option("pinned.defaultProjectScope", value, value === "currentGroup"))
+  }),
   definition(
     "sessionRow.showTimestamp",
     "history",
@@ -292,7 +324,9 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
   definition("chat.openPosition", "session", "session.content", "select", "application", "top", {
     options: ["top", "lastMessage", "latest"].map((value) => option("chat.openPosition", value))
   }),
-  definition("chat.stickyUserPrompt", "session", "session.content", "switch", "application", true),
+  definition("chat.stickyUserPrompt", "session", "session.content", "switch", "application", true, {
+    applyTiming: "sessionReload"
+  }),
   definition(
     "chat.performanceMode",
     "session",
@@ -595,8 +629,10 @@ export function validateSettingValue(
 
   const allowedValues = definitionItem.options?.map((item) => item.value) ?? [];
   if (definitionItem.control === "select") {
-    return typeof input === "string" && allowedValues.includes(input)
-      ? { ok: true, value: input, error: "invalid" }
+    // Read the legacy view-mode alias while returning only its canonical value.
+    const value = definitionItem.relativeKey === "history.defaultViewMode" ? parseHistoryViewMode(input) : input;
+    return typeof value === "string" && allowedValues.includes(value)
+      ? { ok: true, value, error: "invalid" }
       : { ok: false, error: "invalid" };
   }
 

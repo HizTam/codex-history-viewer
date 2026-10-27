@@ -50,6 +50,7 @@ import {
   extractCodexMessageContent,
   extractCodexProtocolContextText,
   extractCodexSessionStartContextText,
+  isClaudeRequestReplayMetadataRecord,
   isCodexTurnAbortedContent,
   selectClaudeControlContent,
 } from "./chatAttachments";
@@ -334,6 +335,8 @@ export async function createChatTimelineRecordAccumulator(
       observeChatSourceActivityRecord(activityEvidence, obj, record.physicalLineIndex);
     }
 
+    if (source === "claude" && isClaudeRequestReplayMetadataRecord(obj)) return;
+
     if (source === "claude") {
       flushPendingClaudeUsageIfNeeded(obj, items, usageState);
       const completedTurnId = finalizePendingClaudeCompletionIfNeeded(obj, lineIndex, claudeTurnState);
@@ -508,6 +511,8 @@ async function readPatchEntryDetails(
   for await (const record of readSessionJsonlRecords(fsPath, source, { sessionInventory, applyCodexRollbacks: true })) {
     const obj = record.value;
     const lineIndex = record.lineIndex;
+
+    if (source === "claude" && isClaudeRequestReplayMetadataRecord(obj)) continue;
 
     if (source === "claude") finalizePendingClaudeCompletionIfNeeded(obj, lineIndex, claudeDetailTurnState);
 

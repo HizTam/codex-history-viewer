@@ -8,6 +8,7 @@ import {
   extractClaudeLocalCommandOutputContent,
   extractClaudeMessageContent,
   extractClaudeRequestInterruptionContent,
+  isClaudeRequestReplayMetadataRecord,
   selectClaudeControlContent,
 } from "../chat/chatAttachments";
 import type {
@@ -941,6 +942,7 @@ class ClaudeGraphRecordReducer {
 
   public async accept(envelope: Extract<AnalysisRecordEnvelope, { kind: "parsed" }>): Promise<void> {
     const obj: any = envelope.value;
+    if (isClaudeRequestReplayMetadataRecord(obj)) return;
     if (obj?.isSidechain === true) this.observedSidechainTrue = true;
     else if (obj?.isSidechain === false) this.observedSidechainFalse = true;
     if (this.claudeRecords.length >= MAX_GRAPH_RECORDS) {

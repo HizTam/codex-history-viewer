@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.19.0",
+  "version": "2.20.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -4505,12 +4505,12 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.historyViewLatestCurrent",
-          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyViewMode == 'latest' && (codexHistoryViewer.uiLang == 'ja')",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyViewMode == 'sessionsList' && (codexHistoryViewer.uiLang == 'ja')",
           "group": "navigation@5"
         },
         {
           "command": "codexHistoryViewer.ui.en.historyViewLatestCurrent",
-          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyViewMode == 'latest' && (codexHistoryViewer.uiLang != 'ja')",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyViewMode == 'sessionsList' && (codexHistoryViewer.uiLang != 'ja')",
           "group": "navigation@5"
         },
         {
@@ -5678,12 +5678,12 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.historyMenuViewSessionsChecked",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historyViewMode == 'latest'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historyViewMode == 'sessionsList'",
           "group": "2_historyViewMode@2"
         },
         {
           "command": "codexHistoryViewer.ui.ja.historyMenuViewSessions",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historyViewMode != 'latest'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historyViewMode != 'sessionsList'",
           "group": "2_historyViewMode@2"
         }
       ],
@@ -5700,12 +5700,12 @@
         },
         {
           "command": "codexHistoryViewer.ui.en.historyMenuViewSessionsChecked",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historyViewMode == 'latest'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historyViewMode == 'sessionsList'",
           "group": "2_historyViewMode@2"
         },
         {
           "command": "codexHistoryViewer.ui.en.historyMenuViewSessions",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historyViewMode != 'latest'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historyViewMode != 'sessionsList'",
           "group": "2_historyViewMode@2"
         }
       ],
@@ -6238,6 +6238,139 @@
           "description": "%cfg.historyTitleSource%",
           "scope": "application",
           "order": 86
+        },
+        "codexHistoryViewer.history.startupMode": {
+          "type": "string",
+          "default": "restore",
+          "enum": [
+            "restore",
+            "defaults"
+          ],
+          "enumItemLabels": [
+            "%cfg.historyStartupMode.labelRestore%",
+            "%cfg.historyStartupMode.labelDefaults%"
+          ],
+          "enumDescriptions": [
+            "%cfg.historyStartupMode.enumRestore%",
+            "%cfg.historyStartupMode.enumDefaults%"
+          ],
+          "description": "%cfg.historyStartupMode%",
+          "scope": "application",
+          "order": 86.1
+        },
+        "codexHistoryViewer.history.defaultViewMode": {
+          "type": "string",
+          "default": "date",
+          "enum": [
+            "date",
+            "sessionsList"
+          ],
+          "enumItemLabels": [
+            "%cfg.historyDefaultViewMode.labelDate%",
+            "%cfg.historyDefaultViewMode.labelSessionsList%"
+          ],
+          "enumDescriptions": [
+            "%cfg.historyDefaultViewMode.enumDate%",
+            "%cfg.historyDefaultViewMode.enumSessionsList%"
+          ],
+          "description": "%cfg.historyDefaultViewMode%",
+          "scope": "application",
+          "order": 86.2
+        },
+        "codexHistoryViewer.history.defaultProjectDisplay": {
+          "type": "string",
+          "default": "list",
+          "enum": [
+            "list",
+            "project"
+          ],
+          "enumItemLabels": [
+            "%cfg.historyDefaultProjectDisplay.labelList%",
+            "%cfg.historyDefaultProjectDisplay.labelProject%"
+          ],
+          "enumDescriptions": [
+            "%cfg.historyDefaultProjectDisplay.enumList%",
+            "%cfg.historyDefaultProjectDisplay.enumProject%"
+          ],
+          "description": "%cfg.historyDefaultProjectDisplay%",
+          "scope": "application",
+          "order": 86.3
+        },
+        "codexHistoryViewer.history.defaultProjectScope": {
+          "type": "string",
+          "default": "all",
+          "enum": [
+            "currentGroup",
+            "all"
+          ],
+          "enumItemLabels": [
+            "%cfg.historyDefaultProjectScope.labelCurrentGroup%",
+            "%cfg.historyDefaultProjectScope.labelAll%"
+          ],
+          "enumDescriptions": [
+            "%cfg.historyDefaultProjectScope.enumCurrentGroup%",
+            "%cfg.historyDefaultProjectScope.enumAll%"
+          ],
+          "description": "%cfg.historyDefaultProjectScope%",
+          "scope": "application",
+          "order": 86.4
+        },
+        "codexHistoryViewer.pinned.startupMode": {
+          "type": "string",
+          "default": "restore",
+          "enum": [
+            "restore",
+            "defaults"
+          ],
+          "enumItemLabels": [
+            "%cfg.pinnedStartupMode.labelRestore%",
+            "%cfg.pinnedStartupMode.labelDefaults%"
+          ],
+          "enumDescriptions": [
+            "%cfg.pinnedStartupMode.enumRestore%",
+            "%cfg.pinnedStartupMode.enumDefaults%"
+          ],
+          "description": "%cfg.pinnedStartupMode%",
+          "scope": "application",
+          "order": 86.5
+        },
+        "codexHistoryViewer.pinned.defaultProjectDisplay": {
+          "type": "string",
+          "default": "list",
+          "enum": [
+            "list",
+            "project"
+          ],
+          "enumItemLabels": [
+            "%cfg.pinnedDefaultProjectDisplay.labelList%",
+            "%cfg.pinnedDefaultProjectDisplay.labelProject%"
+          ],
+          "enumDescriptions": [
+            "%cfg.pinnedDefaultProjectDisplay.enumList%",
+            "%cfg.pinnedDefaultProjectDisplay.enumProject%"
+          ],
+          "description": "%cfg.pinnedDefaultProjectDisplay%",
+          "scope": "application",
+          "order": 86.6
+        },
+        "codexHistoryViewer.pinned.defaultProjectScope": {
+          "type": "string",
+          "default": "all",
+          "enum": [
+            "currentGroup",
+            "all"
+          ],
+          "enumItemLabels": [
+            "%cfg.pinnedDefaultProjectScope.labelCurrentGroup%",
+            "%cfg.pinnedDefaultProjectScope.labelAll%"
+          ],
+          "enumDescriptions": [
+            "%cfg.pinnedDefaultProjectScope.enumCurrentGroup%",
+            "%cfg.pinnedDefaultProjectScope.enumAll%"
+          ],
+          "description": "%cfg.pinnedDefaultProjectScope%",
+          "scope": "application",
+          "order": 86.7
         },
         "codexHistoryViewer.sessionRow.showTimestamp": {
           "type": "boolean",

@@ -4985,7 +4985,7 @@
       "menu": "view/title",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.historyViewLatestCurrent",
-        "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyViewMode == 'latest' && {localeCondition}",
+        "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historyViewMode == 'sessionsList' && {localeCondition}",
         "group": "navigation@5"
       }
     },
@@ -6074,7 +6074,7 @@
       "menu": "codexHistoryViewer.historyViewModeSubmenu.{locale}",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.historyMenuViewSessionsChecked",
-        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historyViewMode == 'latest'",
+        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historyViewMode == 'sessionsList'",
         "group": "2_historyViewMode@2"
       }
     },
@@ -6083,7 +6083,7 @@
       "menu": "codexHistoryViewer.historyViewModeSubmenu.{locale}",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.historyMenuViewSessions",
-        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historyViewMode != 'latest'",
+        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historyViewMode != 'sessionsList'",
         "group": "2_historyViewMode@2"
       }
     },

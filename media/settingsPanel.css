@@ -465,6 +465,12 @@ select:focus-visible,
   line-height: 1.5;
 }
 
+.setting-badge.apply-timing {
+  max-width: 100%;
+  border-color: currentColor;
+  overflow-wrap: anywhere;
+}
+
 .setting-badge.experimental {
   color: var(--vscode-charts-purple);
   border-color: currentColor;
