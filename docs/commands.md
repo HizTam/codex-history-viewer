@@ -144,6 +144,10 @@ Starting with 2.15.0, saving a search offers **Query only** or **Query and filte
 
 The **File AI Change History** icon on Session Viewer diff cards opens the same view at the selected change, initially loading up to 100 nearby changes. Use **Load more** for the remaining history. A row combining multiple changes jumps to its first included change; an unavailable match displays a notice. The icon is available on both collapsed and expanded file rows when the target can be resolved to a file in the current workspace, independently of the optional Explorer context-menu setting.
 
+**Open in History** on a change card focuses an existing Session Viewer tab for that history and reveals the selected diff, preserving its temporary or dedicated mode and editor group. If no matching tab is open, it creates a dedicated tab in the current editor group.
+
+When opening changes in quick succession, the last selected change takes precedence.
+
 ## History Insights and Agent Runs
 
 | Command (EN label) | Command ID | Description |

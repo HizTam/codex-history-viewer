@@ -5,6 +5,7 @@ import {
   HISTORY_CACHE_FILE_PATTERN,
   SEARCH_INDEX_FILE_NAME,
   SEARCH_INDEX_FILE_PATTERN,
+  SEARCH_INDEX_TEMP_FILE_PATTERN,
   SESSION_ANALYSIS_INDEX_FILE_NAME,
   SESSION_ANALYSIS_INDEX_FILE_PATTERN,
   isLegacyVersionedCacheFile,
@@ -127,7 +128,7 @@ export async function listLegacyFiles(globalStorageUri: vscode.Uri): Promise<vsc
       continue;
     }
     if (
-      TEMP_JSON_FILE_PATTERN.test(lowerName) &&
+      (TEMP_JSON_FILE_PATTERN.test(lowerName) || SEARCH_INDEX_TEMP_FILE_PATTERN.test(lowerName)) &&
       await isOlderThan(fileUri, now, ORPHANED_TEMP_JSON_MIN_AGE_MS)
     ) {
       out.push(fileUri);

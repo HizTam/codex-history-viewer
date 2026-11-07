@@ -12,9 +12,8 @@ import { claudeChangeSearchText, readClaudeEditResults, readClaudeResultChanges 
 import {
   formatJsonReadOrDropCorruptDebug,
   isFileNotFoundError,
-  readJsonOrDropCorrupt,
-  writeJson,
 } from "../storage/jsonStorage";
+import { readSearchIndex, writeSearchIndex } from "../storage/searchIndexStorage";
 import { normalizeWhitespace } from "../utils/textUtils";
 import {
   buildAttachmentSearchText,
@@ -84,7 +83,7 @@ export interface IndexedFileChangeHint {
   readonly hasDiffLikeContent: boolean;
 }
 
-interface SearchIndexEntryV1 {
+export interface SearchIndexEntryV1 {
   readonly fsPath: string;
   readonly mtimeMs: number;
   readonly size: number;
@@ -108,7 +107,7 @@ interface SearchIndexContext {
   indexToolContent: SearchIndexToolContent;
 }
 
-interface SearchIndexCacheContext {
+export interface SearchIndexCacheContext {
   codexSessionsRoot: string;
   codexArchivedSessionsRoot?: string;
   claudeSessionsRoot: string;
@@ -259,7 +258,7 @@ export class SearchIndexService {
       indexToolContent: params.indexToolContent,
     };
     throwIfCancelled(token);
-    let workingState = await this.loadWorkingState(context, !!forceRebuild, performanceProbe);
+    let workingState = await this.loadWorkingState(context, !!forceRebuild, performanceProbe, token);
     throwIfCancelled(token);
 
     let dirty = !!forceRebuild;
@@ -431,7 +430,7 @@ export class SearchIndexService {
     }
     if (dirty) {
       const writeStartedAt = nowMs();
-      await this.save(workingState, () => throwIfCancelled(token), performanceProbe);
+      await this.save(workingState, () => throwIfCancelled(token), performanceProbe, token);
       writeMs = elapsedMs(writeStartedAt);
     }
     const readSnapshot = this.publishWorkingState(workingState, readableKeys, performanceProbe);
@@ -467,6 +466,7 @@ export class SearchIndexService {
     nextContext: SearchIndexContext,
     forceRebuild: boolean,
     performanceProbe?: PerformanceProbe,
+    token?: vscode.CancellationToken,
   ): Promise<SearchIndexWorkingState> {
     const normalizedContext = normalizeContext(nextContext);
     if (forceRebuild) {
@@ -481,7 +481,7 @@ export class SearchIndexService {
       return { context: this.context, entries: this.entries, sharesPublishedEntries: true };
     }
 
-    const raw = await this.readCacheFile(performanceProbe);
+    const raw = await this.readCacheFile(performanceProbe, token);
     if (!isValidCacheFile(raw) || !isSameContext(raw.context, normalizedContext)) {
       performanceProbe?.add("mapMaterializationCount");
       return { context: normalizedContext, entries: new Map(), sharesPublishedEntries: false };
@@ -499,8 +499,11 @@ export class SearchIndexService {
     };
   }
 
-  private async readCacheFile(performanceProbe?: PerformanceProbe): Promise<SearchIndexFileV2 | null> {
-    const outcome = await readJsonOrDropCorrupt<SearchIndexFileV2>(this.cacheUri, { performanceProbe });
+  private async readCacheFile(
+    performanceProbe?: PerformanceProbe,
+    token?: vscode.CancellationToken,
+  ): Promise<unknown> {
+    const outcome = await readSearchIndex(this.cacheUri, { performanceProbe, token });
     const { result } = outcome;
     if (result.ok) return result.value;
     const debugMessage = formatJsonReadOrDropCorruptDebug("search.index readCache", outcome);
@@ -556,16 +559,15 @@ export class SearchIndexService {
     state: SearchIndexWorkingState,
     beforeCommit: () => void,
     performanceProbe?: PerformanceProbe,
+    token?: vscode.CancellationToken,
   ): Promise<void> {
-    const entries: Record<string, SearchIndexEntryV1> = {};
-    for (const [key, value] of state.entries) entries[key] = value;
-    const payload: SearchIndexFileV2 = {
+    const payload = {
       version: SEARCH_INDEX_FILE_VERSION,
       context: state.context,
-      entries,
+      entries: state.entries,
     };
-    // Search index files can grow large, so save without pretty-printing to reduce size.
-    await writeJson(this.cacheUri, payload, { pretty: false, beforeCommit, performanceProbe });
+    // Preserve the immutable working map while the storage layer emits bounded records.
+    await writeSearchIndex(this.cacheUri, payload, { beforeCommit, performanceProbe, token });
   }
 }
 

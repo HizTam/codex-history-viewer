@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.20.0** (2026-10-27).
+Latest release: **2.20.1** (2026-11-07).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -155,6 +155,8 @@ For files sent by Claude Code, Search includes recorded file paths and descripti
 ## Search
 
 Search is local, cancellable, and backed by an incremental search index. It can search message text, configured tool metadata, titles, tags, notes, and attachment metadata.
+
+When an update changes the search cache format, the cache is rebuilt automatically when needed. The first search or File AI Change History load after updating may take longer.
 
 Saved Claude Code progress updates and thinking text are included in the Assistant role. Selecting a matching result opens the corresponding card and expands thinking text when needed. In-page search also includes collapsed thinking text.
 
@@ -371,10 +373,11 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.20.0
+## What's New in 2.20.1
 
-- Added independent startup display settings for History and Pinned. Each view can restore its previous state or start from configured defaults on every startup.
-- Added startup defaults for project display and project scope. History can also start in By Date or Sessions List view.
+- Fixed search index save and load failures with large history datasets. ([#21](https://github.com/HizTam/codex-history-viewer/issues/21))
+- Fixed duplicate Session Viewer tabs opened from **File AI Change History**.
+- Fixed earlier navigation requests overriding the destination when opening changes in quick succession.
 
 ## Changelog
 
