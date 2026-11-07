@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.20.1] - 2026-11-07
+
+### Fixed
+
+- Fixed search index save and load failures that could make full-text search unavailable with large history datasets. ([#21](https://github.com/HizTam/codex-history-viewer/issues/21))
+- Fixed **Open in History** in **File AI Change History** opening an additional dedicated tab when the same session was already open in a temporary tab.
+- Fixed earlier navigation requests overriding the destination when opening changes in quick succession from **File AI Change History**.
+
+Note: The search cache format has changed. The cache is rebuilt automatically when needed, so the first search or File AI Change History load after updating may take longer.
+
 ## [2.20.0] - 2026-10-27
 
 ### Added

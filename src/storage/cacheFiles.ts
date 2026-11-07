@@ -1,9 +1,10 @@
 export const HISTORY_CACHE_FILE_NAME = "cache.v9.json";
-export const SEARCH_INDEX_FILE_NAME = "search-index.v2.json";
+export const SEARCH_INDEX_FILE_NAME = "search-index.v3.jsonl";
 export const SESSION_ANALYSIS_INDEX_FILE_NAME = "session-analysis-index.v1.json";
 
 export const HISTORY_CACHE_FILE_PATTERN = /^cache\.v\d+\.json$/i;
-export const SEARCH_INDEX_FILE_PATTERN = /^search-index\.v\d+\.json$/i;
+export const SEARCH_INDEX_FILE_PATTERN = /^search-index\.v\d+\.jsonl?$/i;
+export const SEARCH_INDEX_TEMP_FILE_PATTERN = /^search-index\.v\d+\.tmp-[a-z0-9]+-[a-z0-9]+\.jsonl$/i;
 export const SESSION_ANALYSIS_INDEX_FILE_PATTERN = /^session-analysis-index\.v\d+\.json$/i;
 
 export function isLegacyVersionedCacheFile(

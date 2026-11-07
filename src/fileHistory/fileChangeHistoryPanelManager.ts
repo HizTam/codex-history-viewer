@@ -103,6 +103,7 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
   private readonly stateByPanel = new WeakMap<vscode.WebviewPanel, FileChangeHistoryPanelState>();
   private readonly bookmarkTargetsByPanel = new WeakMap<vscode.WebviewPanel, Map<string, BookmarkTarget>>();
   private readonly readyByPanel = new WeakMap<vscode.WebviewPanel, boolean>();
+  private openHistoryRequest?: object;
   private readonly panelIconPath: { light: vscode.Uri; dark: vscode.Uri };
 
   constructor(
@@ -817,6 +818,12 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
     if (!state || !cardId) return;
     const card = state.cards.find((item) => item.id === cardId);
     if (!card) return;
+    // Keep only the latest navigation across file-history panels and reject invalidated source state.
+    const request = {};
+    const generation = state.generation;
+    this.openHistoryRequest = request;
+    const isRequestCurrent = (): boolean =>
+      this.openHistoryRequest === request && this.stateByPanel.get(panel)?.generation === generation;
     const session = this.historyService.findByFsPath(card.sessionFsPath);
     if (!session) {
       void vscode.window.showErrorMessage(t("fileChangeHistory.error.openHistoryFailed", t("app.openSessionFailed")));
@@ -832,13 +839,15 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
       entryId: card.entry.id,
     };
     try {
-      await this.chatPanels.openSession(session, {
-        kind: "session",
+      await this.chatPanels.openSessionPreferExisting(session, {
+        fallbackKind: "session",
         revealMessageIndex: card.messageIndex,
         revealTarget,
-        viewColumn: vscode.ViewColumn.Active,
+        preserveFocus: false,
+        isRequestCurrent,
       });
     } catch (error) {
+      if (!isRequestCurrent()) return;
       const detail = getErrorDetail(error);
       void vscode.window.showErrorMessage(detail
         ? t("fileChangeHistory.error.openHistoryFailed", detail)

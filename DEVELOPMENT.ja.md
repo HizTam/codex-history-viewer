@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-10-27
-- 対象バージョン: 2.20.0
+- 最終更新: 2026-11-07
+- 対象バージョン: 2.20.1
 
 ## 1. 概要
 
@@ -420,10 +420,10 @@
   - CWD が空、または `CWD なし` の疑似プロジェクトには別名を保存しない
   - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
-  - 保存先: `globalStorageUri/search-index.v2.json`
-  - 内部 file version: 30
+  - 保存先: `globalStorageUri/search-index.v3.jsonl`
+  - 内部 file version: 35（保存形式番号1とは独立）
   - 用途: 繰り返し検索を高速化する増分インデックス
-  - `search-index.v2.json` が破損して JSON parse error になった場合は、破損内容を退避せず削除し、次回検索時に再構築する
+  - 認識済み形式の `search-index.v3.jsonl` で、UTF-8復号後のJSON構文破損、または必須レコード欠落によるEOFを検出した場合は、`parseError` として破損内容を退避せず削除し、次回検索時に再構築する。不正UTF-8（文字途中の切断を含む）は `readError` として削除しない
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
   - 再利用条件:
     - `sessionsRoot`
@@ -497,7 +497,7 @@
   - 実行前に Handoff 件数と容量を確認ダイアログで表示する
 - `Empty Trash`:
   - `deleted` と `undo-delete` を手動削除する
-  - あわせて旧世代の `cache.v*.json` / `search-index.v*.json` / `session-analysis-index.v*.json` と、1 時間以上古い `*.tmp-*.json` も削除する。ただし現在の `cache.v9.json` / `search-index.v2.json` / `session-analysis-index.v1.json` は削除しない
+  - あわせて旧世代の `cache.v*.json` / `search-index.v*.json` / `search-index.v*.jsonl` / `session-analysis-index.v*.json` と、1 時間以上古い JSON 一時ファイル・検索専用 JSONL 一時ファイルも削除する。ただし現在の `cache.v9.json` / `search-index.v3.jsonl` / `session-analysis-index.v1.json` は削除しない
   - ダイアログでは古い一時ファイルの件数を個別表示せず、ストレージ整理として扱う。Status 表示上の件数は「ゴミ箱件数」のみを扱う
 - 自動削除:
   - 履歴キャッシュ、検索インデックス、Session Analysis Index、ゴミ箱は自動で全削除せず、`Empty Trash`、`Rebuild Cache`、`Rebuild Search Index` などの明示的なユーザー操作に委ねる
@@ -727,7 +727,7 @@
   - Webview 内検索（正規表現、完全一致、検索履歴候補に対応）
   - `続きを読み込む`
   - 前 / 次の diff card へ移動。source toggle で絞り込んでいる場合は、表示中 card だけを移動対象にする
-  - `履歴で開く`: 通常履歴 Webview を現在のエディタグループに別タブとして開き、該当 diff card へスクロールする。`patchEntry` reveal では full detail mode を強制しない
+  - `履歴で開く`: 同じ履歴の既存タブを優先し、一時／専用の保持方法と表示グループを維持して該当 diff card へフォーカスする。既存タブがなければ現在のエディタグループに専用タブを作る。`patchEntry` reveal では full detail mode を強制しない。File AI パネル間でも最後の有効なカード要求を優先し、元パネルの再読込・破棄後の要求と古い例外通知を反映しない
 - 追加読み込み:
   - 成功 / 失敗 / キャンセルのいずれでも現在のスクロール位置を維持する
   - 追加後は通知相当の短いメッセージだけを表示し、追加分へ自動移動しない
@@ -1009,11 +1009,11 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 ### 4.3 履歴キャッシュ
 
 - `src/storage/cacheFiles.ts`
-  - 現行の履歴キャッシュ名 (`cache.v9.json`) と検索インデックス名 (`search-index.v2.json`) を一元管理する
+  - 現行の履歴キャッシュ名 (`cache.v9.json`) と検索インデックス名 (`search-index.v3.jsonl`) を一元管理する
   - `Empty Trash` の旧世代判定も同じ定数と pattern を使い、現行ファイル名の drift を防ぐ
 - `src/storage/jsonStorage.ts`
   - `readJsonDetailed()` は JSON 読み込み結果を `ok` / `missing` / `parseError` / `readError` として返す
-  - `readJsonOrDropCorrupt()` は parse error のときだけ対象 JSON を best-effort で削除し、履歴キャッシュ / 検索インデックスで共通利用する
+  - `readJsonOrDropCorrupt()` は parse error のときだけ対象 JSON を best-effort で削除し、履歴キャッシュなどの JSON 保存先で利用する。検索専用 JSONL は `src/storage/searchIndexStorage.ts` の `readSearchIndex()` を使い、認識済み形式の構文破損だけを削除する
   - read / delete result は `errorName` だけを保持し、JSON 本文や path を含み得る `errorMessage` は保持しない
   - `writeJson()` は同一ディレクトリの一時ファイルへ書いてから rename し、rename 失敗時は `beforeCommit` を再確認してから直接書き込みへフォールバックする。フォールバックの成功 / 失敗にかかわらず一時ファイルを best-effort で削除する
 - `src/services/historyService.ts`
@@ -1106,10 +1106,10 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 ### 4.5 検索インデックス
 
 - `src/services/searchIndexService.ts`
-  - `search-index.v2.json` を管理する。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
-  - `SEARCH_INDEX_FILE_VERSION = 23` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item / Codex `history_base`論理履歴 / Codex `item_completed` / `FileChange`のfile change hint / Codex非同期質問対応前に生成した既存インデックスは再構築対象にする
+  - `search-index.v3.jsonl` を管理する。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
+  - `SEARCH_INDEX_FILE_VERSION = 35` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item / Codex `history_base`論理履歴 / Codex `item_completed` / `FileChange`のfile change hint / Codex非同期質問対応前に生成した既存インデックスは再構築対象にする
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
-  - 検索インデックス読み込み時の parse error はインデックスを削除して `null` 扱いにし、次回検索時に再構築する
+  - 検索インデックス読み込み時は、認識済み形式のJSON構文破損・必須レコード欠落によるEOFを `parseError` に分類した場合だけインデックスを削除して `null` 扱いにし、次回検索時に再構築する。未知形式・schema不正や、不正UTF-8を含む `readError` は削除しない
   - セッションごとに `mtime` / `size` を持ち、差分更新する
   - 更新・保存用Maintenance stateと検索consumer向けimmutable Read snapshotを分離する。全hitではMapを複製せず既存snapshotを返し、mtimeだけの変更でmessages / hintsが構造同値ならprocess-local opaque identityを引き継いでRead snapshotを再利用する
   - 初期file / logical plan observationは共有cursorを持つ最大8 workerで並行化し、同一sessionのJSONL scanと公開順は直列のまま維持する。キャンセル後は新しいstatを発行せず、発行済みworkerの完了を待つ
@@ -1127,9 +1127,16 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - PDF / Office / binary / base64 document の本文と、Codex file reference の参照先ファイル本文は検索インデックスへ入れない
   - 旧キャッシュに `indexToolContent` がない場合は `toolCallsAndOutputs` とみなし、既定設定のままなら不要な再作成を避ける
   - `cleanupOrphanEntries()` で現在の履歴に存在しない cacheKey を削除する
-  - JSONL再構築後にleaf stampとlogical planを再観測し、変化時は一度だけ再走査する。二度目も変わる場合は新stateを保存・公開しない
+  - JSONL再構築後にleaf stampとlogical planを再観測し、変化時は一度だけ再走査する。二度目も変わる場合は当該keyを今回のRead snapshotから省略して旧Maintenance entryを維持し、他sessionの安定した更新は保存・公開する
   - FileNotFoundは再確認できた場合だけ該当entryを削除し、permission、sharing violation、未知I/O errorでは既存entryを保持する。対応する旧entryがないtransient、または再利用stateがないstrict経路では不完全indexを成功公開しない
   - `forceRebuild` 指定時は専用working stateで最初から作り直し、atomic保存成功後だけprocess-local stateを置き換える
+
+2.20.1（2026-11-07）では、検索専用の `src/storage/searchIndexStorage.ts` で有界JSONLを読み書きする。本文・ファイルパス・任意長メタデータをUTF-16単位のchunkへ分け、元のメッセージ境界とIDを復元する。検索計算版35、抽出範囲、immutable snapshot、保存成功後の公開は維持する。
+
+- `file:` URIはNodeの逐次I/Oを使い、索引全体やセッション全体の文字列化を行わない。別URIは `workspace.fs` のbyte bufferを使うため総byte量のメモリは必要だが、全体文字列は作らない
+- 全レコードと末尾件数を検証してから採用する。未知形式・schema・context不一致は非削除で再構築する。認識済み形式で、UTF-8復号に成功した行のJSON構文破損、または必須レコード欠落によるEOFだけを `parseError` として破損削除する。不正UTF-8（多バイト文字途中の切断を含む）・権限・資源エラーは `readError` として削除せず、キャンセルは伝播する。完全な最終レコードに改行がないだけでは破損としない
+- 旧 `search-index.v2.json` は読み込まず元履歴から再構築する。旧形式の削除は従来の `Empty Trash` による確認付き保守で行い、自動削除は追加しない
+- 同一ディレクトリの完成した一時ファイルをcommit guard後に公開する。rename失敗時のcopy／直接write fallbackは従来同様best-effortであり、全entryの常駐メモリ、単一messageの実行環境上限、process間last-writer-winsは変更しない
 
 ### 4.5.1 File AI Change History 実装
 
@@ -1154,7 +1161,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
   - 同じファイルで再実行した場合は検索状態、scroll、cursor を初期化する
   - hidden から戻っただけでは Webview state を保持する
   - `loadMore` は世代管理と `CancellationTokenSource` で古い結果の混入を防ぐ
-  - `履歴で開く` は通常履歴 Webview を現在のエディタグループに別タブとして開き、`patchEntry` reveal target で該当 diff card を開く
+  - `履歴で開く` は同じ履歴の既存タブを一時／専用の保持方法と元のエディタグループを維持して使い、`patchEntry` reveal target で該当 diff card へフォーカスする。未表示の場合だけ現在グループへ専用タブを作る
   - `patchEntry` reveal target では通常履歴 Webview を summary mode のまま開き、対象 diff entry の詳細だけを必要時に読み込む
   - `sendModel` では `initial` / `reload` / `loadMore` の reason を Webview へ渡し、初回・再読み込み時の追加履歴案内と load more 完了通知を分ける
 - `src/fileHistory/fileChangeHistoryTypes.ts`
@@ -1848,7 +1855,7 @@ UI の辞書管理と日本語への翻訳は区別する。`From` / `To`、メ�
 
 ### 5.1 セットアップ
 
-開発・生成・検証・パッケージ作成には `.node-version` に指定した公式 Node.js 24.22.1 / ICU 78.3 を選択して使用する。CVE-2026-111497 の修正を含む同じ24系の版へ更新し、ローカライズ生成時の言語名の再現性を固定する。作業前に `node --version` が `.node-version` と一致することを確認する。KaTeX のCLI用依存 `commander@15` の Node.js 22.12.0 以上、`@vscode/vsce@4.0.0` の Node.js 22 以上という下限も満たす。これらの開発用ツールはVSIXへ含めず、VS Code拡張の実行環境要件は変更しない。
+開発・生成・検証・パッケージ作成には `.node-version` に指定した公式 Node.js 24.22.1 / ICU 78.3 を選択して使用する。CVE-2026-111497 の修正を含む同じ24系の版へ更新し、ローカライズ生成時の言語名の再現性を固定する。作業前に `node --version` が `.node-version` と一致することを確認する。KaTeX のCLI用依存 `commander@15` の Node.js 22.12.0 以上、`@vscode/vsce@4.1.0` の Node.js 22 以上という下限も満たす。これらの開発用ツールはVSIXへ含めず、VS Code拡張の実行環境要件は変更しない。
 
 TypeScript は `6.0.3` を使用し、`module` / `moduleResolution` は `Node16` とする。package は CommonJS のままであり、拡張の出力形式も維持する。TypeScript 6で非推奨となった旧Node解決方式は使用しない。Compiler APIの互換性を維持するため、安定した同APIを提供しないTypeScript 7への移行は保留する。VS Codeの型定義は対応下限の `1.90.0` に合わせて `~1.90.0` とし、Nodeの型定義は実行環境に合わせて20系を維持する。
 
@@ -1877,7 +1884,7 @@ KaTeX 0.18.0 では一部の内部 CSS class に `katex-` prefix が追加され
 
 Mermaid 11.17.2 の diagram math は、scoped override の `$katex` 参照で root の exact 0.18.9 に統一する。Mermaid が使う renderToString と公開 options の互換性、既存の 0.18.9 CSS / fonts との一致を確認した構成であり、旧 0.16.47 の prototype 汚染を前提とする問題を持ち込まない。`sync:katex` / `check:katex` は root と直接同梱資産の byte 一致を引き続き検査する。図中数式は raw renderer の生成と製品 SVG 安全化後を区別し、既存の foreignObject 除去と Host の保存検証を維持する。
 
-開発用 VSCE 4.0.0 配下の @azure/identity には @azure/msal-node 7.1.1 を scoped override する。認証要求のパラメーター転送に関する修正を取り込み、identity の使用 API と既定 form_post の互換性を確認した構成とする。MSAL と Node 実体は VSIX へ同梱しない。
+開発用 VSCE 4.1.0 配下の @azure/identity には @azure/msal-node 7.1.1 を scoped override する。認証要求のパラメーター転送に関する修正を取り込み、identity の使用 API と既定 form_post の互換性を確認した構成とする。MSAL と Node 実体は VSIX へ同梱しない。
 
 `npm run check:renderer` は manifest、lock、installed package、Mermaid / identity からの実解決を照合する。lint と prepublish にも組み込み、Markdown / DOMPurify / KaTeX / MSAL の未承認版や古い nested renderer を検出したら失敗する。依存更新時は scoped override、検証対象版、lock、実 bundle、関連文書を同時にレビューする。
 
@@ -2509,7 +2516,7 @@ git diff --check
 - `続きを読み込む` の成功 / 失敗 / キャンセル後に scroll 位置が維持される
 - `続きを読み込む` で追加された card が既存表示の途中に入る場合でも、表示順は変更時刻昇順のままで、閲覧中 card 付近へ scroll が復元される
 - 全候補解析後は `続きを読み込む` が消え、`これ以上の履歴はありません` が表示される。この表示は Webview 内検索の対象に含めない
-- `履歴で開く` を押すと、通常履歴 Webview が現在のエディタグループに別タブとして開き、該当 diff card へスクロールする
+- `履歴で開く` を押すと、同じ履歴の既存タブが一時／専用の保持方法と元のグループを維持してアクティブになり、該当 diff card へスクロールする。未表示の場合だけ現在グループに専用タブが作られ、別履歴の一時タブは差し替わらない
 - ファイル履歴で Codex / Claude Code source toggle を切り替えた状態でも、前 / 次 card ナビゲーションが表示中 card だけを対象にする
 - ファイル履歴で Codex / Claude Code source toggle を切り替えても、表示中 card の変更時刻順が崩れず、可能な限り閲覧中 card 付近へ scroll が復元される
 - `履歴で開く` で通常履歴 Webview を開いても full detail mode が強制されず、対象 diff entry の詳細だけが必要時に読み込まれる
@@ -2666,12 +2673,12 @@ git diff --check
 - `search.indexToolContent` 変更時に検索インデックス再作成の通知が出て、`Rebuild Search Index` で検索インデックスだけ再作成できる
 - `Rebuild Cache` 実行前に確認が出て、履歴キャッシュ、検索インデックス、Session Analysis Index が同じ履歴集合から順番に再作成される。開始時snapshotが完了時にもcurrentであり、再作成全体が成功した場合だけ、開いている History Insights と Branch Navigation へ再作成結果が反映される
 - 破損した `cache.v9.json` がある状態で起動 / refresh すると、parse error として削除され、履歴キャッシュが再生成される
-- 破損した `search-index.v2.json` がある状態で検索すると、parse error として削除され、検索インデックスが再構築される
+- 認識済み形式の `search-index.v3.jsonl` にUTF-8復号可能なJSON構文破損、または必須レコード欠落によるEOFがある状態で検索すると、`parseError` として削除され、検索インデックスが再構築される。未知形式・不正schema・不正UTF-8（文字途中の切断を含む）・I/O・資源エラーは破損削除しない。最終改行がないだけでは破損としない
 - `Delete` 実行後に `undo-delete` / `deleted` の扱いと `Undo Last Action` が整合する
 - `Delete` 後に該当セッションパネルが閉じ、存在しないセッションを開こうとしてもゴーストパネルが残らない
 - Undo 付き通知のボタンと Undo 完了メッセージが `ui.language` に応じて表示される
 - `Empty Trash` 実行後に Status のゴミ箱件数が 0 になり、旧世代キャッシュも削除される
-- `Empty Trash` 実行後も現行の `cache.v9.json` / `search-index.v2.json` / `session-analysis-index.v1.json` は削除されず、旧世代の `cache.v*.json` / `search-index.v*.json` / `session-analysis-index.v*.json` と 1 時間以上古い `*.tmp-*.json` だけが削除される
+- `Empty Trash` 実行後も現行の `cache.v9.json` / `search-index.v3.jsonl` / `session-analysis-index.v1.json` は削除されず、旧世代の `cache.v*.json` / `search-index.v*.json` / `search-index.v*.jsonl` / `session-analysis-index.v*.json` と 1 時間以上古い既存JSON一時ファイル・検索専用JSONL一時ファイルだけが削除される
 - Control ビューと Command Palette に `Debug Info (Copy)` が出ない
 - `debug.logging.enabled` を `true` にすると OutputChannel に履歴 refresh / 検索インデックスの診断ログが出る
 - 診断ログにセッションパス、セッションID、メッセージ本文が含まれない
