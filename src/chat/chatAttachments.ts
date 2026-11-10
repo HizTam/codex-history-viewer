@@ -84,6 +84,7 @@ export interface ExtractedCodexTextContent {
 
 export interface ClaudeRequestInterruptionContent {
   scope: ChatSystemEventScope;
+  reason?: "sessionEnded" | "agentProcessEnded";
 }
 
 export interface ClaudeLocalCommandOutputContent {
@@ -320,7 +321,35 @@ function extractCodexTextOnlyContentForContext(content: unknown): string | null 
   return texts.length > 0 ? texts.join("\n") : null;
 }
 
-export function extractClaudeRequestInterruptionContent(content: unknown): ClaudeRequestInterruptionContent | null {
+export function extractClaudeRequestInterruptionContent(content: unknown, record?: unknown): ClaudeRequestInterruptionContent | null {
+  const obj = record && typeof record === "object" && !Array.isArray(record)
+    ? record as Record<string, unknown> : undefined;
+  if (obj?.interruptedByShutdown === true) {
+    // Strict shutdown validation must never fall back to permissive legacy extraction.
+    if (obj.type !== "user" || detectClaudeMaterializedMessageRole(obj) !== "user") return null;
+    let text: string;
+    if (typeof content === "string") text = content;
+    else if (Array.isArray(content) && content.length > 0) {
+      const texts: string[] = [];
+      for (const item of content) {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+        if (item.type !== "text" || typeof item.text !== "string" || isPotentialImageAttachmentItem(item)) return null;
+        texts.push(item.text);
+      }
+      text = texts.join("");
+    } else return null;
+    if (hasClaudeIdeTag(text) || stripImagePlaceholders(text).placeholderCount > 0) return null;
+    const normalized = normalizeNewlines(text).trim();
+    const scope = getClaudeRequestInterruptedScope(normalized);
+    if (scope) return { scope, reason: "sessionEnded" };
+    if (normalized === "[Request interrupted: the session ended before this agent finished. Nobody asked it to stop.]") {
+      return { scope: "request", reason: "sessionEnded" };
+    }
+    if (normalized === "[Agent call interrupted: the process running this conversation stopped before this agent finished, so it returned no result. Nobody asked it to stop.]") {
+      return { scope: "request", reason: "agentProcessEnded" };
+    }
+    return null;
+  }
   if (!hasTextCandidate(content, "Request interrupted by user")) return null;
 
   if (typeof content === "string") {

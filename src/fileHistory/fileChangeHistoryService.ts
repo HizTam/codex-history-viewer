@@ -1,6 +1,7 @@
 import { resolveClaudeAgentHistory } from "../sessions/claudeAgentHistory";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { performance } from "node:perf_hooks";
 import { readJsonlLines } from "../utils/sessionFileReader";
 import * as vscode from "vscode";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
@@ -20,6 +21,7 @@ import {
 import {
   detectClaudeMaterializedMessageRole,
   extractClaudeLocalCommandOutputContent,
+  extractClaudeMessageContent,
   extractClaudeRequestInterruptionContent,
   isCodexTurnAbortedContent,
   selectClaudeControlContent,
@@ -29,7 +31,7 @@ import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
 import { extractCodexToolOutputText } from "../chat/codexResponseItems";
 import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/projectPathMapper";
-import type { SearchIndexReadSnapshot } from "../services/searchIndexService";
+import type { IndexedSearchMessage, SearchIndexReadSnapshot } from "../services/searchIndexService";
 import type { HistoryIndex, SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { readSessionJsonlRecords } from "../sessions/codexHistoryBase";
 import { ClaudeFileChangeTracker } from "../sessions/claudeFileChanges";
@@ -94,7 +96,6 @@ interface ClaudeToolCall {
 }
 
 interface ClaudeParsedContent {
-  messageText: string;
   toolCalls: ClaudeToolCall[];
 }
 
@@ -168,37 +169,37 @@ export class FileChangeHistoryService {
     };
   }
 
-  public buildCandidates(params: {
+  public async buildCandidates(params: {
     index: HistoryIndex;
     searchIndexSnapshot: SearchIndexReadSnapshot;
     target: FileChangeHistoryTarget;
     config: CodexHistoryViewerConfig;
-  }): FileChangeHistoryCandidate[] {
+    token?: vscode.CancellationToken;
+  }): Promise<FileChangeHistoryCandidate[]> {
     const { index, searchIndexSnapshot, target, config } = params;
-    const candidates: FileChangeHistoryCandidate[] = [];
+    const checkpoint = createCandidateCheckpoint(params.token);
+    await checkpoint();
+    const candidates: TimedFileChangeCandidate[] = [];
     const projectPathMappings = this.getProjectPathMappings(target);
+    let needles: readonly string[] | undefined;
+    const getNeedles = async (): Promise<readonly string[]> =>
+      needles ??= await buildSearchNeedles(target, projectPathMappings, checkpoint);
 
     for (const session of index.sessions) {
+      await checkpoint();
       if (!isEnabledSource(session.source, config)) continue;
       if (!isSessionAllowedForWorkspace(session, target.workspaceRoot, projectPathMappings)) continue;
 
       // Search index hits are ranking hints; raw session parsing is the source of truth.
-      const hintScore = scoreFileChangeHints(searchIndexSnapshot, session, target, projectPathMappings);
+      const hintScore = await scoreFileChangeHints(searchIndexSnapshot, session, target, projectPathMappings, checkpoint);
       const fallbackScore = hintScore > 0
         ? 0
-        : scoreSearchMessages(searchIndexSnapshot, session, target, projectPathMappings);
+        : await scoreSearchMessages(searchIndexSnapshot, session, getNeedles, checkpoint);
       const matchScore = Math.max(hintScore, fallbackScore);
-      candidates.push({ session, matchScore });
+      candidates.push({ candidate: { session, matchScore }, sortTime: getSessionSortTime(session) });
     }
 
-    candidates.sort((a, b) => {
-      const at = getSessionSortTime(a.session);
-      const bt = getSessionSortTime(b.session);
-      if (at !== bt) return at - bt;
-      if (a.matchScore !== b.matchScore) return b.matchScore - a.matchScore;
-      return a.session.fsPath.localeCompare(b.session.fsPath);
-    });
-    return candidates;
+    return sortFileChangeCandidates(candidates, checkpoint);
   }
 
   public async loadCards(params: {
@@ -443,7 +444,7 @@ async function parseClaudeSession(
       const rawContent = getClaudeMessageContent(obj);
       const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
       const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
-      if (role === "user" && extractClaudeRequestInterruptionContent(controlContent)) continue;
+      if (role === "user" && extractClaudeRequestInterruptionContent(controlContent, obj)) continue;
       if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) continue;
       if (extractClaudeTerminalOutput(obj, controlContent)) {
         messageIndex += 1;
@@ -451,7 +452,11 @@ async function parseClaudeSession(
       }
       const parsed = parseClaudeMessageContent(rawContent);
       changes.acceptResults(obj);
-      if (normalizeWhitespace(parsed.messageText)) messageIndex += 1;
+      // Count the same visible text and attachments as Chat without loading image payloads.
+      throwIfCancelled(token);
+      const extracted = await extractClaudeMessageContent(rawContent, session.meta.cwd, { enabled: false }, { role, pastedPrompt, record: obj });
+      throwIfCancelled(token);
+      if (extracted.text.trim() || extracted.attachments.length > 0) messageIndex += 1;
       const timestampIso = resolveClaudeDiffTimestamp(obj, session);
 
       for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
@@ -851,16 +856,79 @@ function toHistoryCard(
   };
 }
 
-function scoreFileChangeHints(
+interface TimedFileChangeCandidate {
+  readonly candidate: FileChangeHistoryCandidate;
+  readonly sortTime: number;
+}
+
+function createCandidateCheckpoint(token?: vscode.CancellationToken): () => Promise<void> {
+  let lastYield = performance.now();
+  return async () => {
+    throwIfCancelled(token);
+    if (performance.now() - lastYield < 8) return;
+    await new Promise<void>(resolve => setImmediate(resolve));
+    lastYield = performance.now();
+    throwIfCancelled(token);
+  };
+}
+
+async function sortFileChangeCandidates(
+  values: TimedFileChangeCandidate[],
+  checkpoint: () => Promise<void>,
+): Promise<FileChangeHistoryCandidate[]> {
+  const compare = (a: TimedFileChangeCandidate, b: TimedFileChangeCandidate): number => {
+    if (a.sortTime !== b.sortTime) return a.sortTime - b.sortTime;
+    if (a.candidate.matchScore !== b.candidate.matchScore) return b.candidate.matchScore - a.candidate.matchScore;
+    return a.candidate.session.fsPath.localeCompare(b.candidate.session.fsPath);
+  };
+  // Bound native sorting, then merge stably without blocking cancellation for the whole inventory.
+  const runSize = 256;
+  for (let start = 0; start < values.length; start += runSize) {
+    await checkpoint();
+    const run = values.slice(start, start + runSize).sort(compare);
+    for (let offset = 0; offset < run.length; offset++) {
+      await checkpoint();
+      values[start + offset] = run[offset]!;
+    }
+  }
+  let scratch = new Array<TimedFileChangeCandidate>(values.length);
+  for (let width = runSize; width < values.length; width *= 2) {
+    for (let start = 0; start < values.length; start += width * 2) {
+      let left = start;
+      const middle = Math.min(start + width, values.length);
+      let right = middle;
+      const end = Math.min(start + width * 2, values.length);
+      for (let output = start; output < end; output++) {
+        await checkpoint();
+        scratch[output] = left < middle && (right >= end || compare(values[left]!, values[right]!) <= 0)
+          ? values[left++]!
+          : values[right++]!;
+      }
+    }
+    [values, scratch] = [scratch, values];
+  }
+  const candidates: FileChangeHistoryCandidate[] = [];
+  for (const value of values) {
+    await checkpoint();
+    candidates.push(value.candidate);
+  }
+  await checkpoint();
+  return candidates;
+}
+
+async function scoreFileChangeHints(
   searchIndexSnapshot: SearchIndexReadSnapshot,
   session: SessionSummary,
   target: FileChangeHistoryTarget,
   projectPathMappings: readonly ProjectPathMapping[],
-): number {
+  checkpoint: () => Promise<void>,
+): Promise<number> {
   const hints = searchIndexSnapshot.getFileChangeHints(session.cacheKey) ?? [];
   let score = 0;
   for (const hint of hints) {
+    await checkpoint();
     for (const hintPath of hint.paths) {
+      await checkpoint();
       if (!matchesPathCandidate(hintPath, session.meta.cwd, target, projectPathMappings)) continue;
       score = Math.max(score, hint.origin === "codexPatch" ? 100 : hint.hasDiffLikeContent ? 80 : 40);
     }
@@ -868,67 +936,105 @@ function scoreFileChangeHints(
   return score;
 }
 
-function scoreSearchMessages(
+async function scoreSearchMessages(
   searchIndexSnapshot: SearchIndexReadSnapshot,
   session: SessionSummary,
-  target: FileChangeHistoryTarget,
-  projectPathMappings: readonly ProjectPathMapping[],
-): number {
-  const messages = searchIndexSnapshot.getMessages(session.cacheKey) ?? [];
-  const needles = buildSearchNeedles(target, projectPathMappings);
-  for (const message of messages) {
-    if (message.source === "message") continue;
-    const haystack = message.text.toLowerCase();
-    if (needles.some((needle) => needle.length > 0 && haystack.includes(needle))) return 20;
+  getNeedles: () => Promise<readonly string[]>,
+  checkpoint: () => Promise<void>,
+): Promise<number> {
+  const texts = searchIndexSnapshot.iterateToolTexts
+    ? searchIndexSnapshot.iterateToolTexts(session.cacheKey, checkpoint)
+    : iterateLegacyToolTexts(searchIndexSnapshot.getMessages(session.cacheKey) ?? [], checkpoint);
+  for await (const text of texts) {
+    await checkpoint();
+    if (text.length === 0) continue;
+    const needles = await getNeedles();
+    // Keep whole-message Unicode case conversion, including context-sensitive final sigma.
+    const haystack = text.toLowerCase();
+    await checkpoint();
+    for (const needle of needles) {
+      await checkpoint();
+      if (needle.length > 0 && haystack.includes(needle)) {
+        await checkpoint();
+        return 20;
+      }
+    }
   }
+  await checkpoint();
   return 0;
 }
 
-function buildSearchNeedles(
+async function* iterateLegacyToolTexts(
+  messages: readonly IndexedSearchMessage[],
+  checkpoint: () => Promise<void>,
+): AsyncGenerator<string> {
+  for (const message of messages) {
+    await checkpoint();
+    if (message.source !== "message") yield message.text;
+  }
+}
+
+async function buildSearchNeedles(
   target: FileChangeHistoryTarget,
   projectPathMappings: readonly ProjectPathMapping[],
-): string[] {
+  checkpoint: () => Promise<void>,
+): Promise<string[]> {
+  const needles: string[] = [];
+  const seen = new Set<string>();
+  const addValue = async (value: string): Promise<void> => {
+    await checkpoint();
+    const text = String(value ?? "").trim();
+    if (!text) return;
+    // Stream the original variant order instead of retaining the quadratic intermediate list.
+    for (const variant of [text, text.replace(/\\/g, "/"), text.replace(/\//g, "\\")]) {
+      await checkpoint();
+      const normalized = variant.toLowerCase().trim();
+      if (!normalized) continue;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      needles.push(normalized);
+    }
+  };
   const relative = safeRelativePath(target.workspaceRoot, target.fsPath);
-  const values = [target.fsPath, relative, path.basename(target.fsPath)];
+  for (const value of [target.fsPath, relative, path.basename(target.fsPath)]) await addValue(value);
 
-  for (const sourcePath of buildAssociatedTargetPaths(target.fsPath, projectPathMappings)) {
-    values.push(sourcePath);
+  for (const sourcePath of await buildAssociatedTargetPaths(target.fsPath, projectPathMappings, checkpoint)) {
+    await addValue(sourcePath);
     for (const mapping of projectPathMappings) {
+      await checkpoint();
       if (!isPathInsideOrEqual(sourcePath, mapping.sourceCwd)) continue;
-      values.push(safeRelativePath(mapping.sourceCwd, sourcePath));
+      await addValue(safeRelativePath(mapping.sourceCwd, sourcePath));
     }
   }
 
-  return buildPathNeedleVariants(values);
+  await checkpoint();
+  return needles;
 }
 
-function buildAssociatedTargetPaths(
+async function buildAssociatedTargetPaths(
   targetPath: string,
   projectPathMappings: readonly ProjectPathMapping[],
-): string[] {
+  checkpoint: () => Promise<void>,
+): Promise<string[]> {
   const out: string[] = [];
+  const seen = new Set<string>();
   const normalizedTargetPath = path.normalize(targetPath);
   for (const mapping of projectPathMappings) {
+    await checkpoint();
     const sourceCwd = String(mapping.sourceCwd ?? "").trim();
     const targetCwd = String(mapping.targetCwd ?? "").trim();
     if (!sourceCwd || !targetCwd) continue;
     if (!isPathInsideOrEqual(normalizedTargetPath, targetCwd)) continue;
     const rel = safeRelativePath(targetCwd, normalizedTargetPath);
-    out.push(rel ? path.join(sourceCwd, rel) : sourceCwd);
+    const sourcePath = (rel ? path.join(sourceCwd, rel) : sourceCwd).trim();
+    const key = sourcePath.toLowerCase();
+    if (!sourcePath || seen.has(key)) continue;
+    seen.add(key);
+    out.push(sourcePath);
   }
-  return dedupeStrings(out);
-}
-
-function buildPathNeedleVariants(values: readonly string[]): string[] {
-  const out: string[] = [];
-  for (const value of values) {
-    const text = String(value ?? "").trim();
-    if (!text) continue;
-    out.push(text);
-    out.push(text.replace(/\\/g, "/"));
-    out.push(text.replace(/\//g, "\\"));
-  }
-  return dedupeStrings(out.map((value) => value.toLowerCase()));
+  await checkpoint();
+  return out;
 }
 
 function isEnabledSource(source: SessionSource, config: CodexHistoryViewerConfig): boolean {
@@ -1143,30 +1249,22 @@ function parsePatchHeader(header: string): { leftStart: number; rightStart: numb
 
 function parseClaudeMessageContent(content: unknown): ClaudeParsedContent {
   const items = Array.isArray(content) ? content : content && typeof content === "object" ? [content] : null;
-  if (!items) return { messageText: typeof content === "string" ? content : "", toolCalls: [] };
+  if (!items) return { toolCalls: [] };
 
-  const messageTexts: string[] = [];
   const toolCalls: ClaudeToolCall[] = [];
   for (const item of items) {
     if (!item || typeof item !== "object") continue;
     const obj = item as Record<string, unknown>;
     const type = typeof obj.type === "string" ? obj.type : "";
-    if (type === "text" || type === "input_text" || type === "output_text") {
-      if (typeof obj.text === "string") messageTexts.push(obj.text);
-      continue;
-    }
     if (type === "tool_use") {
       toolCalls.push({
         callId: typeof obj.id === "string" ? obj.id : typeof obj.tool_use_id === "string" ? obj.tool_use_id : undefined,
         name: typeof obj.name === "string" ? obj.name : undefined,
         input: obj.input,
       });
-      continue;
     }
-    if (type === "tool_result") continue;
-    if (typeof obj.text === "string") messageTexts.push(obj.text);
   }
-  return { messageText: messageTexts.join(""), toolCalls };
+  return { toolCalls };
 }
 
 function getClaudeMessageContent(obj: any): unknown {

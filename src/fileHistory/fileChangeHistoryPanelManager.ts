@@ -442,7 +442,18 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
           progressCancellation = progressToken.onCancellationRequested(() => cancellation.cancel());
           if (progressToken.isCancellationRequested) cancellation.cancel();
           const token = cancellation.token;
+          const getCurrentState = (): FileChangeHistoryPanelState | undefined => {
+            const current = this.stateByPanel.get(panel);
+            if (!current || current.generation !== generation) return undefined;
+            if (token.isCancellationRequested) throw new vscode.CancellationError();
+            if (this.hasReplacedCodexMainline(sessionInventory)) {
+              this.refreshCodexRolloutMainlines();
+              return undefined;
+            }
+            return current;
+          };
           await this.sendLoading(panel, "syncIndex");
+          if (!getCurrentState()) return;
           const indexStartedAt = nowMs();
           const searchIndexSnapshot = await this.searchIndexService.ensureUpToDate({
             index: historyIndex,
@@ -459,42 +470,41 @@ export class FileChangeHistoryPanelManager implements vscode.Disposable {
           });
           indexMs = elapsedMs(indexStartedAt);
 
-          const current = this.stateByPanel.get(panel);
-          if (!current || current.generation !== generation) return;
-          if (this.hasReplacedCodexMainline(sessionInventory)) {
-            this.refreshCodexRolloutMainlines();
-            return;
-          }
+          if (!getCurrentState()) return;
           await this.sendLoading(panel, "collectCandidates");
+          const current = getCurrentState();
+          if (!current) return;
           const candidateStartedAt = nowMs();
-          const candidates = prioritizeFileChangeHistoryOrigin(this.fileChangeHistoryService.buildCandidates({
+          const rankedCandidates = await this.fileChangeHistoryService.buildCandidates({
             index: historyIndex,
             searchIndexSnapshot,
             target: current.target,
             config,
-          }), current.navigationOrigin);
+            token,
+          });
           candidateMs = elapsedMs(candidateStartedAt);
+          const rankedState = getCurrentState();
+          if (!rankedState) return;
+          const candidates = prioritizeFileChangeHistoryOrigin(rankedCandidates, rankedState.navigationOrigin);
 
           await this.sendLoading(panel, "parseSessions");
+          const parseState = getCurrentState();
+          if (!parseState) return;
           const loadStartedAt = nowMs();
           const loaded = await this.fileChangeHistoryService.loadCards({
-            target: current.target,
+            target: parseState.target,
             candidates,
             nextCandidateIndex: 0,
             pendingCards: [],
             limit,
             sessionInventory: historyIndex.historySources ?? historyIndex.sessions,
-            origin: current.navigationOrigin,
+            origin: parseState.navigationOrigin,
             token,
           });
           loadMs = elapsedMs(loadStartedAt);
 
-          const latest = this.stateByPanel.get(panel);
-          if (!latest || latest.generation !== generation) return;
-          if (this.hasReplacedCodexMainline(sessionInventory)) {
-            this.refreshCodexRolloutMainlines();
-            return;
-          }
+          const latest = getCurrentState();
+          if (!latest) return;
           const sortedCards = sortFileChangeHistoryCards(loaded.cards);
           this.stateByPanel.set(panel, {
             ...latest,

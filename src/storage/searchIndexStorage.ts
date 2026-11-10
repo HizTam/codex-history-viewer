@@ -2,6 +2,7 @@ import { constants } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { copyFile, unlink } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { performance } from "node:perf_hooks";
 import { Readable } from "node:stream";
 import { finished, pipeline } from "node:stream/promises";
@@ -65,6 +66,18 @@ export interface SearchIndexStorageOptions {
   readonly performanceProbe?: PerformanceProbe;
 }
 
+export interface SearchIndexReadHeader {
+  readonly version: number;
+  readonly context: unknown;
+}
+
+export interface SearchIndexReadOptions extends SearchIndexStorageOptions {
+  // Reject incompatible metadata before decoding or transforming any entries.
+  readonly acceptHeader?: (header: SearchIndexReadHeader) => boolean;
+  // Transform each complete entry before the next one is decoded; undefined rejects the index.
+  readonly mapEntry?: (entry: unknown) => unknown | Promise<unknown>;
+}
+
 export interface SearchIndexWriteData {
   readonly version: number;
   readonly context: SearchIndexCacheContext;
@@ -72,6 +85,20 @@ export interface SearchIndexWriteData {
 }
 
 class SchemaError extends Error {}
+
+class HeaderValidationError extends Error {
+  constructor(cause: unknown) {
+    super("Search index header validation failed", { cause });
+    this.name = "HeaderValidationError";
+  }
+}
+
+class EntryTransformError extends Error {
+  constructor(cause: unknown) {
+    super("Search index entry transformation failed", { cause });
+    this.name = "EntryTransformError";
+  }
+}
 
 class CooperativeWork {
   private lastYield = performance.now();
@@ -100,12 +127,17 @@ export async function writeSearchIndex(
   const work = new CooperativeWork(options);
   work.check();
   const tempUri = buildTempUri(uri);
+  const nativePath = resolveNativePath(uri);
+  const tempNativePath = nativePath === undefined ? undefined : resolveNativePath(tempUri);
+  if (nativePath !== undefined && tempNativePath === undefined) {
+    throw new Error("Search index temporary path is not local");
+  }
   let providerBytes: Uint8Array | undefined;
-  let ownsTemp = uri.scheme !== "file";
+  let ownsTemp = nativePath === undefined;
   try {
     options.performanceProbe?.add("cacheWriteCount");
-    if (uri.scheme === "file") {
-      const output = createWriteStream(tempUri.fsPath, { flags: "wx" });
+    if (nativePath !== undefined) {
+      const output = createWriteStream(tempNativePath!, { flags: "wx" });
       output.once("open", () => { ownsTemp = true; });
       const cancellation = options.token?.onCancellationRequested(() => output.destroy(new vscode.CancellationError()));
       try {
@@ -131,24 +163,24 @@ export async function writeSearchIndex(
     } catch {
       work.check();
       options.beforeCommit?.();
-      if (uri.scheme === "file") await copyFile(tempUri.fsPath, uri.fsPath);
+      if (nativePath !== undefined) await copyFile(tempNativePath!, nativePath);
       else await vscode.workspace.fs.writeFile(uri, providerBytes!);
     }
   } finally {
-    if (ownsTemp) await cleanupTemp(tempUri);
+    if (ownsTemp) await cleanupTemp(tempUri, tempNativePath);
   }
 }
 
 export async function readSearchIndex(
   uri: vscode.Uri,
-  options: SearchIndexStorageOptions = {},
+  options: SearchIndexReadOptions = {},
 ): Promise<JsonReadOrDropCorruptResult<unknown>> {
   const work = new CooperativeWork(options);
   work.check();
   const rows = new RowReader(readRows(readBytes(uri, options, work), work));
   let result: JsonReadResult<unknown>;
   try {
-    result = { ok: true, value: await decodeIndex(rows, work) };
+    result = { ok: true, value: await decodeIndex(rows, work, options) };
   } catch (error) {
     if (error instanceof vscode.CancellationError) throw error;
     if (error instanceof SchemaError || (!rows.recognized && error instanceof SyntaxError)) {
@@ -206,13 +238,21 @@ function* indexRows(data: SearchIndexWriteData): Generator<Row> {
   yield* metaRows(data.context, CONTEXT_SCHEMA);
   let entryOrdinal = 0;
   for (const [key, entry] of data.entries) {
+    // Packed entries decode on access, so each serialization pass reads the getter once.
+    const messages = entry.messages;
     requireCount(entryOrdinal);
-    requireCount(entry.messages.length);
+    requireCount(messages.length);
     if (entry.fileChangeHints !== undefined) requireCount(entry.fileChangeHints.length);
-    yield ["entry", entryOrdinal++, entry.messages.length, entry.fileChangeHints?.length ?? null];
-    yield* metaRows({ ...entry, key }, ENTRY_SCHEMA);
-    for (let ordinal = 0; ordinal < entry.messages.length; ordinal++) {
-      const message = entry.messages[ordinal];
+    yield ["entry", entryOrdinal++, messages.length, entry.fileChangeHints?.length ?? null];
+    yield* metaRows({
+      key,
+      fsPath: entry.fsPath,
+      mtimeMs: entry.mtimeMs,
+      size: entry.size,
+      historySignature: entry.historySignature,
+    }, ENTRY_SCHEMA);
+    for (let ordinal = 0; ordinal < messages.length; ordinal++) {
+      const message = messages[ordinal];
       requireText(message.text);
       yield ["message", ordinal, message.text.length, chunkCount(message.text.length)];
       yield* metaRows(message, MESSAGE_SCHEMA);
@@ -272,7 +312,8 @@ async function* readBytes(
   work: CooperativeWork,
 ): AsyncGenerator<Uint8Array> {
   work.check();
-  if (uri.scheme !== "file") {
+  const nativePath = resolveNativePath(uri);
+  if (nativePath === undefined) {
     const bytes = await vscode.workspace.fs.readFile(uri);
     options.performanceProbe?.add("cacheReadByteCount", bytes.byteLength);
     for (let offset = 0; offset < bytes.byteLength; offset += READ_CHUNK_BYTES) {
@@ -282,7 +323,7 @@ async function* readBytes(
     work.check();
     return;
   }
-  const input = createReadStream(uri.fsPath, { highWaterMark: READ_CHUNK_BYTES });
+  const input = createReadStream(nativePath, { highWaterMark: READ_CHUNK_BYTES });
   const cancellation = options.token?.onCancellationRequested(() => input.destroy(new vscode.CancellationError()));
   try {
     for await (const raw of input) {
@@ -356,7 +397,11 @@ class RowReader {
   }
 }
 
-async function decodeIndex(rows: RowReader, work: CooperativeWork): Promise<unknown> {
+async function decodeIndex(
+  rows: RowReader,
+  work: CooperativeWork,
+  options: SearchIndexReadOptions,
+): Promise<unknown> {
   const header = await rows.next();
   if (!header || header.length !== 3 || header[0] !== "header" || header[1] !== FORMAT_VERSION) {
     throw new SchemaError("Unrecognized search index format");
@@ -364,6 +409,22 @@ async function decodeIndex(rows: RowReader, work: CooperativeWork): Promise<unkn
   rows.recognized = true;
   requireCount(header[2]);
   const context = await readMeta(rows, CONTEXT_SCHEMA);
+  if (options.acceptHeader !== undefined) {
+    await work.checkpoint();
+    let accepted: boolean;
+    try {
+      // Validation observes a frozen copy without mutating the decoded metadata.
+      accepted = options.acceptHeader(Object.freeze({
+        version: header[2] as number,
+        context: Object.freeze({ ...context }),
+      }));
+    } catch (error) {
+      if (error instanceof vscode.CancellationError) throw error;
+      throw new HeaderValidationError(error);
+    }
+    await work.checkpoint();
+    if (accepted !== true) return null;
+  }
   const entries: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   let entryOrdinal = 0;
   while (true) {
@@ -412,7 +473,22 @@ async function decodeIndex(rows: RowReader, work: CooperativeWork): Promise<unkn
       }
       entry.fileChangeHints = hints;
     }
-    entries[key] = entry;
+    if (options.mapEntry === undefined) {
+      entries[key] = entry;
+    } else {
+      await work.checkpoint();
+      let mapped: unknown;
+      try {
+        mapped = await options.mapEntry(entry);
+      } catch (error) {
+        if (error instanceof vscode.CancellationError) throw error;
+        // Mapper failures are not malformed JSON and must never delete a valid cache.
+        throw new EntryTransformError(error);
+      }
+      await work.checkpoint();
+      if (mapped === undefined) throw new SchemaError("Rejected search index entry");
+      entries[key] = mapped;
+    }
   }
 }
 
@@ -510,9 +586,16 @@ function buildTempUri(uri: vscode.Uri): vscode.Uri {
   return uri.with({ path: `${stem}.tmp-${Date.now().toString(36)}-${randomUUID().replace(/-/gu, "")}.jsonl` });
 }
 
-async function cleanupTemp(uri: vscode.Uri): Promise<void> {
+function resolveNativePath(uri: vscode.Uri): string | undefined {
+  if ((uri.scheme !== "file" && uri.scheme !== "vscode-userdata") || !isAbsolute(uri.fsPath)) return undefined;
+  // The file scheme restores UNC authority that userdata.fsPath does not include.
+  const nativePath = uri.scheme === "vscode-userdata" ? uri.with({ scheme: "file" }).fsPath : uri.fsPath;
+  return isAbsolute(nativePath) ? nativePath : undefined;
+}
+
+async function cleanupTemp(uri: vscode.Uri, nativePath: string | undefined): Promise<void> {
   try {
-    if (uri.scheme === "file") await unlink(uri.fsPath);
+    if (nativePath !== undefined) await unlink(nativePath);
     else await vscode.workspace.fs.delete(uri, { recursive: false, useTrash: false });
   } catch {
     // Cleanup is best effort and must never hide the primary result or error.

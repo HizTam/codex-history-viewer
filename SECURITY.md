@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-10-25
+Last updated: 2026-11-10
 
 ## Supported Versions
 
@@ -18,9 +18,9 @@ Use the latest published release of Codex History Viewer whenever possible. Olde
 | 1.2.2 through 2.7.x | Does not include all current Markdown and KaTeX dependency security updates; upgrade to 2.19.0 or later. |
 | 1.2.1 and earlier | Do not install or redistribute historical VSIX files. |
 
-## Dependencies Shipped in 2.19.0
+## Dependencies Shipped in 2.20.2
 
-Version 2.19.0 updates the Markdown renderer and the sanitizer and math renderer used by Mermaid.
+Version 2.20.2 retains the Markdown, diagram-rendering, and decompression dependency versions used in 2.20.1. The Markdown renderer and the sanitizer and math renderer used by Mermaid were last updated in 2.19.0.
 
 | Component | Bundled version | Use |
 | --- | --- | --- |
@@ -42,6 +42,15 @@ Resolved npm dependencies are recorded in `package-lock.json`. Embedded componen
 Codex History Viewer v2.19.0 pins Node.js used for development and builds to **24.22.1**, which includes the [Node.js security fix for CVE-2026-111497](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases#nodejs-brotli-decoder-out-of-bounds-write-permits-remote-code-execution-cve-2026-111497---high). The vulnerability can cause memory corruption when an affected runtime decompresses attacker-controlled Brotli data. Source builds must use the version specified in `.node-version`.
 
 This notice concerns the development/build runtime. Installed extensions run on the host runtime supplied by VS Code or the remote VS Code Server, whose security updates are provided independently. Compressed Codex histories (`.jsonl.zst`) are decoded using bundled Zstandard WebAssembly.
+
+### Development dependency advisories
+
+As of 2026-11-10, the development dependencies used through the VSIX packaging tool, `@vscode/vsce`, have the following advisory status:
+
+- `minimatch@10.2.6` is within the affected range for [GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249). It is retained to match the packaging tool's current version 10 requirement. The advisory requires `optimizationLevel` of 2 or higher; the checked packaging calls use the default level of 1.
+- `qs`, used through `typed-rest-client`, is updated from 6.16.0 to 6.17.1 in Codex History Viewer 2.20.2, resolving [GHSA-6pq8-jhm2-2vcw](https://github.com/advisories/GHSA-6pq8-jhm2-2vcw). The updated version is outside the advisory's affected range.
+
+The affected minimatch version remains in the development lock file. These development dependencies and the packaging tool are not included in the extension's VSIX. The call-path checks above do not establish that all development dependencies are free of vulnerabilities.
 
 ### Remote Codex App Server maintenance (experimental)
 
@@ -128,6 +137,12 @@ Support for `.jsonl.zst` histories is experimental and disabled by default. When
 The reader processes compressed input incrementally, enforces a 1 GiB decoded-data limit per file read, and uses the bundled decoder's default 128 MiB maximum window. It checks cancellation, yields between decoding work, and stops on invalid or truncated streams. These are decoding limits, not a limit on the extension's total memory use; parsed session models and indexes also require memory. The setting carries a resource-impact badge.
 
 An explicitly requested import can convert incoming session data to an existing destination's storage format. It writes a temporary file and checks for source or destination changes before replacing the destination. This temporary file belongs to the import operation and is not a persistent decompression cache.
+
+### Search indexes and local cached data
+
+Search and analysis caches contain derived history data, which may include message text, configured tool content, and file paths. These caches are not encrypted by the extension and should be protected like the source histories.
+
+Version 2.20.2 reads and writes local file-backed search caches incrementally, including local `vscode-userdata` storage, and retains indexed message text in segmented byte buffers until it is needed. Other storage providers retain the provider-based read and write fallback. These changes reduce JavaScript heap pressure; they do not impose a limit on total RAM or disk usage. Large individual sessions and concurrent readers retaining older index snapshots may temporarily require additional memory. Source history files are not rewritten by search indexing.
 
 ### Claude Code bookmarks, progress text, additional user input, and notifications
 

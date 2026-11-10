@@ -80,6 +80,7 @@ export async function resolveClaudeAgentHistory(
   const own: RecordEntry[] = [];
   const references: RecordEntry[] = [];
   for (const entry of scan.records) {
+    checkCancelled(options);
     const value = entry.value;
     if (typeof value.uuid === "string" && SAFE_ID.test(value.uuid)) {
       const previous = byUuid.get(value.uuid)?.value;
@@ -96,7 +97,9 @@ export async function resolveClaudeAgentHistory(
       if (value.isSidechain !== false && !(typeof value.agentId === "string" && value.agentId !== location.agentId)) partial = true;
     }
   }
-  const parentIds = new Set(own.map(entry => entry.value.parentUuid));
+  const effective = resolvePreservedParents(byUuid, duplicateUuids, location, options);
+  partial ||= effective.partial;
+  const parentIds = new Set(own.map(entry => effective.parents.get(entry.value.uuid)));
   const leafCandidate = own.slice().reverse().find(entry => !parentIds.has(entry.value.uuid) && !(entry.value.type === "system" && entry.value.subtype === "compact_boundary"));
   const leaf = leafCandidate ? byUuid.get(leafCandidate.value.uuid) : undefined;
   const ownLines = new Set<number>();
@@ -109,7 +112,7 @@ export async function resolveClaudeAgentHistory(
     visited.add(value.uuid);
     if (isOwnedRecord(value, location)) ownLines.add(current.line);
     else if (value.agentId === location.agentId && value.isSidechain !== false) partial = true;
-    const parent = value.parentUuid;
+    const parent = effective.parents.get(value.uuid);
     if (parent == null) break;
     if (typeof parent !== "string" || !SAFE_ID.test(parent)) { partial = true; break; }
     current = byUuid.get(parent);
@@ -117,7 +120,7 @@ export async function resolveClaudeAgentHistory(
     if (!current && !references.some(entry => entry.value.parentLastUuid === parent)) partial = true;
   }
   if (!leaf) partial = true;
-  partial = recoverParallelRecords(byUuid, duplicateUuids, ownLines, location, options) || partial;
+  partial = recoverParallelRecords(byUuid, duplicateUuids, effective.parents, ownLines, location, options) || partial;
   if (references.length) {
     if (references.length !== 1) partial = true;
     const ref = references.at(-1)!.value;
@@ -172,11 +175,128 @@ function isOwnedRecord(value: Record<string, any>, location: ClaudeAgentPath): b
     typeof value.uuid === "string" && SAFE_ID.test(value.uuid);
 }
 
+// Restore compacted references in a private graph without altering persisted records.
+function resolvePreservedParents(
+  byUuid: ReadonlyMap<string, RecordEntry>,
+  duplicateUuids: ReadonlySet<string>,
+  location: ClaudeAgentPath,
+  options: SessionJsonlReadOptions,
+): { parents: ReadonlyMap<string, unknown>; partial: boolean } {
+  const parents = new Map<string, unknown>();
+  const children = new Map<string, Set<string>>();
+  const boundaries: RecordEntry[] = [];
+  const isAuthoritative = (uuid: unknown): uuid is string => typeof uuid === "string" && SAFE_ID.test(uuid) &&
+    !duplicateUuids.has(uuid) && !!byUuid.get(uuid) && isOwnedRecord(byUuid.get(uuid)!.value, location);
+  for (const [uuid, entry] of byUuid) {
+    checkCancelled(options);
+    parents.set(uuid, entry.value.parentUuid);
+    if (!isAuthoritative(uuid)) continue;
+    const parent = entry.value.parentUuid;
+    if (typeof parent === "string" && SAFE_ID.test(parent)) {
+      const group = children.get(parent) ?? new Set<string>();
+      group.add(uuid);
+      children.set(parent, group);
+    }
+    if (entry.value.type === "system" && entry.value.subtype === "compact_boundary") boundaries.push(entry);
+  }
+  let remainingWork = MAX_CHAIN_DEPTH * 4;
+  let exhausted = false;
+  let partial = false;
+  const spend = (amount = 1): boolean => {
+    checkCancelled(options);
+    if (amount > remainingWork) { exhausted = true; return false; }
+    remainingWork -= amount;
+    return true;
+  };
+  const isObject = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === "object" && !Array.isArray(value);
+  const buildPatch = (metadata: Record<string, unknown>): Map<string, string> | undefined => {
+    const preserved = new Set<string>();
+    const patch = new Map<string, string>();
+    let anchor: unknown;
+    let tail: string;
+    if (Object.hasOwn(metadata, "preservedMessages")) {
+      const messages = metadata.preservedMessages;
+      if (!isObject(messages) || !Array.isArray(messages.uuids)) return undefined;
+      // The upstream writer emits an empty list as a complete, valid no-op.
+      if (messages.uuids.length === 0) return patch;
+      if (!spend(messages.uuids.length)) return undefined;
+      anchor = messages.anchorUuid;
+      if (!isAuthoritative(anchor)) return undefined;
+      let parent = anchor;
+      for (const uuid of messages.uuids) {
+        checkCancelled(options);
+        if (!isAuthoritative(uuid) || preserved.has(uuid) || uuid === anchor) return undefined;
+        preserved.add(uuid);
+        patch.set(uuid, parent);
+        parent = uuid;
+      }
+      tail = parent;
+    } else {
+      const segment = metadata.preservedSegment;
+      if (!isObject(segment) || !spend(3) || !isAuthoritative(segment.headUuid) ||
+          !isAuthoritative(segment.tailUuid) || !isAuthoritative(segment.anchorUuid)) return undefined;
+      anchor = segment.anchorUuid;
+      tail = segment.tailUuid;
+      let current: unknown = tail;
+      // Follow the existing effective graph, including earlier successful boundaries.
+      while (true) {
+        if (!spend() || !isAuthoritative(current) || preserved.has(current) || preserved.size >= MAX_CHAIN_DEPTH || current === anchor) return undefined;
+        preserved.add(current);
+        if (current === segment.headUuid) break;
+        current = parents.get(current);
+      }
+      patch.set(segment.headUuid, segment.anchorUuid);
+    }
+    if (!isAuthoritative(anchor)) return undefined;
+    for (const child of children.get(anchor) ?? []) {
+      if (!spend()) return undefined;
+      if (!preserved.has(child)) patch.set(child, tail);
+    }
+    const ancestors = new Set<string>();
+    let current: unknown = anchor;
+    while (current != null) {
+      if (!spend() || !isAuthoritative(current) || patch.has(current) || ancestors.has(current) || ancestors.size >= MAX_CHAIN_DEPTH) return undefined;
+      ancestors.add(current);
+      current = parents.get(current);
+    }
+    return patch;
+  };
+  // Map iteration retains UUID first appearance while exposing only its latest content.
+  for (const entry of boundaries) {
+    if (!spend()) { partial = true; break; }
+    const metadata: unknown = entry.value.compactMetadata;
+    if (metadata === undefined) continue;
+    if (!isObject(metadata)) { partial = true; continue; }
+    if (!Object.hasOwn(metadata, "preservedMessages") && !Object.hasOwn(metadata, "preservedSegment")) continue;
+    const patch = buildPatch(metadata);
+    if (!patch) {
+      partial = true;
+      if (exhausted) break;
+      continue;
+    }
+    // Reserve every write before committing so budget exhaustion cannot apply a prefix.
+    if (!spend(patch.size)) { partial = true; break; }
+    for (const [uuid, parent] of patch) {
+      checkCancelled(options);
+      const previous = parents.get(uuid);
+      if (typeof previous === "string") children.get(previous)?.delete(uuid);
+      parents.set(uuid, parent);
+      const group = children.get(parent) ?? new Set<string>();
+      group.add(uuid);
+      children.set(parent, group);
+    }
+    checkCancelled(options);
+  }
+  return { parents, partial };
+}
+
 // A turn can contain parallel assistant blocks and results outside the leaf's parent chain.
 // Recover only explicit relations in the same ownership scope, retaining physical line order.
 function recoverParallelRecords(
   byUuid: ReadonlyMap<string, RecordEntry>,
   duplicateUuids: ReadonlySet<string>,
+  parents: ReadonlyMap<string, unknown>,
   ownLines: Set<number>,
   location: ClaudeAgentPath,
   options: SessionJsonlReadOptions,
@@ -226,7 +346,7 @@ function recoverParallelRecords(
     checkCancelled(options);
     if (ownLines.has(entry.line)) continue;
     const ids = readToolIds(entry.value, "tool_result", "tool_use_id");
-    const explicit = [entry.value.parentUuid, entry.value.sourceToolAssistantUUID]
+    const explicit = [parents.get(entry.value.uuid), entry.value.sourceToolAssistantUUID]
       .filter((uuid): uuid is string => typeof uuid === "string")
       .map(uuid => assistants.get(uuid)).filter((value): value is RecordEntry => value !== undefined);
     const related = [...ids].map(id => {

@@ -37,8 +37,8 @@ import {
 } from "../sessions/codexHistoryBase";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import { stableTextSha256 } from "../utils/stableTextHash";
-import { extractCompactUserText, safeDisplayPath } from "../utils/textUtils";
-import { isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
+import { safeDisplayPath } from "../utils/textUtils";
+import { extractClaudeCompactUserText, isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
 import {
   normalizeSessionAnalysisGraphIdentifier,
   normalizeSessionAnalysisProjectCwd,
@@ -1023,7 +1023,7 @@ async function buildRawClaudeRecord(
     !isCrossSessionInbound &&
     !isClaudeCompactSummaryRecord(obj) &&
     obj?.isMeta !== true &&
-    !extractClaudeRequestInterruptionContent(controlContent) &&
+    !extractClaudeRequestInterruptionContent(controlContent, obj) &&
     !extractClaudeLocalCommandOutputContent(controlContent) &&
     !extractClaudeTerminalOutput(obj, controlContent)
   ) {
@@ -1033,7 +1033,7 @@ async function buildRawClaudeRecord(
       { enabled: false, maxBytes: 1024 * 1024 },
       { role: "user", pastedPrompt, record: obj },
     );
-    const compact = extractCompactUserText(extracted.text);
+    const compact = extractClaudeCompactUserText(obj, extracted.text, pastedPrompt);
     if (compact || extracted.attachments.length > 0) {
       const normalized = normalizeGraphText(compact ?? extracted.text);
       humanCandidate = {
