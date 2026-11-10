@@ -15,6 +15,7 @@ import {
   buildAttachmentSummaryLines,
   detectClaudeMaterializedMessageRole,
   extractClaudeMessageContent,
+  extractClaudeRequestInterruptionContent,
   extractCodexMessageContent,
   selectClaudeControlContent,
 } from "../chat/chatAttachments";
@@ -394,7 +395,22 @@ async function renderClaudeRecord(
   const rawContent = getClaudeMessageContent(obj);
   const parsed = parseClaudeMessageContent(rawContent);
   const pastedPrompt = role === "user" ? await params.pastedPromptResolver?.resolve(obj, rawContent) : undefined;
-  const terminalOutput = extractClaudeTerminalOutput(obj, selectClaudeControlContent(rawContent, pastedPrompt));
+  const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+  const interruption = role === "user" ? extractClaudeRequestInterruptionContent(controlContent, obj) : null;
+  if (interruption) {
+    const title = interruption.reason === "sessionEnded" ? t("chat.systemEvent.interrupted.sessionEndedTitle")
+      : interruption.reason === "agentProcessEnded" ? t("chat.systemEvent.interrupted.agentProcessEndedTitle")
+        : interruption.scope === "toolUse" ? t("chat.systemEvent.interrupted.toolUseTitle") : t("chat.systemEvent.interrupted.title");
+    const description = interruption.reason === "sessionEnded" ? t("chat.systemEvent.interrupted.sessionEndedDescription")
+      : interruption.reason === "agentProcessEnded" ? t("chat.systemEvent.interrupted.agentProcessEndedDescription")
+        : t("chat.systemEvent.interrupted.description");
+    lines.push(`## ${title}`, "");
+    const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
+    if (ts) lines.push(`- Timestamp: \`${formatIsoToLocal(ts, timeZone, { withSeconds: true })}\``, "");
+    lines.push(description, "");
+    return { handled: true, msgIndex, lastToolCallId: undefined };
+  }
+  const terminalOutput = extractClaudeTerminalOutput(obj, controlContent);
   if (terminalOutput) {
     msgIndex += 1;
     messageLineMap.set(msgIndex, lines.length + 1);

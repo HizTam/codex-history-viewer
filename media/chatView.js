@@ -11340,7 +11340,7 @@
 
     if (showDetails) {
       const details = el("div", { className: "systemEventDetails" });
-      appendUsageDetail(details, i18n.systemEventDetailReason || localization.defaults.systemEventDetailReason, normalizeUsageText(item && item.reason));
+      appendUsageDetail(details, i18n.systemEventDetailReason || localization.defaults.systemEventDetailReason, getSystemEventReasonText(item));
       appendUsageDetail(
         details,
         i18n.systemEventDetailDuration || localization.defaults.systemEventDetailDuration,
@@ -11465,6 +11465,14 @@
     if (item && item.kind === "localCommandOutput") {
       return getSafeUiText(i18n.systemEventLocalCommandTitle, localization.defaults.systemEventLocalCommandTitle);
     }
+    if (item && item.kind === "requestInterrupted" && item.source === "claude") {
+      if (item.reason === "sessionEnded") {
+        return getSafeUiText(i18n.systemEventSessionEndedTitle, localization.defaults.systemEventSessionEndedTitle);
+      }
+      if (item.reason === "agentProcessEnded") {
+        return getSafeUiText(i18n.systemEventAgentProcessEndedTitle, localization.defaults.systemEventAgentProcessEndedTitle);
+      }
+    }
     if (item && item.kind === "requestInterrupted" && item.scope === "toolUse") {
       return getSafeUiText(i18n.systemEventInterruptedToolUseTitle, localization.defaults.systemEventInterruptedToolUseTitle);
     }
@@ -11476,9 +11484,34 @@
 
   function getSystemEventDescriptionText(item) {
     if (item && item.kind === "requestInterrupted") {
+      if (item.source === "claude") {
+        if (item.reason === "sessionEnded") {
+          return getSafeUiText(i18n.systemEventSessionEndedDescription, localization.defaults.systemEventSessionEndedDescription);
+        }
+        if (item.reason === "agentProcessEnded") {
+          return getSafeUiText(i18n.systemEventAgentProcessEndedDescription, localization.defaults.systemEventAgentProcessEndedDescription);
+        }
+        if (item.reason !== undefined) {
+          return getSafeUiText(i18n.systemEventInterruptedGenericDescription, localization.defaults.systemEventInterruptedGenericDescription);
+        }
+      }
       return getSafeUiText(i18n.systemEventInterruptedDescription, localization.defaults.systemEventInterruptedDescription);
     }
     return "";
+  }
+
+  function getSystemEventReasonText(item) {
+    if (item && item.kind === "requestInterrupted" && item.source === "claude") {
+      // Claude reasons are protocol identifiers, never arbitrary presentation text.
+      if (item.reason === "sessionEnded") {
+        return getSafeUiText(i18n.systemEventSessionEndedReason, localization.defaults.systemEventSessionEndedReason);
+      }
+      if (item.reason === "agentProcessEnded") {
+        return getSafeUiText(i18n.systemEventAgentProcessEndedReason, localization.defaults.systemEventAgentProcessEndedReason);
+      }
+      return "";
+    }
+    return normalizeUsageText(item && item.reason);
   }
 
   function renderProtocolContext(item, cardKey) {

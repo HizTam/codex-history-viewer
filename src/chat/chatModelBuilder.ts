@@ -566,7 +566,7 @@ async function readPatchEntryDetails(
     const rawContent = getClaudeMessageContent(obj);
     const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
     const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
-    if (role === "user" && extractClaudeRequestInterruptionContent(controlContent)) {
+    if (role === "user" && extractClaudeRequestInterruptionContent(controlContent, obj)) {
       const turnId = resolveClaudeControlTurnId(claudeDetailTurnState);
       markCodexTurnInterrupted(claudeDetailTurnState?.turnState, turnId, readTimestampIso(obj), {
         itemBacked: true,
@@ -583,7 +583,7 @@ async function readPatchEntryDetails(
     const parsed = parseClaudeMessageContent(rawContent);
     claudeChanges.acceptResults(obj);
     const extracted = await extractClaudeMessageContent(rawContent, sessionCwd, { enabled: false }, { role, pastedPrompt, record: obj });
-    const compactUserText = role === "user" ? extractClaudeCompactUserText(obj, normalizeText(extracted.text)) : null;
+    const compactUserText = role === "user" ? extractClaudeCompactUserText(obj, normalizeText(extracted.text), pastedPrompt) : null;
     const turnResolution = resolveClaudeRecordTurnId(
       obj,
       role,
@@ -1133,7 +1133,7 @@ async function indexClaudeTimelineRecord(
   const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
   const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
   const ts = readTimestampIso(obj);
-  const interruption = role === "user" ? extractClaudeRequestInterruptionContent(controlContent) : null;
+  const interruption = role === "user" ? extractClaudeRequestInterruptionContent(controlContent, obj) : null;
   if (interruption) {
     const turnId = resolveClaudeControlTurnId(claudeTurnState);
     const item: ChatSystemEventItem = {
@@ -1141,6 +1141,7 @@ async function indexClaudeTimelineRecord(
       kind: "requestInterrupted",
       source: "claude",
       scope: interruption.scope,
+      ...(interruption.reason ? { reason: interruption.reason } : {}),
       ...(ts ? { timestampIso: ts } : {}),
       ...(turnId ? { turnId } : {}),
     };
@@ -1193,7 +1194,7 @@ async function indexClaudeTimelineRecord(
   });
   const attachments = extracted.attachments;
   const text = normalizeText(extracted.text);
-  const compactUserText = role === "user" ? extractClaudeCompactUserText(obj, text) : null;
+  const compactUserText = role === "user" ? extractClaudeCompactUserText(obj, text, pastedPrompt) : null;
   const turnResolution = resolveClaudeRecordTurnId(
     obj,
     role,

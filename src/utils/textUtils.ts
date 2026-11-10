@@ -288,7 +288,7 @@ export function stripTransportMetaTags(text: string): string {
   return normalizeWhitespace(out);
 }
 
-export function extractCompactUserText(text: string): string | null {
+export function extractCompactUserText(text: string, options?: { preserveClaudeInterruptionText?: boolean }): string | null {
   const normalized = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
   if (!normalized) return null;
 
@@ -297,7 +297,8 @@ export function extractCompactUserText(text: string): string | null {
   const compact = stripTransportMetaTags(base);
   // Suppress boilerplate-only user messages after metadata cleanup.
   if (isBoilerplateUserMessageText(compact)) return null;
-  if (isCodexTurnAbortedMessageText(compact) || isClaudeRequestInterruptedMessageText(compact)) return null;
+  if (isCodexTurnAbortedMessageText(compact)) return null;
+  if (!options?.preserveClaudeInterruptionText && isClaudeRequestInterruptedMessageText(compact)) return null;
   return compact.length > 0 ? compact : null;
 }
 

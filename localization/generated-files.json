@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "files": {
-    "l10n/bundle.l10n.ja.json": "51fcf3ef4c8bc8308748498dabcdc5588a8ccab5ba3f7d5f01713d33b3b5f178",
+    "l10n/bundle.l10n.ja.json": "902b9afbcf89761f6495fd817a4aa5a0cdd6c9cdf503498ef1080155b981a6a4",
     "package.nls.ja.json": "2e28caa2755d416d9e840f8e1c2fbf0abee72d73d7bd647b9bf1308c0b115b2a",
-    "l10n/bundle.l10n.json": "b699cfd3d0b74c88f84f9adf7046508f1a9a0a1a6cfc639b6ae7de483e0ba564",
+    "l10n/bundle.l10n.json": "5ba4bc4ff3a3bfdbe40177c086b43996a9dc8fd2c29bacabc29ecf30b2a246bd",
     "package.nls.en.json": "e3e2839b604e5be0f769e9637365279d885e3244644cbaadadf0d1353b7f9a77",
     "package.nls.json": "e3e2839b604e5be0f769e9637365279d885e3244644cbaadadf0d1353b7f9a77",
-    "src/generated/localeCatalog.ts": "4f91f4e920500a8a480d966d4f30892d0ac618aecfcb5464784e63a9cf3910c1",
-    "src/generated/defaultRuntimeMessages.ts": "42505958d998e8d2e40f310fc4915eda1c8fe2650f4ec5c9a0f3de1cfb0ae6b9",
+    "src/generated/localeCatalog.ts": "ed08da52d7cdf762b8c2c4e9750e10f7c48e7f5a76204a8f50133037be73bb4f",
+    "src/generated/defaultRuntimeMessages.ts": "c790eeb26d6cd69b7b2ce1c11916b8eabb9b705174f98f5a54a970b0b4250f06",
     "src/generated/uiCommandAliases.ts": "a26347a9a023d8ffbc5e442d0b159a63b2fe6da59083a5fce82bdb96c60727f2",
-    "src/generated/webviewI18n.ts": "224da05eaa7309036e61981b04da20a4d42dea6a12bc3ac8c2cd755ff7042d71",
-    "media/generated/localization.js": "13624df11e1e43685b2c4c9233c08389bd9efcda8ab8ffdce3335289c6d10e70"
+    "src/generated/webviewI18n.ts": "0318a9fac537d5a377e572ec2af91679946e794f823bdced1b5823cc1696eee4",
+    "media/generated/localization.js": "b4436fd7dcece6414e61a3eec2858eae1e2d8bdccf3c39d818adff9a2ab5ff39"
   },
   "packageHash": "925e726b5c21961abd66e3467f16ccde25fceb441e60e092d22dc72e015efdcd"
 }

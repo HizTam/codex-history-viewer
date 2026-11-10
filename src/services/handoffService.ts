@@ -10,6 +10,7 @@ import {
   detectClaudeMaterializedMessageRole,
   extractClaudeLocalCommandOutputContent,
   extractClaudeMessageContent,
+  extractClaudeRequestInterruptionContent,
   extractCodexMessageContent,
   isCodexProtocolContextContent,
   selectClaudeControlContent,
@@ -419,6 +420,7 @@ async function collectClaudeMessage(
   const rawContent = getClaudeMessageContent(obj);
   const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
   const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+  if (role === "user" && extractClaudeRequestInterruptionContent(controlContent, obj)) return true;
   if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) return true;
   if (extractClaudeTerminalOutput(obj, controlContent)) return true;
   const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt, record: obj });

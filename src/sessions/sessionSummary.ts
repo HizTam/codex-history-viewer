@@ -6,7 +6,6 @@ import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import { formatTimeHmInTimeZone, toYmdInTimeZone, ymdToString } from "../utils/dateUtils";
 import { normalizeCacheKey, statSafe } from "../utils/fsUtils";
 import {
-  extractCompactUserText,
   normalizeWhitespace,
   safeDisplayPath,
   singleLineSnippet,
@@ -16,6 +15,7 @@ import {
   detectClaudeMaterializedMessageRole,
   extractClaudeLocalCommandOutputContent,
   extractClaudeMessageContent,
+  extractClaudeRequestInterruptionContent,
   extractCodexCompactUserText,
   extractCodexMessageContent,
   isCodexProtocolContextContent,
@@ -26,7 +26,7 @@ import {
   type ClaudePastedPromptResolver,
 } from "../chat/claudePastedPrompt";
 import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
-import { isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
+import { extractClaudeCompactUserText, isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
 import type { ChatAttachment } from "../chat/chatTypes";
 import type {
   PreviewMessage,
@@ -316,6 +316,7 @@ async function appendPreviewMessage(
   const rawContent = getClaudeMessageContent(obj);
   const pastedPrompt = role === "user" ? await pastedPromptResolver?.resolve(obj, rawContent) : undefined;
   const controlContent = selectClaudeControlContent(rawContent, pastedPrompt);
+  if (role === "user" && extractClaudeRequestInterruptionContent(controlContent, obj)) return;
   if (role === "user" && extractClaudeLocalCommandOutputContent(controlContent)) return;
   if (extractClaudeTerminalOutput(obj, controlContent)) return;
   const extracted = await extractClaudeMessageContent(rawContent, undefined, { enabled: false }, { role, pastedPrompt, record: obj });
@@ -323,7 +324,7 @@ async function appendPreviewMessage(
   const textRaw = [buildClaudePreviewText(extracted.text), attachmentSummary].filter(Boolean).join("\n");
   const textNormalized = normalizeWhitespace(textRaw);
   if (!textNormalized) return;
-  const userText = role === "user" ? extractCompactUserText(textNormalized) : null;
+  const userText = role === "user" ? extractClaudeCompactUserText(obj, textNormalized, pastedPrompt) : null;
   if (role === "user" && !userText) return;
   const text = role === "user" ? userText! : textNormalized;
 
