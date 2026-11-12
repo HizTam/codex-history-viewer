@@ -22,6 +22,7 @@ import {
   addUnavailablePlaceholderIfNeeded,
   extractImageAttachmentFromItem,
   isPotentialImageAttachmentItem,
+  isSuppressedInputAudioImageCandidate,
   stripImagePlaceholders,
 } from "./chatImageAttachments";
 import {
@@ -238,7 +239,8 @@ export function extractCodexTextContent(content: unknown): ExtractedCodexTextCon
       const stripped = stripImagePlaceholders(maybeText);
       const files = extractCodexFilesMentionedFromText(stripped.text);
       if (files.text) texts.push(files.text);
-      if (stripped.placeholderCount > 0 || files.attachments.length > 0 || isPotentialImageAttachmentItem(obj)) {
+      if (stripped.placeholderCount > 0 || files.attachments.length > 0 || isPotentialImageAttachmentItem(obj) ||
+        isSuppressedInputAudioImageCandidate(obj)) {
         hasNonTextContent = true;
       }
       continue;
@@ -423,6 +425,12 @@ export function extractClaudeLocalCommandOutputContent(content: unknown): Claude
 function toClaudeRequestInterruptionContent(text: string): ClaudeRequestInterruptionContent | null {
   const scope = getClaudeRequestInterruptedScope(text);
   return scope ? { scope } : null;
+}
+
+export function hasSuppressedInputAudioImageCandidate(content: unknown): boolean {
+  return normalizeContentItems(content).some((item) =>
+    item !== null && typeof item === "object" && !Array.isArray(item) && isSuppressedInputAudioImageCandidate(item),
+  );
 }
 
 export async function extractCodexMessageContent(
@@ -1625,7 +1633,7 @@ export function hasClaudeAttachmentLikeContent(content: unknown): boolean {
     if (!item || typeof item !== "object") continue;
     const obj = item as Record<string, unknown>;
     const type = normalizeType(readStringField(obj, "type"));
-    if (type === "document" || isPotentialImageAttachmentItem(obj)) return true;
+    if (type === "document" || isPotentialImageAttachmentItem(obj) || isSuppressedInputAudioImageCandidate(obj)) return true;
     const text = readStringField(obj, "text");
     if (text && (hasClaudeStructuredAttachmentTag(text) || hasClaudeIdeTag(text) || stripImagePlaceholders(text).placeholderCount > 0)) {
       return true;

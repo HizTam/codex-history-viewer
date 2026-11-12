@@ -45,11 +45,17 @@ export type ChatTimelineItem =
 export type ChatTurnStatus = "incomplete" | "completed" | "interrupted" | "rolledBack" | "unknown";
 export type ChatTurnDisplayStatus = "running" | ChatTurnStatus;
 
+export interface ChatCreditBalance {
+  remaining: number;
+  recordedAtIso?: string;
+}
+
 export interface ChatTurnSummary {
   id: string;
   sequenceNumber: number;
   status: ChatTurnStatus;
   displayStatus?: ChatTurnDisplayStatus;
+  creditBalance?: ChatCreditBalance;
   startedAtIso?: string;
   completedAtIso?: string;
   updatedAtIso?: string;

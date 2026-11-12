@@ -31,8 +31,26 @@ export interface CodexAgentComponent {
   nodes: CodexAgentComponentNode[];
 }
 
+export interface CodexAgentComponentPagedNode extends CodexAgentComponentNode {
+  orderIndex: number;
+}
+
+export interface CodexAgentComponentPage extends Omit<CodexAgentComponent, "nodes"> {
+  totalNodeCount: number;
+  nodes: CodexAgentComponentPagedNode[];
+}
+
+export interface CodexAgentComponentPager {
+  readonly relationKey: string;
+  readonly totalNodeCount: number;
+  readonly initial: CodexAgentComponentPage;
+  getNode(id: string): CodexAgentComponentPagedNode | undefined;
+  nextPage(): CodexAgentComponentPage;
+}
+
 export interface CodexAgentRunsWebviewNode {
   id: string;
+  orderIndex?: number;
   parentId?: string;
   navigationTarget?: string;
   actionTarget?: string;
@@ -58,5 +76,9 @@ export interface CodexAgentRunsWebviewModel {
   relationPartial: boolean;
   omittedCount: number;
   pinRevision: number;
+  totalNodeCount?: number;
+  pageRevision?: number;
+  continuationToken?: string;
+  presentationRevision?: number;
   nodes: CodexAgentRunsWebviewNode[];
 }

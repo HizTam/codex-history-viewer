@@ -12,6 +12,9 @@ import {
 import type {
   CodexAgentComponent,
   CodexAgentComponentNode,
+  CodexAgentComponentPage,
+  CodexAgentComponentPagedNode,
+  CodexAgentComponentPager,
   CodexAgentPresentation,
   CodexAgentRelationKind,
 } from "./codexAgentRunsTypes";
@@ -241,6 +244,197 @@ export class CodexAgentRunsService {
     };
   }
 
+  public createComponentPager(
+    session: SessionSummary,
+    fallbackLabel: string,
+    guardianLabel: string = fallbackLabel,
+  ): CodexAgentComponentPager | undefined {
+    if (!this.isPresentationEnabled()) return undefined;
+    const graph = this.graph!;
+    const current = graph.sessionByIdentity.get(session.identityKey);
+    if (!current) return undefined;
+
+    const component = collectAgentComponent(graph, current, null);
+    const nodes = buildPagedComponentNodes(graph, component, current, fallbackLabel, guardianLabel);
+    const byId = new Map(nodes.map((node) => [node.id, node]));
+    if (
+      nodes.length !== component.sessionIds.size + component.syntheticParentIds.size ||
+      byId.size !== nodes.length ||
+      nodes.filter((node) => node.isCurrent).length !== 1 ||
+      nodes.some((node) => node.parentId && !byId.has(node.parentId))
+    ) {
+      return undefined;
+    }
+    const relationPartial = Array.from(component.sessionIds).some((identityKey) =>
+      graph.droppedEdgeChildren.has(identityKey) ||
+      (graph.sessionByIdentity.get(identityKey)?.meta.claudeAgent?.metadataState ?? "valid") !== "valid",
+    );
+    const sessionCount = component.sessionIds.size;
+    const agentCount = nodes.reduce((count, node) => count + (node.isSubagent ? 1 : 0), 0);
+    const totalNodeCount = nodes.length;
+    const relationKey = createHash("sha256").update(JSON.stringify({
+      current: current.identityKey,
+      relationPartial,
+      // Presentation sorting can change without replacing the current paging generation.
+      nodes: nodes.slice().sort((left, right) => compareOrdinal(left.id, right.id)).map((node) => [
+        node.id,
+        node.parentId ?? "",
+        node.isCurrent,
+        node.isSubagent,
+        node.unavailableParent,
+        node.session?.source ?? "",
+        node.session ? graph.agentMetadataByIdentity.get(node.session.identityKey)?.kind ?? "" : "",
+        node.session?.meta.claudeAgent?.metadataState ?? "valid",
+        node.session ? graph.droppedEdgeChildren.has(node.session.identityKey) : false,
+      ]),
+    }), "utf8").digest("hex");
+
+    // Reuse the established initial selection, but retain each real parent for later pages.
+    const initialNodes = this.buildComponent(current, fallbackLabel, guardianLabel).nodes
+      .map((node) => byId.get(node.id))
+      .filter((node): node is CodexAgentComponentPagedNode => Boolean(node))
+      .sort((left, right) => left.orderIndex - right.orderIndex);
+    const published = new Set(initialNodes.map((node) => node.id));
+    const adjacent = new Map<string, string[]>();
+    for (const node of nodes) {
+      if (!node.parentId || !byId.has(node.parentId)) continue;
+      appendAdjacent(adjacent, node.id, node.parentId);
+      appendAdjacent(adjacent, node.parentId, node.id);
+    }
+    const frontier = new Set<string>();
+    for (const node of initialNodes) {
+      for (const id of adjacent.get(node.id) ?? []) if (!published.has(id)) frontier.add(id);
+    }
+    const page = (pageNodes: CodexAgentComponentPagedNode[]): CodexAgentComponentPage => ({
+      sessionCount,
+      agentCount,
+      totalNodeCount,
+      relationPartial,
+      omittedCount: totalNodeCount - published.size,
+      nodes: pageNodes,
+    });
+    const initial = page(initialNodes);
+    return {
+      relationKey,
+      totalNodeCount,
+      initial,
+      getNode: (id) => byId.get(id),
+      nextPage: () => {
+        // The frontier is the boundary of the published union, not a restart at the root.
+        const distances = new Map<string, number>();
+        const queue = Array.from(frontier, (id) => ({ id, depth: 1 }));
+        let queueIndex = 0;
+        while (queueIndex < queue.length) {
+          const next = queue[queueIndex++]!;
+          if (published.has(next.id) || distances.has(next.id)) continue;
+          distances.set(next.id, next.depth);
+          if (next.depth >= MAX_TRAVERSAL_DEPTH) continue;
+          for (const id of adjacent.get(next.id) ?? []) {
+            if (!published.has(id) && !distances.has(id)) queue.push({ id, depth: next.depth + 1 });
+          }
+        }
+        const candidates = Array.from(distances.keys())
+          .map((id) => byId.get(id)!)
+          .sort((left, right) => left.orderIndex - right.orderIndex);
+        const nextNodes: CodexAgentComponentPagedNode[] = [];
+        const directChildren = new Map<string, number>();
+        for (const candidate of candidates) {
+          if (nextNodes.length >= MAX_COMPONENT_NODES) break;
+          const parentKey = candidate.parentId;
+          if (parentKey && (directChildren.get(parentKey) ?? 0) >= MAX_DIRECT_CHILDREN) continue;
+          if (parentKey) directChildren.set(parentKey, (directChildren.get(parentKey) ?? 0) + 1);
+          nextNodes.push(candidate);
+        }
+        for (const node of nextNodes) {
+          published.add(node.id);
+          frontier.delete(node.id);
+        }
+        for (const node of nextNodes) {
+          for (const id of adjacent.get(node.id) ?? []) if (!published.has(id)) frontier.add(id);
+        }
+        return page(nextNodes);
+      },
+    };
+  }
+
+}
+
+function appendAdjacent(map: Map<string, string[]>, from: string, to: string): void {
+  const entries = map.get(from);
+  if (entries) entries.push(to);
+  else map.set(from, [to]);
+}
+
+function buildPagedComponentNodes(
+  graph: AgentGraph,
+  component: CollectedAgentComponent,
+  current: SessionSummary,
+  fallbackLabel: string,
+  guardianLabel: string,
+): CodexAgentComponentPagedNode[] {
+  const byId = new Map<string, CodexAgentComponentNode>();
+  for (const parentThreadId of component.syntheticParentIds) {
+    const id = syntheticNodeId(parentThreadId);
+    byId.set(id, {
+      id,
+      unavailableParent: true,
+      isCurrent: false,
+      isSubagent: false,
+      taskLabel: "",
+      agentRole: "",
+      directChildCount: graph.unavailableChildrenByParentThreadId.get(parentThreadId)?.length ?? 0,
+    });
+  }
+  for (const identityKey of component.sessionIds) {
+    const candidate = graph.sessionByIdentity.get(identityKey);
+    if (!candidate) continue;
+    const metadata = graph.agentMetadataByIdentity.get(identityKey);
+    const parent = graph.parentByChildIdentity.get(identityKey);
+    const unavailableParentId = metadata && component.syntheticParentIds.has(metadata.parentThreadId)
+      ? syntheticNodeId(metadata.parentThreadId)
+      : undefined;
+    const id = sessionNodeId(identityKey);
+    byId.set(id, {
+      id,
+      ...(parent && component.sessionIds.has(parent.identityKey)
+        ? { parentId: sessionNodeId(parent.identityKey) }
+        : unavailableParentId ? { parentId: unavailableParentId } : {}),
+      session: candidate,
+      unavailableParent: false,
+      isCurrent: identityKey === current.identityKey,
+      isSubagent: Boolean(metadata),
+      taskLabel: resolveCodexAgentTaskLabel(metadata, fallbackLabel, guardianLabel),
+      agentRole: metadata?.agentRole ?? "",
+      directChildCount: graph.childrenByParentIdentity.get(identityKey)?.length ?? 0,
+    });
+  }
+  const children = new Map<string, CodexAgentComponentNode[]>();
+  const roots: CodexAgentComponentNode[] = [];
+  for (const node of byId.values()) {
+    if (node.parentId && byId.has(node.parentId)) {
+      const siblings = children.get(node.parentId);
+      if (siblings) siblings.push(node);
+      else children.set(node.parentId, [node]);
+    } else roots.push(node);
+  }
+  const compareNodes = (left: CodexAgentComponentNode, right: CodexAgentComponentNode): number => {
+    if (left.unavailableParent !== right.unavailableParent) return left.unavailableParent ? -1 : 1;
+    return left.session && right.session ? compareSessions(left.session, right.session) : compareOrdinal(left.id, right.id);
+  };
+  roots.sort(compareNodes);
+  for (const siblings of children.values()) siblings.sort(compareNodes);
+  const ordered: CodexAgentComponentPagedNode[] = [];
+  const seen = new Set<string>();
+  const stack = roots.slice().reverse();
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    if (seen.has(node.id)) continue;
+    seen.add(node.id);
+    ordered.push({ ...node, orderIndex: ordered.length });
+    const descendants = children.get(node.id) ?? [];
+    for (let index = descendants.length - 1; index >= 0; index -= 1) stack.push(descendants[index]!);
+  }
+  return ordered;
 }
 
 function collectAgentComponent(
@@ -292,10 +486,14 @@ function buildDisplayEligibleIds(
   }
 
   const visit = (session: SessionSummary): void => {
-    if (eligible.has(session.identityKey) || !included.has(session.identityKey)) return;
-    eligible.add(session.identityKey);
-    const children = graph.childrenByParentIdentity.get(session.identityKey) ?? [];
-    for (const child of selectBoundedChildren(children, currentPath)) visit(child);
+    const stack = [session];
+    while (stack.length > 0) {
+      const candidate = stack.pop()!;
+      if (eligible.has(candidate.identityKey) || !included.has(candidate.identityKey)) continue;
+      eligible.add(candidate.identityKey);
+      const children = selectBoundedChildren(graph.childrenByParentIdentity.get(candidate.identityKey) ?? [], currentPath);
+      for (let index = children.length - 1; index >= 0; index -= 1) stack.push(children[index]!);
+    }
   };
 
   for (const parentThreadId of Array.from(syntheticParentIds).sort(compareOrdinal)) {
@@ -381,6 +579,11 @@ function buildAgentGraph(
     const parent = sessionByThreadId.get(metadata.parentThreadId);
     if (!parent) {
       appendMapArray(unavailableChildrenByParentThreadId, metadata.parentThreadId, child);
+      continue;
+    }
+    if (parent.source !== child.source) {
+      // A parent key must never bridge otherwise separate history sources.
+      droppedEdgeChildren.add(child.identityKey);
       continue;
     }
     if (parent.identityKey === child.identityKey) {
@@ -498,10 +701,15 @@ function orderComponentSessions(graph: AgentGraph, included: ReadonlySet<string>
   const ordered: SessionSummary[] = [];
   const seen = new Set<string>();
   const visit = (session: SessionSummary): void => {
-    if (seen.has(session.identityKey) || !included.has(session.identityKey)) return;
-    seen.add(session.identityKey);
-    ordered.push(session);
-    for (const child of graph.childrenByParentIdentity.get(session.identityKey) ?? []) visit(child);
+    const stack = [session];
+    while (stack.length > 0) {
+      const candidate = stack.pop()!;
+      if (seen.has(candidate.identityKey) || !included.has(candidate.identityKey)) continue;
+      seen.add(candidate.identityKey);
+      ordered.push(candidate);
+      const children = graph.childrenByParentIdentity.get(candidate.identityKey) ?? [];
+      for (let index = children.length - 1; index >= 0; index -= 1) stack.push(children[index]!);
+    }
   };
   for (const root of roots) visit(root);
   for (const identityKey of Array.from(included).sort(compareOrdinal)) {

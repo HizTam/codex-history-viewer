@@ -4,6 +4,7 @@ import { buildChatSessionModel } from "../chat/chatModelBuilder";
 import type { ChatTimelineItem } from "../chat/chatTypes";
 import { statSafe } from "../utils/fsUtils";
 import { buildBookmarkKey, type BookmarkTarget, type BookmarkTargetKind } from "./bookmarkStore";
+import { getTimelineBookmarkIndexOffset } from "./bookmarkIdentity";
 import { t } from "../i18n";
 
 // Presentation-only cards must not shift the fallback identities of existing bookmark targets.
@@ -33,7 +34,13 @@ export function createTimelineBookmarkTargetBuilder(
     if (message) remember(message);
     remember(item);
   }
-  return (item) => buildTimelineBookmarkTarget(sessionFsPath, sessionCacheKey, item, legacyIndexes.get(item) ?? 0);
+  return (item) => {
+    const itemIndex = legacyIndexes.get(item) ?? 0;
+    const offset = getTimelineBookmarkIndexOffset(item);
+    // Apply the offset only to the fallback identity, preserving titles and enumeration.
+    const fallbackItemIndex = offset <= Number.MAX_SAFE_INTEGER - itemIndex ? itemIndex + offset : itemIndex;
+    return buildTimelineBookmarkTarget(sessionFsPath, sessionCacheKey, item, itemIndex, fallbackItemIndex);
+  };
 }
 
 export interface SessionBookmarkTargetScan {
@@ -46,6 +53,7 @@ export function buildTimelineBookmarkTarget(
   sessionCacheKey: string,
   item: ChatTimelineItem,
   itemIndex: number,
+  fallbackItemIndex: number = itemIndex,
 ): BookmarkTarget | null {
   if (!item || typeof item !== "object") return null;
   // Timing-only thinking must not create invisible bookmark targets.
@@ -58,7 +66,7 @@ export function buildTimelineBookmarkTarget(
     typeof rawMessageIndex === "number" && Number.isFinite(rawMessageIndex)
       ? Math.max(0, Math.floor(rawMessageIndex))
       : undefined;
-  const fallbackId = getBookmarkFallbackId(item, itemIndex);
+  const fallbackId = getBookmarkFallbackId(item, fallbackItemIndex);
   const groupId = getBookmarkGroupId(item);
   const key = buildBookmarkKey({ sessionCacheKey, kind, groupId, messageIndex, timestampIso, fallbackId });
   if (!key) return null;

@@ -14,6 +14,7 @@ export type LongMessageFoldingMode = "off" | "auto" | "always";
 export type ChatOpenPosition = "top" | "lastMessage" | "latest";
 export type ChatPerformanceMode = "auto" | "normal" | "simplified";
 export type ChatTurnTimelineMode = "off" | "basic" | "live";
+export type ChatTurnQuotaWindow = "weekly" | "fiveHour" | "credits";
 export type ImageThumbnailSize = "small" | "medium" | "large";
 export type ResumeMethod = "extension" | "cli" | "both";
 
@@ -77,6 +78,7 @@ export interface CodexHistoryViewerConfig {
   assistantLongMessageFolding: LongMessageFoldingMode;
   stickyUserPrompt: boolean;
   chatTurnTimelineMode: ChatTurnTimelineMode;
+  chatTurnQuotaWindows: ChatTurnQuotaWindow[];
   timeGuideEnabled: boolean;
 }
 
@@ -127,6 +129,17 @@ function parseChatTurnTimelineMode(value: unknown): ChatTurnTimelineMode {
   const normalized = String(value ?? "").trim().toLowerCase();
   if (normalized === "basic" || normalized === "live") return normalized;
   return "off";
+}
+
+function parseChatTurnQuotaWindows(value: unknown): ChatTurnQuotaWindow[] {
+  if (!Array.isArray(value) || value.length > 3) return [];
+  const selected = new Set<ChatTurnQuotaWindow>();
+  // Reject the whole selection rather than partially accepting malformed configuration.
+  for (const item of value) {
+    if ((item !== "weekly" && item !== "fiveHour" && item !== "credits") || selected.has(item)) return [];
+    selected.add(item);
+  }
+  return (["weekly", "fiveHour", "credits"] as const).filter((item) => selected.has(item));
 }
 
 function parseImageThumbnailSize(value: unknown): ImageThumbnailSize {
@@ -277,6 +290,7 @@ export function getConfig(): CodexHistoryViewerConfig {
     assistantLongMessageFolding,
     stickyUserPrompt: cfg.get<boolean>("chat.stickyUserPrompt") ?? true,
     chatTurnTimelineMode: parseChatTurnTimelineMode(cfg.get<string>("chat.turnTimeline.mode") ?? "off"),
+    chatTurnQuotaWindows: parseChatTurnQuotaWindows(cfg.get<unknown>("chat.turnQuota.windows")),
     timeGuideEnabled: cfg.get<boolean>("ui.timeGuide.enabled") ?? false,
   };
 }

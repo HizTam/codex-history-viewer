@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.21.0] - 2026-11-12
+
+### Added
+
+- Added support for displaying the remaining percentages for the 5-hour and weekly usage limits and the remaining credit balance in the Codex turn timeline. Disabled by default; requires Basic or Live turn timeline mode.
+
+### Changed
+
+- Agent Runs for Codex and Claude Code now supports loading additional items beyond the initial display limits.
+- Updated Node.js used for development and builds to **24.22.3** to include the November 2026 security fixes.
+
+### Fixed
+
+- Fixed Codex audio references being displayed as image attachments.
+
 ## [2.20.2] - 2026-11-10
 
 ### Fixed

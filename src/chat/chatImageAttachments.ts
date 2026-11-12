@@ -83,7 +83,17 @@ export async function extractImageAttachmentFromItem(
 
 export function isPotentialImageAttachmentItem(item: object): boolean {
   const type = normalizeType(readStringField(item, "type"));
-  if (type === "document") return false;
+  if (type === "document" || type === "inputaudio") return false;
+  return isImageAttachmentCandidate(item, type);
+}
+
+// Retain the logical positions previously occupied by mistaken audio images.
+export function isSuppressedInputAudioImageCandidate(item: object): boolean {
+  const type = normalizeType(readStringField(item, "type"));
+  return type === "inputaudio" && isImageAttachmentCandidate(item, type);
+}
+
+function isImageAttachmentCandidate(item: object, type: string): boolean {
   const contentType = normalizeType(readStringField(item, "content_type"));
   const source = readObjectField(item, "source");
   return (
@@ -120,7 +130,8 @@ async function extractImageAttachment(
   options: Required<ChatImageExtractionOptions>,
 ): Promise<ChatImageAttachment | null> {
   const type = normalizeType(readStringField(item, "type"));
-  if (type === "document") return null;
+  // A known audio block must never trigger image metadata or file access.
+  if (type === "document" || type === "inputaudio") return null;
 
   const contentType = normalizeType(readStringField(item, "content_type"));
   const source = readObjectField(item, "source");

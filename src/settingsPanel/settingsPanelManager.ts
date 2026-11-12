@@ -1443,6 +1443,8 @@ export class SettingsPanelManager implements vscode.Disposable {
       description: t(definitionItem.descriptionKey),
       control: getPresentedSettingControl(definitionItem),
       value: getPresentedSettingValue(definitionItem, state.value),
+      allowEmptySelection: definitionItem.allowEmptySelection === true,
+      emptySelectionLabel: definitionItem.emptySelectionLabelKey ? t(definitionItem.emptySelectionLabelKey) : undefined,
       valueToken: state.valueToken,
       configured: state.configured,
       modified: state.modified,

@@ -2,7 +2,7 @@
 
 Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
 
-Latest release: **2.20.2** (2026-11-10).
+Latest release: **2.21.0** (2026-11-12).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
@@ -24,8 +24,8 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Search across prompts, responses, tool output, tags, notes, and attachment metadata, with shared search history.
 - View sessions in the Session Viewer with Markdown, including individually copyable tables, GFM task lists, Mermaid diagrams, code highlighting, math rendering, tool cards, and file-change diffs.
 - Manage the extension's primary settings from a categorized settings page, with supported User, Workspace, and Workspace Folder targets, scope-specific JSON backups, maintenance actions, and project resource links.
-- Enable an opt-in turn timeline for Codex and Claude Code sessions to see turn boundaries, turn summaries, completed-turn folding, and running state in live mode.
-- Use Agent Runs to distinguish Codex and Claude Code sub-agent sessions and inspect parent, sibling, and descendant relationships in a right-side tree. (Disabled by default.)
+- Enable an opt-in turn timeline for Codex and Claude Code sessions to see turn boundaries, turn summaries, completed-turn folding, and running state in live mode, with optional displays for remaining Codex usage limits and credits.
+- Use Agent Runs to distinguish Codex and Claude Code sub-agent sessions and inspect parent, sibling, and descendant relationships in a right-side tree, with additional items loaded on request. (Disabled by default.)
 - Use Branch Navigation to inspect and switch between locally forked Codex histories, histories before and after Codex prompt edits, and Claude Code **Fork conversation** histories in their respective session views. (Disabled by default.)
 - Show Codex / Claude Code request interruptions as dedicated timeline cards.
 - Identify commands entered in Claude Code's shell mode with a **Terminal input** badge and view their results in **Terminal output** cards.
@@ -49,29 +49,21 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 ## Quick Start
 
 1. Open the Activity Bar and select **Codex History**.
-2. Use **Control** for global actions such as opening settings, importing sessions, configuring default search roles, rebuilding the cache, and emptying the trash. **Open Settings** opens the categorized settings page; use its **Maintenance** page for settings backups and access to the standard VS Code settings.
-3. Browse sessions under **History**. Use the pane's **...** menu for layout, project, source, display-target, compression, and sort options, or use **Filter History...**, **Change History Sort Order...**, and **Change History Presentation...** from the Command Palette.
-4. Use **Show History Insights** from the History header when you want an aggregate view of the current History target.
-5. Select a session to open a temporary session tab. Use the header toggle or **Open Session in Dedicated Tab** to keep a session assigned to its own tab. **Open Session as Markdown** opens a virtual transcript document named after the session, such as `Review release candidate.md`. The virtual document does not create a file unless you explicitly save it.
-6. Use **Pinned** for saved sessions with its own date, project, source, visibility, tag, and saved sort controls.
-7. Run **Search...** and refine with roles, query syntax, search history, and the current History filters. **Save Current Search...** can save either the query alone or the query together with its filters.
-8. Use context menus to hide or show one or multiple sessions, or use context menus and the Session Viewer's header actions to edit tags/notes.
-9. Use the **File AI Change History** icon on a diff card to open the affected workspace file's AI change history at the selected change. Enable **File Change History > Explorer Context Menu: Enabled** when you also want this action in Explorer file right-click menus.
-10. Keep Codex enabled in **Sources: Enabled**, then turn on Codex archived sessions if you want archived Codex history included. To include `.jsonl.zst` files, also enable **Include compressed Codex histories** under **History Sources**.
-11. Enable `codexHistoryViewer.agentRuns.enabled` when you want to inspect parent and sub-agent relationships with Agent Runs.
-12. Enable `codexHistoryViewer.branchNavigation.enabled` when you want to navigate locally forked Codex histories, histories before and after Codex prompt edits, and Claude Code **Fork conversation** histories.
-13. Choose Extension, CLI, or Extension and CLI as the resume method for each source. CLI actions enter a command in a new VS Code integrated terminal without running it; press Enter to execute it. Use **Handoff to Other AI** when moving work between agents, including when you need to copy the handoff file path.
-14. Use the session information actions in the Session Viewer or **Session Information** in the History, Pinned, and Search context menus to copy a session ID or session file path, or reveal the session file in its containing folder.
+2. Use **Control > Open Settings** to choose history sources and session folders.
+3. Browse **History** and use its **...** menu to change the layout, filters, and sort order.
+4. Select a session to open it. Use the header toggle or **Open Session in Dedicated Tab** to keep it in a dedicated tab.
+5. Use **Pinned** for saved sessions and **Search...** to find past messages.
+6. Use the session's **Resume** action to continue work with Codex or Claude Code.
+
+See the [Command Reference](docs/commands.md) for additional actions.
 
 ## History and Pinned Organization
 
-History and Pinned separate project organization into display and scope controls. Display can switch between **List View** and **Project View**, while scope can switch between **All Project Groups** and **Current Project Group**. Project matching is case-insensitive across platforms. Project views preserve the existing layout choice: session-list history becomes `Project -> Session`, while date-grouped history becomes `Project -> Year -> Month -> Day -> Session`.
+History and Pinned support **List View** and **Project View**, scoped to **All Project Groups** or **Current Project Group**.
 
 To choose each view's startup behavior and defaults, see [Startup Display](#startup-display).
 
-Project folders can have extension-local aliases from the History or Pinned project context menu. Aliases are stored in VS Code extension state without changing Codex or Claude Code history files. When set, aliases appear in project headings, session descriptions, tooltips, filter summaries, Status, and Search scope/session display while the original path remains available in detailed metadata.
-
-Project associations can link another project's history into the current project display or group related projects together without moving the original history files. Associations are available from project context menus and are reflected in History, Pinned, Search, File AI Change History, and handoff content.
+Use project context menus to add aliases or associate related projects without changing or moving the original history files.
 
 History, Pinned, and History Insights can target **Active Only**, **Active + Archived**, **Archived Only**, **Hidden Only**, or **All** sessions when the corresponding sources are available. Hidden sessions can come from either active or archived storage. Hidden and archived states are identified in tree descriptions and tooltips.
 
@@ -79,7 +71,7 @@ History also has a **Compression** filter with **Compressed + Uncompressed**, **
 
 The Command Palette groups History and Pinned view options into **Filter...**, **Change Sort Order...**, and **Change Presentation...** commands for each view. Individual options remain available in the pane menus, and existing command IDs remain usable in custom keybindings.
 
-Pinned has its own project scope, source, visibility target, date, tag filters, and saved sort preference. It does not follow History/Search filter state, so saved sessions can stay focused on a different project or source while you browse and search elsewhere. History can sort by started date, last activity date, name, or source session file size. Pinned can sort by pinned time, started date, last activity date, name, or source session file size. When Tooltip Mode is set to Compact or Detailed, History and Pinned session tooltips also show the source session file size.
+Pinned has independent project, source, visibility, date, tag, and sort settings, so saved sessions can stay focused on a different set of histories from History and Search. Both views support sorting by dates, names, and session file size.
 
 Use **Show timestamp** and **Show project/path** under **History List > Session rows** to simplify session rows in History, Pinned, and Search. The two elements can be hidden independently, while their full timestamp and project information remain available in session tooltips.
 
@@ -87,55 +79,55 @@ Use **Show timestamp** and **Show project/path** under **History List > Session 
 
 The Session Viewer renders local session files as readable timelines. It supports Markdown, Mermaid diagrams, syntax-highlighted fenced code blocks, KaTeX-compatible math, assistant usage metadata, environment snapshots, tool execution metadata, and grouped file-change cards from patch activity. GFM task-list markers render as read-only checkboxes without modifying the stored session content.
 
+Use **Open Session as Markdown** for a transcript document.
+
 Markdown tables use clearer cell spacing and separators, wrap long content, and scroll horizontally within the table when needed. Each table has an action for copying only that table in its original Markdown form.
 
 Fenced `mermaid` blocks render as inline diagrams. Each diagram can switch between Light and Dark display modes, open in a non-modal right-side pane for fit-to-view, zoom, scroll, drag-to-pan, and keyboard navigation, and be saved as SVG, PNG, or Mermaid source (`.mmd`).
 
-The resume button follows the resume method selected separately for Codex and Claude Code. Extension and CLI uses a split button: the last used method becomes the main action, while the dropdown always lists both methods. CLI actions enter the resume command in a new VS Code integrated terminal without pressing Enter. The History, Pinned, and Search context menus follow the same source-specific settings.
+Choose Extension, CLI, or both as the resume method separately for Codex and Claude Code. CLI actions prepare a command in a new terminal for review; press Enter to run it.
 
-When you edit the last prompt in Codex, the edited continuation becomes that conversation's main history. If Codex writes it to a new session file, an open Session Viewer keeps displaying its current file, including during auto-refresh and manual reload. A notice and **Go to main history** let you switch explicitly. While viewing the previous history, this action replaces the resume button; normal resume actions return after switching. The notice is available even when Branch Navigation is disabled.
+If a Codex prompt edit creates a new history file, the Session Viewer stays on its current file. Use **Go to main history** to switch to the edited continuation.
 
-The Session Viewer shows the validated session ID and session file name with actions to copy the ID, copy the full file path, or reveal the file in its containing folder. The same actions are available under **Session Information** in the History, Pinned, and Search context menus.
+The Session Viewer and **Session Information** context menus can copy session IDs and file paths or reveal the session file.
 
 Tree context menus provide actions for individual sessions and multi-selection. See [Session Actions](docs/commands.md#session-actions) for supported commands and selection rules.
 
-The toggle immediately to the right of **Custom Title** switches the current viewer between a dedicated tab and a temporary tab. Its tooltip shows **Dedicated tab** or **Temporary tab** according to the current state. Switching preserves the displayed history, scroll position, selection, search, and expanded cards, while other open tabs keep their state. Selecting another history reuses the most recently active temporary tab unless that history is already open. Pinning remains a separate action.
+The toggle next to **Custom Title** switches between dedicated and temporary tabs while preserving the current view state. Selecting another history reuses a temporary tab unless that history is already open. Pinning is a separate action.
 
 Large histories can use the `auto`, `normal`, or `simplified` performance mode. Heavy tool details and large diff rows can be deferred until **Show details** is enabled or an individual entry is expanded.
 
 Codex and Claude Code sessions can use an opt-in turn timeline. `basic` mode shows turn start/end markers, range rails, summaries, token counts, duration, and manual folding for completed turns. `live` mode adds running-turn indicators, elapsed time, and update activity effects.
 
-Patch group cards can show compact file summaries and an in-place **Open all diffs** / **Close all diffs** action. With the turn timeline enabled, Codex and Claude Code changes are grouped into one diff card per turn. Changes to the same file are combined when their confirmation and completeness status match.
+For Codex, use **Open Settings > Session View > Usage limits** to select **Weekly limit**, **5-hour limit**, and **Credits** individually. This setting is off by default and requires Basic or Live turn timeline mode. Selected items appear at the end of completed or folded turn summaries and at the right of the running turn's timeline row in Live mode.
 
-Each file row has a history icon in both collapsed and expanded diff cards, with the tooltip **File AI Change History**. It opens the workspace file's history and jumps to the selected change. When a row combines several changes, it jumps to the first included change. This action works regardless of the Explorer context menu setting.
+Hover over or focus an item to see its recorded time.
+
+The displayed percentages and credit balances reflect the values saved in local session history when each turn ran and may differ from your current remaining allowance or credit balance.
+
+Each selected item uses its last valid value recorded in the same turn, including after completion. If that turn has no value for a selected item, it shows `-`. Values are not carried across turns.
+
+Patch group cards provide file summaries and **Open all diffs** / **Close all diffs** actions. With the turn timeline enabled, changes are grouped into one diff card per turn.
+
+Use **File AI Change History** on a diff card to open the workspace file's history at that change.
 
 Claude Code file changes use recorded edit results to distinguish applied changes from failed, interrupted, or unapplied edits. Overwrites are treated as updates to existing files. Unconfirmed or incomplete records are labeled, and unconfirmed changes do not contribute to confirmed History Insights totals.
 
-Request interruptions from Codex and Claude Code render as dedicated timeline cards. When available, details include reason, duration, turn ID, rollback state, and rolled-back turn count.
+Request interruptions from Codex and Claude Code appear as dedicated timeline cards. Recognized Claude Code session and agent shutdown notices are excluded from ordinary user-message search and request counts.
 
-Recognized Claude Code session and agent process shutdown interruptions are excluded from ordinary user-message search and human request counts, including request extraction for Resume and Handoff.
+Claude Code cross-session messages, **Task notification**, and **Internal reminder** cards keep internal traffic separate from human requests. Notification details can be expanded and copied.
 
-Claude Code peer and coordinator messages received from other sessions render as dedicated cross-session cards. They remain searchable as assistant-derived content and are excluded from previews, Resume, Handoff, and human-message analysis.
-
-Claude Code internal task notifications and agent reminders appear as **Task notification** and **Internal reminder** cards. Task notifications include an expandable **Notification details** section. Notifications are displayed without duplicating the same notification recorded in another format or changing existing message numbers. Their text remains readable and copyable, while they are excluded from ordinary user-message search, counts, previews, and request extraction for Resume and Handoff.
-
-Claude Code conversation compaction summaries are retained as context, available with **Show details** and in Markdown transcripts. They are excluded from ordinary user-message search, previews, and request counts.
-
-Messages and tool results explicitly preserved during compaction in Claude Code child agent histories remain available in the Session Viewer, search, and statistics.
-
-Codex page-selection context is likewise kept out of ordinary user messages; its raw text remains available in the detail view.
+Claude Code compaction summaries and Codex page-selection context are available in detail views. Messages and tool results preserved during compaction in Claude Code child-agent histories are available in the viewer, search, and statistics.
 
 Progress updates and thinking text saved in Claude Code histories also appear in the timeline without enabling **Show details**. Progress updates are shown directly, while thinking text is expandable. Both support search, bookmarks, copying, and Markdown export.
 
 **Additional user input** cards show user text sent while Claude Code was running.
 
-To display bookmarks from the Claude Code extension, enable **Open Settings > History Sources > Claude Code > Display Claude Code bookmarks**. This setting is disabled by default and requires the Claude Code source and **Show date guide and bookmarks** to be enabled. Matching cards in main Claude Code session histories and their date-guide markers show blue read-only marks, separately from this extension's yellow bookmarks. These marks cannot be removed here; add or remove them in the Claude Code extension and the changes are reflected automatically. The two sets of bookmarks remain independent.
+To display read-only bookmarks from the Claude Code extension in main histories, enable **Open Settings > History Sources > Claude Code > Display Claude Code bookmarks**. The Claude Code source and **Show date guide and bookmarks** must also be enabled. These marks are blue, separate from this extension's yellow bookmarks, and managed in Claude Code.
 
-Session tabs preserve useful state across reload and auto-refresh, including scroll position, selected message, expanded cards/diffs, detail visibility, diff wrapping, and in-page search state. The experimental opt-in **Restore extension tabs after reload** setting can also restore session tabs, File AI Change History, History Insights, and the dedicated settings page after **Developer: Reload Window** or VS Code restart. It is disabled by default because VS Code can defer tab restoration and may occasionally create duplicate tabs when the same history is opened again.
+Session tabs preserve their view state across reloads and auto-refresh. The experimental **Restore extension tabs after reload** setting can also restore session tabs, including multiple temporary tabs and their tab modes, plus File AI Change History, History Insights, and settings after a window reload or VS Code restart. It is off by default because VS Code may delay restoration or create duplicate tabs when the same history is reopened.
 
-When restoration is enabled, multiple temporary session tabs retain their histories and tab modes across restart.
-
-Restoring a long Codex history also loads its referenced earlier history when available. If a referenced file is missing or unreadable, the viewer shows an incomplete-history notice even when **Show details** is off.
+Long Codex histories load referenced earlier history when available. Missing or unreadable references produce an incomplete-history notice.
 
 The session timeline can keep the current user prompt visible at the top while you scroll. Codex memory citation information recorded for intermediate and final responses is rendered as a collapsible section instead of being left as raw metadata in the message body. Session runtime context and local-command output are likewise shown as collapsed cards instead of raw user messages.
 
@@ -160,9 +152,7 @@ For files sent by Claude Code, Search includes recorded file paths and descripti
 
 Search is local, cancellable, and backed by an incremental search index. It can search message text, configured tool metadata, titles, tags, notes, and attachment metadata.
 
-Updates may require cached history, search, or analysis data to be rebuilt automatically. The first history load, search, or use of File AI Change History or History Insights after such an update may take longer.
-
-Local file-backed search caches use incremental reads and writes. Indexed message text is decoded when needed to reduce JavaScript heap usage. Large histories still require RAM and disk space, and individual large sessions can temporarily use additional memory during loading or searching.
+Updates that rebuild cached data may make the first history load, search, or analysis slower. Large histories require additional RAM and disk space.
 
 Saved Claude Code progress updates and thinking text are included in the Assistant role. Selecting a matching result opens the corresponding card and expands thinking text when needed. In-page search also includes collapsed thinking text.
 
@@ -170,13 +160,9 @@ Supported query forms include normal substring search, `exact:...`, `re:...`, `/
 
 Search follows the current History target, including date, project scope, project filter, source, visibility, tags, and compression. **Hidden Only** searches hidden sessions, while **All** searches both visible and hidden sessions. Search does not follow Pinned filters, and it does not create Search results from filters alone.
 
-The global search input combines manual search and search history. Search history is shared with in-page search in the Session Viewer and File AI Change History, stores only query text, and can be selected to run or removed individually with the trash button.
+**Save Current Search...** saves a query alone or together with its filters. **Run Saved Search...** reapplies saved filters to History and Search; query-only presets use the current History filters. Saved searches are shared across projects, while Pinned filters remain independent. Presets that require disabled sources or history types cannot run until those features are enabled.
 
-**Save Current Search...** offers **Query only** and **Query and filters**. The latter saves the query and the date, project, source, display-target, tag, and compression filters used for the displayed search results. Running that preset reapplies its filters to History and Search; Pinned is unaffected. Saved dates remain the dates captured when the preset was created. Query-only presets continue to use the current History filters, and both preset types use the current role and case-sensitivity settings.
-
-The same query can be saved with different filters. Saved searches remain shared across projects and can be removed individually from **Run Saved Search...**. If a preset requires a disabled source, archived sessions, or compressed histories, the extension explains why it cannot run instead of silently widening the search scope.
-
-Opening a Search result can pass the same query into the Session Viewer's in-page search. In-page search in the Session Viewer and File AI Change History supports the same query forms, including exact matching and regular expressions, and can show search-history suggestions below the search input.
+Opening a search result can pass its query to the viewer's in-page search, which supports the same query syntax. Search history is shared across Search, the Session Viewer, and File AI Change History.
 
 Project aliases are shown in Search scope and result display, but they are not added to the search index or treated as searchable hit text.
 
@@ -242,8 +228,6 @@ Use it when you want to answer questions such as:
 
 Open this view with the **File AI Change History** icon on a Session Viewer diff card, or run **Show File AI Change History** for a workspace file. The Explorer file context menu entry is opt-in: enable **File Change History > Explorer Context Menu: Enabled** to use it from Explorer.
 
-Opening from a diff card loads up to 100 changes around the selected change first. **Load more** adds the remaining history. If the selected change cannot be located in the available history, the viewer displays a notice.
-
 The view is scoped to the current workspace and selected file. It supports Codex / Claude Code source toggles, in-page search with shared query history and richer query syntax, incremental **Load more**, previous/next navigation, and **Open in History** links back to the matching diff card in the original session. Diff code is syntax-highlighted when the language can be determined from the file path; otherwise, it is displayed as plain text.
 
 File AI Change History follows project associations when resolving related history, so associated project displays and path mappings are reflected when possible. Hidden sessions remain part of its candidate history.
@@ -260,11 +244,11 @@ The view includes an activity heatmap, token and turn statistics, file-change su
 
 The snapshot also preserves History's compression condition when other filters are refined. Claude Code file-change totals exclude failed, interrupted, unapplied, and unconfirmed edits; incomplete records are reflected in data quality.
 
-Selecting a date cell opens its sessions in History. The History and Search actions on each project row apply that project while preserving the other snapshot conditions. The Search action reruns the current search when one is available, then opens the Search view. Frequently changed file entries can open the existing File AI Change History view or the corresponding workspace file.
+Date cells open matching sessions in History. Project actions open History or Search, and file entries open File AI Change History or the workspace file.
 
 ## Agent Runs
 
-Agent Runs supports Codex and Claude Code sessions, including Claude Code child and descendant agents and delegated worker forks. Both sources use the existing `codexHistoryViewer.agentRuns.enabled` setting, which is disabled by default. If Agent Runs is already enabled for Codex, it also applies to Claude Code without another setting change.
+Agent Runs shows parent and sub-agent relationships for Codex and Claude Code. Enable `codexHistoryViewer.agentRuns.enabled` to use it; it is disabled by default.
 
 When Agent Runs is enabled and its relationship data is ready, sub-agent sessions with an available parent are omitted from History. They remain reachable from the parent session's Agent Runs panel, Search, and explicit Pinned entries. Sub-agent sessions whose parent cannot be resolved safely remain visible in History.
 
@@ -272,7 +256,7 @@ When Agent Runs is enabled and its relationship data is ready, sub-agent session
 
 The Agent Runs action in a Codex or Claude Code session view opens a right-side relationship tree containing the parent, siblings, and descendants of the current session. The current route is blue and other agent routes are orange. The open icon on each available node opens that related session directly.
 
-An already open target keeps its tab mode. A newly opened target inherits the source viewer's dedicated or temporary mode and opens in a separate tab, preserving the source viewer and other temporary tabs.
+When the tree reaches its initial display limits, **Load more** reveals additional items and shows how many remain.
 
 Codex and Claude Code sub-agent histories are included in Search, History Insights, and File AI Change History whether Agent Runs is on or off, subject to each feature's filters.
 
@@ -322,6 +306,7 @@ Common settings include:
 - `codexHistoryViewer.chat.stickyUserPrompt`: keep the current user prompt visible while scrolling the session timeline.
 - `codexHistoryViewer.chat.performanceMode`: choose the default session rendering performance mode.
 - `codexHistoryViewer.chat.turnTimeline.mode`: enable the opt-in turn timeline for Codex and Claude Code sessions with `off`, `basic`, or `live`.
+- `codexHistoryViewer.chat.turnQuota.windows`: choose any combination of Codex usage limits and credits to display: `weekly`, `fiveHour`, and `credits`. Requires `basic` or `live` turn timeline mode.
 - `codexHistoryViewer.webview.restoreAfterReload`: experimental opt-in to restoring session tabs, File AI Change History, History Insights, and the dedicated settings page after Reload Window or VS Code restart.
 - `codexHistoryViewer.images.enabled`: show supported image attachments.
 - `codexHistoryViewer.ui.timeGuide.enabled`: enable compact date guides and bookmark controls.
@@ -367,11 +352,7 @@ If history, search, or analysis results look stale, run **Open Settings > Mainte
 
 ## Commands
 
-Most actions are available from view title buttons and tree context menus.
-
-For the primary user-facing commands with descriptions, see:
-
-- [Command Reference](docs/commands.md)
+See the [Command Reference](docs/commands.md) for view buttons, context menus, and Command Palette actions.
 
 ## Codex Integration Notes
 
@@ -379,13 +360,11 @@ For the primary user-facing commands with descriptions, see:
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.20.2
+## What's New in 2.21.0
 
-- Fixed excessive memory usage when processing large search indexes, which could crash the extension host and cause repeated index rebuilds. ([#23](https://github.com/HizTam/codex-history-viewer/issues/23))
-- Fixed some messages and tool results preserved during compaction in Claude Code child agent histories being missing from the Session Viewer, search, and statistics.
-- Fixed Claude Code session and agent process shutdown interruptions being incorrectly classified in the Session Viewer, search, and statistics.
-- Fixed **Open Session as Markdown** treating Claude Code interruptions as numbered user messages, so subsequent message numbers match the Session Viewer.
-- Fixed incorrect diff message numbers and navigation targets in **File AI Change History** when Claude Code histories contain messages with only images or documents.
+- Added support for displaying the remaining percentages for the 5-hour and weekly usage limits and the remaining credit balance in the Codex turn timeline. Disabled by default; requires Basic or Live turn timeline mode.
+- Agent Runs for Codex and Claude Code now supports loading additional items beyond the initial display limits.
+- Fixed Codex audio references being displayed as image attachments.
 
 ## Changelog
 
@@ -393,7 +372,7 @@ See [CHANGELOG](CHANGELOG.md).
 
 ## Security
 
-Use Codex History Viewer v2.19.0 or later. See [SECURITY](SECURITY.md) for the Markdown and diagram-rendering security updates and the development/build Node.js update addressing Brotli CVE-2026-111497. Do not install or redistribute v1.2.1 or earlier VSIX files.
+Use Codex History Viewer v2.19.0 or later. See [SECURITY](SECURITY.md) for the Markdown and diagram-rendering security updates and the development/build Node.js **24.22.3** security update. Do not install or redistribute v1.2.1 or earlier VSIX files.
 
 ## Privacy
 

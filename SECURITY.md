@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-11-10
+Last updated: 2026-11-12
 
 ## Supported Versions
 
@@ -18,9 +18,9 @@ Use the latest published release of Codex History Viewer whenever possible. Olde
 | 1.2.2 through 2.7.x | Does not include all current Markdown and KaTeX dependency security updates; upgrade to 2.19.0 or later. |
 | 1.2.1 and earlier | Do not install or redistribute historical VSIX files. |
 
-## Dependencies Shipped in 2.20.2
+## Dependencies Shipped in 2.21.0
 
-Version 2.20.2 retains the Markdown, diagram-rendering, and decompression dependency versions used in 2.20.1. The Markdown renderer and the sanitizer and math renderer used by Mermaid were last updated in 2.19.0.
+Version 2.21.0 retains the Markdown, diagram-rendering, and decompression dependency versions used in 2.20.2. The Markdown renderer and the sanitizer and math renderer used by Mermaid were last updated in 2.19.0.
 
 | Component | Bundled version | Use |
 | --- | --- | --- |
@@ -37,9 +37,9 @@ Resolved npm dependencies are recorded in `package-lock.json`. Embedded componen
 
 ## Security Notes
 
-### Brotli CVE-2026-111497 and the development toolchain
+### Node.js security updates and the development toolchain
 
-Codex History Viewer v2.19.0 pins Node.js used for development and builds to **24.22.1**, which includes the [Node.js security fix for CVE-2026-111497](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases#nodejs-brotli-decoder-out-of-bounds-write-permits-remote-code-execution-cve-2026-111497---high). The vulnerability can cause memory corruption when an affected runtime decompresses attacker-controlled Brotli data. Source builds must use the version specified in `.node-version`.
+Node.js used for development and builds is pinned to **24.22.3**, which includes the [November 2026 security fixes](https://nodejs.org/en/blog/vulnerability/november-2026-security-releases). It also retains the [Brotli fix for CVE-2026-111497](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases#nodejs-brotli-decoder-out-of-bounds-write-permits-remote-code-execution-cve-2026-111497---high), first adopted in Codex History Viewer v2.19.0. Source builds must use the version specified in `.node-version`.
 
 This notice concerns the development/build runtime. Installed extensions run on the host runtime supplied by VS Code or the remote VS Code Server, whose security updates are provided independently. Compressed Codex histories (`.jsonl.zst`) are decoded using bundled Zstandard WebAssembly.
 
@@ -143,6 +143,10 @@ An explicitly requested import can convert incoming session data to an existing 
 Search and analysis caches contain derived history data, which may include message text, configured tool content, and file paths. These caches are not encrypted by the extension and should be protected like the source histories.
 
 Version 2.20.2 reads and writes local file-backed search caches incrementally, including local `vscode-userdata` storage, and retains indexed message text in segmented byte buffers until it is needed. Other storage providers retain the provider-based read and write fallback. These changes reduce JavaScript heap pressure; they do not impose a limit on total RAM or disk usage. Large individual sessions and concurrent readers retaining older index snapshots may temporarily require additional memory. Source history files are not rewritten by search indexing.
+
+### Codex usage-limit and credit displays
+
+The optional usage-limit and credit displays read values already recorded in local Codex session history. These displays do not access provider APIs or authentication files. The values are recorded snapshots and may differ from the current remaining allowance or credit balance.
 
 ### Claude Code bookmarks, progress text, additional user input, and notifications
 

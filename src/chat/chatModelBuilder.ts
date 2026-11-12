@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { extractClaudeTerminalOutput } from "./claudeTerminalOutput";
 import type {
   ChatAttachment,
+  ChatCreditBalance,
   ChatEnvironmentItem,
   ChatMessageItem,
   ChatMemoryCitation,
@@ -50,6 +51,7 @@ import {
   extractCodexMessageContent,
   extractCodexProtocolContextText,
   extractCodexSessionStartContextText,
+  hasSuppressedInputAudioImageCandidate,
   isClaudeRequestReplayMetadataRecord,
   isCodexTurnAbortedContent,
   selectClaudeControlContent,
@@ -69,6 +71,7 @@ import {
 import {
   buildClaudePatchBookmarkGroupId,
   buildCodexPatchBookmarkGroupId,
+  setTimelineBookmarkIndexOffset,
   resolveClaudeToolCallId,
 } from "../services/bookmarkIdentity";
 import {
@@ -293,6 +296,7 @@ export async function createChatTimelineRecordAccumulator(
   const usageState: UsageBuildState = {};
   const environmentState: EnvironmentBuildState = {};
   const memoryCitationState: MemoryCitationBuildState = {};
+  const suppressedAudioMessages = new Set<ChatMessageItem>();
   const interruptionState: InterruptionBuildState = {};
   const turnState: TurnBuildState | undefined = shouldBuildTurnTimeline(options) ? createTurnBuildState() : undefined;
   const claudeTurnState = source === "claude" && turnState ? createClaudeTurnBuildState(turnState) : undefined;
@@ -383,6 +387,7 @@ export async function createChatTimelineRecordAccumulator(
         () => messageIndex,
         codexTurnMeta,
         memoryCitationState,
+        suppressedAudioMessages,
         interruptionState,
         turnState,
         sessionCwd,
@@ -463,6 +468,7 @@ export async function createChatTimelineRecordAccumulator(
         if (item.type === "patchGroup" && !item.entries.length && !item.incomplete) items.splice(i, 1);
       }
     }
+    removeSuppressedAudioMessages(items, suppressedAudioMessages);
     finalizeTimelineItems(items);
     if (!turnState) {
       finalizedResult = { items, ...(activityEvidence ? { activityEvidence } : {}) };
@@ -638,6 +644,7 @@ async function indexCodexTimelineRecord(
   currentMessageIndex: () => number,
   codexTurnMeta: ChatMessageModelMeta,
   memoryCitationState: MemoryCitationBuildState,
+  suppressedAudioMessages: Set<ChatMessageItem>,
   interruptionState: InterruptionBuildState,
   turnState: TurnBuildState | undefined,
   sessionCwd?: string,
@@ -680,7 +687,9 @@ async function indexCodexTimelineRecord(
         turnId ?? memoryCitationState.activeTurnId);
       memoryCitation = split.memoryCitation ?? pendingCitation;
     }
-    if (!text && attachments.length === 0 && !memoryCitation) return true;
+    const hadAudioImageCandidate = hasSuppressedInputAudioImageCandidate(content);
+    const suppressedAudio = !text && attachments.length === 0 && !memoryCitation && hadAudioImageCandidate;
+    if (!text && attachments.length === 0 && !memoryCitation && !suppressedAudio) return true;
 
     const sessionStartContextText =
       role === "user" &&
@@ -712,7 +721,7 @@ async function indexCodexTimelineRecord(
       role === "assistant"
         ? false
         : role === "user"
-          ? protocolContextText !== null || (!compactUserText && attachments.length === 0)
+          ? protocolContextText !== null || (!compactUserText && attachments.length === 0 && !hadAudioImageCandidate)
           : isBoilerplate;
 
     assignAttachmentIds(attachments, typeof idx === "number" ? `m${idx}` : `item${items.length}`);
@@ -739,6 +748,7 @@ async function indexCodexTimelineRecord(
       isContext,
     };
     items.push(item);
+    if (suppressedAudio) suppressedAudioMessages.add(item);
     observeCodexItemTurn(turnState, turnId, ts);
     if (role === "assistant") rememberAssistantCitationTarget(memoryCitationState, item, items.length - 1,
       obj?.payload?.phase, turnId ?? memoryCitationState.activeTurnId);
@@ -958,11 +968,12 @@ function indexCodexEventRecord(
   if (payloadType === "task_complete") resetMemoryCitationState(memoryCitationState, true);
 
   if (payloadType === "token_count") {
+    const turnId = resolveCodexUsageTurnId(obj, turnState, lineIndex);
     const usageItem = buildCodexUsageItem(
       obj,
       currentMessageIndex(),
       codexTurnMeta,
-      resolveCodexUsageTurnId(obj, turnState, lineIndex),
+      turnId,
     );
     if (usageItem) {
       const pairedDurableUsage = consumePendingCodexDurableUsagePair(usageItem, usageState, lineIndex);
@@ -972,6 +983,12 @@ function indexCodexEventRecord(
         items.push(usageItem);
         observeCodexItemTurn(turnState, usageItem.turnId, usageItem.timestampIso);
       }
+    }
+    // Observe credits independently so metadata-only updates never add token usage.
+    const turn = turnId ? turnState?.entries.get(turnId) : undefined;
+    if (turn) {
+      const creditBalance = extractCodexCreditBalance(obj?.payload?.rate_limits?.credits, obj?.timestamp);
+      if (creditBalance) turn.creditBalance = creditBalance;
     }
     return true;
   }
@@ -1404,6 +1421,7 @@ interface EnvironmentBuildState {
 interface TurnBuildEntry {
   id: string;
   status: ChatTurnStatus;
+  creditBalance?: ChatCreditBalance;
   startedAtIso?: string;
   startedLineIndex?: number;
   completedAtIso?: string;
@@ -2015,6 +2033,7 @@ function finalizeTurns(
       id: entry.id,
       sequenceNumber: turnIndex + 1,
       status: entry.status,
+      ...(entry.creditBalance ? { creditBalance: entry.creditBalance } : {}),
       ...(entry.startedAtIso ? { startedAtIso: entry.startedAtIso } : {}),
       ...(entry.completedAtIso ? { completedAtIso: entry.completedAtIso } : {}),
       ...(entry.updatedAtIso ? { updatedAtIso: entry.updatedAtIso } : {}),
@@ -2690,6 +2709,21 @@ function buildClaudeUsageItem(
   };
 }
 
+function extractCodexCreditBalance(value: unknown, timestampIso: unknown): ChatCreditBalance | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.has_credits !== "boolean" || raw.unlimited !== false ||
+    typeof raw.balance !== "string" || raw.balance.length > 128) return undefined;
+  const match = /^(\d+)(?:\.(\d+))?$/u.exec(raw.balance);
+  if (!match || match[0] !== raw.balance) return undefined;
+  // Round decimal strings directly instead of crossing a binary floating-point boundary.
+  const remaining = Number(match[1]) + (match[2] && match[2][0] >= "5" ? 1 : 0);
+  if (!Number.isSafeInteger(remaining) || remaining < 0) return undefined;
+  const recordedAtIso = typeof timestampIso === "string" && timestampIso.length <= 128
+    ? normalizeTimestampIso(timestampIso) : undefined;
+  return { remaining, ...(recordedAtIso ? { recordedAtIso } : {}) };
+}
+
 function normalizeOptionalInteger(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
   const n = Math.max(0, Math.floor(value));
@@ -2997,6 +3031,24 @@ function attachOrPushToolOutput(
   };
   if (!includeDetails) tool.presentation = buildToolPresentation(tool);
   items.push(tool);
+}
+
+function removeSuppressedAudioMessages(items: ChatTimelineItem[], suppressed: Set<ChatMessageItem>): void {
+  if (suppressed.size === 0) return;
+  let writeIndex = 0;
+  let removed = 0;
+  for (const item of items) {
+    // Late citations keep their original message and bookmark positions.
+    if (item.type === "message" && suppressed.has(item) && !item.text &&
+      !item.attachments?.length && !item.memoryCitation) {
+      removed += 1;
+      continue;
+    }
+    if (removed > 0) setTimelineBookmarkIndexOffset(item, removed);
+    items[writeIndex++] = item;
+  }
+  items.length = writeIndex;
+  suppressed.clear();
 }
 
 function finalizeTimelineItems(items: ChatTimelineItem[]): void {

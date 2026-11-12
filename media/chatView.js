@@ -403,6 +403,7 @@
   let assistantLongMessageFolding = "off";
   let stickyUserPromptEnabled = true;
   let turnTimelineMode = "off";
+  let turnQuotaWindows = [];
   let imageSettings = { thumbnailSize: "medium" };
   let isClaudeAgent = false;
   let panelKind = "session";
@@ -433,6 +434,20 @@
   let messageNavMap = new Map();
   let patchGroupNavMap = new Map();
   let currentTurnSummaryById = new Map();
+  let currentTurnQuotaById = new Map();
+  let turnQuotaDescriptionSequence = 0;
+  const turnQuotaTooltipState = {
+    bindings: new WeakMap(),
+    element: null,
+    activeBinding: null,
+    hoveredBinding: null,
+    focusedBinding: null,
+    pointerWithin: false,
+    showTimer: 0,
+    closeTimer: 0,
+    positionFrame: 0,
+    listening: false,
+  };
   let expandedMessageIndexes = new Set();
   let expandedClaudeProgressIds = new Set();
   let expandedStickyUserKeys = new Set();
@@ -510,6 +525,17 @@
   let agentRunsTreeNeedsInitialReveal = true;
   let agentRunsTreeRenderFrame = 0;
   let agentRunsTreeFocusNodeId = "";
+  let agentRunsPageRequestId = 0;
+  let agentRunsPagePending = null;
+  let agentRunsPageTimeout = 0;
+  let agentRunsBufferedPageRevision = -1;
+  let agentRunsResumePageOnOpen = false;
+  let agentRunsPinRevisions = new Map();
+  let agentRunsPresentationRevisions = new Map();
+  let agentRunsBufferedPins = new Map();
+  let agentRunsBufferedPresentations = new Map();
+  let agentRunsRestoreAnchor = null;
+  let agentRunsNextPageFocusId = "";
   let mermaidPaneModel = null;
   let mermaidPaneReturnFocus = null;
   let mermaidPaneWidth = null;
@@ -653,6 +679,7 @@
     scrollRootEl.addEventListener("mousedown", handleStickyUserPointerScrollIntent, { passive: true });
   }
   window.addEventListener("blur", () => {
+    hideTurnQuotaTooltip();
     cancelBranchOverlayResize(true);
     cancelAgentRunsOverlayResize(true);
     cancelMermaidPaneResize(true);
@@ -1053,6 +1080,14 @@
       handleCodexAgentRunsStateMessage(msg);
       return;
     }
+    if (msg.type === "codexAgentRunsPage") {
+      handleAgentRunsPageMessage(msg);
+      return;
+    }
+    if (msg.type === "codexAgentRunsPresentationStates") {
+      handleAgentRunsPresentationMessage(msg);
+      return;
+    }
     if (msg.type === "setCodexAgentRunPinState") {
       handleCodexAgentRunPinStateMessage(msg);
       return;
@@ -1332,6 +1367,7 @@
         }
         agentRunsState = "disabled";
         agentRunsModel = null;
+        resetAgentRunsPaging();
         agentRunsPendingPins = new Map();
         agentRunsPinRevision = 0;
         resetSessionScopedUiState();
@@ -1378,6 +1414,8 @@
       timeGuideEnabled = msg.timeGuideEnabled === true;
       stickyUserPromptEnabled = msg.stickyUserPrompt !== false;
       turnTimelineMode = normalizeTurnTimelineMode(msg.turnTimelineMode);
+      turnQuotaWindows = normalizeTurnQuotaWindows(msg.turnQuotaWindows);
+      if (turnQuotaWindows.length === 0) hideTurnQuotaTooltip();
       syncTurnTimelineModeClass();
       configuredPerformanceMode = normalizePerformanceMode(msg.chatPerformanceMode);
       performanceStats = normalizePerformanceStats(msg.performanceStats);
@@ -1584,6 +1622,8 @@
       timeGuideEnabled = msg.timeGuideEnabled === true;
       stickyUserPromptEnabled = msg.stickyUserPrompt !== false;
       turnTimelineMode = normalizeTurnTimelineMode(msg.turnTimelineMode);
+      turnQuotaWindows = normalizeTurnQuotaWindows(msg.turnQuotaWindows);
+      if (turnQuotaWindows.length === 0) hideTurnQuotaTooltip();
       syncTurnTimelineModeClass();
       configuredPerformanceMode = normalizePerformanceMode(msg.chatPerformanceMode);
       if (!isTurnTimelineEnabled()) clearTurnTimelineInteractiveState();
@@ -1710,7 +1750,7 @@
 
   vscode.postMessage({
     type: "ready",
-    capabilities: { sessionModelReuse: 1, stableViewLayout: 1 },
+    capabilities: { sessionModelReuse: 1, stableViewLayout: 1, agentRunsPaging: true },
     detailMode:
       webviewState && webviewState.restore && webviewState.restore.detailMode === "full" ? "full" : "summary",
   });
@@ -1735,6 +1775,16 @@
 
   function isTurnTimelineEnabled() {
     return turnTimelineMode === "basic" || turnTimelineMode === "live";
+  }
+
+  function normalizeTurnQuotaWindows(value) {
+    if (!Array.isArray(value) || value.length > 3) return [];
+    const selected = new Set();
+    for (const window of value) {
+      if ((window !== "weekly" && window !== "fiveHour" && window !== "credits") || selected.has(window)) return [];
+      selected.add(window);
+    }
+    return ["weekly", "fiveHour", "credits"].filter((window) => selected.has(window));
   }
 
   function isTurnTimelineLive() {
@@ -1795,6 +1845,7 @@
         assistantLongMessageFolding,
         stickyUserPromptEnabled,
         turnTimelineMode,
+        turnQuotaWindows,
         timeGuideEnabled,
         imageSettings,
         effectivePerformanceMode,
@@ -3143,6 +3194,7 @@
     }
     const occurrences = Array.isArray(choice?.occurrences) ? choice.occurrences : [];
     if (occurrences.length === 0) return;
+    hideTurnQuotaTooltip();
     closeBranchChoicePreview();
     const hasMultipleOccurrences = choice.occurrenceCount > 1 || occurrences.length > 1;
     const actionLabel = hasMultipleOccurrences
@@ -3319,7 +3371,343 @@
     }
   }
 
+  function isAgentRunsRevision(value) {
+    return Number.isSafeInteger(value) && value >= 0;
+  }
+
+  function strictAgentRunsToken(value) {
+    return typeof value === "string" && normalizeAgentRunToken(value) === value ? value : "";
+  }
+
+  function normalizeAgentRunsV2Nodes(rawNodes) {
+    if (!Array.isArray(rawNodes) || rawNodes.length > MAX_AGENT_RUN_NODES) return null;
+    const nodes = [];
+    const stringFields = { title: 320, taskLabel: 160, agentRole: 120, started: 80, lastActivity: 80 };
+    const booleanFields = ["titleIsCustom", "isCurrent", "isSubagent", "unavailableParent", "isPinned", "isBookmarked", "hasTags", "hasNote"];
+    for (const raw of rawNodes) {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+      const id = strictAgentRunsToken(raw.id);
+      if (!id || !isAgentRunsRevision(raw.orderIndex) || !isAgentRunsRevision(raw.directChildCount)) return null;
+      const node = { id, orderIndex: raw.orderIndex, directChildCount: raw.directChildCount };
+      for (const field of ["parentId", "navigationTarget", "actionTarget"]) {
+        if (raw[field] !== undefined && raw[field] !== "" && !strictAgentRunsToken(raw[field])) return null;
+        node[field] = raw[field] || "";
+      }
+      for (const [field, max] of Object.entries(stringFields)) {
+        const value = raw[field];
+        if (typeof value !== "string" || value.length > max || /[\u0000-\u001f\u007f]/u.test(value)) return null;
+        node[field] = value;
+      }
+      for (const field of booleanFields) {
+        if (typeof raw[field] !== "boolean") return null;
+        node[field] = raw[field];
+      }
+      if ((node.isCurrent || node.unavailableParent) && node.navigationTarget) return null;
+      if (node.unavailableParent && (node.actionTarget || node.isCurrent)) return null;
+      nodes.push(node);
+    }
+    return nodes;
+  }
+
+  // Validate the complete union before committing a page, including formerly pending edges.
+  function validateAgentRunsV2Union(nodes, totalNodeCount, omittedCount) {
+    if (!isAgentRunsRevision(totalNodeCount) || !isAgentRunsRevision(omittedCount) ||
+      totalNodeCount < nodes.length || omittedCount !== totalNodeCount - nodes.length) return false;
+    const byId = new Map();
+    const orders = new Set();
+    const targets = new Set();
+    let currentCount = 0;
+    for (const node of nodes) {
+      if (byId.has(node.id) || orders.has(node.orderIndex) || node.orderIndex >= totalNodeCount) return false;
+      byId.set(node.id, node);
+      orders.add(node.orderIndex);
+      if (node.isCurrent) currentCount += 1;
+      for (const target of [node.navigationTarget, node.actionTarget]) {
+        if (!target) continue;
+        if (targets.has(target)) return false;
+        targets.add(target);
+      }
+    }
+    if (currentCount !== 1) return false;
+    const color = new Map();
+    for (const node of nodes) {
+      if (color.get(node.id) === 2) continue;
+      const path = [];
+      let cursor = node;
+      while (cursor && !color.has(cursor.id)) {
+        color.set(cursor.id, 1);
+        path.push(cursor.id);
+        if (cursor.parentId && !byId.has(cursor.parentId) && omittedCount === 0) return false;
+        cursor = byId.get(cursor.parentId);
+      }
+      if (cursor && color.get(cursor.id) === 1) return false;
+      for (const id of path) color.set(id, 2);
+    }
+    return true;
+  }
+
+  function normalizeAgentRunsV2Model(raw) {
+    if (!raw || typeof raw !== "object" || raw.pageRevision !== 0 ||
+      !isAgentRunsRevision(raw.sessionCount) || !isAgentRunsRevision(raw.agentCount) ||
+      !isAgentRunsRevision(raw.pinRevision) || !isAgentRunsRevision(raw.presentationRevision)) return null;
+    const nodes = normalizeAgentRunsV2Nodes(raw.nodes);
+    if (!nodes || !hasAgentRunsPageChildBounds(nodes) || !validateAgentRunsV2Union(nodes, raw.totalNodeCount, raw.omittedCount) ||
+      raw.agentCount > raw.sessionCount || raw.sessionCount > raw.totalNodeCount) return null;
+    const continuationToken = raw.omittedCount > 0 ? strictAgentRunsToken(raw.continuationToken) : "";
+    if ((raw.omittedCount > 0 && !continuationToken) || (raw.omittedCount === 0 && raw.continuationToken)) return null;
+    return { protocolVersion: 2, nodes, totalNodeCount: raw.totalNodeCount, sessionCount: raw.sessionCount,
+      agentCount: raw.agentCount, omittedCount: raw.omittedCount, relationPartial: raw.relationPartial === true,
+      pageRevision: 0, continuationToken, pinRevision: raw.pinRevision, presentationRevision: raw.presentationRevision };
+  }
+
+  function hasAgentRunsPageChildBounds(nodes) {
+    const perParent = new Map();
+    for (const node of nodes) {
+      if (!node.parentId) continue;
+      const count = (perParent.get(node.parentId) || 0) + 1;
+      if (count > MAX_AGENT_RUN_CHILDREN) return false;
+      perParent.set(node.parentId, count);
+    }
+    return true;
+  }
+
+  function stopAgentRunsPageRequest() {
+    if (agentRunsPageTimeout) clearTimeout(agentRunsPageTimeout);
+    agentRunsPageTimeout = 0;
+    agentRunsPagePending = null;
+  }
+
+  function resetAgentRunsPaging() {
+    stopAgentRunsPageRequest();
+    agentRunsBufferedPageRevision = -1;
+    agentRunsResumePageOnOpen = false;
+    agentRunsPinRevisions = new Map();
+    agentRunsPresentationRevisions = new Map();
+    agentRunsBufferedPins = new Map();
+    agentRunsBufferedPresentations = new Map();
+    agentRunsRestoreAnchor = null;
+    agentRunsNextPageFocusId = "";
+  }
+
+  function handleAgentRunsV2StateMessage(msg) {
+    if (!isAgentRunsRevision(msg.generation) || msg.generation < agentRunsGeneration) return;
+    if (msg.state !== "ready") {
+      resetAgentRunsPaging();
+      handleCodexAgentRunsStateMessage({ ...msg, version: 1 });
+      return;
+    }
+    const next = normalizeAgentRunsV2Model(msg.model);
+    if (!next) return;
+    const sameGeneration = msg.generation === agentRunsGeneration && agentRunsModel?.protocolVersion === 2;
+    if (sameGeneration && agentRunsModel.pageRevision > 0) return;
+    if (sameGeneration) {
+      if (next.totalNodeCount !== agentRunsModel.totalNodeCount || next.nodes.length !== agentRunsModel.nodes.length) return;
+      const previousById = new Map(agentRunsModel.nodes.map((node) => [node.id, node]));
+      for (const node of next.nodes) {
+        const previous = previousById.get(node.id);
+        if (!previous || ["parentId", "orderIndex", "navigationTarget", "actionTarget", "isCurrent", "isSubagent", "unavailableParent"]
+          .some((field) => node[field] !== previous[field])) return;
+        if (agentRunsPinRevisions.get(node.actionTarget) === next.pinRevision && previous.isPinned !== node.isPinned) return;
+        if (agentRunsPresentationRevisions.get(node.id) === next.presentationRevision &&
+          JSON.stringify(readAgentRunsPresentation(previous)) !== JSON.stringify(readAgentRunsPresentation(node))) return;
+      }
+    }
+    if (!sameGeneration) {
+      resetAgentRunsPaging();
+      agentRunsPendingPins = new Map();
+    }
+    for (const node of next.nodes) {
+      const previous = sameGeneration ? agentRunsModel.nodes.find((entry) => entry.id === node.id) : null;
+      if (previous && (agentRunsPinRevisions.get(node.actionTarget) ?? -1) > next.pinRevision) node.isPinned = previous.isPinned;
+      else if (node.actionTarget) agentRunsPinRevisions.set(node.actionTarget, next.pinRevision);
+      if (previous && (agentRunsPresentationRevisions.get(node.id) ?? -1) > next.presentationRevision) {
+        Object.assign(node, readAgentRunsPresentation(previous));
+      } else agentRunsPresentationRevisions.set(node.id, next.presentationRevision);
+    }
+    agentRunsGeneration = msg.generation;
+    agentRunsState = "ready";
+    agentRunsModel = next;
+    agentRunsPinRevision = next.pinRevision;
+    for (const revision of agentRunsPinRevisions.values()) agentRunsPinRevision = Math.max(agentRunsPinRevision, revision);
+    if (msg.i18n && typeof msg.i18n === "object") i18n = msg.i18n;
+    updateToolbar();
+    if (agentRunsOverlayOpen) renderAgentRunsOverlay();
+  }
+
+  function requestAgentRunsMore() {
+    if (agentRunsModel?.protocolVersion !== 2 || agentRunsPagePending || !agentRunsModel.continuationToken) return;
+    agentRunsResumePageOnOpen = false;
+    const pending = { generation: agentRunsGeneration, pageRevision: agentRunsModel.pageRevision,
+      continuationToken: agentRunsModel.continuationToken, requestId: ++agentRunsPageRequestId };
+    agentRunsPagePending = pending;
+    agentRunsBufferedPageRevision = pending.pageRevision + 1;
+    agentRunsPageTimeout = setTimeout(() => {
+      if (agentRunsPagePending !== pending) return;
+      stopAgentRunsPageRequest();
+      if (agentRunsOverlayOpen) renderAgentRunsOverlay();
+      showToast(getSafeUiText(i18n.agentRunsReadMoreFailed, localization.defaults.agentRunsReadMoreFailed));
+    }, 15000);
+    vscode.postMessage({ type: "requestAgentRunsMore", version: 2, ...pending });
+    if (agentRunsOverlayOpen) renderAgentRunsOverlay();
+  }
+
+  function captureAgentRunsViewportAnchor() {
+    const viewport = agentRunsOverlayRootEl?.querySelector(".agentRunsTreeViewport");
+    if (!(viewport instanceof HTMLElement)) return null;
+    const top = viewport.getBoundingClientRect().top;
+    for (const card of viewport.querySelectorAll(".agentRunsTreeNode:not(.omitted)")) {
+      const rect = card.getBoundingClientRect();
+      if (rect.bottom > top) return { id: card.dataset.agentRunsNodeId, offset: rect.top - top };
+    }
+    return null;
+  }
+
+  function handleAgentRunsPageMessage(msg) {
+    const pending = agentRunsPagePending;
+    const current = agentRunsModel;
+    if (msg.version !== 2 || !pending || current?.protocolVersion !== 2 ||
+      msg.generation !== agentRunsGeneration || msg.generation !== pending.generation ||
+      msg.requestId !== pending.requestId || msg.basePageRevision !== pending.pageRevision ||
+      current.pageRevision !== pending.pageRevision) return;
+    if (msg.ok === false) {
+      stopAgentRunsPageRequest();
+      if (agentRunsOverlayOpen) renderAgentRunsOverlay();
+      showToast(getSafeUiText(i18n.agentRunsReadMoreFailed, localization.defaults.agentRunsReadMoreFailed));
+      return;
+    }
+    const nodes = normalizeAgentRunsV2Nodes(msg.nodes);
+    const union = nodes ? [...current.nodes, ...nodes] : [];
+    const nextToken = msg.omittedCount > 0 ? strictAgentRunsToken(msg.continuationToken) : "";
+    if (!nodes || nodes.length === 0 || msg.pageRevision !== current.pageRevision + 1 ||
+      !isAgentRunsRevision(msg.pinRevision) || !isAgentRunsRevision(msg.presentationRevision) ||
+      !hasAgentRunsPageChildBounds(nodes) ||
+      !validateAgentRunsV2Union(union, current.totalNodeCount, msg.omittedCount) ||
+      (msg.omittedCount > 0 && !nextToken) || (msg.omittedCount === 0 && msg.continuationToken)) return;
+    const pinRevisions = new Map(agentRunsPinRevisions);
+    const presentationRevisions = new Map(agentRunsPresentationRevisions);
+    for (const node of nodes) {
+      const pin = agentRunsBufferedPins.get(node.actionTarget);
+      if (pin && pin.revision === msg.pinRevision && pin.isPinned !== node.isPinned) return;
+      if (pin && pin.revision > msg.pinRevision) node.isPinned = pin.isPinned;
+      if (node.actionTarget) pinRevisions.set(node.actionTarget, Math.max(msg.pinRevision, pin?.revision ?? 0));
+      const presentation = agentRunsBufferedPresentations.get(node.id);
+      if (presentation && presentation.revision === msg.presentationRevision &&
+        JSON.stringify(presentation.fields) !== JSON.stringify(readAgentRunsPresentation(node))) return;
+      if (presentation && presentation.revision > msg.presentationRevision) Object.assign(node, presentation.fields);
+      presentationRevisions.set(node.id, Math.max(msg.presentationRevision, presentation?.revision ?? 0));
+    }
+    agentRunsRestoreAnchor = captureAgentRunsViewportAnchor();
+    if (agentRunsOverlayOpen && getSessionOverlayFocusKey(agentRunsOverlayRootEl) === "agent:more") {
+      agentRunsNextPageFocusId = nodes.slice().sort((a, b) => a.orderIndex - b.orderIndex)[0].id;
+    }
+    agentRunsModel = { ...current, nodes: union, pageRevision: msg.pageRevision,
+      omittedCount: msg.omittedCount, continuationToken: nextToken,
+      pinRevision: Math.max(current.pinRevision, msg.pinRevision),
+      presentationRevision: Math.max(current.presentationRevision, msg.presentationRevision) };
+    agentRunsPinRevisions = pinRevisions;
+    agentRunsPresentationRevisions = presentationRevisions;
+    agentRunsPinRevision = Math.max(agentRunsPinRevision, msg.pinRevision);
+    agentRunsBufferedPins.clear();
+    agentRunsBufferedPresentations.clear();
+    agentRunsBufferedPageRevision = -1;
+    stopAgentRunsPageRequest();
+    if (agentRunsOverlayOpen) renderAgentRunsOverlay();
+    showToast(formatTemplate(getSafeUiText(i18n.agentRunsAdded, localization.defaults.agentRunsAdded), nodes.length));
+  }
+
+  function isAgentRunsV2Patch(msg, revision) {
+    return msg.version === 2 && msg.generation === agentRunsGeneration && agentRunsModel?.protocolVersion === 2 &&
+      isAgentRunsRevision(revision) && isAgentRunsRevision(msg.requiredPageRevision) &&
+      Array.isArray(msg.states) && msg.states.length <= MAX_AGENT_RUN_NODES;
+  }
+
+  function handleAgentRunsV2PinMessage(msg) {
+    if (!isAgentRunsV2Patch(msg, msg.pinRevision)) return;
+    const future = msg.requiredPageRevision > agentRunsModel.pageRevision;
+    if (future && msg.requiredPageRevision !== agentRunsBufferedPageRevision) return;
+    const byTarget = new Map(agentRunsModel.nodes.filter((node) => node.actionTarget).map((node) => [node.actionTarget, node]));
+    const updates = new Map();
+    for (const raw of msg.states) {
+      const target = strictAgentRunsToken(raw?.target);
+      if (!target || updates.has(target) || typeof raw.isPinned !== "boolean") return;
+      const node = byTarget.get(target);
+      if (future ? !!node : !node) return;
+      const previous = future ? agentRunsBufferedPins.get(target) : { revision: agentRunsPinRevisions.get(target) ?? -1, isPinned: node.isPinned };
+      if (previous && previous.revision === msg.pinRevision && previous.isPinned !== raw.isPinned) return;
+      updates.set(target, { revision: msg.pinRevision, isPinned: raw.isPinned });
+    }
+    if (future && new Set([...agentRunsBufferedPins.keys(), ...updates.keys()]).size > MAX_AGENT_RUN_NODES) return;
+    let changed = false;
+    for (const [target, update] of updates) {
+      const previousRevision = future ? agentRunsBufferedPins.get(target)?.revision ?? -1 : agentRunsPinRevisions.get(target) ?? -1;
+      if (update.revision <= previousRevision) continue;
+      if (future) agentRunsBufferedPins.set(target, update);
+      else {
+        byTarget.get(target).isPinned = update.isPinned;
+        agentRunsPinRevisions.set(target, update.revision);
+        const pending = agentRunsPendingPins.get(target);
+        if (pending?.generation === agentRunsGeneration && pending.desiredPinned === update.isPinned) agentRunsPendingPins.delete(target);
+        changed = true;
+      }
+    }
+    agentRunsPinRevision = Math.max(agentRunsPinRevision, msg.pinRevision);
+    if (changed && agentRunsOverlayOpen) renderAgentRunsOverlay();
+  }
+
+  function readAgentRunsPresentation(node) {
+    return { title: node.title, titleIsCustom: node.titleIsCustom, taskLabel: node.taskLabel, agentRole: node.agentRole,
+      started: node.started, lastActivity: node.lastActivity, directChildCount: node.directChildCount,
+      isBookmarked: node.isBookmarked, hasTags: node.hasTags, hasNote: node.hasNote };
+  }
+
+  function normalizeAgentRunsPresentation(raw) {
+    if (!raw || typeof raw !== "object" || !isAgentRunsRevision(raw.directChildCount)) return null;
+    const fields = readAgentRunsPresentation(raw);
+    for (const [field, max] of Object.entries({ title: 320, taskLabel: 160, agentRole: 120, started: 80, lastActivity: 80 })) {
+      if (typeof fields[field] !== "string" || fields[field].length > max || /[\u0000-\u001f\u007f]/u.test(fields[field])) return null;
+    }
+    for (const field of ["titleIsCustom", "isBookmarked", "hasTags", "hasNote"]) {
+      if (typeof fields[field] !== "boolean") return null;
+    }
+    return fields;
+  }
+
+  function handleAgentRunsPresentationMessage(msg) {
+    if (!isAgentRunsV2Patch(msg, msg.presentationRevision)) return;
+    const future = msg.requiredPageRevision > agentRunsModel.pageRevision;
+    if (future && msg.requiredPageRevision !== agentRunsBufferedPageRevision) return;
+    const byId = new Map(agentRunsModel.nodes.map((node) => [node.id, node]));
+    const updates = new Map();
+    for (const raw of msg.states) {
+      const id = strictAgentRunsToken(raw?.id);
+      const fields = normalizeAgentRunsPresentation(raw);
+      if (!id || !fields || updates.has(id) || (future ? byId.has(id) : !byId.has(id))) return;
+      const previous = future ? agentRunsBufferedPresentations.get(id) : {
+        revision: agentRunsPresentationRevisions.get(id) ?? -1, fields: readAgentRunsPresentation(byId.get(id)) };
+      if (previous && previous.revision === msg.presentationRevision && JSON.stringify(previous.fields) !== JSON.stringify(fields)) return;
+      updates.set(id, { revision: msg.presentationRevision, fields });
+    }
+    if (future && new Set([...agentRunsBufferedPresentations.keys(), ...updates.keys()]).size > MAX_AGENT_RUN_NODES) return;
+    let changed = false;
+    for (const [id, update] of updates) {
+      const previousRevision = future ? agentRunsBufferedPresentations.get(id)?.revision ?? -1 : agentRunsPresentationRevisions.get(id) ?? -1;
+      if (update.revision <= previousRevision) continue;
+      if (future) agentRunsBufferedPresentations.set(id, update);
+      else {
+        Object.assign(byId.get(id), update.fields);
+        agentRunsPresentationRevisions.set(id, update.revision);
+        changed = true;
+      }
+    }
+    agentRunsModel.presentationRevision = Math.max(agentRunsModel.presentationRevision, msg.presentationRevision);
+    if (changed && agentRunsOverlayOpen) renderAgentRunsOverlay();
+  }
+
   function handleCodexAgentRunsStateMessage(msg) {
+    if (msg.version === 2) {
+      handleAgentRunsV2StateMessage(msg);
+      return;
+    }
     if (Number(msg.version) !== 1) return;
     const generation = Number(msg.generation);
     if (!Number.isSafeInteger(generation) || generation < agentRunsGeneration) return;
@@ -3328,6 +3716,8 @@
       : "disabled";
     const nextModel = state === "ready" ? normalizeAgentRunsModel(msg.model) : null;
     const sameGeneration = generation === agentRunsGeneration;
+    if (sameGeneration && agentRunsModel?.protocolVersion === 2 && state === "ready") return;
+    if (!sameGeneration || state !== "ready") resetAgentRunsPaging();
     if (nextModel && sameGeneration && agentRunsModel && agentRunsPinRevision > nextModel.pinRevision) {
       const currentPinState = new Map(
         agentRunsModel.nodes
@@ -3357,6 +3747,11 @@
   }
 
   function handleCodexAgentRunPinStateMessage(msg) {
+    if (msg.version === 2) {
+      handleAgentRunsV2PinMessage(msg);
+      return;
+    }
+    if (agentRunsModel?.protocolVersion === 2) return;
     if (
       Number(msg.version) !== 1 ||
       Number(msg.generation) !== agentRunsGeneration ||
@@ -3389,8 +3784,9 @@
   }
 
   function handleCodexAgentRunPinResultMessage(msg) {
+    if ((msg.version === 2) !== (agentRunsModel?.protocolVersion === 2)) return;
     if (
-      Number(msg.version) !== 1 ||
+      (Number(msg.version) !== 1 && msg.version !== 2) ||
       Number(msg.generation) !== agentRunsGeneration ||
       agentRunsState !== "ready" ||
       !agentRunsModel
@@ -3409,6 +3805,13 @@
       return;
     }
     agentRunsPendingPins.delete(target);
+    if (msg.version === 2) {
+      if (typeof msg.isPinned === "boolean") {
+        handleAgentRunsV2PinMessage({ ...msg, states: [{ target, isPinned: msg.isPinned }] });
+      }
+      if (agentRunsOverlayOpen) renderAgentRunsOverlay();
+      return;
+    }
     if (typeof msg.isPinned === "boolean") {
       const node = agentRunsModel.nodes.find((candidate) => candidate.actionTarget === target);
       if (node) node.isPinned = msg.isPinned;
@@ -3632,6 +4035,7 @@
       return;
     }
     if (agentRunsState !== "ready" || !agentRunsModel || !(agentRunsOverlayRootEl instanceof HTMLElement)) return;
+    hideTurnQuotaTooltip();
     if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
     closeBranchOverlay({ restoreFocus: false, restorePageSearch: false });
     if (isPageSearchOpen()) closePageSearch();
@@ -3646,14 +4050,22 @@
     agentRunsTreeFocusNodeId = agentRunsModel.nodes.find((node) => node.isCurrent)?.id || "";
     syncSessionOverlayDocumentKeydown();
     renderAgentRunsOverlay();
+    const resumePage = agentRunsResumePageOnOpen;
+    agentRunsResumePageOnOpen = false;
+    if (resumePage && agentRunsModel.protocolVersion === 2 && agentRunsBufferedPageRevision === agentRunsModel.pageRevision + 1 && !agentRunsPagePending) {
+      requestAgentRunsMore();
+    }
   }
 
   function closeAgentRunsOverlay(options = {}) {
     if (!(agentRunsOverlayRootEl instanceof HTMLElement)) return;
+    // Preserve only an interrupted request as the intent to resume on the next open.
+    if (agentRunsOverlayOpen) agentRunsResumePageOnOpen = Boolean(agentRunsPagePending);
     cancelSessionOverlayBackdropFocus();
     rememberAgentRunsTreeViewport();
     cancelAgentRunsOverlayResize(false);
     agentRunsOverlayOpen = false;
+    stopAgentRunsPageRequest();
     syncSessionOverlayDocumentKeydown();
     if (agentRunsTreeRenderFrame) cancelAnimationFrame(agentRunsTreeRenderFrame);
     agentRunsTreeRenderFrame = 0;
@@ -3795,7 +4207,7 @@
     const viewport = el("div", {
       className: "agentRunsTreeViewport",
       tabIndex: 0,
-      role: "tree",
+      role: "group",
       ariaLabel: accessibleTitle,
     });
     setSessionOverlayFocusKey(viewport, "agent:viewport");
@@ -3803,9 +4215,14 @@
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.classList.add("agentRunsTreeConnectors");
     svg.setAttribute("aria-hidden", "true");
-    const nodeLayer = el("div", { className: "agentRunsTreeNodeLayer" });
-    for (const node of graph.orderedNodes) nodeLayer.appendChild(renderAgentRunsTreeNode(node, graph));
+    const nodeLayer = el("div", { className: "agentRunsTreeNodeLayer", role: "tree", ariaLabel: accessibleTitle });
     stage.append(svg, nodeLayer);
+    for (const node of graph.orderedNodes) {
+      const card = renderAgentRunsTreeNode(node, graph);
+      // Keep auxiliary paging controls in the shared scroll region, outside the history tree.
+      const isLoadControl = node.omitted && agentRunsModel.protocolVersion === 2 && agentRunsModel.continuationToken;
+      (isLoadControl ? stage : nodeLayer).appendChild(card);
+    }
     viewport.appendChild(stage);
     viewport.addEventListener("scroll", () => {
       agentRunsTreeScrollTop = viewport.scrollTop;
@@ -3829,6 +4246,24 @@
         viewport.scrollTop = restoreScrollTop;
         agentRunsTreeScrollTop = viewport.scrollTop;
       }
+      if (agentRunsRestoreAnchor) {
+        const anchor = agentRunsRestoreAnchor;
+        agentRunsRestoreAnchor = null;
+        const card = Array.from(stage.querySelectorAll(".agentRunsTreeNode")).find((entry) => entry.dataset.agentRunsNodeId === anchor.id);
+        if (card instanceof HTMLElement) {
+          viewport.scrollTop += card.getBoundingClientRect().top - viewport.getBoundingClientRect().top - anchor.offset;
+          agentRunsTreeScrollTop = viewport.scrollTop;
+        }
+      }
+      if (agentRunsNextPageFocusId) {
+        const id = agentRunsNextPageFocusId;
+        agentRunsNextPageFocusId = "";
+        const control = Array.from(stage.querySelectorAll("[role='treeitem']")).find((entry) => entry.dataset.agentRunsNodeId === id);
+        if (control instanceof HTMLElement) {
+          control.focus({ preventScroll: true });
+          return;
+        }
+      }
       restoreSessionOverlayFocus(
         agentRunsOverlayRootEl,
         restoreFocusKey,
@@ -3839,6 +4274,7 @@
 
   function buildAgentRunsGraph(model) {
     const nodes = model.nodes.map((node) => ({ ...node, currentPath: false }));
+    if (model.protocolVersion === 2) nodes.sort((a, b) => a.orderIndex - b.orderIndex);
     if (model.omittedCount > 0) {
       let omittedId = "__agent-runs-omitted__";
       while (nodes.some((node) => node.id === omittedId)) omittedId += "_";
@@ -3886,28 +4322,37 @@
     for (const node of nodes) node.currentPath = currentPath.has(node.id);
 
     const depthById = new Map();
-    const resolving = new Set();
-    const resolveDepth = (node) => {
-      if (!node || !node.parentId || !nodeById.has(node.parentId)) return 0;
-      const cached = depthById.get(node.id);
-      if (cached !== undefined) return cached;
-      if (resolving.has(node.id)) return 0;
-      resolving.add(node.id);
-      const depth = Math.min(MAX_AGENT_RUN_DEPTH, resolveDepth(nodeById.get(node.parentId)) + 1);
-      resolving.delete(node.id);
-      depthById.set(node.id, depth);
-      return depth;
-    };
-    for (const node of nodes) depthById.set(node.id, resolveDepth(node));
+    for (const node of nodes) {
+      if (depthById.has(node.id)) continue;
+      const path = [];
+      const seen = new Set();
+      let cursor = node;
+      while (cursor && !depthById.has(cursor.id) && !seen.has(cursor.id)) {
+        seen.add(cursor.id);
+        path.push(cursor);
+        cursor = nodeById.get(cursor.parentId);
+      }
+      let depth = cursor && depthById.has(cursor.id) ? depthById.get(cursor.id) + 1 : 0;
+      for (let index = path.length - 1; index >= 0; index -= 1) {
+        const value = model.protocolVersion === 2 ? depth : Math.min(MAX_AGENT_RUN_DEPTH, depth);
+        depthById.set(path[index].id, value);
+        depth += 1;
+      }
+    }
     const orderedNodes = [];
     const visited = new Set();
     const appendPreOrder = (nodeId) => {
-      if (!nodeId || visited.has(nodeId)) return;
-      const node = nodeById.get(nodeId);
-      if (!node) return;
-      visited.add(nodeId);
-      orderedNodes.push(node);
-      for (const childId of childrenByParent.get(nodeId) || []) appendPreOrder(childId);
+      const stack = [nodeId];
+      while (stack.length > 0) {
+        const id = stack.pop();
+        if (!id || visited.has(id)) continue;
+        const node = nodeById.get(id);
+        if (!node) continue;
+        visited.add(id);
+        orderedNodes.push(node);
+        const children = childrenByParent.get(id) || [];
+        for (let index = children.length - 1; index >= 0; index -= 1) stack.push(children[index]);
+      }
     };
     for (const rootId of childrenByParent.get("") || []) appendPreOrder(rootId);
     for (const node of nodes) appendPreOrder(node.id);
@@ -3937,12 +4382,26 @@
   }
 
   function renderAgentRunsTreeNode(node, graph) {
-    const card = el("article", { className: "agentRunsTreeNode" });
+    // Keep the visual wrapper transparent to the inner treeitem semantics.
+    const card = el("article", { className: "agentRunsTreeNode", role: "none" });
     card.dataset.agentRunsNodeId = node.id;
     const depth = graph.depthById.get(node.id) || 0;
     card.style.setProperty("--agent-runs-node-indent", Math.min(depth, 8) * 28 + "px");
     if (node.omitted) {
       card.classList.add("omitted");
+      if (agentRunsModel?.protocolVersion === 2 && agentRunsModel.continuationToken) {
+        card.classList.add("agentRunsLoadControls");
+        const more = el("button", { type: "button", className: "agentRunsReadMore", textContent: agentRunsPagePending
+          ? getSafeUiText(i18n.agentRunsReadingMore, localization.defaults.agentRunsReadingMore)
+          : formatTemplate(getSafeUiText(i18n.agentRunsReadMore, localization.defaults.agentRunsReadMore), agentRunsModel.omittedCount) });
+        // Keep keyboard focus while the request guard blocks repeated activation.
+        more.setAttribute("aria-disabled", String(!!agentRunsPagePending));
+        more.setAttribute("aria-busy", String(!!agentRunsPagePending));
+        setSessionOverlayFocusKey(more, "agent:more");
+        more.addEventListener("click", requestAgentRunsMore);
+        card.appendChild(more);
+        return card;
+      }
       const omitted = el("div", { className: "agentRunsTreeNodePrimary", tabIndex: 0, role: "treeitem" });
       omitted.dataset.agentRunsNodeId = node.id;
       omitted.dataset.agentRunsParentId = "";
@@ -4254,9 +4713,15 @@
         const parentRect = parentElement.getBoundingClientRect();
         const parentAnchorX = parentRect.left - stageRect.left + 18;
         const parentY = parentRect.bottom - stageRect.top;
-        const trunkX = Math.min(parentAnchorX, ...children.map((child) => child.left - 10));
-        const shoulderY = Math.min(...children.map((child) => child.branchY), parentY + 10);
-        const lastBranchY = Math.max(...children.map((child) => child.branchY));
+        // Keep extrema aggregation independent of the number of displayed siblings.
+        let trunkX = parentAnchorX;
+        let shoulderY = parentY + 10;
+        let lastBranchY = Number.NEGATIVE_INFINITY;
+        for (const child of children) {
+          trunkX = Math.min(trunkX, child.left - 10);
+          shoulderY = Math.min(shoulderY, child.branchY);
+          lastBranchY = Math.max(lastBranchY, child.branchY);
+        }
         const currentChild = children.find((child) => child.node.currentPath === true);
         const alternateChildren = children.filter((child) => child.node.currentPath !== true);
         const trunkPath = (endY) =>
@@ -4438,6 +4903,7 @@
       showToast(getSafeUiText(i18n.branchNone, localization.defaults.branchNone));
       return;
     }
+    hideTurnQuotaTooltip();
     if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
     branchOverlayRestorePageSearch = isPageSearchOpen();
     if (branchOverlayRestorePageSearch) closePageSearch();
@@ -6819,6 +7285,7 @@
   }
 
   function pauseVisibleLayoutWork() {
+    hideTurnQuotaTooltip();
     visibleLayoutResumePending = true;
     if (visibleLayoutReturnPending) retainStableVisibleLayoutWidth();
     if (visibleLayoutResumeFrame) {
@@ -6911,6 +7378,7 @@
   }
 
   function handleVisibleLayoutViewportResize() {
+    hideTurnQuotaTooltip();
     debugVisibleLayout("resize");
     if (!hostViewVisible || document.visibilityState === "hidden") {
       pauseVisibleLayoutWork();
@@ -7227,6 +7695,7 @@
   }
 
   function openPageSearch() {
+    hideTurnQuotaTooltip();
     if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
     if (branchOverlayOpen) closeBranchOverlay({ restoreFocus: false, restorePageSearch: false });
     if (agentRunsOverlayOpen) closeAgentRunsOverlay({ restoreFocus: false });
@@ -9128,6 +9597,7 @@
     }
     renderDepth += 1;
     try {
+    hideTurnQuotaTooltip();
     closeBranchOccurrenceMenu();
     if (lazyImageObserver) lazyImageObserver.disconnect();
     if (lazyMermaidObserver) lazyMermaidObserver.disconnect();
@@ -9151,6 +9621,7 @@
       clearSessionAnnotationHeader();
       renderCurrentSessionMetadata();
       currentTurnSummaryById = new Map();
+      currentTurnQuotaById = new Map();
       resetRunningTurnIndicators();
       scheduleStickyUserOverlayUpdate();
       return;
@@ -9167,6 +9638,9 @@
     const turnTimelineEnabled = isTurnTimelineEnabled();
     const turnTimelineLive = isTurnTimelineLive();
     const turnSummaryById = turnTimelineEnabled ? buildTurnSummaryMap(model.turns) : new Map();
+    currentTurnQuotaById = turnQuotaWindows.length > 0 && turnTimelineEnabled && model.meta?.historySource === "codex"
+      ? buildTurnQuotaMap(items, turnSummaryById)
+      : new Map();
     const turnRunKeyByItemIndex = turnTimelineEnabled ? buildTurnRunKeyByItemIndex(items, turnSummaryById) : new Map();
     currentTurnSummaryById = turnSummaryById;
     resetRunningTurnIndicators({ keepFallback: turnTimelineLive });
@@ -9673,15 +10147,15 @@
       const durationText = buildTurnCompletedDurationText(turn);
       if (durationText) main.appendChild(el("span", { className: "turnMarkerMeta", textContent: durationText }));
 
-      const counts = buildTurnEndCounts(turn);
-      if (counts.text) {
-        collapsedCountsEl = el("div", { className: "turnMarkerCounts turnCollapsedSummaryCounts", textContent: counts.text });
-      }
+      collapsedCountsEl = renderTurnCounts(turn, turnId, "turnCollapsedSummaryCounts", row, true);
     } else {
       appendTurnCollapseStateBadge(main, turn, turnId);
     }
     line.appendChild(main);
-    if (collapsedCountsEl) line.appendChild(collapsedCountsEl);
+    if (collapsedCountsEl) {
+      line.appendChild(collapsedCountsEl);
+      line.classList.toggle("turnMarkerLine-hasQuota", collapsedCountsEl.classList.contains("turnMarkerCounts-hasQuota"));
+    }
     row.appendChild(line);
     configureTurnMarkerToggle(row, turn, turnId, normalizedRunKey);
     return row;
@@ -9719,10 +10193,10 @@
     appendTurnCollapseStateBadge(main, turn, turnId);
     line.appendChild(main);
 
-    const counts = buildTurnEndCounts(turn);
-    if (counts.text) {
-      const countsEl = el("div", { className: "turnMarkerCounts", textContent: counts.text });
+    const countsEl = renderTurnCounts(turn, turnId, "", row);
+    if (countsEl) {
       line.appendChild(countsEl);
+      line.classList.toggle("turnMarkerLine-hasQuota", countsEl.classList.contains("turnMarkerCounts-hasQuota"));
     }
     row.appendChild(line);
     return row;
@@ -10037,8 +10511,9 @@
     return chip;
   }
 
-  function appendRunningTurnChipContent(container, turn, fallbackTurnId) {
+  function appendRunningTurnChipContent(container, turn, fallbackTurnId, includeQuota = true) {
     const turnId = normalizeTurnId((turn && turn.id) || fallbackTurnId);
+    container.removeAttribute("aria-describedby");
     container.appendChild(el("span", { className: "runningTurnChipTitle", textContent: buildTurnNumberLabel(turn, turnId) }));
     container.appendChild(
       el("span", {
@@ -10067,6 +10542,9 @@
     if (activityText) {
       container.appendChild(el("span", { className: "runningTurnChipLastActivity runningTurnChipTime", textContent: activityText }));
     }
+    const quota = includeQuota ? renderTurnQuotaGroup(turnId, container, container instanceof HTMLButtonElement) : null;
+    if (quota) container.appendChild(quota);
+    container.classList.toggle("runningTurnChip-hasQuota", !!quota);
   }
 
   function buildRunningTurnChipTooltip(turn, fallbackTurnId, options = {}) {
@@ -10169,7 +10647,8 @@
     }
     const button = ensureRunningTurnFallbackChip();
     button.textContent = "";
-    appendRunningTurnChipContent(button, turn, turnId);
+    // Keep the floating locator focused on the running turn and its jump action.
+    appendRunningTurnChipContent(button, turn, turnId, false);
     applyRunningTurnActivityState(button, activityState);
     button.dataset.turnId = turnId;
     applyRunningTurnChipTooltip(button, turn, turnId, { includeJumpLabel: true });
@@ -10356,6 +10835,264 @@
     return getLatestMeaningfulTimelineCard(turnCards);
   }
 
+  function bindTurnQuotaTooltip(anchor, sections, options = {}) {
+    if (!(anchor instanceof HTMLElement)) return;
+    const content = Array.isArray(sections) && sections.length <= 3
+      ? sections.map((section) => ({
+          heading: typeof section?.heading === "string" ? section.heading : "",
+          rows: Array.isArray(section?.rows) ? section.rows.slice(0, 2).filter((row) =>
+            row && typeof row.label === "string" && row.label.length > 0 && row.label.length <= 128 &&
+            typeof row.value === "string" && row.value.length > 0 && row.value.length <= 256,
+          ).map((row) => ({ label: row.label, value: row.value })) : [],
+        })).filter((section) => section.heading.length <= 320 && section.rows.length > 0)
+      : [];
+    const previous = turnQuotaTooltipState.bindings.get(anchor);
+    if (content.length === 0) {
+      if (previous) {
+        turnQuotaTooltipState.bindings.set(anchor, {
+          anchor, sections: [], hover: false, focus: false, focusOwner: null, showHeadings: false,
+        });
+        if ([turnQuotaTooltipState.activeBinding, turnQuotaTooltipState.hoveredBinding, turnQuotaTooltipState.focusedBinding]
+          .some((binding) => binding?.anchor === anchor)) hideTurnQuotaTooltip();
+      }
+      return;
+    }
+    const settings = options && typeof options === "object" ? options : {};
+    const binding = {
+      anchor,
+      sections: content,
+      hover: settings.hover === true,
+      focus: settings.focus === true,
+      focusOwner: settings.focusOwner instanceof HTMLElement ? settings.focusOwner : null,
+      showHeadings: settings.showHeadings === true,
+    };
+    turnQuotaTooltipState.bindings.set(anchor, binding);
+    if (previous) {
+      if ([turnQuotaTooltipState.activeBinding, turnQuotaTooltipState.hoveredBinding, turnQuotaTooltipState.focusedBinding]
+        .includes(previous)) hideTurnQuotaTooltip();
+      return;
+    }
+    anchor.addEventListener("pointerenter", handleTurnQuotaTooltipPointerEnter);
+    anchor.addEventListener("pointerleave", handleTurnQuotaTooltipPointerLeave);
+    anchor.addEventListener("focus", handleTurnQuotaTooltipFocus);
+    anchor.addEventListener("blur", handleTurnQuotaTooltipBlur);
+  }
+
+  function isTurnQuotaTooltipBindingVisible(binding) {
+    if (turnQuotaWindows.length === 0 || !binding || !(binding.anchor instanceof HTMLElement) || !binding.anchor.isConnected ||
+      isDeferredRenderPaused() || agentRunsOverlayOpen || branchOverlayOpen ||
+      isImagePreviewOpen() || isMermaidPaneOpen() ||
+      branchChoiceMenuEl instanceof HTMLElement || branchChoicePreviewEl instanceof HTMLElement) return false;
+    const anchor = binding.anchor;
+    const style = window.getComputedStyle(anchor);
+    if (style.visibility === "hidden" || style.visibility === "collapse" || anchor.getClientRects().length === 0) return false;
+    const rect = anchor.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0 &&
+      rect.left < window.innerWidth && rect.top < window.innerHeight;
+  }
+
+  function isTurnQuotaTooltipBindingFocused(binding) {
+    if (!binding) return false;
+    const owner = binding.focusOwner instanceof HTMLElement && binding.focusOwner.contains(binding.anchor)
+      ? binding.focusOwner : binding.anchor;
+    return owner instanceof HTMLElement && owner.isConnected && owner.contains(document.activeElement);
+  }
+
+  function handleTurnQuotaTooltipPointerEnter(event) {
+    const binding = turnQuotaTooltipState.bindings.get(event.currentTarget);
+    if (!binding?.hover || event.pointerType === "touch") return;
+    turnQuotaTooltipState.hoveredBinding = binding;
+    turnQuotaTooltipState.focusedBinding = getFocusedTurnQuotaTooltipBinding();
+    cancelTurnQuotaTooltipClose();
+    cancelTurnQuotaTooltipShow();
+    addTurnQuotaTooltipListeners();
+    if (turnQuotaTooltipState.activeBinding === binding) return;
+    turnQuotaTooltipState.showTimer = window.setTimeout(() => {
+      turnQuotaTooltipState.showTimer = 0;
+      if (turnQuotaTooltipState.hoveredBinding === binding) showTurnQuotaTooltip(binding);
+    }, 220);
+  }
+
+  function handleTurnQuotaTooltipPointerLeave(event) {
+    const binding = turnQuotaTooltipState.bindings.get(event.currentTarget);
+    if (!binding || turnQuotaTooltipState.hoveredBinding !== binding) return;
+    turnQuotaTooltipState.hoveredBinding = null;
+    cancelTurnQuotaTooltipShow();
+    scheduleTurnQuotaTooltipClose();
+  }
+
+  function handleTurnQuotaTooltipFocus(event) {
+    const binding = turnQuotaTooltipState.bindings.get(event.currentTarget);
+    if (!binding?.focus) return;
+    turnQuotaTooltipState.focusedBinding = binding;
+    cancelTurnQuotaTooltipShow();
+    cancelTurnQuotaTooltipClose();
+    showTurnQuotaTooltip(binding);
+  }
+
+  function handleTurnQuotaTooltipBlur(event) {
+    const binding = turnQuotaTooltipState.bindings.get(event.currentTarget);
+    if (!binding || turnQuotaTooltipState.focusedBinding !== binding) return;
+    turnQuotaTooltipState.focusedBinding = null;
+    scheduleTurnQuotaTooltipClose();
+  }
+
+  function cancelTurnQuotaTooltipShow() {
+    if (turnQuotaTooltipState.showTimer) window.clearTimeout(turnQuotaTooltipState.showTimer);
+    turnQuotaTooltipState.showTimer = 0;
+  }
+
+  function getFocusedTurnQuotaTooltipBinding() {
+    const binding = turnQuotaTooltipState.bindings.get(document.activeElement);
+    return binding?.focus && isTurnQuotaTooltipBindingFocused(binding) ? binding : null;
+  }
+
+  function cancelTurnQuotaTooltipClose() {
+    if (turnQuotaTooltipState.closeTimer) window.clearTimeout(turnQuotaTooltipState.closeTimer);
+    turnQuotaTooltipState.closeTimer = 0;
+  }
+
+  function scheduleTurnQuotaTooltipClose() {
+    cancelTurnQuotaTooltipClose();
+    turnQuotaTooltipState.closeTimer = window.setTimeout(() => {
+      turnQuotaTooltipState.closeTimer = 0;
+      const state = turnQuotaTooltipState;
+      if (state.pointerWithin && isTurnQuotaTooltipBindingVisible(state.activeBinding)) return;
+      if (state.showTimer) return;
+      const hovered = isTurnQuotaTooltipBindingVisible(state.hoveredBinding) ? state.hoveredBinding : null;
+      state.focusedBinding = getFocusedTurnQuotaTooltipBinding();
+      const focused = isTurnQuotaTooltipBindingFocused(state.focusedBinding) &&
+        isTurnQuotaTooltipBindingVisible(state.focusedBinding) ? state.focusedBinding : null;
+      if (hovered || focused) showTurnQuotaTooltip(hovered || focused);
+      else hideTurnQuotaTooltip();
+    }, 180);
+  }
+
+  function showTurnQuotaTooltip(binding) {
+    if (!isTurnQuotaTooltipBindingVisible(binding)) {
+      hideTurnQuotaTooltip();
+      return;
+    }
+    const state = turnQuotaTooltipState;
+    cancelTurnQuotaTooltipShow();
+    cancelTurnQuotaTooltipClose();
+    if (state.activeBinding === binding && state.element instanceof HTMLElement) return;
+    if (state.positionFrame) cancelAnimationFrame(state.positionFrame);
+    state.positionFrame = 0;
+    let popup = state.element;
+    if (!(popup instanceof HTMLElement)) {
+      popup = el("div", { id: "turnQuotaTooltip", className: "turnQuotaTooltip", role: "tooltip" });
+      // The anchors provide complete static descriptions; this portal is their visual equivalent.
+      popup.setAttribute("aria-hidden", "true");
+      popup.tabIndex = -1;
+      // Keep pointer interaction from moving focus into the hidden visual duplicate.
+      popup.addEventListener("mousedown", (event) => event.preventDefault());
+      popup.addEventListener("pointerenter", () => {
+        if (turnQuotaTooltipState.element !== popup) return;
+        turnQuotaTooltipState.pointerWithin = true;
+        cancelTurnQuotaTooltipClose();
+      });
+      popup.addEventListener("pointerleave", () => {
+        if (turnQuotaTooltipState.element !== popup) return;
+        turnQuotaTooltipState.pointerWithin = false;
+        scheduleTurnQuotaTooltipClose();
+      });
+      document.body.appendChild(popup);
+      state.element = popup;
+    }
+    popup.replaceChildren();
+    popup.hidden = false;
+    popup.style.visibility = "hidden";
+    state.pointerWithin = false;
+    for (const section of binding.sections) {
+      if (binding.showHeadings && section.heading) {
+        popup.appendChild(el("div", { className: "turnQuotaTooltipHeading", textContent: section.heading }));
+      }
+      for (const row of section.rows) {
+        const line = el("div", { className: "turnQuotaTooltipRow" });
+        line.append(el("span", { className: "turnQuotaTooltipLabel", textContent: row.label }),
+          el("span", { className: "turnQuotaTooltipValue", textContent: row.value }));
+        popup.appendChild(line);
+      }
+    }
+    state.activeBinding = binding;
+    addTurnQuotaTooltipListeners();
+    state.positionFrame = requestAnimationFrame(() => {
+      state.positionFrame = 0;
+      if (state.element !== popup || state.activeBinding !== binding) return;
+      if (!isTurnQuotaTooltipBindingVisible(binding)) {
+        hideTurnQuotaTooltip();
+        return;
+      }
+      const rect = binding.anchor.getBoundingClientRect();
+      const margin = 8;
+      const left = Math.min(Math.max(margin, rect.right - popup.offsetWidth),
+        Math.max(margin, window.innerWidth - popup.offsetWidth - margin));
+      const below = rect.bottom + 5;
+      const top = below + popup.offsetHeight <= window.innerHeight - margin
+        ? below : Math.max(margin, rect.top - popup.offsetHeight - 5);
+      popup.style.left = left + "px";
+      popup.style.top = top + "px";
+      popup.style.visibility = "";
+    });
+  }
+
+  function addTurnQuotaTooltipListeners() {
+    if (turnQuotaTooltipState.listening) return;
+    turnQuotaTooltipState.listening = true;
+    document.addEventListener("scroll", handleTurnQuotaTooltipScroll, true);
+    document.addEventListener("pointerdown", handleTurnQuotaTooltipOutside, true);
+    window.addEventListener("keydown", handleTurnQuotaTooltipKeydown, true);
+  }
+
+  function handleTurnQuotaTooltipScroll(event) {
+    const popup = turnQuotaTooltipState.element;
+    if (popup instanceof HTMLElement && event.target instanceof Node && popup.contains(event.target)) return;
+    hideTurnQuotaTooltip();
+  }
+
+  function handleTurnQuotaTooltipOutside(event) {
+    const state = turnQuotaTooltipState;
+    if (event.target instanceof Node && ((state.element instanceof HTMLElement && state.element.contains(event.target)) ||
+      state.activeBinding?.anchor.contains(event.target))) return;
+    hideTurnQuotaTooltip();
+  }
+
+  function handleTurnQuotaTooltipKeydown(event) {
+    if (event.key !== "Escape") return;
+    const popup = turnQuotaTooltipState.element;
+    const visible = popup instanceof HTMLElement && !popup.hidden && popup.style.visibility !== "hidden";
+    hideTurnQuotaTooltip();
+    if (!visible) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
+  function hideTurnQuotaTooltip() {
+    const state = turnQuotaTooltipState;
+    cancelTurnQuotaTooltipShow();
+    cancelTurnQuotaTooltipClose();
+    if (state.positionFrame) cancelAnimationFrame(state.positionFrame);
+    state.positionFrame = 0;
+    if (state.listening) {
+      document.removeEventListener("scroll", handleTurnQuotaTooltipScroll, true);
+      document.removeEventListener("pointerdown", handleTurnQuotaTooltipOutside, true);
+      window.removeEventListener("keydown", handleTurnQuotaTooltipKeydown, true);
+    }
+    state.listening = false;
+    const popup = state.element;
+    state.element = null;
+    state.activeBinding = null;
+    state.hoveredBinding = null;
+    state.focusedBinding = null;
+    state.pointerWithin = false;
+    if (popup instanceof HTMLElement) {
+      popup.hidden = true;
+      popup.replaceChildren();
+      popup.remove();
+    }
+  }
+
   function buildTurnEndCounts(turn) {
     if (!turn || typeof turn !== "object") return { text: "", tooltip: "" };
     const itemCount = normalizeCount(turn.itemCount);
@@ -10392,6 +11129,258 @@
       text: parts.join(" / "),
       tooltip: "",
     };
+  }
+
+  // Keep each turn's credits separate from the latest complete entries for each window.
+  function buildTurnQuotaMap(items, turns) {
+    const latest = new Map();
+    if (!Array.isArray(items) || !(turns instanceof Map)) return latest;
+    for (const [turnId, turn] of turns) {
+      const entry = formatTurnCreditEntry(turn?.creditBalance);
+      if (entry) latest.set(turnId, [entry]);
+    }
+    for (const item of items) {
+      if (!item || item.type !== "usage") continue;
+      const turnId = normalizeTurnId(item.turnId);
+      if (!turnId || !turns.has(turnId)) continue;
+      const entries = [...(latest.get(turnId) || [])];
+      const seen = new Set();
+      for (const entry of formatTurnQuotaEntries(item)) {
+        const minutes = entry.windowMinutes;
+        if ((minutes !== 300 && minutes !== 10080) || seen.has(minutes)) continue;
+        seen.add(minutes);
+        const index = entries.findIndex((previous) => previous.windowMinutes === minutes);
+        if (index < 0) entries.push(entry);
+        else entries[index] = entry;
+      }
+      latest.set(turnId, entries);
+    }
+    return latest;
+  }
+
+  function formatTurnCreditEntry(balance) {
+    if (!balance || typeof balance !== "object" || Array.isArray(balance) ||
+      !Number.isSafeInteger(balance.remaining) || balance.remaining < 0) return null;
+    return {
+      kind: "credits",
+      label: formatTurnQuotaLabel(getSafeUiText(i18n.quotaCredits, localization.defaults.quotaCredits)),
+      remainingText: formatTemplate(getSafeUiText(i18n.quotaCreditsRemaining, localization.defaults.quotaCreditsRemaining),
+        getUsageNumber(balance.remaining)),
+      recordedValue: formatTurnQuotaRecorded(balance.recordedAtIso),
+    };
+  }
+
+  function normalizeQuotaText(value) {
+    return typeof value === "string" ? value.replace(/[\u0000-\u001f\u007f]/gu, "").trim().slice(0, 80) : "";
+  }
+
+  function formatTurnQuotaLabel(window) {
+    // Preserve separator spacing from the locale, including English trailing spaces.
+    const template = typeof i18n.quotaWindowLabel === "string" && i18n.quotaWindowLabel.trim()
+      ? i18n.quotaWindowLabel : localization.defaults.quotaWindowLabel;
+    return formatTemplate(template, window);
+  }
+
+  function formatTurnQuotaEntries(item) {
+    const limits = item?.rateLimits;
+    if (!limits || typeof limits !== "object" || Array.isArray(limits)) return [];
+    const entries = [];
+    const bucketId = normalizeQuotaText(limits.limitId);
+    const bucket = bucketId && bucketId !== "codex" ? normalizeQuotaText(limits.limitName) || bucketId : "";
+    let recordedValue = null;
+    for (const [index, name] of ["primary", "secondary"].entries()) {
+      const limit = limits[name];
+      const used = limit?.usedPercent;
+      if (!limit || typeof limit !== "object" || Array.isArray(limit) ||
+        typeof used !== "number" || !Number.isFinite(used) || used < 0 || used > Number.MAX_SAFE_INTEGER) continue;
+      const minutes = limit.windowMinutes;
+      const validMinutes = Number.isSafeInteger(minutes) && minutes > 0;
+      let label = minutes === 10080
+        ? getSafeUiText(i18n.quotaWeeklyWindow, localization.defaults.quotaWeeklyWindow)
+        : validMinutes && minutes % 1440 === 0
+          ? formatTemplate(getSafeUiText(i18n.quotaDaysWindow, localization.defaults.quotaDaysWindow), getUsageNumber(minutes / 1440))
+          : validMinutes && minutes % 60 === 0 && minutes < 1440
+            ? formatTemplate(getSafeUiText(i18n.quotaHoursWindow, localization.defaults.quotaHoursWindow), getUsageNumber(minutes / 60))
+            : validMinutes
+              ? formatTemplate(getSafeUiText(i18n.quotaMinutesWindow, localization.defaults.quotaMinutesWindow), getUsageNumber(minutes))
+              : formatTemplate(getSafeUiText(i18n.quotaUnknownWindow, localization.defaults.quotaUnknownWindow), index + 1);
+      if (bucket) label = formatTemplate(getSafeUiText(i18n.quotaBucketWindow, localization.defaults.quotaBucketWindow), bucket, label);
+      const remaining = Math.max(0, 100 - used);
+      // Preserve true zero/full boundaries while displaying only integer percentages.
+      const remainingText = used > 99 && used < 100
+        ? getSafeUiText(i18n.quotaRemainingBelow, localization.defaults.quotaRemainingBelow)
+        : used > 0 && used < 1
+          ? getSafeUiText(i18n.quotaRemainingAbove, localization.defaults.quotaRemainingAbove)
+          : formatTemplate(getSafeUiText(i18n.quotaRemaining, localization.defaults.quotaRemaining),
+            remaining.toLocaleString(undefined, { maximumFractionDigits: 0 }));
+      if (recordedValue === null) recordedValue = formatTurnQuotaRecorded(item.timestampIso);
+      entries.push({
+        label,
+        windowMinutes: validMinutes ? minutes : null,
+        remainingText,
+        recordedValue,
+        resetValue: formatTurnQuotaReset(limit, item.timestampIso),
+      });
+    }
+    if (entries.length === 2 && entries[0].label === entries[1].label) {
+      for (const [index, entry] of entries.entries()) {
+        entry.label = formatTemplate(getSafeUiText(i18n.quotaDuplicateWindow, localization.defaults.quotaDuplicateWindow), entry.label, index + 1);
+      }
+    }
+    for (const entry of entries) {
+      entry.label = formatTurnQuotaLabel(entry.label);
+    }
+    return entries;
+  }
+
+  function selectTurnQuotaEntries(entries, windows) {
+    const selected = normalizeTurnQuotaWindows(windows);
+    const available = Array.isArray(entries) ? entries : [];
+    // Credits follow both periods regardless of selection or source-record order.
+    return [["fiveHour", 300], ["weekly", 10080], ["credits", "credits"]]
+      .filter(([selection]) => selected.includes(selection))
+      .map(([, key]) => available.find((entry) => key === "credits"
+        ? entry?.kind === "credits" : entry?.windowMinutes === key) || createTurnQuotaPlaceholder(key));
+  }
+
+  function createTurnQuotaPlaceholder(minutes) {
+    const credits = minutes === "credits";
+    const window = credits
+      ? getSafeUiText(i18n.quotaCredits, localization.defaults.quotaCredits)
+      : minutes === 10080
+      ? getSafeUiText(i18n.quotaWeeklyWindow, localization.defaults.quotaWeeklyWindow)
+      : formatTemplate(getSafeUiText(i18n.quotaHoursWindow, localization.defaults.quotaHoursWindow), getUsageNumber(5));
+    return {
+      label: formatTurnQuotaLabel(window),
+      ...(credits ? { kind: "credits" } : { windowMinutes: minutes }),
+      remainingText: getSafeUiText(i18n.quotaRemainingUnavailable, localization.defaults.quotaRemainingUnavailable),
+      unavailable: true,
+      recordedValue: "",
+      resetValue: "",
+    };
+  }
+
+  // Normalize only valid recorded timestamps; never substitute the viewing time.
+  function parseTurnQuotaTimestamp(timestampIso) {
+    if (typeof timestampIso !== "string" || timestampIso.length > 128) return null;
+    const value = timestampIso.trim();
+    if (!value) return null;
+    const ms = Date.parse(value);
+    return Number.isFinite(ms) ? ms : null;
+  }
+
+  function formatTurnQuotaRecorded(timestampIso) {
+    const ms = parseTurnQuotaTimestamp(timestampIso);
+    return ms === null ? "" : formatIsoYmdHms(new Date(ms).toISOString());
+  }
+
+  function formatTurnQuotaReset(limit, timestampIso) {
+    if (!limit || typeof limit !== "object" || Array.isArray(limit)) return "";
+    let ms = null;
+    if (Number.isSafeInteger(limit.resetsAt) && limit.resetsAt >= 0) {
+      const absolute = limit.resetsAt * 1000;
+      if (Number.isFinite(new Date(absolute).getTime())) ms = absolute;
+    }
+    if (ms === null && Number.isSafeInteger(limit.resetsInSeconds) && limit.resetsInSeconds >= 0) {
+      const recordedMs = parseTurnQuotaTimestamp(timestampIso);
+      if (recordedMs !== null) {
+        const relative = recordedMs + limit.resetsInSeconds * 1000;
+        if (Number.isFinite(new Date(relative).getTime())) ms = relative;
+      }
+    }
+    if (ms === null) return "";
+    return formatIsoYmdHms(new Date(ms).toISOString());
+  }
+
+  function buildTurnQuotaTooltipSections(entries) {
+    if (!Array.isArray(entries)) return [];
+    const recordedLabel = getSafeUiText(i18n.quotaRecordedAt, localization.defaults.quotaRecordedAt);
+    const resetLabel = getSafeUiText(i18n.quotaResetAt, localization.defaults.quotaResetAt);
+    const unavailableValue = getSafeUiText(i18n.quotaUnavailableValue, localization.defaults.quotaUnavailableValue);
+    const unavailableDescription = getSafeUiText(i18n.quotaUnavailable, localization.defaults.quotaUnavailable);
+    return entries.map((entry) => ({
+      heading: entry.label + (entry.unavailable ? unavailableDescription : entry.remainingText),
+      rows: [
+        { label: recordedLabel, value: entry.recordedValue || unavailableValue,
+          descriptionValue: entry.recordedValue || unavailableDescription },
+        ...(entry.kind === "credits" ? [] : [
+          { label: resetLabel, value: entry.resetValue || unavailableValue,
+            descriptionValue: entry.resetValue || unavailableDescription },
+        ]),
+      ],
+    }));
+  }
+
+  function renderTurnQuotaGroup(turnId, descriptionOwner, ownerFocusable) {
+    if (turnQuotaWindows.length === 0 || !isTurnTimelineEnabled() || model?.meta?.historySource !== "codex" ||
+      !currentTurnSummaryById.has(turnId)) return null;
+    const allEntries = currentTurnQuotaById.get(turnId);
+    const entries = selectTurnQuotaEntries(allEntries, turnQuotaWindows);
+    if (entries.length === 0) return null;
+    const group = el("span", { className: "turnQuotaGroup" +
+      (entries.some((entry) => entry.kind === "credits") ? " turnQuotaGroup-hasCredits" : "") });
+    const sections = buildTurnQuotaTooltipSections(entries);
+    const descriptionJoin = getSafeUiText(i18n.quotaDescriptionJoin, localization.defaults.quotaDescriptionJoin);
+    const joinDescriptions = (parts) => parts.reduce((text, part, index) =>
+      index === 0 ? part : formatTemplate(descriptionJoin, text, part), "");
+    const focusOwner = ownerFocusable && descriptionOwner instanceof HTMLElement ? descriptionOwner : null;
+    const descriptions = sections.map((section) => joinDescriptions([section.heading,
+      ...section.rows.map((row) => row.label + " " + row.descriptionValue)]));
+    for (const [index, entry] of entries.entries()) {
+      const spanSections = [sections[index]];
+      const section = spanSections[0];
+      const span = el("span", { className: "turnQuota" });
+      span.append(el("span", { className: "turnQuotaWindow", textContent: entry.label }),
+        el("span", { className: "turnQuotaRemaining", textContent: entry.remainingText }));
+      // Keep decorative separators with the preceding item when the group wraps.
+      if (index < entries.length - 1) {
+        const separator = el("span", { className: "turnQuotaSeparator", textContent: " / " });
+        separator.setAttribute("aria-hidden", "true");
+        span.appendChild(separator);
+      }
+      span.setAttribute("role", "group");
+      span.setAttribute("aria-label", section.heading);
+      const id = "turn-quota-description-" + (++turnQuotaDescriptionSequence);
+      const description = el("span", { className: "turnQuotaDescription", id,
+        textContent: joinDescriptions(spanSections.map((part) => joinDescriptions([
+          ...(spanSections.length > 1 ? [part.heading] : []),
+          ...part.rows.map((row) => row.label + " " + row.descriptionValue),
+        ]))) });
+      span.setAttribute("aria-describedby", id);
+      if (!focusOwner) span.tabIndex = 0;
+      group.appendChild(span);
+      group.appendChild(description);
+      bindTurnQuotaTooltip(span, spanSections, { hover: true, focus: !focusOwner, focusOwner, showHeadings: spanSections.length > 1 });
+    }
+    if (focusOwner) {
+      const id = "turn-quota-description-" + (++turnQuotaDescriptionSequence);
+      const description = el("span", { className: "turnQuotaDescription", id,
+        textContent: joinDescriptions(descriptions) });
+      group.appendChild(description);
+      const existing = (focusOwner.getAttribute("aria-describedby") || "").trim().split(/\s+/u).filter(Boolean);
+      focusOwner.setAttribute("aria-describedby", [...new Set([...existing, id])].join(" "));
+      bindTurnQuotaTooltip(focusOwner, sections, { hover: false, focus: true, showHeadings: sections.length > 1 });
+    }
+    return group;
+  }
+
+  function renderTurnCounts(turn, turnId, extraClass, descriptionOwner, ownerFocusable = false) {
+    const counts = buildTurnEndCounts(turn);
+    const completed = normalizeTurnDisplayStatus(turn?.status) === "completed";
+    const quota = completed ? renderTurnQuotaGroup(turnId, descriptionOwner, ownerFocusable && canCollapseTurn(turn, turnId)) : null;
+    if (!counts.text && !quota) return null;
+    const countsEl = el("div", { className: "turnMarkerCounts" + (extraClass ? " " + extraClass : "") });
+    if (!quota) {
+      countsEl.textContent = counts.text;
+      return countsEl;
+    }
+    countsEl.classList.add("turnMarkerCounts-hasQuota");
+    if (counts.text) {
+      countsEl.appendChild(el("span", { className: "turnMarkerCountsText", textContent: counts.text }));
+      countsEl.appendChild(el("span", { className: "turnMarkerQuotaSeparator", textContent: " / " }));
+    }
+    countsEl.appendChild(quota);
+    return countsEl;
   }
 
   function normalizeCount(value) {
@@ -12027,7 +13016,9 @@
     if (typeof value !== "number" || !Number.isFinite(value)) return "";
     const ms = value * 1000;
     if (!Number.isFinite(ms)) return "";
-    return formatIsoYmdHms(new Date(ms).toISOString());
+    const date = new Date(ms);
+    if (!Number.isFinite(date.getTime())) return "";
+    return formatIsoYmdHms(date.toISOString());
   }
 
   function formatDurationSeconds(value) {
@@ -13072,6 +14063,7 @@
   function openImagePreview(images, index) {
     const previewImages = Array.isArray(images) ? images.filter(canPreviewImage).map(toPreviewImage) : [];
     if (previewImages.length === 0) return;
+    hideTurnQuotaTooltip();
     if (isMermaidPaneOpen()) closeMermaidPane({ restoreFocus: false });
     const safeIndex = Number.isFinite(index)
       ? Math.min(previewImages.length - 1, Math.max(0, Math.floor(index)))
@@ -18011,6 +19003,7 @@
       return;
     }
 
+    hideTurnQuotaTooltip();
     if (branchOverlayOpen) closeBranchOverlay({ restoreFocus: false, restorePageSearch: false });
     if (agentRunsOverlayOpen) closeAgentRunsOverlay({ restoreFocus: false });
     if (isImagePreviewOpen()) closeImagePreview();

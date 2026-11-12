@@ -17,6 +17,7 @@ import {
   extractClaudeMessageContent,
   extractClaudeRequestInterruptionContent,
   extractCodexMessageContent,
+  hasSuppressedInputAudioImageCandidate,
   selectClaudeControlContent,
 } from "../chat/chatAttachments";
 import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
@@ -209,7 +210,13 @@ async function renderCodexRecord(
     const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false }, { role });
     const text = normalizeWhitespace(extracted.text);
     const attachmentLines = buildAttachmentSummaryLines(extracted.attachments);
-    if (!text && attachmentLines.length === 0) return { handled: true, msgIndex, lastToolCallId };
+    if (!text && attachmentLines.length === 0) {
+      if (hasSuppressedInputAudioImageCandidate(obj?.payload?.content)) {
+        if (role === "user" || role === "assistant") msgIndex += 1;
+        lastToolCallId = undefined;
+      }
+      return { handled: true, msgIndex, lastToolCallId };
+    }
 
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
     const ctx = role !== "assistant" && isBoilerplateUserMessage(text) ? " (context)" : "";

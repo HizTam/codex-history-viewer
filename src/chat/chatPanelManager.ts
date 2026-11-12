@@ -1,6 +1,7 @@
 import { resolveUiLanguage } from "../i18n";
 import { buildWebviewI18n, postLocalizedMessage, localizationBootstrap } from "../localization/webviewLocalization";
 import * as path from "node:path";
+import { randomBytes } from "node:crypto";
 import { hasClaudeAgentPathShape, isClaudePathPart } from "../agents/claudeAgentMetadata";
 import { isBoundedSessionIdentityKey } from "../sessions/sessionIdentity";
 import * as vscode from "vscode";
@@ -19,6 +20,7 @@ import {
 import { type BookmarkStore, type BookmarkTarget } from "../services/bookmarkStore";
 import { isSafeSentFilePath } from "./claudeSentFiles";
 import { createTimelineBookmarkTargetBuilder } from "../services/bookmarkTargetResolver";
+import { copyTimelineBookmarkIndexOffset } from "../services/bookmarkIdentity";
 import { isClaudeProgressId } from "./claudeProgress";
 import { isClaudeQueuedInputId } from "./claudeQueuedInput";
 import { ClaudeNativeBookmarkReader, isClaudeBookmarkSessionId } from "../services/claudeNativeBookmarkReader";
@@ -88,6 +90,8 @@ import type { CodexForkNavigationSnapshot } from "../branchMap/codexForkNavigati
 import type { CodexAgentRunsService } from "../agents/codexAgentRunsService";
 import type {
   CodexAgentComponent,
+  CodexAgentComponentPager,
+  CodexAgentComponentPagedNode,
   CodexAgentRunsWebviewModel,
   CodexAgentRunsWebviewNode,
 } from "../agents/codexAgentRunsTypes";
@@ -225,6 +229,49 @@ type CodexAgentRunsPanelSnapshot = {
   pinTargetByNodeId: ReadonlyMap<string, string>;
   targets: ReadonlyMap<string, SessionSummary>;
   pinTargets: ReadonlyMap<string, SessionSummary>;
+  historyIndex?: ReturnType<HistoryService["getIndex"]>;
+  paging?: CodexAgentRunsPanelPaging;
+};
+type CodexAgentRunsDeliveryWork = {
+  message: Record<string, unknown>;
+  invalidate: () => void;
+  commit: () => void;
+};
+type CodexAgentRunsPanelPaging = {
+  historySource: "codex" | "claude";
+  pager: CodexAgentComponentPager;
+  lookupPager: CodexAgentComponentPager;
+  pageRevision: number;
+  continuationToken?: string;
+  publishedNodeIds: Set<string>;
+  nodePageRevisions: Map<string, number>;
+  pinPageRevisions: Map<string, number>;
+  presentationSignatures: Map<string, string>;
+  presentationRevision: number;
+  latestRequestId: number;
+  delivery: {
+    readyDelivered: boolean;
+    deliveredPageRevision: number;
+    needsDelivery: boolean;
+    inFlight: boolean;
+    attempt: number;
+    retryAttempt: number;
+    retryTimer?: ReturnType<typeof setTimeout>;
+    deadlineTimer?: ReturnType<typeof setTimeout>;
+    pinSignatures: Map<string, boolean>;
+    // Reserve sent revisions before dispatch so an older completion cannot restore an invalidated signature.
+    pinRevisions: Map<string, number>;
+    presentationRevisions: Map<string, number>;
+    pinResults: Map<string, Record<string, unknown>>;
+  };
+  lastResponse?: {
+    cursor: string;
+    basePageRevision: number;
+    pageRevision: number;
+    nodeIds: string[];
+    omittedCount: number;
+    continuationToken?: string;
+  };
 };
 type BranchNavigationSnapshot = ClaudeBranchNavigationSnapshot | CodexForkNavigationSnapshot;
 type BranchSwitchRequest = {
@@ -357,6 +404,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly branchCancellationByPanel = new WeakMap<vscode.WebviewPanel, vscode.CancellationTokenSource>();
   private readonly codexAgentRunsSnapshotByPanel = new WeakMap<vscode.WebviewPanel, CodexAgentRunsPanelSnapshot>();
   private readonly codexAgentRunsGenerationByPanel = new WeakMap<vscode.WebviewPanel, number>();
+  private readonly agentRunsPagingCapablePanels = new WeakSet<vscode.WebviewPanel>();
   private readonly codexAgentRunNavigationSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private readonly codexAgentRunNavigationClaimedSequenceByPanel = new WeakMap<vscode.WebviewPanel, number>();
   private readonly codexAgentRunPinSequenceByPanel = new WeakMap<vscode.WebviewPanel, Map<string, number>>();
@@ -502,6 +550,7 @@ export class ChatPanelManager implements vscode.Disposable {
         userLongMessageFolding,
         assistantLongMessageFolding,
         turnTimelineMode,
+        turnQuotaWindows: config.chatTurnQuotaWindows,
         stickyUserPrompt,
         imageSettings,
         chatOpenPosition: config.chatOpenPosition,
@@ -1405,8 +1454,10 @@ export class ChatPanelManager implements vscode.Disposable {
       this.branchPresentationSessionKeyByPanel.delete(panel);
       this.branchGenerationByPanel.delete(panel);
       this.branchHistoryGenerationByPanel.delete(panel);
+      this.cancelPagedAgentRunsDelivery(panel);
       this.codexAgentRunsSnapshotByPanel.delete(panel);
       this.codexAgentRunsGenerationByPanel.delete(panel);
+      this.agentRunsPagingCapablePanels?.delete(panel);
       this.titleRefreshSequenceByPanel.delete(panel);
       this.sessionDataRequestSequenceByPanel.delete(panel);
       this.sessionDataTransitionByPanel.delete(panel);
@@ -1672,6 +1723,7 @@ export class ChatPanelManager implements vscode.Disposable {
       type !== "switchClaudeBranch" &&
       type !== "openCodexAgentRun" &&
       type !== "toggleCodexAgentRunPin" &&
+      type !== "requestAgentRunsMore" &&
       !(await this.ensurePanelSessionFile(panel, state))
     ) {
       return;
@@ -1683,6 +1735,14 @@ export class ChatPanelManager implements vscode.Disposable {
         return;
       }
       case "ready": {
+        // A new Webview lifetime cannot reuse a prior continuation or pending result.
+        if (msg?.capabilities?.agentRunsPaging === true) this.agentRunsPagingCapablePanels?.add(panel);
+        else this.agentRunsPagingCapablePanels?.delete(panel);
+        if (this.codexAgentRunsSnapshotByPanel.get(panel)?.paging) {
+          this.nextCodexAgentRunsGeneration(panel);
+          this.codexAgentRunsSnapshotByPanel.delete(panel);
+          this.codexAgentRunPinRevisionByPanel.delete(panel);
+        }
         if (msg?.capabilities?.sessionModelReuse === 1) {
           this.sessionModelReuseCapablePanels.add(panel);
         } else {
@@ -2117,6 +2177,10 @@ export class ChatPanelManager implements vscode.Disposable {
         await this.handleOpenCodexAgentRun(panel, msg, requestSequence);
         return;
       }
+      case "requestAgentRunsMore": {
+        this.handleAgentRunsMoreRequest(panel, msg);
+        return;
+      }
       case "toggleCodexAgentRunPin": {
         await this.handleToggleCodexAgentRunPin(panel, msg, requestSequence);
         return;
@@ -2317,6 +2381,10 @@ export class ChatPanelManager implements vscode.Disposable {
   private publishCodexAgentRunPinState(panel: vscode.WebviewPanel): void {
     const snapshot = this.codexAgentRunsSnapshotByPanel.get(panel);
     if (!snapshot || !this.readyByPanel.get(panel)) return;
+    if (snapshot.paging) {
+      this.queuePagedAgentRunsDelivery(panel, snapshot);
+      return;
+    }
     const pinRevision = (this.codexAgentRunPinRevisionByPanel.get(panel) ?? 0) + 1;
     this.codexAgentRunPinRevisionByPanel.set(panel, pinRevision);
     const pinnedSessions = buildPinnedSessionLookup(this.pinStore);
@@ -2395,6 +2463,11 @@ export class ChatPanelManager implements vscode.Disposable {
     }
     if (!this.codexAgentRuns.isPresentationEnabled()) return;
 
+    if (this.agentRunsPagingCapablePanels?.has(panel)) {
+      this.publishPagedAgentRuns(panel, session);
+      return;
+    }
+
     const component = this.codexAgentRuns.buildComponent(session, t("codexAgentRuns.subagent"), t("codexAgentRuns.guardian"));
     if (!hasAgentRunsRelation(component)) {
       const generation = this.nextCodexAgentRunsGeneration(panel);
@@ -2464,7 +2537,7 @@ export class ChatPanelManager implements vscode.Disposable {
         title,
         titleIsCustom,
         taskLabel: node.isSubagent ? node.taskLabel : "",
-        agentRole: node.isSubagent ? node.agentRole : "",
+        agentRole: node.isSubagent ? sanitizeAgentRunWebviewText(node.agentRole, "", 120) : "",
         started: node.session ? formatAgentRunDateTime(node.session.startedLocalDate, node.session.startedTimeLabel) : "",
         lastActivity: node.session
           ? formatAgentRunDateTime(node.session.lastActivityLocalDate, node.session.lastActivityTimeLabel)
@@ -2515,6 +2588,495 @@ export class ChatPanelManager implements vscode.Disposable {
     }, "ready");
   }
 
+  private publishPagedAgentRuns(panel: vscode.WebviewPanel, session: SessionSummary): void {
+    const pager = this.codexAgentRuns.createComponentPager(
+      session, t("codexAgentRuns.subagent"), t("codexAgentRuns.guardian"),
+    );
+    if (!pager || !hasAgentRunsRelation(pager.initial)) {
+      const generation = this.nextCodexAgentRunsGeneration(panel);
+      this.codexAgentRunsSnapshotByPanel.delete(panel);
+      this.codexAgentRunPinSequenceByPanel.delete(panel);
+      this.codexAgentRunPinRevisionByPanel.delete(panel);
+      this.postCodexAgentRunsMessage(panel, {
+        type: "setCodexAgentRunsState", version: 2, generation, state: "empty", i18n: this.buildI18n(),
+      }, "empty");
+      return;
+    }
+    const previous = this.codexAgentRunsSnapshotByPanel.get(panel);
+    if (previous?.paging && previous.currentIdentityKey === session.identityKey && previous.relationKey === pager.relationKey) {
+      previous.historyIndex = this.historyService.getIndex();
+      previous.paging.lookupPager = pager;
+      this.queuePagedAgentRunsDelivery(panel, previous);
+      return;
+    }
+
+    const generation = this.nextCodexAgentRunsGeneration(panel);
+    const snapshot: CodexAgentRunsPanelSnapshot = {
+      generation, currentIdentityKey: session.identityKey, relationKey: pager.relationKey,
+      historyIndex: this.historyService.getIndex(),
+      navigationTargetByNodeId: new Map(), pinTargetByNodeId: new Map(), targets: new Map(), pinTargets: new Map(),
+      paging: {
+        historySource: session.source, pager, lookupPager: pager, pageRevision: 0,
+        ...(pager.initial.omittedCount > 0 ? { continuationToken: createAgentRunsContinuationToken() } : {}),
+        publishedNodeIds: new Set(), nodePageRevisions: new Map(), pinPageRevisions: new Map(),
+        presentationSignatures: new Map(), presentationRevision: 0, latestRequestId: 0,
+        delivery: {
+          readyDelivered: false, deliveredPageRevision: 0, needsDelivery: true, inFlight: false,
+          attempt: 0, retryAttempt: 0, pinSignatures: new Map(), pinRevisions: new Map(),
+          presentationRevisions: new Map(), pinResults: new Map(),
+        },
+      },
+    };
+    this.codexAgentRunsSnapshotByPanel.set(panel, snapshot);
+    this.codexAgentRunPinRevisionByPanel.set(panel, 0);
+    this.codexAgentRunPinSequenceByPanel.delete(panel);
+    this.queuePagedAgentRunsDelivery(panel, snapshot);
+  }
+
+  private mapPagedAgentRunsNodes(
+    snapshot: CodexAgentRunsPanelSnapshot,
+    sourceNodes: readonly CodexAgentComponentPagedNode[],
+    pageRevision: number,
+  ): CodexAgentRunsWebviewNode[] {
+    const paging = snapshot.paging!;
+    const navigationById = new Map(snapshot.navigationTargetByNodeId);
+    const pinById = new Map(snapshot.pinTargetByNodeId);
+    const targets = new Map(snapshot.targets);
+    const pinTargets = new Map(snapshot.pinTargets);
+    const pinned = buildPinnedSessionLookup(this.pinStore);
+    const bookmarked = new Set(this.bookmarkStore.getAll().map((entry) => entry.sessionCacheKey));
+    const mapped = sourceNodes.map((raw) => {
+      const original = paging.pager.getNode(raw.id) ?? raw;
+      const refreshed = paging.lookupPager.getNode(raw.id) ?? original;
+      // Ordering and targets belong to the original generation, not to refreshed sort metadata.
+      const node = { ...refreshed, orderIndex: original.orderIndex };
+      const navigationTarget = node.session && !node.isCurrent
+        ? navigationById.get(node.id) ?? `agent-run-${snapshot.generation}-${node.orderIndex}` : undefined;
+      const actionTarget = node.session
+        ? pinById.get(node.id) ?? `agent-pin-${snapshot.generation}-${node.orderIndex}` : undefined;
+      if (navigationTarget && node.session) {
+        navigationById.set(node.id, navigationTarget);
+        targets.set(navigationTarget, node.session);
+      }
+      if (actionTarget && node.session) {
+        pinById.set(node.id, actionTarget);
+        pinTargets.set(actionTarget, node.session);
+        if (!paging.pinPageRevisions.has(actionTarget)) paging.pinPageRevisions.set(actionTarget, pageRevision);
+      }
+      if (!paging.nodePageRevisions.has(node.id)) paging.nodePageRevisions.set(node.id, pageRevision);
+      paging.publishedNodeIds.add(node.id);
+      const annotation = node.session ? this.annotationStore.get(node.session.fsPath) : null;
+      const fallback = t(node.unavailableParent ? "codexAgentRuns.parentUnavailable" : "codexAgentRuns.untitled");
+      const titleIsCustom = Boolean(node.session?.customTitle);
+      const sanitized = sanitizeAgentRunWebviewText(node.session?.displayTitle, fallback);
+      const guardianTitle = node.session?.meta.codexAgent?.kind === "guardian" &&
+        sanitized.startsWith("The following is the Codex agent history");
+      const title = !titleIsCustom && (isSessionProtocolContextTitle(sanitized) || guardianTitle) ? fallback : sanitized;
+      const value: CodexAgentRunsWebviewNode = {
+        id: node.id, ...(node.parentId ? { parentId: node.parentId } : {}), orderIndex: node.orderIndex,
+        ...(navigationTarget ? { navigationTarget } : {}), ...(actionTarget ? { actionTarget } : {}),
+        title, titleIsCustom, taskLabel: node.isSubagent ? node.taskLabel : "",
+        agentRole: node.isSubagent ? sanitizeAgentRunWebviewText(node.agentRole, "", 120) : "",
+        started: node.session ? formatAgentRunDateTime(node.session.startedLocalDate, node.session.startedTimeLabel) : "",
+        lastActivity: node.session ? formatAgentRunDateTime(node.session.lastActivityLocalDate, node.session.lastActivityTimeLabel) : "",
+        directChildCount: Math.max(0, Math.min(1_000_000, node.directChildCount)),
+        isCurrent: node.isCurrent, isSubagent: node.isSubagent, unavailableParent: node.unavailableParent,
+        isPinned: Boolean(node.session && isSessionPinnedInLookup(pinned, node.session)),
+        isBookmarked: Boolean(node.session && bookmarked.has(node.session.cacheKey)),
+        hasTags: Boolean(annotation?.tags.length), hasNote: Boolean(annotation?.note.trim()),
+      };
+      return value;
+    });
+    snapshot.navigationTargetByNodeId = navigationById;
+    snapshot.pinTargetByNodeId = pinById;
+    snapshot.targets = targets;
+    snapshot.pinTargets = pinTargets;
+    return mapped;
+  }
+
+  private isCurrentPagedAgentRunsDelivery(panel: vscode.WebviewPanel, snapshot: CodexAgentRunsPanelSnapshot): boolean {
+    const state = this.stateByPanel.get(panel);
+    const current = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
+    return Boolean(snapshot.paging && this.codexAgentRunsSnapshotByPanel.get(panel) === snapshot &&
+      this.agentRunsPagingCapablePanels.has(panel) && this.readyByPanel.get(panel) &&
+      getConfig().agentRunsEnabled && this.codexAgentRuns.isPresentationEnabled() &&
+      this.historyService.isCurrentIndexForConfig(getConfig()) && snapshot.historyIndex === this.historyService.getIndex() &&
+      current?.identityKey === snapshot.currentIdentityKey && current.source === snapshot.paging.historySource);
+  }
+
+  private cancelPagedAgentRunsDelivery(panel: vscode.WebviewPanel): void {
+    const delivery = this.codexAgentRunsSnapshotByPanel.get(panel)?.paging?.delivery;
+    if (!delivery) return;
+    if (delivery.retryTimer) clearTimeout(delivery.retryTimer);
+    if (delivery.deadlineTimer) clearTimeout(delivery.deadlineTimer);
+    delivery.retryTimer = undefined;
+    delivery.deadlineTimer = undefined;
+    delivery.attempt += 1;
+    delivery.inFlight = false;
+    delivery.needsDelivery = false;
+  }
+
+  private queuePagedAgentRunsDelivery(panel: vscode.WebviewPanel, snapshot: CodexAgentRunsPanelSnapshot): void {
+    const delivery = snapshot.paging!.delivery;
+    delivery.needsDelivery = true;
+    delivery.retryAttempt = 0;
+    if (delivery.retryTimer) clearTimeout(delivery.retryTimer);
+    delivery.retryTimer = undefined;
+    this.flushPagedAgentRunsDelivery(panel, snapshot);
+  }
+
+  private recoverUndeliveredPagedAgentRuns(panel: vscode.WebviewPanel): void {
+    if (this.agentRunsPagingCapablePanels?.has(panel) &&
+      this.codexAgentRunsSnapshotByPanel.get(panel)?.paging?.delivery.needsDelivery) {
+      this.publishCodexAgentRuns(panel);
+    }
+  }
+
+  private schedulePagedAgentRunsRetry(panel: vscode.WebviewPanel, snapshot: CodexAgentRunsPanelSnapshot): void {
+    const delivery = snapshot.paging!.delivery;
+    const delay = [250, 1000, 3000][delivery.retryAttempt++];
+    if (delay === undefined || !this.isCurrentPagedAgentRunsDelivery(panel, snapshot)) return;
+    if (delivery.retryTimer) clearTimeout(delivery.retryTimer);
+    delivery.retryTimer = setTimeout(() => {
+      delivery.retryTimer = undefined;
+      this.flushPagedAgentRunsDelivery(panel, snapshot);
+    }, delay);
+    delivery.retryTimer.unref();
+  }
+
+  private flushPagedAgentRunsDelivery(panel: vscode.WebviewPanel, snapshot: CodexAgentRunsPanelSnapshot): void {
+    const delivery = snapshot.paging!.delivery;
+    if (delivery.inFlight || !this.isCurrentPagedAgentRunsDelivery(panel, snapshot)) return;
+    let work: CodexAgentRunsDeliveryWork | undefined;
+    try {
+      work = this.createPagedAgentRunsDeliveryWork(panel, snapshot);
+    } catch (error) {
+      this.logger?.debug(`codexAgentRuns.prepareDelivery failed error=${sanitizeDebugError(error)}`);
+      this.schedulePagedAgentRunsRetry(panel, snapshot);
+      return;
+    }
+    if (!work) {
+      delivery.needsDelivery = false;
+      delivery.retryAttempt = 0;
+      return;
+    }
+    const attempt = ++delivery.attempt;
+    delivery.inFlight = true;
+    const finish = (delivered: boolean): void => {
+      if (this.codexAgentRunsSnapshotByPanel.get(panel) !== snapshot || delivery.attempt !== attempt || !delivery.inFlight) return;
+      if (delivery.deadlineTimer) clearTimeout(delivery.deadlineTimer);
+      delivery.deadlineTimer = undefined;
+      delivery.inFlight = false;
+      if (!this.isCurrentPagedAgentRunsDelivery(panel, snapshot)) {
+        delivery.needsDelivery = true;
+        return;
+      }
+      if (!delivered) {
+        this.schedulePagedAgentRunsRetry(panel, snapshot);
+        return;
+      }
+      work!.commit();
+      delivery.retryAttempt = 0;
+      this.flushPagedAgentRunsDelivery(panel, snapshot);
+    };
+    delivery.deadlineTimer = setTimeout(() => finish(false), 15000);
+    delivery.deadlineTimer.unref();
+    work.invalidate();
+    void this.deliverPagedAgentRunsMessage(panel, work.message).then(finish);
+  }
+
+  private createPagedAgentRunsDeliveryWork(
+    panel: vscode.WebviewPanel, snapshot: CodexAgentRunsPanelSnapshot,
+  ): CodexAgentRunsDeliveryWork | undefined {
+    const paging = snapshot.paging!;
+    const delivery = paging.delivery;
+    if (!delivery.readyDelivered) {
+      const initial = paging.pager.initial;
+      const nodes = this.mapPagedAgentRunsNodes(snapshot, initial.nodes, 0);
+      const pinRevision = this.nextCodexAgentRunPinRevision(panel);
+      const presentationRevision = ++paging.presentationRevision;
+      return {
+        message: {
+          type: "setCodexAgentRunsState", version: 2, generation: snapshot.generation, state: "ready",
+          model: {
+            sessionCount: initial.sessionCount, agentCount: initial.agentCount, relationPartial: initial.relationPartial,
+            omittedCount: initial.omittedCount, totalNodeCount: initial.totalNodeCount, pageRevision: 0,
+            ...(paging.continuationToken ? { continuationToken: paging.continuationToken } : {}),
+            pinRevision, presentationRevision, nodes,
+          }, i18n: this.buildI18n(),
+        },
+        invalidate: () => this.invalidatePagedAgentRunsSnapshots(snapshot, {
+          pin: { revision: pinRevision, targets: nodes.flatMap((node) => node.actionTarget ? [node.actionTarget] : []) },
+          presentation: { revision: presentationRevision, nodeIds: nodes.map((node) => node.id) },
+        }),
+        commit: () => {
+          delivery.readyDelivered = true;
+          this.commitPagedAgentRunsNodeSnapshots(snapshot, nodes, pinRevision, presentationRevision);
+        },
+      };
+    }
+    const result = delivery.pinResults.entries().next().value as [string, Record<string, unknown>] | undefined;
+    if (result) {
+      const [target, message] = result;
+      return { message, invalidate: () => {
+        if (typeof message.isPinned === "boolean") {
+          this.invalidatePagedAgentRunsSnapshots(snapshot, { pin: { revision: Number(message.pinRevision), targets: [target] } });
+        }
+      }, commit: () => {
+        if (delivery.pinResults.get(target) === message) delivery.pinResults.delete(target);
+        const revision = Number(message.pinRevision);
+        if (typeof message.isPinned === "boolean" && Number.isSafeInteger(revision) &&
+          (delivery.pinRevisions.get(target) ?? -1) <= revision) {
+          delivery.pinRevisions.set(target, revision);
+          delivery.pinSignatures.set(target, message.isPinned);
+        }
+      } };
+    }
+    const pinned = buildPinnedSessionLookup(this.pinStore);
+    const pinStates: { target: string; isPinned: boolean }[] = [];
+    let pinPage: number | undefined;
+    for (const [target, session] of snapshot.pinTargets) {
+      const page = paging.pinPageRevisions.get(target);
+      if (page === undefined || page > delivery.deliveredPageRevision) continue;
+      const isPinned = isSessionPinnedInLookup(pinned, session);
+      if (delivery.pinSignatures.get(target) === isPinned) continue;
+      if (pinPage === undefined) pinPage = page;
+      if (page === pinPage) pinStates.push({ target, isPinned });
+      if (pinStates.length === 500) break;
+    }
+    if (pinStates.length > 0) {
+      const pinRevision = this.nextCodexAgentRunPinRevision(panel);
+      return {
+        message: { type: "setCodexAgentRunPinState", version: 2, generation: snapshot.generation,
+          pinRevision, requiredPageRevision: pinPage, states: pinStates },
+        invalidate: () => this.invalidatePagedAgentRunsSnapshots(snapshot, {
+          pin: { revision: pinRevision, targets: pinStates.map((state) => state.target) },
+        }),
+        commit: () => {
+          for (const state of pinStates) {
+            if ((delivery.pinRevisions.get(state.target) ?? -1) > pinRevision) continue;
+            delivery.pinRevisions.set(state.target, pinRevision);
+            delivery.pinSignatures.set(state.target, state.isPinned);
+          }
+        },
+      };
+    }
+    const source = Array.from(paging.publishedNodeIds, (id) => paging.lookupPager.getNode(id))
+      .filter((node): node is CodexAgentComponentPagedNode => Boolean(node));
+    const nodes = this.mapPagedAgentRunsNodes(snapshot, source, paging.pageRevision);
+    const changed: { id: string; state: Record<string, unknown>; signature: string }[] = [];
+    let presentationPage: number | undefined;
+    for (const node of nodes) {
+      const page = paging.nodePageRevisions.get(node.id)!;
+      if (page > delivery.deliveredPageRevision) continue;
+      const state = toAgentRunsPresentationState(node);
+      const signature = JSON.stringify(state);
+      if (paging.presentationSignatures.get(node.id) === signature) continue;
+      if (presentationPage === undefined) presentationPage = page;
+      if (page === presentationPage) changed.push({ id: node.id, state, signature });
+      if (changed.length === 500) break;
+    }
+    if (changed.length < 1) return undefined;
+    const presentationRevision = ++paging.presentationRevision;
+    return {
+      message: { type: "codexAgentRunsPresentationStates", version: 2, generation: snapshot.generation,
+        presentationRevision, requiredPageRevision: presentationPage, states: changed.map((entry) => entry.state) },
+      invalidate: () => this.invalidatePagedAgentRunsSnapshots(snapshot, {
+        presentation: { revision: presentationRevision, nodeIds: changed.map((entry) => entry.id) },
+      }),
+      commit: () => {
+        for (const entry of changed) {
+          if ((delivery.presentationRevisions.get(entry.id) ?? -1) > presentationRevision) continue;
+          delivery.presentationRevisions.set(entry.id, presentationRevision);
+          paging.presentationSignatures.set(entry.id, entry.signature);
+        }
+      },
+    };
+  }
+
+  private invalidatePagedAgentRunsSnapshots(
+    snapshot: CodexAgentRunsPanelSnapshot,
+    sent: {
+      pin?: { revision: number; targets: readonly string[] };
+      presentation?: { revision: number; nodeIds: readonly string[] };
+    },
+  ): void {
+    const paging = snapshot.paging!;
+    const delivery = paging.delivery;
+    // Until dispatch is acknowledged, even a return to the last confirmed value must be projected again.
+    if (sent.pin) {
+      for (const target of sent.pin.targets) {
+        if ((delivery.pinRevisions.get(target) ?? -1) > sent.pin.revision) continue;
+        delivery.pinRevisions.set(target, sent.pin.revision);
+        delivery.pinSignatures.delete(target);
+      }
+    }
+    if (sent.presentation) {
+      for (const id of sent.presentation.nodeIds) {
+        if ((delivery.presentationRevisions.get(id) ?? -1) > sent.presentation.revision) continue;
+        delivery.presentationRevisions.set(id, sent.presentation.revision);
+        paging.presentationSignatures.delete(id);
+      }
+    }
+  }
+
+  private commitPagedAgentRunsNodeSnapshots(
+    snapshot: CodexAgentRunsPanelSnapshot, nodes: readonly CodexAgentRunsWebviewNode[],
+    pinRevision: number, presentationRevision: number,
+  ): void {
+    const paging = snapshot.paging!;
+    const delivery = paging.delivery;
+    for (const node of nodes) {
+      if (node.actionTarget && (delivery.pinRevisions.get(node.actionTarget) ?? -1) <= pinRevision) {
+        delivery.pinRevisions.set(node.actionTarget, pinRevision);
+        delivery.pinSignatures.set(node.actionTarget, node.isPinned);
+      }
+      if ((delivery.presentationRevisions.get(node.id) ?? -1) <= presentationRevision) {
+        delivery.presentationRevisions.set(node.id, presentationRevision);
+        paging.presentationSignatures.set(node.id, JSON.stringify(toAgentRunsPresentationState(node)));
+      }
+    }
+  }
+
+  private deliverPagedAgentRunsMessage(panel: vscode.WebviewPanel, message: Record<string, unknown>): Promise<boolean> {
+    try {
+      return Promise.resolve(postLocalizedMessage(panel.webview, "chat", message,
+        { historySource: this.stateByPanel.get(panel)?.historySource })).then((delivered) => delivered === true, (error) => {
+          this.logger?.debug(`codexAgentRuns.delivery failed error=${sanitizeDebugError(error)}`);
+          return false;
+        });
+    } catch (error) {
+      this.logger?.debug(`codexAgentRuns.delivery failed error=${sanitizeDebugError(error)}`);
+      return Promise.resolve(false);
+    }
+  }
+
+  private handleAgentRunsMoreRequest(panel: vscode.WebviewPanel, msg: any, allowIndexRevalidation = true): void {
+    const snapshot = this.codexAgentRunsSnapshotByPanel.get(panel);
+    const paging = snapshot?.paging;
+    const requestId = sanitizePositiveSequence(msg?.requestId);
+    const basePageRevision = msg?.pageRevision;
+    const cursor = typeof msg?.continuationToken === "string" && /^[a-f0-9]{48}$/u.test(msg.continuationToken)
+      ? msg.continuationToken : "";
+    const validEnvelope = msg?.version === 2 && requestId > 0 && Number.isSafeInteger(msg?.generation) &&
+      Number.isSafeInteger(basePageRevision) && basePageRevision >= 0 && cursor &&
+      Object.keys(msg).every((key) => ["type", "version", "generation", "pageRevision", "continuationToken", "requestId"].includes(key));
+    const state = this.stateByPanel.get(panel);
+    const current = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
+    const validSnapshot = snapshot && paging && this.agentRunsPagingCapablePanels?.has(panel) &&
+      paging.delivery.readyDelivered &&
+      this.readyByPanel.get(panel) && getConfig().agentRunsEnabled && this.codexAgentRuns.isPresentationEnabled() &&
+      this.historyService.isCurrentIndexForConfig(getConfig()) && snapshot.generation === msg?.generation &&
+      current?.identityKey === snapshot.currentIdentityKey && current.source === paging.historySource &&
+      requestId >= paging.latestRequestId;
+    const replay = paging?.lastResponse;
+    const isReplay = Boolean(replay && replay.cursor === cursor && replay.basePageRevision === basePageRevision);
+    const validContinuation = isReplay || (paging && paging.continuationToken === cursor &&
+      paging.pageRevision === basePageRevision && requestId > paging.latestRequestId);
+    if (!validEnvelope || !validSnapshot || !validContinuation || !snapshot || !paging) {
+      this.postCodexAgentRunsMessage(panel, {
+        type: "codexAgentRunsPage", version: 2, ok: false, generation: msg?.generation,
+        requestId, basePageRevision, reason: "unavailable",
+      }, "pageRejected");
+      return;
+    }
+    if (snapshot.historyIndex !== this.historyService.getIndex()) {
+      // Revalidate only an otherwise valid request, and never retry the refresh itself.
+      if (allowIndexRevalidation) {
+        try {
+          this.publishCodexAgentRuns(panel);
+        } catch {
+          this.logger?.debug("codexAgentRuns.page revalidation failed");
+          this.postCodexAgentRunsMessage(panel, {
+            type: "codexAgentRunsPage", version: 2, ok: false, generation: snapshot.generation,
+            requestId, basePageRevision, reason: "unavailable",
+          }, "pageRejected");
+          return;
+        }
+        this.handleAgentRunsMoreRequest(panel, msg, false);
+        return;
+      }
+      this.postCodexAgentRunsMessage(panel, {
+        type: "codexAgentRunsPage", version: 2, ok: false, generation: snapshot.generation,
+        requestId, basePageRevision, reason: "unavailable",
+      }, "pageRejected");
+      return;
+    }
+    if (isReplay && replay) {
+      paging.latestRequestId = requestId;
+      this.postAgentRunsPage(panel, snapshot, replay, requestId);
+      return;
+    }
+    try {
+      const page = paging.pager.nextPage();
+      if (page.nodes.length < 1 || page.nodes.length > 500 || page.totalNodeCount !== paging.pager.totalNodeCount ||
+          page.omittedCount !== page.totalNodeCount - paging.publishedNodeIds.size - page.nodes.length ||
+          page.nodes.some((node) => paging.publishedNodeIds.has(node.id))) throw new Error("Invalid agent page");
+      const result: NonNullable<CodexAgentRunsPanelPaging["lastResponse"]> = {
+        cursor, basePageRevision, pageRevision: basePageRevision + 1,
+        nodeIds: page.nodes.map((node) => node.id), omittedCount: page.omittedCount,
+        ...(page.omittedCount > 0 ? { continuationToken: createAgentRunsContinuationToken() } : {}),
+      };
+      paging.latestRequestId = requestId;
+      paging.pageRevision = result.pageRevision;
+      paging.continuationToken = result.continuationToken;
+      paging.lastResponse = result;
+      this.postAgentRunsPage(panel, snapshot, result, requestId);
+    } catch (error) {
+      this.logger?.debug(`codexAgentRuns.page failed error=${sanitizeDebugError(error)}`);
+      this.postCodexAgentRunsMessage(panel, {
+        type: "codexAgentRunsPage", version: 2, ok: false, generation: snapshot.generation,
+        requestId, basePageRevision, reason: "unavailable",
+      }, "pageFailed");
+    }
+  }
+
+  private postAgentRunsPage(
+    panel: vscode.WebviewPanel,
+    snapshot: CodexAgentRunsPanelSnapshot,
+    response: NonNullable<CodexAgentRunsPanelPaging["lastResponse"]>,
+    requestId: number,
+  ): void {
+    const paging = snapshot.paging!;
+    const source = response.nodeIds.map((id) => paging.lookupPager.getNode(id) ?? paging.pager.getNode(id));
+    if (source.some((node) => !node)) {
+      this.logger?.debug("codexAgentRuns.page missing-node");
+      this.postCodexAgentRunsMessage(panel, {
+        type: "codexAgentRunsPage", version: 2, ok: false, generation: snapshot.generation,
+        requestId, basePageRevision: response.basePageRevision, reason: "unavailable",
+      }, "pageFailed");
+      return;
+    }
+    const nodes = this.mapPagedAgentRunsNodes(snapshot, source as CodexAgentComponentPagedNode[], response.pageRevision);
+    const pinRevision = this.nextCodexAgentRunPinRevision(panel);
+    const presentationRevision = ++paging.presentationRevision;
+    this.invalidatePagedAgentRunsSnapshots(snapshot, {
+      pin: { revision: pinRevision, targets: nodes.flatMap((node) => node.actionTarget ? [node.actionTarget] : []) },
+      presentation: { revision: presentationRevision, nodeIds: nodes.map((node) => node.id) },
+    });
+    void this.deliverPagedAgentRunsMessage(panel, {
+      type: "codexAgentRunsPage", version: 2, ok: true, generation: snapshot.generation,
+      requestId, basePageRevision: response.basePageRevision, pageRevision: response.pageRevision,
+      nodes, omittedCount: response.omittedCount,
+      ...(response.continuationToken ? { continuationToken: response.continuationToken } : {}),
+      pinRevision, presentationRevision,
+    }).then((delivered) => {
+      if (!delivered || this.codexAgentRunsSnapshotByPanel.get(panel) !== snapshot) return;
+      // Transport acknowledgement remains valid for this generation even while its index is being refreshed.
+      paging.delivery.deliveredPageRevision = Math.max(paging.delivery.deliveredPageRevision, response.pageRevision);
+      if (this.isCurrentPagedAgentRunsDelivery(panel, snapshot)) {
+        this.commitPagedAgentRunsNodeSnapshots(snapshot, nodes, pinRevision, presentationRevision);
+      }
+      this.queuePagedAgentRunsDelivery(panel, snapshot);
+    });
+  }
+
+  private nextCodexAgentRunPinRevision(panel: vscode.WebviewPanel): number {
+    const revision = (this.codexAgentRunPinRevisionByPanel.get(panel) ?? 0) + 1;
+    this.codexAgentRunPinRevisionByPanel.set(panel, revision);
+    return revision;
+  }
+
   private postCodexAgentRunsMessage(
     panel: vscode.WebviewPanel,
     message: Record<string, unknown>,
@@ -2533,6 +3095,7 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private nextCodexAgentRunsGeneration(panel: vscode.WebviewPanel): number {
+    this.cancelPagedAgentRunsDelivery(panel);
     const generation = (this.codexAgentRunsGenerationByPanel.get(panel) ?? 0) + 1;
     this.codexAgentRunsGenerationByPanel.set(panel, generation);
     return generation;
@@ -2746,6 +3309,9 @@ export class ChatPanelManager implements vscode.Disposable {
     const currentSession = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
     return Boolean(
       this.codexAgentRuns.isPresentationEnabled() &&
+      (!requestSnapshot.paging || (requestSnapshot.historyIndex === this.historyService.getIndex() &&
+        requestSnapshot.paging.historySource === currentSession?.source &&
+        this.historyService.isCurrentIndexForConfig(getConfig()))) &&
       snapshot === requestSnapshot &&
       snapshot.generation === generation &&
       isSameCodexAgentRunTarget(snapshot.pinTargets.get(target), session) &&
@@ -2764,15 +3330,28 @@ export class ChatPanelManager implements vscode.Disposable {
     success: boolean,
     isPinned?: boolean,
   ): void {
-    this.postCodexAgentRunsMessage(panel, {
+    const snapshot = this.codexAgentRunsSnapshotByPanel.get(panel);
+    const paging = snapshot?.generation === generation ? snapshot.paging : undefined;
+    const pinRevision = paging && isPinned !== undefined
+      ? this.nextCodexAgentRunPinRevision(panel)
+      : this.codexAgentRunPinRevisionByPanel.get(panel) ?? 0;
+    const message = {
       type: "codexAgentRunPinResult",
-      version: 1,
+      version: this.agentRunsPagingCapablePanels?.has(panel) ? 2 : 1,
       generation,
       target,
       requestId,
       success,
+      ...(paging ? { pinRevision, requiredPageRevision: paging.pinPageRevisions.get(target) ?? 0 } : {}),
       ...(isPinned !== undefined ? { isPinned } : {}),
-    }, "pinResult");
+    };
+    if (paging && snapshot && snapshot.pinTargets.has(target)) {
+      const previous = paging.delivery.pinResults.get(target);
+      if (!previous || Number(previous.requestId) <= requestId) paging.delivery.pinResults.set(target, message);
+      this.queuePagedAgentRunsDelivery(panel, snapshot);
+    } else {
+      this.postCodexAgentRunsMessage(panel, message, "pinResult");
+    }
   }
 
   private isCurrentCodexAgentRunNavigation(
@@ -2789,6 +3368,9 @@ export class ChatPanelManager implements vscode.Disposable {
     const currentSession = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
     return Boolean(
       this.codexAgentRuns.isPresentationEnabled() &&
+      (!requestSnapshot.paging || (requestSnapshot.historyIndex === this.historyService.getIndex() &&
+        requestSnapshot.paging.historySource === currentSession?.source &&
+        this.historyService.isCurrentIndexForConfig(getConfig()))) &&
       snapshot === requestSnapshot &&
       snapshot.generation === generation &&
       isSameCodexAgentRunTarget(snapshot.targets.get(target), session) &&
@@ -4047,6 +4629,8 @@ export class ChatPanelManager implements vscode.Disposable {
       stickyUserPrompt: config.stickyUserPrompt,
       turnTimelineMode: config.chatTurnTimelineMode,
       chatPerformanceMode: config.chatPerformanceMode,
+      // Read presentation-only settings after asynchronous model loading to avoid stale updates.
+      turnQuotaWindows: getConfig().chatTurnQuotaWindows,
       performanceStats,
       toolDisplayMode: config.toolDisplayMode,
       userLongMessageFolding: config.userLongMessageFolding,
@@ -4077,6 +4661,9 @@ export class ChatPanelManager implements vscode.Disposable {
     if (!reusesDeliveredAutoRefreshModel) {
       this.scheduleBranchNavigation(panel);
       this.publishCodexAgentRuns(panel);
+    } else {
+      // A no-op transcript refresh must still recover an undelivered companion snapshot.
+      this.recoverUndeliveredPagedAgentRuns(panel);
     }
     const delivered = await delivery;
     if (delivered) {
@@ -5208,6 +5795,19 @@ function buildCodexAgentRunsRelationKey(component: CodexAgentComponent, currentI
   });
 }
 
+function createAgentRunsContinuationToken(): string {
+  // Tokens are scoped through the panel snapshot and never encode a session or file path.
+  return randomBytes(24).toString("hex");
+}
+
+function toAgentRunsPresentationState(node: CodexAgentRunsWebviewNode): Record<string, unknown> {
+  return {
+    id: node.id, title: node.title, titleIsCustom: node.titleIsCustom,
+    taskLabel: node.taskLabel, agentRole: node.agentRole, started: node.started, lastActivity: node.lastActivity,
+    directChildCount: node.directChildCount, isBookmarked: node.isBookmarked, hasTags: node.hasTags, hasNote: node.hasNote,
+  };
+}
+
 function isSameCodexAgentRunTarget(
   current: SessionSummary | undefined,
   requested: SessionSummary,
@@ -5250,9 +5850,10 @@ function formatAgentRunDateTime(localDate: string | undefined, timeLabel: string
   return date && time ? `${date} ${time}` : date || time;
 }
 
-function sanitizeAgentRunWebviewText(value: unknown, fallback: string): string {
+function sanitizeAgentRunWebviewText(value: unknown, fallback: string, maxLength = 320): string {
   const text = typeof value === "string" ? value.trim() : "";
-  return text && text.length <= 320 && !/[\u0000-\u001f\u007f]/u.test(text) ? text : fallback;
+  // Omit invalid optional text without rejecting the surrounding agent model or page.
+  return text && text.length <= maxLength && !/[\u0000-\u001f\u007f]/u.test(text) ? text : fallback;
 }
 
 function randomNonce(): string {
@@ -5555,7 +6156,7 @@ function toWebviewChatSessionModel(model: ChatSessionModel, detailMode: ChatSess
 function toFullWebviewChatSessionModel(model: ChatSessionModel): ChatSessionModel {
   return {
     ...model,
-    items: model.items.map((item) => toFullWebviewTimelineItem(item)),
+    items: model.items.map((item) => copyTimelineBookmarkIndexOffset(item, toFullWebviewTimelineItem(item))),
   };
 }
 
@@ -5573,7 +6174,7 @@ function toFullWebviewTimelineItem(item: ChatTimelineItem): ChatTimelineItem {
 function toSummaryChatSessionModel(model: ChatSessionModel): ChatSessionModel {
   return {
     ...model,
-    items: model.items.map((item) => toSummaryTimelineItem(item)),
+    items: model.items.map((item) => copyTimelineBookmarkIndexOffset(item, toSummaryTimelineItem(item))),
   };
 }
 

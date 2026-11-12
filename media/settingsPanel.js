@@ -615,7 +615,9 @@
     const root = element("div", "multi-select");
     const selected = Array.isArray(setting.value) ? setting.value : [];
     const selectedOptions = (setting.options || []).filter((item) => selected.includes(item.value));
-    const triggerText = selectedOptions.map((item) => item.label).join(", ");
+    const allowEmptySelection = setting.allowEmptySelection === true;
+    const emptyLabel = typeof setting.emptySelectionLabel === "string" ? setting.emptySelectionLabel : "";
+    const triggerText = selectedOptions.map((item) => item.label).join(", ") || emptyLabel;
     const trigger = button("", "multi-trigger");
     trigger.disabled = disabled;
     trigger.setAttribute("aria-label", setting.label + ": " + triggerText);
@@ -627,6 +629,9 @@
       const token = element("span", "multi-token", item.label);
       token.title = item.description || item.label;
       tokens.append(token);
+    }
+    if (selectedOptions.length === 0 && emptyLabel) {
+      tokens.append(element("span", "multi-token", emptyLabel));
     }
     trigger.append(tokens, createIcon("chevron-down", "multi-trigger-chevron"));
     trigger.addEventListener("click", () => {
@@ -674,7 +679,7 @@
           const next = selectedItem
             ? selected.filter((value) => value !== item.value)
             : selected.concat(item.value);
-          if (next.length === 0) {
+          if (next.length === 0 && !allowEmptySelection) {
             settingStatuses.set(setting.key, {
               message: snapshot.labels.selectAtLeastOne,
               error: true

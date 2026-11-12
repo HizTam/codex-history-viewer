@@ -1,5 +1,33 @@
 import { readCodexFileChangeEvent } from "../sessions/codexFileChangeEvents";
 
+const timelineBookmarkIndexOffset = Symbol("timelineBookmarkIndexOffset");
+type TimelineBookmarkIndexOffsetMetadata = { [timelineBookmarkIndexOffset]?: unknown };
+
+// Keep removed-card offsets in memory and preserve them through ordinary object spreads.
+export function setTimelineBookmarkIndexOffset(item: object, offset: number): void {
+  if (!Number.isSafeInteger(offset) || offset < 0) {
+    throw new RangeError("Timeline bookmark index offset must be a non-negative safe integer.");
+  }
+  Object.defineProperty(item, timelineBookmarkIndexOffset, {
+    value: offset,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
+export function getTimelineBookmarkIndexOffset(item: object): number {
+  if (!item || typeof item !== "object") return 0;
+  const offset = (item as TimelineBookmarkIndexOffsetMetadata)[timelineBookmarkIndexOffset];
+  return typeof offset === "number" && Number.isSafeInteger(offset) && offset >= 0 ? offset : 0;
+}
+
+export function copyTimelineBookmarkIndexOffset<T extends object>(source: object, target: T): T {
+  const offset = getTimelineBookmarkIndexOffset(source);
+  if (offset > 0) setTimelineBookmarkIndexOffset(target, offset);
+  return target;
+}
+
 // Builds stable cross-view IDs for bookmark targets that originate from JSONL records.
 export function buildCodexPatchBookmarkGroupId(obj: unknown, fallbackIndex?: number): string {
   const event = readCodexFileChangeEvent(obj);

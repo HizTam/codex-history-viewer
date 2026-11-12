@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.20.2",
+  "version": "2.21.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -6560,6 +6560,29 @@
           "description": "%cfg.chatTurnTimelineMode%",
           "scope": "window",
           "order": 106
+        },
+        "codexHistoryViewer.chat.turnQuota.windows": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string",
+            "enum": [
+              "weekly",
+              "fiveHour",
+              "credits"
+            ],
+            "enumItemLabels": [
+              "%cfg.chatTurnQuotaWindows.labelWeekly%",
+              "%cfg.chatTurnQuotaWindows.labelFiveHour%",
+              "%cfg.chatTurnQuotaWindows.labelCredits%"
+            ]
+          },
+          "uniqueItems": true,
+          "minItems": 0,
+          "maxItems": 3,
+          "description": "%cfg.chatTurnQuotaWindows%",
+          "scope": "window",
+          "order": 107
         },
         "codexHistoryViewer.images.enabled": {
           "type": "boolean",

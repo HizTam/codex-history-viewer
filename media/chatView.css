@@ -2697,6 +2697,21 @@ body.vscode-high-contrast-light .agentRunsTreeViewport {
   box-shadow: 0 3px 10px rgba(0, 0, 0, .12);
 }
 
+/* Match the centered load controls without styling the legacy omitted notice. */
+.agentRunsTreeNode.omitted.agentRunsLoadControls {
+  display: grid;
+  justify-items: center;
+  width: 100%;
+  min-height: 0;
+  margin-left: 0;
+  margin-top: 12px;
+  border: 0;
+  border-radius: 0;
+  padding: 10px 0 2px;
+  background: transparent;
+  box-shadow: none;
+}
+
 .agentRunsTreeNode.located {
   animation: agentRunsLocateCurrent 820ms ease-out;
 }
@@ -3560,6 +3575,238 @@ body.vscode-high-contrast-light .branchTreeViewport {
   .runningTurnFallbackChip.runningTurnChip {
     gap: 5px;
     padding: 7px 10px;
+  }
+}
+
+.agentRunsReadMore {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 116px;
+  min-height: 30px;
+  border: 1px solid color-mix(in srgb, var(--chv-border) 86%, transparent);
+  border-radius: 6px;
+  padding: 4px 10px;
+  background: color-mix(in srgb, var(--chv-tool-bg) 68%, transparent);
+  color: var(--chv-fg);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.agentRunsReadMore:hover:not([aria-disabled="true"]) {
+  border-color: color-mix(in srgb, var(--chv-accent) 48%, var(--chv-border) 52%);
+  background: color-mix(in srgb, var(--chv-accent) 8%, var(--chv-tool-bg) 92%);
+}
+
+.agentRunsReadMore:active:not([aria-disabled="true"]) {
+  background: color-mix(in srgb, var(--chv-accent) 12%, var(--chv-tool-bg) 88%);
+}
+
+.agentRunsReadMore:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: 2px;
+}
+
+.agentRunsReadMore[aria-disabled="true"] {
+  opacity: 0.7;
+  cursor: progress;
+}
+
+.turnQuotaGroup,
+.turnQuota {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.turnQuotaGroup {
+  flex: 0 1 auto;
+  column-gap: 0;
+  row-gap: 8px;
+}
+
+.turnQuotaSeparator {
+  flex: 0 0 auto;
+  white-space: pre;
+}
+
+/* Keep selected credits readable without changing the existing period-only layout. */
+.turnQuotaGroup-hasCredits {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.turnQuotaGroup-hasCredits .turnQuota {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+
+.turnQuotaGroup-hasCredits .turnQuotaRemaining {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.turnQuota {
+  color: var(--chv-muted);
+  white-space: nowrap;
+}
+
+.turnQuotaWindow {
+  min-width: 0;
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.turnQuotaRemaining {
+  flex: 0 0 auto;
+}
+
+.turnQuota:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+.turnQuotaDescription {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Keep the visible date table aligned without duplicating its accessible descriptions. */
+.turnQuotaTooltip {
+  position: fixed;
+  z-index: 110;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px 10px;
+  box-sizing: border-box;
+  max-width: min(560px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: auto;
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--chv-border));
+  border-radius: 5px;
+  padding: 8px 10px;
+  background: var(--vscode-editorHoverWidget-background, var(--chv-tool-bg));
+  color: var(--vscode-editorHoverWidget-foreground, var(--chv-fg));
+  box-shadow: 0 4px 12px rgba(0, 0, 0, .28);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  pointer-events: auto;
+  cursor: default;
+}
+
+.turnQuotaTooltip[hidden] {
+  display: none;
+}
+
+.turnQuotaTooltipRow {
+  display: contents;
+}
+
+.turnQuotaTooltipLabel {
+  align-self: start;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.turnQuotaTooltipValue {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+
+.turnQuotaTooltipHeading {
+  grid-column: 1 / -1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+
+.turnQuotaTooltipHeading:not(:first-child) {
+  margin-top: 5px;
+}
+
+body.vscode-high-contrast .turnQuotaTooltip,
+body.vscode-high-contrast-light .turnQuotaTooltip {
+  border-color: var(--vscode-contrastBorder, var(--chv-border));
+}
+
+.turnMarkerCounts-hasQuota {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: min(760px, 65vw);
+}
+
+.turnMarkerCountsText {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.turnMarkerQuotaSeparator {
+  flex: 0 0 auto;
+  white-space: pre;
+}
+
+.runningTurnAnchorRow > .runningTurnChip-hasQuota {
+  justify-self: stretch;
+}
+
+.runningTurnChip-hasQuota .turnQuotaGroup {
+  margin-left: auto;
+  padding-left: 8px;
+}
+
+/* Keep the anchored divider visible between metadata and the right-aligned quota. */
+.runningTurnAnchorRow > .runningTurnChip-hasQuota .runningTurnChipLastActivity {
+  flex-grow: 0;
+}
+
+.runningTurnAnchorRow > .runningTurnChip-hasQuota .turnQuotaGroup {
+  flex: 1 1 auto;
+  padding-left: 0;
+}
+
+.runningTurnAnchorRow > .runningTurnChip-hasQuota .turnQuotaGroup::before {
+  content: "";
+  flex: 1 1 0;
+  margin-right: 8px;
+  height: 1px;
+  background: color-mix(in srgb, var(--chv-fg) 14%, var(--chv-border) 86%);
+}
+
+@media (max-width: 640px) {
+  .runningTurnChip-hasQuota .runningTurnChipLastActivity {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .turnMarkerLine-hasQuota {
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+  }
+
+  .turnMarkerCounts-hasQuota {
+    max-width: 58vw;
+    padding-left: 3px;
+  }
+
+  .turnMarkerCounts-hasQuota .turnMarkerCountsText,
+  .turnMarkerCounts-hasQuota .turnMarkerQuotaSeparator,
+  .runningTurnChip-hasQuota .runningTurnChipElapsed {
+    display: none;
   }
 }
 

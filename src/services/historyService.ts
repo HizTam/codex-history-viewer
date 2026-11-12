@@ -50,7 +50,7 @@ interface HistoryInputStamp {
   readonly size: number;
 }
 
-const SUMMARY_CACHE_ALGO_VERSION = 30;
+const SUMMARY_CACHE_ALGO_VERSION = 31;
 const HISTORY_REFRESH_CONCURRENCY = 4;
 
 interface CacheFileV9 {

@@ -2,6 +2,13 @@
   "schemaVersion": 1,
   "dynamicRuntime": [
     {
+      "file": "src/settingsPanel/settingsPanelManager.ts",
+      "expression": "definitionItem.emptySelectionLabelKey",
+      "keys": [
+        "settingsPanel.setting.chat.turnQuota.windows.emptyLabel"
+      ]
+    },
+    {
       "file": "src/extension.ts",
       "expression": "`history.filter.compression.${historyCompressionFilter}`",
       "keys": [

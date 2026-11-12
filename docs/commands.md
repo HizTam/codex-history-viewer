@@ -165,6 +165,12 @@ Use **Open Parent Session** to open a sub-agent's parent session.
 
 Use the open icon on an Agent Runs node to open that history. An already open target keeps its tab mode. A new target opens in a separate tab with the source viewer's dedicated or temporary mode; the source viewer and other temporary tabs keep their contents.
 
+Use **Load more** in Agent Runs to display additional items beyond the initial display limits for Codex or Claude Code.
+
+## Usage Limits
+
+For Codex, use **Open Settings > Session View > Usage limits** to select **Weekly limit**, **5-hour limit**, and **Credits** individually. The display is off by default and requires Basic or Live turn timeline mode.
+
 ## Session Actions
 
 The toggle immediately to the right of **Custom Title** switches the current viewer between a dedicated tab and a temporary tab. Its tooltip shows the current state: **Dedicated tab** or **Temporary tab**. It preserves the displayed history and its scroll, selection, search, and expanded cards. Other temporary tabs remain unchanged. Selecting a new history reuses the most recently active temporary tab; an already open dedicated tab for that history takes precedence. Multiple temporary tabs survive window restoration when **Restore extension tabs after reload** is enabled, and changing tab mode preserves Branch Navigation. This header control has no Command Palette command and is independent of pinning.

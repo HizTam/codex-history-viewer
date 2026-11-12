@@ -24,6 +24,7 @@ import {
   extractClaudeMessageContent,
   extractClaudeRequestInterruptionContent,
   extractCodexMessageContent,
+  hasSuppressedInputAudioImageCandidate,
   isCodexProtocolContextContent,
   isCodexTurnAbortedContent,
   selectClaudeControlContent,
@@ -60,7 +61,7 @@ import {
   readCodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
 
-const SEARCH_INDEX_FILE_VERSION = 36;
+const SEARCH_INDEX_FILE_VERSION = 37;
 const SEARCH_STAT_CONCURRENCY = 8;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
@@ -1002,7 +1003,13 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
     const text = normalizeWhitespace(
       [messageText, buildAttachmentSearchText(extracted.attachments)].filter(Boolean).join("\n"),
     );
-    if (!text && extracted.attachments.length === 0 && !suppressMessageText) return true;
+    if (!text && extracted.attachments.length === 0 && !suppressMessageText) {
+      // Hidden audio keeps existing anchors without creating a search entry.
+      if ((role === "user" || role === "assistant") && hasSuppressedInputAudioImageCandidate(obj?.payload?.content)) {
+        state.messageIndex += 1;
+      }
+      return true;
+    }
 
     if (role === "user" || role === "assistant") state.messageIndex += 1;
     const anchor = Math.max(1, state.messageIndex);

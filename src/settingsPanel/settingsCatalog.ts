@@ -41,6 +41,8 @@ export interface SettingsDefinition {
   step?: number;
   unitKey?: string;
   options?: readonly SettingsOptionDefinition[];
+  allowEmptySelection?: boolean;
+  emptySelectionLabelKey?: string;
   dependency?: SettingsDependency;
   presentation?: "resumeActions";
 }
@@ -393,6 +395,23 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
       resourceImpact: true
     }
   ),
+  definition(
+    "chat.turnQuota.windows",
+    "session",
+    "session.content",
+    "multi",
+    "window",
+    [],
+    {
+      options: ["weekly", "fiveHour", "credits"].map((value) =>
+        option("chat.turnQuota.windows", value)
+      ),
+      allowEmptySelection: true,
+      emptySelectionLabelKey: "settingsPanel.setting.chat.turnQuota.windows.emptyLabel",
+      sourceBadge: "codex",
+      resourceImpact: true
+    }
+  ),
   definition("agentRuns.enabled", "session", "session.navigation", "switch", "application", false, {
     resourceImpact: true
   }),
@@ -639,7 +658,7 @@ export function validateSettingValue(
   if (!Array.isArray(input)) {
     return { ok: false, error: "invalid" };
   }
-  if (input.length === 0) {
+  if (input.length === 0 && definitionItem.allowEmptySelection !== true) {
     return { ok: false, error: "empty" };
   }
   if (input.length > allowedValues.length) {
@@ -684,6 +703,10 @@ export function normalizeSettingValue(
   }
 
   if (definitionItem.control === "multi" && Array.isArray(input)) {
+    // Keep quota presentation consistent with the runtime's all-or-nothing selection parser.
+    if (definitionItem.relativeKey === "chat.turnQuota.windows") {
+      return { value: cloneSettingValue(definitionItem.defaultValue), invalid: true };
+    }
     const allowedValues = definitionItem.options?.map((item) => item.value) ?? [];
     const supplied = new Set(input.filter((item): item is string => typeof item === "string"));
     const filtered = allowedValues.filter((item) => supplied.has(item));

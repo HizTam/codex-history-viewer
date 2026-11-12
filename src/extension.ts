@@ -2341,6 +2341,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       const chatOpenPositionChanged = e.affectsConfiguration("codexHistoryViewer.chat.openPosition");
       const chatPerformanceModeChanged = e.affectsConfiguration("codexHistoryViewer.chat.performanceMode");
       const chatTurnTimelineModeChanged = e.affectsConfiguration("codexHistoryViewer.chat.turnTimeline.mode");
+      const chatTurnQuotaWindowsChanged = e.affectsConfiguration("codexHistoryViewer.chat.turnQuota.windows");
       const toolDisplayModeChanged = e.affectsConfiguration("codexHistoryViewer.chat.toolDisplayMode");
       const userLongMessageFoldingChanged = e.affectsConfiguration("codexHistoryViewer.chat.userLongMessageFolding");
       const assistantLongMessageFoldingChanged = e.affectsConfiguration(
@@ -2376,6 +2377,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
         !chatOpenPositionChanged &&
         !chatPerformanceModeChanged &&
         !chatTurnTimelineModeChanged &&
+        !chatTurnQuotaWindowsChanged &&
         !toolDisplayModeChanged &&
         !longMessageFoldingChanged &&
         !imagesChanged &&

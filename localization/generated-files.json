@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "files": {
-    "l10n/bundle.l10n.ja.json": "902b9afbcf89761f6495fd817a4aa5a0cdd6c9cdf503498ef1080155b981a6a4",
-    "package.nls.ja.json": "2e28caa2755d416d9e840f8e1c2fbf0abee72d73d7bd647b9bf1308c0b115b2a",
-    "l10n/bundle.l10n.json": "5ba4bc4ff3a3bfdbe40177c086b43996a9dc8fd2c29bacabc29ecf30b2a246bd",
-    "package.nls.en.json": "e3e2839b604e5be0f769e9637365279d885e3244644cbaadadf0d1353b7f9a77",
-    "package.nls.json": "e3e2839b604e5be0f769e9637365279d885e3244644cbaadadf0d1353b7f9a77",
-    "src/generated/localeCatalog.ts": "ed08da52d7cdf762b8c2c4e9750e10f7c48e7f5a76204a8f50133037be73bb4f",
-    "src/generated/defaultRuntimeMessages.ts": "c790eeb26d6cd69b7b2ce1c11916b8eabb9b705174f98f5a54a970b0b4250f06",
+    "l10n/bundle.l10n.ja.json": "18edc08fc065e84d6e9f885ab3c332f0eb5dec51e178edd22ae14eda366335dc",
+    "package.nls.ja.json": "ae9f77a8d44373844873268f284df9e409b2bfbbd6f6d9906697ab04fdcdea96",
+    "l10n/bundle.l10n.json": "f5ce2bd137e8d8deae270dd2d7229b5a31939d810528d4888bfe587e47852b51",
+    "package.nls.en.json": "0d6373ee0d7aa8f6261c500ef1952c9b2c5ddd45e39c6874dfcba68d72c7d49c",
+    "package.nls.json": "0d6373ee0d7aa8f6261c500ef1952c9b2c5ddd45e39c6874dfcba68d72c7d49c",
+    "src/generated/localeCatalog.ts": "ae5aeed7049a63a9137ad508f88184acfd8391795fd65cc43146910832a4ea9c",
+    "src/generated/defaultRuntimeMessages.ts": "fa7f77f507d7a674b43160a32820c6aef5fbae6f7eefa85161b71384b782edde",
     "src/generated/uiCommandAliases.ts": "a26347a9a023d8ffbc5e442d0b159a63b2fe6da59083a5fce82bdb96c60727f2",
-    "src/generated/webviewI18n.ts": "0318a9fac537d5a377e572ec2af91679946e794f823bdced1b5823cc1696eee4",
-    "media/generated/localization.js": "b4436fd7dcece6414e61a3eec2858eae1e2d8bdccf3c39d818adff9a2ab5ff39"
+    "src/generated/webviewI18n.ts": "9605b08484d8df0210eb13362d10de266c4a5b05c1c6a9520f375da50eb84194",
+    "media/generated/localization.js": "5ffbea203035e39453042ab2ecc08a4a32da88057354669fa2d48f3584e6c3cc"
   },
   "packageHash": "925e726b5c21961abd66e3467f16ccde25fceb441e60e092d22dc72e015efdcd"
 }

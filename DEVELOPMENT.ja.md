@@ -1,7 +1,7 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-11-10
-- 対象バージョン: 2.20.2
+- 最終更新: 2026-11-12
+- 対象バージョン: 2.21.0
 
 ## 1. 概要
 
@@ -112,6 +112,9 @@
 - ページ内検索のツールカード補足情報は、個々の表示タグを` · `で区切る。送信ファイルカードは、ヘッダーに表示済みの状態コードと同じ詳細状態タグを省く。配信警告と実行成功など異なる状態、終了コード・所要時間・エラー詳細は残す。非成功の送信結果で実行状態に中断・キャンセルが記録されていれば、ヘッダーにもそのラベルを使う。
 - Codexの `agent_message.memory_citation` は `partial_answer` を含むphaseで利用する。本文と判明しているphase／turnが一致するassistantへだけ結合し、イベント先行にも対応する。本文内の引用を優先し、user入力・turn開始／終了／中断を越えて保留引用を持ち越さない。
 - Unicode改行などの互換対応時に、派生cacheはHistory summary algorithm `28`、Search index `34`、Codex Analysis parser `18`、Claude Analysis parser `17`へ更新した。元履歴のsize／mtimeが変わらない場合も再解析する。履歴や注釈を変更しない。以前Unicode改行で読み落としていた発言が復旧すると番号が変わり得るため、その場合の旧しおりを番号だけで推測して付け替えない。
+
+- Codexの既知 `input_audio` は画像候補と完全抽出の両方で画像から除外する。誤画像が消費していたuser/assistantの番号枠は維持し、本文・添付・引用のない一時messageだけを全record処理後に除く。引用が後着した場合は既存targetへ結合して残す。Search／Markdownも番号枠を維持し、File AIと差分詳細の後続参照を変えない
+- 音声message除去後のしおりキーには、除去数の累積offsetをprivate Symbol metadataで引き継ぐ。Hostのfull／summary変換でも保持し、最終配列からのlegacy indexへfallback用offsetだけを加える。先頭の不完全履歴noteを含めて既存キーを維持し、保存形式やWebviewの通常propertyは増やさない。元履歴・注釈・既生成Handoffは書き換えず、音声再生や参照先取得は追加しない
 
 ### 3.0.7 Claude Code の圧縮保全参照と自動終了
 
@@ -393,10 +396,10 @@
 
 | 対象 | 実装の定数 | 現行値 |
 | --- | --- | ---: |
-| History summary | `SUMMARY_CACHE_ALGO_VERSION` | 30 |
-| Search index | `SEARCH_INDEX_FILE_VERSION` | 36 |
-| Codex Analysis | `SESSION_ANALYSIS_CODEX_PARSER_VERSION` | 18 |
-| Claude Code Analysis | `SESSION_ANALYSIS_CLAUDE_PARSER_VERSION` | 19 |
+| History summary | `SUMMARY_CACHE_ALGO_VERSION` | 31 |
+| Search index | `SEARCH_INDEX_FILE_VERSION` | 37 |
+| Codex Analysis | `SESSION_ANALYSIS_CODEX_PARSER_VERSION` | 19 |
+| Claude Code Analysis | `SESSION_ANALYSIS_CLAUDE_PARSER_VERSION` | 20 |
 | Codex Branch Navigation | `CODEX_FORK_NAVIGATION_ALGORITHM_VERSION` | 6 |
 
 - 履歴キャッシュ:
@@ -430,7 +433,7 @@
   - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
   - 保存先: `globalStorageUri/search-index.v3.jsonl`
-  - 内部 file version: 36（保存形式番号1とは独立）
+  - 内部 file version: 37（保存形式番号1とは独立）
   - 用途: 繰り返し検索を高速化する増分インデックス
   - 認識済み形式の `search-index.v3.jsonl` で、UTF-8復号後のJSON構文破損、または必須レコード欠落によるEOFを検出した場合は、`parseError` として破損内容を退避せず削除し、次回検索時に再構築する。不正UTF-8（文字途中の切断を含む）は `readError` として削除しない
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
@@ -459,7 +462,7 @@
   - 用途: History Insights の統計と Claude Code Branch Navigation の構造化 occurrence を共用する差分解析キャッシュ。履歴キャッシュや検索インデックスの代替にはしない
   - History Insights、Claude Code Branch Navigation、または `Rebuild Cache` を要求したときだけ lazy load / lazy build し、拡張機能の起動や通常の History / Search 表示を待たせない
   - セッションごとの `cacheKey`、source、`mtime`、`size`、parser version と、sessions root / 有効ソースを含む cache context を検証し、変更された entry だけを再解析する
-  - 現行source parser versionはCodex `18` / Claude Code `19`とする。圧縮保全参照・自動終了分類に未対応のClaude version 18以下のentryは再解析し、有効なCodex entryは保持する。Claudeの編集結果とBash差分を反映しないversion 12 entryは再解析する。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析する
+  - 現行source parser versionはCodex `19` / Claude Code `20`とする。音声参照の誤画像分類修正前のCodex18以下／Claude19以下のentryは既存version検証で再計算する。以下は過去更新時の対応記録である。圧縮保全参照・自動終了分類に未対応のClaude version 18以下のentryは再解析し、有効なCodex entryは保持する。Claudeの編集結果とBash差分を反映しないversion 12 entryは再解析する。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析する
   - 既存 Chat model builder と同じ抽出結果を使って message index、turn、usage、file change、ツール名別呼び出し回数を集計し、解析側で独自の message index を採番しない
   - 同一セッションの重複解析を共有し、全体の更新、保存、clear は直列化する。進捗通知とキャンセルに対応する
   - 破損 JSON は削除して次回要求時に再生成し、権限エラーなどの read error では既存ファイルを削除しない
@@ -650,6 +653,12 @@
 - start marker は turn 開始位置だけを示し、`完了` などの終了状態は end marker にだけ出す
 - start marker には activity / status dot を出さず、静的な開始境界として表示する
 - end marker は turn の最後の表示 item の直後に出し、item 数、tool 数、変更数、入力 / 出力 / 合計 token を表示する。token 合計がない場合だけ usage 記録件数へフォールバックする
+- Codexの利用枠は、本文内の実行中表示の右端と、完了・折りたたみ要約では合計を含む全countの後へ「週の利用枠：残り33％」の形式で表示する。割合は整数へ四捨五入し、端点は「1％未満」「99％超」で0％/100％の誤表示を防ぐ。元のusage値や詳細表示は変えない。フローティングには利用枠を表示せず、既存のターン情報とジャンプ操作を維持する。枠の期間はprimary / secondaryの位置ではなく記録された分数から決める。Claudeへは追加しない
+- `chat.turnQuota.windows`はwindow scopeで既定`[]`。ターンタイムラインの`basic`または`live`が必要。専用設定画面のターンタイムライン直後にCodex限定・パフォーマンスバッヂ付きの複数選択チップを置く。選択肢は「週利用枠」／「5時間利用枠」／「クレジット」、保存値は`weekly`／`fiveHour`／`credits`。最大3項目を選べ、既存の選択にクレジットを自動追加しない。未選択はオフと表示し、選択肢ごとの説明は付けない。quotaだけ空選択を許し、他multi/Resumeの空禁止は維持する。設定・通信の配列は要素/重複/長さを厳密検証し、不正なら全体を未選択へ戻す。未リリースの旧quota modeとの互換・移行は設けない。変更は位置を保持して即時反映し、未選択ではquota抽出・DOM・tooltipを省く。非同期sessionDataは送信時の最新配列を使い、描画keyにも正規順配列を含める
+- クレジットはtoken_countのrate_limits.creditsから有限の非負十進文字列を検証し、小数の先頭桁によって整数へ四捨五入する。丸め後がsafe integerでない値は採用しない。既存TurnBuildEntryが残高と当該記録の日時を一体で所有し、ChatTurnSummary.creditBalanceへ配信する。usage生成・重複判定・token集計・Insightsのquota snapshotとは分離し、残高だけ更新された場合や丸め後同値でも記録日時を更新する。info欠損でも既知turnだけ更新でき、未知turnや架空usageは作らない。同turn内の最終有効値を維持し、未取得は`-`。クレジットのtooltipは記録日時の1行だけで、リセット予定は付けない。日時欠損時は他記録から補完しない。クレジット選択時だけ項目を右寄せで折り返し、狭幅でも残高が重ならないようにする。残高文字列自体が幅を超える場合も文字単位で折り返し、クレジット未選択時の既存レイアウトは維持する。利用枠とクレジットの表示項目間は集計欄と同じ` / `で区切る。装飾の区切りは読み上げ説明に含めず、狭幅では前の項目と一緒に折り返す。
+- 利用枠は配信済みmodelから求め、実行中・完了の両方で、各期間の同じturn内の最終有効entryを使用する。後続usageの欠損・不正や片枠だけの更新では別期間のentryを消さず、新しい有効値が届いた期間の割合・label/bucket・記録日時・resetを一体で置換する。同期間内でも日時やresetだけを昔のentryから補完しない。選択枠が一度も取得できていなければ割合欄を`-`、支援技術向けは不明とする。他期間への代替はしない。300／10080分の完全一致で区別し、slot・文字列・似た期間から推測しない。本文は5時間枠・週枠・クレジットの順とし、選択したクレジットを最右端に置く。未選択項目は表示しない。次turn・別session・model切詰めから復活させるcache、新規採取・外部API・推計は追加しない。`Show details`に依存せず、Claude/floating/ターン表示offでは追加しない
+- 利用枠付きの実行中anchored行でも、最終活動等と右端利用枠の空き領域に既存と同じ色・1px高の横線を保つ。quotaなしの横線とfallbackの座布団・dotは従来どおりにする
+- 枠部分の専用tooltipは当該の選択枠だけの「記録日時」「リセット予定」2行を2列で表示し、日英ともlabelを右寄せしてcolonを揃える。割合を採用した同じusageのtimestampを記録日時に使い、有効な絶対reset時刻を優先し、相対秒数だけなら同timestampを基準に変換する。閲覧時刻やreset到来で値・文字色を変えない。日時は既存timezoneに従い、取得不能の日時欄は「—」、支援技術向けは「不明」／`Not available`。複数選択時のcollapsed owner focusだけは選択した項目を見出し付きでまとめ、未選択枠はtooltip/ARIAにも出さない。hover・focusで表示し、popupへのpointer移動でも維持し、Escape・scroll・再描画・非表示・overlayで閉じる。通常spanはgroupのnameと静的description、折りたたみ行は既存操作名と選択枠descriptionを持つ。visual popupは重複読み上げせず、Tab/クリックでfocusを奪わない。記録時点という注意書きは加えない
 - completed turn は start marker 側の toggle で手動折りたたみ / 展開できる。折りたたみ状態は Webview 内の同一セッション UI 状態として保持し、JSONL / globalState / 検索 index には保存しない
 - 折りたたみ中の completed turn は、本文 row と通常 end marker を隠し、start marker を collapsed summary marker に切り替える。summary には `開始` / `終了`、開始時刻、終了時刻、所要時間、item / tool / patch / token summary を集約する。狭い viewport では `ターン N`、toggle、`開始` / `終了` badge を折り返さず、時刻、所要時間、件数、token summary などの補助情報を ellipsis または非表示にして表示崩れを避ける
 - turn marker の toggle は本文側の固定幅 slot ではなく、turn rail 上または rail-control lane に置き、`ターン N` の開始位置を rail のすぐ右で揃える
@@ -880,7 +889,13 @@
 - card 本体は静的な treeitem とし、利用可能な別 node の header 右端にある `セッションを開く` アイコンだけを移動操作にする。hover / focus-within では card と icon を強調し、icon の active 中は押下状態を示す。current、missing parent、省略 node は移動可能に見せない
 - 移動先のセッションタブが開いていれば保持状態を維持して reveal する。未 open なら開き元が一時の場合は独立した新しい一時タブ、専用の場合は新しい専用タブを開く。Codex／Claude、通常／branchのどちらも保持状態を使う。元 panel や他の一時タブの session、scroll、search、details state を置き換えない。非同期確認中の元タブの保持状態変更では古いopenを確定しない
 - ペイン幅はドラッグで変更して Webview state に保存するが、ペインの open 状態は Reload Window 後に復元しない。Branch Navigation overlay、page search と同時には開かない
-- Webview では表示 node 500 件、depth 64、parent ごとの child 200 件を上限とし、current path を優先して省略件数を表示する。partial relation、missing parent、stale navigation target は確認できた範囲だけを表示し、元の JSONL や注釈を変更しない
+- Agent RunsはCodex / Claude Code共通で、初期表示を最大500 node・親直下200 child・探索深さ64とし、current pathを優先する。超過分は中央の「続きを読み込む（残りN件）」ボタンから、1回最大500 node・同一親の追加200件・境界からの探索深さ64で段階的に追加できる。操作行には大きなcard背景・枠・影・最小高さを付けず、AI変更履歴と同じ寸法・色調のボタンだけを表示する。loading/再試行/focus/anchorは維持し、旧V1の省略通知・関係品質警告とは分離する。種別フィルタやGuardian非表示切替は追加しない
+- 対応 Webview は ready capability によって Agent Runs protocol version 2 を使い、Host が管理する panel・relation generation・pageRevision・opaque continuation token を検証して続きを要求する。V1 の非対応 Webview は従来の bounded 表示に縮退する。表示済み集合の追加は有効な要求への応答だけを atomic に適用し、重複・旧世代・不正入力を追加しない
+- Agent Runsの任意のrole表示は、HostのV1/V2配信時に既存の表示文字列helperでtrim後120 UTF-16 code unitsまでへ検証し、超過・非文字列・内部C0/DELは空へ戻す。nodeやページ全体は失わず、元のClaude agentType（256まで）・Serviceのmetadataは保持する。初期・追加・再送・presentationのsignatureは同じ正規化済み表示値を使い、Webviewの厳格な応答全体検証は維持する
+- 後続 node も全 component の一意な orderIndex で並べる。未表示親への参照は操作 target にせず、確認済みの親が追加された時点で描画する。関係・深さ・順序は反復走査し、深い階層で call stack を使い切らない。接続線の座標も反復集計し、累積した兄弟数が関数の引数上限に達しないようにする。追加前の visible node を anchor とし、上側へ祖先・sibling が入っても閲覧位置を保つ
+- 同じ relation の表示項目・Pin の更新では展開済み集合と cursor を保持する。構造・対象セッション・設定変更では失効させ、Webview reload / ウィンドウ復元では初期表示から開始する。Pin は target ごと、タイトル等は node ごとの revision を比較し、逆順の部分通知と次ページより先着した更新を失わない。partial relation、missing parent、stale navigation target は確認できた範囲だけを扱い、元の JSONL や注釈を変更しない
+- 追加要求の失敗・timeout後は、overlayを開き直しても自動再試行せず、同cursorの手動操作を待つ。要求中に閉じた場合だけ再openで未適用pageを再要求する。再開意思とPin/presentationの保留revisionは分離する。共通scroll領域はgroup、履歴nodeのlayerは名前付きtreeとし、外側cardはrole=noneで内側treeitemの意味を保持する。V2の追加操作行はtree外の後続兄弟に置いて既存のTab・矢印・focus/anchor・中央配置を維持する
+- 正規の追加要求で、最新graph準備済み・panel snapshotのindex参照だけが古い場合は、同じ操作内でrelationを1回だけ再評価して全検証をやり直す。graph未準備・不正要求・他の状態不一致は再評価せず拒否し、既存の配送guardも維持する。利用枠の読み上げ説明は言語別のpair templateで結合し、日本語の句点と英語のperiod-spaceを保持する
 
 ### 3.6.6 Mermaid 図
 
@@ -977,6 +992,7 @@
 - `chat.assistantLongMessageFolding`
 - `chat.stickyUserPrompt`
 - `chat.turnTimeline.mode`
+- `chat.turnQuota.windows`
 - `images.enabled`
 - `images.maxSizeMB`
 - `images.thumbnailSize`
@@ -1712,7 +1728,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - 複数選択はcheckboxの横並びやcomma区切り文字列ではなく、履歴インサイトの絞り込みと同系統のpill chipとpopoverで表示する。個別resetとfolder pickerはtooltip・`aria-label`付きicon buttonとし、操作領域の幅を揃える。
 - 設定label、description、option labelは、セッションビュー、履歴ビュー、コマンドパレット、右クリックメニューで使われる機能名と対応させ、manifest設定の説明とも実際の適用範囲、無効時に残る操作、実験機能の制約を一致させる。例として「セッションを専用タブで開く」「ファイルの AI 更新履歴」「通常表示／軽量表示」「Codex で再開」を説明内でも同じ表記にし、英語UIも`Normal View`／`Lightweight View`へ統一する。非同期復元の遅延／重複、Agent RunsのCodex・Claude Code対応、Branch NavigationのWorktree非対応、CLI再開時のEnter操作、削除設定がHistory／Pinned／Search／コマンドパレットへ適用され、無効時は完全削除になることを明示する。表示文言の調整だけでは保存keyやenumを変更しない。
 - セッション表示では初期表示位置、sticky user prompt、performance、tool表示、長文folding、turn timelineを「セッションビュー」cardへ統合し、card内のlabelは「パフォーマンスモード」「ツール表示」と簡潔にする。1種類の履歴ソースだけに適用される設定はcatalogの`sourceBadge`を正本として`Codex`／`Claude Code` badgeを表示する。Agent RunsとBranch Navigationは両履歴ソース対応のため限定badgeを付けず、2.18.1以降はリソース使用量iconだけを維持する。
-- CPU、memory、disk accessなどの使用量へ影響する14設定はcatalogの`resourceImpact`を正本とし、label横へtheme追従のgauge iconを表示する。icon wrapperはlocalized tooltipと`role=img`／`aria-label`を持ち、外部assetやicon fontには依存しない。自動更新3設定、最大検索結果数、検索index内容も対象に含める。
+- CPU、memory、disk accessなどの使用量へ影響する設定はcatalogの`resourceImpact`を正本とし、label横へtheme追従のgauge iconを表示する。icon wrapperはlocalized tooltipと`role=img`／`aria-label`を持ち、外部assetやicon fontには依存しない。自動更新3設定、最大検索結果数、検索index内容、Codex利用枠表示も対象に含める。
 - OSのファイル管理アプリと区別するため、`fileChangeHistory.explorerContextMenu.enabled` は「VS Code のファイル一覧」と表示する。wide表示は最大1440px、左右24pxの外側padding、約210pxの左navigationとし、header下の左navigationと右contentを独立してscrollさせる。navigation group見出しは11pxとする。同一pageの再描画ではfocusをスクロールさせず左右それぞれのscroll座標を維持し、navigationによるpage切替時だけ右contentを新しいpageの先頭へ移動する。狭幅ではbody scrollとdrawer表示へ戻す。
 - header metadataは全pageで`v{version} · {license} · Copyright (c) {years} HizTam`を表示する。copyrightは2026年を開始年とし、2027年以降はextension hostの現在年までの範囲へ自動更新する。「拡張機能情報」はcontent見出しを表示せず、「バージョン情報」「ライセンス」「サードパーティライセンス」の3tabで構成する。3つの`tabpanel`は対応するtabの`aria-controls`先としてDOMへ常設し、非選択panelを`hidden`にする。wide表示ではtab panelだけ、狭幅ではbodyだけをscrollさせ、ライセンス文書の二重scrollを避ける。UIのtab labelは日本語／英語へ統一し、法的文書本文は原文を維持する。
 - バージョン情報tabにはstar icon付きのsecondary button「GitHub」、heart icon付きのsecondary button「GitHub Sponsorsで支援」の順でaction行を表示し、その下に「セキュリティ情報」／`Security Information`、脆弱性報告、変更履歴、コマンド一覧への関連リンクを表示する。6つの外部導線は、開く対象と外部ブラウザーへ遷移することを説明する英語・日本語の`title` tooltipを持つ。Copyright表示とは同じ行へ置かず、3tab構成を維持してSecurity、CHANGELOG、commandsを独立tabにはしない。セキュリティ情報linkの遷移先文書はGitHub標準の`Security Policy`見出しを維持する。WebviewはSponsorsの固定actionまたはrepositoryを含む5種類の固定resource IDだけをhostへ送り、hostがallowlist内の固定GitHub URLを`vscode.env.openExternal`で開く。WebviewからURLを受け取らず、Star状態や件数、外部widget、外部script、GitHub APIを読み込まない。
@@ -1752,7 +1768,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 - `completeness` の省略または `partial` 指定では欠落したキーを英語で補完し、`complete` は欠落をエラーにする。補完元の既定言語は `complete` 必須で、既存英日にも引き続き明記する。省略時の正規化はメモリー内だけで行い、原本は書き換えず、明示的な `partial` と同じ生成物を得る。これは翻訳ファイルの検証方針であり、利用者向け設定ではない。`null` などの不正な `completeness` 値、訳文の空文字、未知キー、型不正、プレースホルダーの過不足は省略時も拒否する。
 - `manifest` はコマンド名・設定説明など、`runtime` は `t(...)` で参照する通知・QuickPick・Webviewの文言を担当する。新しい文言は英日正本へ追加し、Webviewでは `localization/webview-keys.json` に対応を記載する。動的キーは `localization/key-usage.json` で許容集合を管理する。
 
-追加言語はこの1ファイルを置いて再ビルド・配布することで反映する。インストール済み拡張へのファイル追加だけでは静的manifestは更新されない。Node / ICUによる名前の差を防ぐため、生成環境は `.node-version` の Node 24.22.1 / ICU 78.3 に固定する。
+追加言語はこの1ファイルを置いて再ビルド・配布することで反映する。インストール済み拡張へのファイル追加だけでは静的manifestは更新されない。Node / ICUによる名前の差を防ぐため、生成環境は `.node-version` の Node 24.22.3 / ICU 78.3 に固定する。
 
 `scripts/generate-localization.mjs` は、設定の言語enum、`package.nls*.json`、`l10n/bundle.l10n*.json`、`src/generated/*`、`media/generated/localization.js` を生成する。翻訳本文を含む生成JSON・TS・JSはGit管理外とし、直接編集しない。翻訳正本、UI定義、`package.json` と、翻訳本文を含まない `localization/generated-files.json` を管理対象とする。台帳は所有ファイルとhashを記録し、所有外ファイルや手編集された生成物を上書きしない。削除した言語の所有済み生成物だけを除去する。台帳自体がない、または壊れている場合は生成を停止し、無条件に上書きしない。全入力の検証後に一時ファイルから置換し、所有記録を最後に更新する。重複JSONキー、不正UTF-8、BOM、CRLF、危険なプロパティ・パス、リンク、サイズ上限超過を拒否する。
 
@@ -1878,7 +1894,7 @@ UI の辞書管理と日本語への翻訳は区別する。`From` / `To`、メ�
 
 ### 5.1 セットアップ
 
-開発・生成・検証・パッケージ作成には `.node-version` に指定した公式 Node.js 24.22.1 / ICU 78.3 を選択して使用する。CVE-2026-111497 の修正を含む同じ24系の版へ更新し、ローカライズ生成時の言語名の再現性を固定する。作業前に `node --version` が `.node-version` と一致することを確認する。KaTeX のCLI用依存 `commander@15` の Node.js 22.12.0 以上、`@vscode/vsce@4.1.0` の Node.js 22 以上という下限も満たす。これらの開発用ツールはVSIXへ含めず、VS Code拡張の実行環境要件は変更しない。
+開発・生成・検証・パッケージ作成には `.node-version` に指定した公式 Node.js 24.22.3 / ICU 78.3 を選択して使用する。2026年11月のセキュリティ修正と従来の Brotli CVE-2026-111497 の修正を含み、ローカライズ生成時の言語名の再現性を固定する。作業前に `node --version` が `.node-version` と一致することを確認する。KaTeX のCLI用依存 `commander@15` の Node.js 22.12.0 以上、`@vscode/vsce@4.1.0` の Node.js 22 以上という下限も満たす。これらの開発用ツールはVSIXへ含めず、VS Code拡張の実行環境要件は変更しない。
 
 TypeScript は `6.0.3` を使用し、`module` / `moduleResolution` は `Node16` とする。package は CommonJS のままであり、拡張の出力形式も維持する。TypeScript 6で非推奨となった旧Node解決方式は使用しない。Compiler APIの互換性を維持するため、安定した同APIを提供しないTypeScript 7への移行は保留する。VS Codeの型定義は対応下限の `1.90.0` に合わせて `~1.90.0` とし、Nodeの型定義は実行環境に合わせて20系を維持する。
 

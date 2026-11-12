@@ -55,6 +55,8 @@ export interface SettingsSettingModel {
   maximum?: number;
   step?: number;
   options?: readonly SettingsOptionModel[];
+  allowEmptySelection?: boolean;
+  emptySelectionLabel?: string;
 }
 
 export interface SettingsPageModel {
