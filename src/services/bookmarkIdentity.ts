@@ -1,7 +1,22 @@
 import { readCodexFileChangeEvent } from "../sessions/codexFileChangeEvents";
 
 const timelineBookmarkIndexOffset = Symbol("timelineBookmarkIndexOffset");
+const timelineBookmarkVoiceCompatibility = Symbol("timelineBookmarkVoiceCompatibility");
+interface VoiceBookmarkCompatibility { readonly legacyItemCount?: 0 | 1; readonly ambiguousScope?: string; readonly legacyTimestampIso?: string }
+type VoiceBookmarkMetadata = { [timelineBookmarkVoiceCompatibility]?: VoiceBookmarkCompatibility };
 type TimelineBookmarkIndexOffsetMetadata = { [timelineBookmarkIndexOffset]?: unknown };
+
+// Enumerable symbols survive host projections but are excluded from Webview structured serialization.
+export function setVoiceBookmarkCompatibility(item: object, metadata: VoiceBookmarkCompatibility): void {
+  if (metadata.legacyItemCount !== undefined && metadata.legacyItemCount !== 0 && metadata.legacyItemCount !== 1 ||
+      metadata.ambiguousScope !== undefined && !/^cv-[a-f0-9]{32}$/u.test(metadata.ambiguousScope) ||
+      metadata.legacyTimestampIso !== undefined && typeof metadata.legacyTimestampIso !== "string") throw new TypeError("Invalid voice bookmark compatibility.");
+  Object.defineProperty(item, timelineBookmarkVoiceCompatibility, { value: Object.freeze({ ...metadata }), enumerable: true, configurable: true });
+}
+
+export function getVoiceBookmarkCompatibility(item: object): VoiceBookmarkCompatibility | undefined {
+  return (item as VoiceBookmarkMetadata)[timelineBookmarkVoiceCompatibility];
+}
 
 // Keep removed-card offsets in memory and preserve them through ordinary object spreads.
 export function setTimelineBookmarkIndexOffset(item: object, offset: number): void {

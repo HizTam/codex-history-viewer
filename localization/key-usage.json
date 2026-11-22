@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "dynamicRuntime": [
     {
+      "file": "src/services/bookmarkTargetResolver.ts",
+      "expression": "`chat.antigravityProgress.${item.kind}`",
+      "keys": [
+        "chat.antigravityProgress.thinking",
+        "chat.antigravityProgress.redactedThinking",
+        "chat.antigravityProgress.queuedInput"
+      ]
+    },
+    {
       "file": "src/settingsPanel/settingsPanelManager.ts",
       "expression": "definitionItem.emptySelectionLabelKey",
       "keys": [
@@ -1489,7 +1498,22 @@
         "settingsPanel.setting.history.defaultProjectScope.label",
         "settingsPanel.setting.pinned.startupMode.label",
         "settingsPanel.setting.pinned.defaultProjectDisplay.label",
-        "settingsPanel.setting.pinned.defaultProjectScope.label"
+        "settingsPanel.setting.pinned.defaultProjectScope.label",
+        "settingsPanel.sourceBadge.antigravity",
+        "settingsPanel.card.sources.antigravity",
+        "settingsPanel.setting.antigravity.sessionsRoot.label",
+        "settingsPanel.setting.antigravity.sessionsRoot.description",
+        "settingsPanel.option.sources.enabled.antigravity.label",
+        "settingsPanel.option.sources.enabled.antigravity.description",
+        "settingsPanel.disabled.source.antigravity",
+        "settingsPanel.setting.resume.antigravityMethod.label",
+        "settingsPanel.setting.resume.antigravityMethod.description",
+        "settingsPanel.option.resume.antigravityMethod.extension.label",
+        "settingsPanel.option.resume.antigravityMethod.extension.description",
+        "settingsPanel.option.resume.antigravityMethod.cli.label",
+        "settingsPanel.option.resume.antigravityMethod.cli.description",
+        "settingsPanel.option.resume.antigravityMethod.both.label",
+        "settingsPanel.option.resume.antigravityMethod.both.description"
       ]
     },
     {
@@ -2175,7 +2199,22 @@
         "settingsPanel.setting.claude.nativeBookmarks.enabled.description",
         "settingsPanel.disabled.nativeBookmarks",
         "settingsPanel.card.history.startup",
-        "settingsPanel.card.pinned.startup"
+        "settingsPanel.card.pinned.startup",
+        "settingsPanel.sourceBadge.antigravity",
+        "settingsPanel.card.sources.antigravity",
+        "settingsPanel.setting.antigravity.sessionsRoot.label",
+        "settingsPanel.setting.antigravity.sessionsRoot.description",
+        "settingsPanel.option.sources.enabled.antigravity.label",
+        "settingsPanel.option.sources.enabled.antigravity.description",
+        "settingsPanel.disabled.source.antigravity",
+        "settingsPanel.setting.resume.antigravityMethod.label",
+        "settingsPanel.setting.resume.antigravityMethod.description",
+        "settingsPanel.option.resume.antigravityMethod.extension.label",
+        "settingsPanel.option.resume.antigravityMethod.extension.description",
+        "settingsPanel.option.resume.antigravityMethod.cli.label",
+        "settingsPanel.option.resume.antigravityMethod.cli.description",
+        "settingsPanel.option.resume.antigravityMethod.both.label",
+        "settingsPanel.option.resume.antigravityMethod.both.description"
       ]
     },
     {
@@ -2524,7 +2563,22 @@
         "settingsPanel.setting.history.defaultProjectScope.description",
         "settingsPanel.setting.pinned.startupMode.description",
         "settingsPanel.setting.pinned.defaultProjectDisplay.description",
-        "settingsPanel.setting.pinned.defaultProjectScope.description"
+        "settingsPanel.setting.pinned.defaultProjectScope.description",
+        "settingsPanel.sourceBadge.antigravity",
+        "settingsPanel.card.sources.antigravity",
+        "settingsPanel.setting.antigravity.sessionsRoot.label",
+        "settingsPanel.setting.antigravity.sessionsRoot.description",
+        "settingsPanel.option.sources.enabled.antigravity.label",
+        "settingsPanel.option.sources.enabled.antigravity.description",
+        "settingsPanel.disabled.source.antigravity",
+        "settingsPanel.setting.resume.antigravityMethod.label",
+        "settingsPanel.setting.resume.antigravityMethod.description",
+        "settingsPanel.option.resume.antigravityMethod.extension.label",
+        "settingsPanel.option.resume.antigravityMethod.extension.description",
+        "settingsPanel.option.resume.antigravityMethod.cli.label",
+        "settingsPanel.option.resume.antigravityMethod.cli.description",
+        "settingsPanel.option.resume.antigravityMethod.both.label",
+        "settingsPanel.option.resume.antigravityMethod.both.description"
       ]
     },
     {
@@ -2866,7 +2920,22 @@
         "settingsPanel.setting.codex.compressedSessions.enabled.description",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.label",
         "settingsPanel.setting.claude.nativeBookmarks.enabled.description",
-        "settingsPanel.disabled.nativeBookmarks"
+        "settingsPanel.disabled.nativeBookmarks",
+        "settingsPanel.sourceBadge.antigravity",
+        "settingsPanel.card.sources.antigravity",
+        "settingsPanel.setting.antigravity.sessionsRoot.label",
+        "settingsPanel.setting.antigravity.sessionsRoot.description",
+        "settingsPanel.option.sources.enabled.antigravity.label",
+        "settingsPanel.option.sources.enabled.antigravity.description",
+        "settingsPanel.disabled.source.antigravity",
+        "settingsPanel.setting.resume.antigravityMethod.label",
+        "settingsPanel.setting.resume.antigravityMethod.description",
+        "settingsPanel.option.resume.antigravityMethod.extension.label",
+        "settingsPanel.option.resume.antigravityMethod.extension.description",
+        "settingsPanel.option.resume.antigravityMethod.cli.label",
+        "settingsPanel.option.resume.antigravityMethod.cli.description",
+        "settingsPanel.option.resume.antigravityMethod.both.label",
+        "settingsPanel.option.resume.antigravityMethod.both.description"
       ]
     },
     {
@@ -3564,7 +3633,22 @@
         "settingsPanel.option.pinned.defaultProjectDisplay.list.label",
         "settingsPanel.option.pinned.defaultProjectDisplay.project.label",
         "settingsPanel.option.pinned.defaultProjectScope.currentGroup.label",
-        "settingsPanel.option.pinned.defaultProjectScope.all.label"
+        "settingsPanel.option.pinned.defaultProjectScope.all.label",
+        "settingsPanel.sourceBadge.antigravity",
+        "settingsPanel.card.sources.antigravity",
+        "settingsPanel.setting.antigravity.sessionsRoot.label",
+        "settingsPanel.setting.antigravity.sessionsRoot.description",
+        "settingsPanel.option.sources.enabled.antigravity.label",
+        "settingsPanel.option.sources.enabled.antigravity.description",
+        "settingsPanel.disabled.source.antigravity",
+        "settingsPanel.setting.resume.antigravityMethod.label",
+        "settingsPanel.setting.resume.antigravityMethod.description",
+        "settingsPanel.option.resume.antigravityMethod.extension.label",
+        "settingsPanel.option.resume.antigravityMethod.extension.description",
+        "settingsPanel.option.resume.antigravityMethod.cli.label",
+        "settingsPanel.option.resume.antigravityMethod.cli.description",
+        "settingsPanel.option.resume.antigravityMethod.both.label",
+        "settingsPanel.option.resume.antigravityMethod.both.description"
       ]
     },
     {
@@ -3912,7 +3996,22 @@
         "settingsPanel.option.pinned.startupMode.restore.description",
         "settingsPanel.option.pinned.startupMode.defaults.description",
         "settingsPanel.option.history.defaultProjectScope.currentGroup.description",
-        "settingsPanel.option.pinned.defaultProjectScope.currentGroup.description"
+        "settingsPanel.option.pinned.defaultProjectScope.currentGroup.description",
+        "settingsPanel.sourceBadge.antigravity",
+        "settingsPanel.card.sources.antigravity",
+        "settingsPanel.setting.antigravity.sessionsRoot.label",
+        "settingsPanel.setting.antigravity.sessionsRoot.description",
+        "settingsPanel.option.sources.enabled.antigravity.label",
+        "settingsPanel.option.sources.enabled.antigravity.description",
+        "settingsPanel.disabled.source.antigravity",
+        "settingsPanel.setting.resume.antigravityMethod.label",
+        "settingsPanel.setting.resume.antigravityMethod.description",
+        "settingsPanel.option.resume.antigravityMethod.extension.label",
+        "settingsPanel.option.resume.antigravityMethod.extension.description",
+        "settingsPanel.option.resume.antigravityMethod.cli.label",
+        "settingsPanel.option.resume.antigravityMethod.cli.description",
+        "settingsPanel.option.resume.antigravityMethod.both.label",
+        "settingsPanel.option.resume.antigravityMethod.both.description"
       ]
     },
     {

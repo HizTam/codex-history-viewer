@@ -1,12 +1,15 @@
 import type { SessionSummary } from "../sessions/sessionTypes";
+import { ANTIGRAVITY_UUID } from "../antigravity/antigravityTypes";
 
-export type ResumeTargetSource = "codex" | "claude";
+export type ResumeTargetSource = "codex" | "claude" | "antigravity";
 export type ResumeActionReason =
   | "available"
   | "wrongSource"
   | "archived"
   | "invalidSessionId"
   | "workspaceUntrusted"
+  | "rootUnverified"
+  | "remoteHostMismatch"
   | "unknown";
 
 const CODEX_EXTENSION_SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
@@ -17,6 +20,7 @@ export function resolveExtensionResumeSessionId(
   target: ResumeTargetSource,
 ): string | null {
   if (session.source !== target || session.storage.archiveState !== "active" || session.meta.claudeAgent) return null;
+  if (target === "antigravity") return typeof session.meta.id === "string" && ANTIGRAVITY_UUID.test(session.meta.id) ? session.meta.id : null;
   const id = typeof session.meta.id === "string" ? session.meta.id.trim() : "";
   if (!id) return null;
   if (target === "codex") return CODEX_EXTENSION_SESSION_ID_PATTERN.test(id) ? id : null;

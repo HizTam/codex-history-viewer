@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
-import type { CodexHistoryViewerConfig } from "../settings";
+import { getConfig, type CodexHistoryViewerConfig } from "../settings";
+import { captureAntigravitySourceScope, isAntigravitySourceScopeCurrent, isAntigravitySourceScopeEnvironmentCurrent } from "../antigravity/antigravitySessionScope";
 import type { ArchiveLocationFilter, HistoryIndex, SessionSourceFilter, SessionSummary } from "../sessions/sessionTypes";
+import { isSourceInventoryComplete } from "../sessions/sourceInventory";
 import { t } from "../i18n";
 import { safeDisplayPath, singleLineSnippet } from "../utils/textUtils";
 import { SearchRootNode, SearchSessionNode, type SearchHit } from "../tree/treeNodes";
@@ -12,9 +14,15 @@ import {
 } from "../types/dateScope";
 import {
   type IndexedSearchRole,
-  type SearchIndexReadSnapshot,
+  type SearchIndexScanReader,
   SearchIndexService,
 } from "./searchIndexService";
+import {
+  acquireSearchIndexReader,
+  buildSearchCandidatePlan,
+  buildRegexSearchCandidatePlan,
+  type SearchCandidatePlan,
+} from "./searchIndexReader";
 import type { SessionAnnotationStore } from "./sessionAnnotationStore";
 import type { HiddenSessionStore } from "./hiddenSessionStore";
 import { matchProjectByCanonicalKey, resolveCanonicalProjectKey } from "./projectPathMapper";
@@ -42,6 +50,7 @@ export interface CompiledSearchQuery {
   displayQuery: string;
   locate: (text: string) => LocatedMatch | null;
   locateAll: (text: string, maxMatches: number) => LocatedMatch[];
+  readonly candidatePlan: SearchCandidatePlan;
 }
 
 interface PlainCondition {
@@ -64,6 +73,8 @@ export interface SearchFlowResult {
   root: SearchRootNode;
   sessions: SearchSessionNode[];
   request: SearchRequest;
+  // Host-only publication guard; never persist or forward it to a Webview.
+  isCurrent?: () => boolean;
 }
 
 export interface HistorySearchRefreshState {
@@ -154,19 +165,50 @@ export async function runSearchFlow(
     getProjectDisplayName?: (projectCwd: string) => string;
     getCanonicalProjectKey?: (projectCwd: string) => string | null;
     isRequestCurrent?: () => boolean;
+    getCurrentHistoryIndex?: () => HistoryIndex;
     sessionInventory?: readonly SessionSummary[];
     hiddenSessionStore?: HiddenSessionStore;
   },
 ): Promise<SearchFlowResult | null> {
   if (options?.isRequestCurrent && !options.isRequestCurrent()) return null;
   const sessionInventory = options?.sessionInventory ?? Object.freeze(Array.from(index.sessions));
-  if (sessionInventory.length === 0) {
+  const effectiveScope = sanitizeDateScope(scope);
+  const effectiveSourceFilter = sanitizeSessionSourceFilter(sourceFilter);
+  const includesAntigravity = config.enableAntigravitySource && (effectiveSourceFilter === "all" || effectiveSourceFilter === "antigravity");
+  const incompleteAntigravity = includesAntigravity && !isSourceInventoryComplete(index.sourceInventoryStates, "antigravity", config);
+  if (includesAntigravity && !options?.getCurrentHistoryIndex) {
+    void vscode.window.showErrorMessage(t("search.error.historyUnavailable"));
+    return null;
+  }
+  const nativeScope = includesAntigravity ? captureAntigravitySourceScope(config, index, sessionInventory) : undefined;
+  const configurationKey = (): string => {
+    const settings = vscode.workspace.getConfiguration("codexHistoryViewer");
+    return JSON.stringify([settings.get<unknown>("sources.enabled"), settings.get<unknown>("antigravity.sessionsRoot")]);
+  };
+  const nativeConfigurationKey = nativeScope ? configurationKey() : undefined;
+  let validatedIndex: HistoryIndex | undefined;
+  const isCurrent = (final = false): boolean => {
+    if (options?.isRequestCurrent && !options.isRequestCurrent()) return false;
+    if (!nativeScope) return true;
+    try {
+      if (configurationKey() !== nativeConfigurationKey) return false;
+      const currentIndex = options!.getCurrentHistoryIndex!();
+      if (!isAntigravitySourceScopeEnvironmentCurrent(nativeScope, config, currentIndex)) return false;
+      // HistoryService publishes identity changes as a new index snapshot, not in place.
+      if (final || currentIndex !== validatedIndex) {
+        if (!isAntigravitySourceScopeCurrent(nativeScope, getConfig(), currentIndex)) return false;
+        validatedIndex = currentIndex;
+      }
+      return true;
+    } catch { return false; }
+  };
+  const isPublicationCurrent = (): boolean => isCurrent(true);
+  if (!isCurrent()) return null;
+  if (sessionInventory.length === 0 && !incompleteAntigravity) {
     void vscode.window.showInformationMessage(t("app.noSessionsFound"));
     return null;
   }
 
-  const effectiveScope = sanitizeDateScope(scope);
-  const effectiveSourceFilter = sanitizeSessionSourceFilter(sourceFilter);
   const tagFilter = sanitizeTagFilter(options?.tagFilter ?? []);
   const archiveLocationFilter =
     options?.archiveLocationFilter ?? ((options?.includeArchivedSessions ?? true) ? "all" : "activeOnly");
@@ -194,7 +236,7 @@ export async function runSearchFlow(
     queryInput = entered.trim();
     roleFilter = sanitizeRoleFilter(options?.defaultRoleFilter ?? ["user", "assistant"]);
   }
-  if (options?.isRequestCurrent && !options.isRequestCurrent()) return null;
+  if (!isCurrent()) return null;
 
   const compiled = compileSearchQuery(queryInput, effectiveCaseSensitive);
   if (!compiled) {
@@ -231,42 +273,59 @@ export async function runSearchFlow(
   const results = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: t("app.searching"), cancellable: true },
     async (progress, token) => {
-      try {
-        const effectiveToken = createSearchCancellationToken(token, options?.isRequestCurrent);
-        // Synchronize index delta before searching, and remove index entries for deleted files.
-        const searchIndexSnapshot = await searchIndexService.ensureUpToDate({
-          index,
-          sessionInventory,
-          codexSessionsRoot: config.sessionsRoot,
-          codexArchivedSessionsRoot: config.codexArchivedSessionsRoot,
-          claudeSessionsRoot: config.claudeSessionsRoot,
-          includeCodex: config.enableCodexSource,
-          includeCodexArchived: config.enableCodexArchivedSessions,
-          includeClaude: config.enableClaudeSource,
-          indexToolContent: config.searchIndexToolContent,
-          token: effectiveToken,
-          progress,
-        });
-        if (effectiveToken.isCancellationRequested) return null;
-        return await searchSessions({
-          sessions: candidates,
-          compiled,
-          maxResults: config.searchMaxResults,
-          token: effectiveToken,
-          progress,
-          searchIndexSnapshot,
-          annotationStore,
-          roleFilter,
-        });
-      } catch (err) {
-        if (err instanceof vscode.CancellationError) return null;
-        throw err;
+      for (let cacheAttempt = 0; cacheAttempt < 2; cacheAttempt++) {
+        try {
+          const effectiveToken = createSearchCancellationToken(token, isCurrent);
+          // Synchronize index delta before searching, and remove index entries for deleted files.
+          const reader = await acquireSearchIndexReader(() => searchIndexService.ensureUpToDate({
+            index,
+            sessionInventory,
+            codexSessionsRoot: config.sessionsRoot,
+            codexArchivedSessionsRoot: config.codexArchivedSessionsRoot,
+            claudeSessionsRoot: config.claudeSessionsRoot,
+            includeCodex: config.enableCodexSource,
+            includeCodexArchived: config.enableCodexArchivedSessions,
+            includeClaude: config.enableClaudeSource,
+            antigravitySessionsRoots: config.antigravitySessionsRoots,
+            includeAntigravity: config.enableAntigravitySource,
+            indexToolContent: config.searchIndexToolContent,
+            token: effectiveToken,
+            progress,
+          }), {
+            cacheKeys: candidates.map(session => session.cacheKey),
+            candidatePlan: compiled.candidatePlan,
+            roles: [...roleFilter],
+            token: effectiveToken,
+          });
+          try {
+            if (effectiveToken.isCancellationRequested) return null;
+            const found = await searchSessions({
+              sessions: candidates,
+              compiled,
+              maxResults: config.searchMaxResults,
+              token: effectiveToken,
+              progress,
+              searchIndexReader: reader,
+              annotationStore,
+              roleFilter,
+            });
+            return found && { ...found, unavailableSources: reader.unavailableSources };
+          } finally {
+            await reader.dispose();
+          }
+        } catch (err) {
+          if (!isCurrent()) return null;
+          if (err instanceof vscode.CancellationError) return null;
+          if (cacheAttempt === 0 && searchIndexService.canRetryWithLegacy?.(err)) continue;
+          throw err;
+        }
       }
+      return null;
     },
   );
 
   if (!results) return null;
-  if (options?.isRequestCurrent && !options.isRequestCurrent()) return null;
+  if (!isPublicationCurrent()) return null;
 
   const scopeParts: string[] = [];
   if (options?.compressionFilter && options.compressionFilter !== "all") {
@@ -300,6 +359,8 @@ export async function runSearchFlow(
     scopeKind: effectiveScope.kind,
     scopeValue,
     totalHits: results.totalHits,
+    incompleteSources: (effectiveSourceFilter === "all" || effectiveSourceFilter === "antigravity") && config.enableAntigravitySource &&
+      (results.unavailableSources?.includes("antigravity") || !isSourceInventoryComplete(index.sourceInventoryStates, "antigravity", config)) ? ["antigravity"] : [],
     pageSearchSeed: rootPageSearchSeed,
   });
   const sessionNodes = results.sessions.map((s) => {
@@ -317,6 +378,7 @@ export async function runSearchFlow(
   return {
     root,
     sessions: sessionNodes,
+    ...(nativeScope ? { isCurrent: isPublicationCurrent } : {}),
     request: {
       queryInput,
       roleFilter: Array.from(roleFilter),
@@ -407,11 +469,11 @@ async function searchSessions(params: {
   maxResults: number;
   token: vscode.CancellationToken;
   progress: vscode.Progress<{ message?: string; increment?: number }>;
-  searchIndexSnapshot: SearchIndexReadSnapshot;
+  searchIndexReader: SearchIndexScanReader;
   annotationStore: SessionAnnotationStore;
   roleFilter: ReadonlySet<IndexedSearchRole>;
 }): Promise<{ totalHits: number; sessions: Array<{ session: SessionSummary; hits: SearchHit[] }> } | null> {
-  const { sessions, compiled, maxResults, token, progress, searchIndexSnapshot, annotationStore, roleFilter } = params;
+  const { sessions, compiled, maxResults, token, progress, searchIndexReader, annotationStore, roleFilter } = params;
 
   const bySession = new Map<string, { session: SessionSummary; hits: SearchHit[] }>();
   let totalHits = 0;
@@ -433,32 +495,31 @@ async function searchSessions(params: {
     });
     if (totalHits >= maxResults) continue;
 
-    const messages = searchIndexSnapshot.getMessages(s.cacheKey);
-    if (messages && messages.length > 0) {
-      for (const m of messages) {
-        if (token.isCancellationRequested) return null;
+    for await (const m of searchIndexReader.iterateMessages(s.cacheKey, async () => {
+      if (token.isCancellationRequested) throw new vscode.CancellationError();
+    })) {
+      if (token.isCancellationRequested) return null;
+      if (totalHits >= maxResults) break;
+      if (!roleFilter.has(m.role)) continue;
+
+      const matches = compiled.locateAll(m.text, maxPerMessage);
+      if (matches.length === 0) continue;
+
+      if (!bySession.has(s.cacheKey)) bySession.set(s.cacheKey, { session: s, hits: [] });
+      const bucket = bySession.get(s.cacheKey)!;
+
+      for (const located of matches) {
         if (totalHits >= maxResults) break;
-        if (!roleFilter.has(m.role)) continue;
-
-        const matches = compiled.locateAll(m.text, maxPerMessage);
-        if (matches.length === 0) continue;
-
-        if (!bySession.has(s.cacheKey)) bySession.set(s.cacheKey, { session: s, hits: [] });
-        const bucket = bySession.get(s.cacheKey)!;
-
-        for (const located of matches) {
-          if (totalHits >= maxResults) break;
-          const snippet = singleLineSnippet(buildAround(m.text, located.hitAt, located.hitLen), 160);
-          bucket.hits.push({
-            messageIndex: m.messageIndex,
-            role: m.role,
-            source: m.source,
-            ...(m.progressId ? { progressId: m.progressId, progressKind: m.progressKind } : {}),
-            ...(m.inputId ? { inputId: m.inputId } : {}),
-            snippet,
-          });
-          totalHits += 1;
-        }
+        const snippet = singleLineSnippet(buildAround(m.text, located.hitAt, located.hitLen), 160);
+        bucket.hits.push({
+          messageIndex: m.messageIndex,
+          role: m.role,
+          source: m.source,
+          ...(m.progressId ? { progressId: m.progressId, progressKind: m.progressKind } : {}),
+          ...(m.inputId ? { inputId: m.inputId } : {}),
+          snippet,
+        });
+        totalHits += 1;
       }
     }
 
@@ -583,6 +644,7 @@ export function compileSearchQuery(rawInput: string, caseSensitive: boolean): Co
     if (!firstRegex || !allRegex) return null;
     return {
       mode: "regex",
+      candidatePlan: buildRegexSearchCandidatePlan(slashRegex.body, firstRegex.flags),
       displayQuery: raw,
       locate: (text) => locateByRegex(text, firstRegex),
       locateAll: (text, maxMatches) => locateAllByRegex(text, allRegex, maxMatches),
@@ -599,6 +661,7 @@ export function compileSearchQuery(rawInput: string, caseSensitive: boolean): Co
     if (!firstRegex || !allRegex) return null;
     return {
       mode: "regex",
+      candidatePlan: buildRegexSearchCandidatePlan(body, firstRegex.flags),
       displayQuery: raw,
       locate: (text) => locateByRegex(text, firstRegex),
       locateAll: (text, maxMatches) => locateAllByRegex(text, allRegex, maxMatches),
@@ -611,6 +674,7 @@ export function compileSearchQuery(rawInput: string, caseSensitive: boolean): Co
     const needle = caseSensitive ? phrase : phrase.toLowerCase();
     return {
       mode: "exact",
+      candidatePlan: buildSearchCandidatePlan([[needle]], caseSensitive),
       displayQuery: raw,
       locate: (text) => locateByNeedle(text, needle, caseSensitive, phrase.length),
       locateAll: (text, maxMatches) => locateAllByNeedle(text, needle, caseSensitive, phrase.length, maxMatches),
@@ -621,6 +685,8 @@ export function compileSearchQuery(rawInput: string, caseSensitive: boolean): Co
   if (!clauses || clauses.length === 0) return null;
   return {
     mode: "plain",
+    candidatePlan: buildSearchCandidatePlan(clauses.map(clause =>
+      clause.conditions.filter(condition => !condition.negated).map(condition => condition.normalized)), caseSensitive),
     displayQuery: raw,
     locate: (text) => locateByClauses(text, clauses, caseSensitive),
     locateAll: (text, _maxMatches) => {
@@ -815,9 +881,9 @@ function normalizeTagKey(value: string): string {
 }
 
 function sanitizeSessionSourceFilter(sourceFilter: SessionSourceFilter | undefined): SessionSourceFilter {
-  return sourceFilter === "codex" || sourceFilter === "claude" ? sourceFilter : "all";
+  return sourceFilter === "codex" || sourceFilter === "claude" || sourceFilter === "antigravity" ? sourceFilter : "all";
 }
 
 function getSourceFilterLabel(sourceFilter: Exclude<SessionSourceFilter, "all">): string {
-  return sourceFilter === "codex" ? t("history.filter.source.codex") : t("history.filter.source.claude");
+  return sourceFilter === "codex" ? t("history.filter.source.codex") : sourceFilter === "antigravity" ? t("history.filter.source.antigravity") : t("history.filter.source.claude");
 }

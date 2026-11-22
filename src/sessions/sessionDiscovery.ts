@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { isSessionFile, isCompressedSessionFile, uncompressedSessionPath } from "../utils/sessionFileReader";
 import type { SessionArchiveState, SessionRootKind, SessionSource } from "./sessionTypes";
 import type { PerformanceProbe } from "../performance/performanceCounters";
+import { discoverAntigravitySessions } from "../antigravity/antigravityDiscovery";
+import type { AntigravitySummaryRecord } from "../antigravity/antigravityTypes";
 
 export interface SessionDiscoveryOptions {
   codexRoot: string;
@@ -14,6 +16,9 @@ export interface SessionDiscoveryOptions {
   includeCodexArchived: boolean;
   includeCodexCompressed?: boolean;
   includeClaude: boolean;
+  antigravityRoots?: readonly string[];
+  includeAntigravity?: boolean;
+  onAntigravityDiscovered?: (files: readonly DiscoveredSessionFile[]) => Promise<void>;
   performanceProbe?: PerformanceProbe;
 }
 
@@ -23,11 +28,15 @@ export interface DiscoveredSessionFile {
   rootKind: SessionRootKind;
   archiveState: SessionArchiveState;
   rootPath: string;
+  antigravitySummary?: AntigravitySummaryRecord;
 }
 
 export interface SessionDiscoveryResult {
   readonly files: DiscoveredSessionFile[];
   readonly failureCount: number;
+  readonly coreFailureCount: number;
+  readonly antigravityFailureCount: number;
+  readonly antigravityRoots: readonly string[];
 }
 
 interface SessionFileCollection {
@@ -42,13 +51,31 @@ export async function findSessionFiles(options: SessionDiscoveryOptions): Promis
 
 // Preserve failed discovery scopes so callers do not publish an incomplete inventory.
 export async function discoverSessionFiles(options: SessionDiscoveryOptions): Promise<SessionDiscoveryResult> {
+  const discoverNative = () => options.includeAntigravity === undefined
+    ? Promise.resolve({ files: [], failureCount: 0, allowedRoots: [] })
+    : discoverAntigravitySessions(options.antigravityRoots ?? [], options.includeAntigravity === true);
+  const discoverCore = () => discoverCoreSessionFiles(options);
+  const [core, antigravity] = options.onAntigravityDiscovered
+    ? await Promise.all([discoverCore(), discoverNative().then(async result => {
+        await options.onAntigravityDiscovered?.(result.files);
+        return result;
+      })])
+    : [await discoverCore(), await discoverNative()] as const;
+  const { results, failureCount, pushUnique } = core;
+  for (const file of antigravity.files) pushUnique(file);
+  return { files: results, failureCount: failureCount + antigravity.failureCount, coreFailureCount: failureCount,
+    antigravityFailureCount: antigravity.failureCount, antigravityRoots: antigravity.allowedRoots };
+}
+
+async function discoverCoreSessionFiles(options: SessionDiscoveryOptions) {
   const results: DiscoveredSessionFile[] = [];
   const seen = new Set<string>();
   let failureCount = 0;
 
   const pushUnique = (file: DiscoveredSessionFile): void => {
     if (file.source === "codex" && isCompressedSessionFile(file.fsPath) && options.includeCodexCompressed !== true) return;
-    const key = path.normalize(file.fsPath).toLowerCase();
+    const normalized = path.normalize(file.fsPath);
+    const key = file.source === "antigravity" && process.platform !== "win32" ? normalized : normalized.toLowerCase();
     if (seen.has(key)) return;
     seen.add(key);
     results.push(file);
@@ -108,7 +135,7 @@ export async function discoverSessionFiles(options: SessionDiscoveryOptions): Pr
     }
   }
 
-  return { files: results, failureCount };
+  return { results, failureCount, pushUnique };
 }
 
 async function collectExistingRoot(

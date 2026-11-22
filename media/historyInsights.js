@@ -273,6 +273,11 @@
       banner.textContent = text("showingPrevious");
       shell.appendChild(banner);
     }
+    if (model.sourceInventoryIncomplete) {
+      const banner = el("div", { className: "refreshBanner stale", role: "status" });
+      banner.textContent = text("sourceInventoryIncomplete");
+      shell.appendChild(banner);
+    }
 
     if (model.quality.targetSessions === 0) {
       const empty = el("section", { className: "emptyPanel" });
@@ -374,7 +379,7 @@
     error.hidden = true;
     const grid = el("div", { className: "filterGrid" });
     grid.append(
-      renderFilterDropdown("source", "filterSource", values.options.source, values.canEditSource, true),
+      renderFilterDropdown("source", "filterSource", values.options.source, values.canEditSource, !values.options.source.some((option) => option.value === "all")),
       renderDateRangeControl(),
       renderFilterDropdown("archiveLocation", "filterLocation", values.options.archiveLocation, values.canEditArchiveLocation, false),
       renderFilterDropdown("projects", "filterProject", values.options.projects, true, true),
@@ -654,7 +659,7 @@
     const selected = new Set(filterDraft.sourceIds);
     const sourceOptions = filters.options?.source || [];
     const selectedOptions = sourceOptions.filter((option) => selected.has(option.id));
-    return selectedOptions.length === 1 && selectedOptions[0]?.value === "claude";
+    return selectedOptions.length === 1 && ["claude", "antigravity"].includes(selectedOptions[0]?.value);
   }
 
   function reconcileArchiveSelectionForSource(wasClaudeOnly) {
@@ -1513,7 +1518,8 @@
     const breakdownValues = groups.flatMap((group) => {
       const rows = selectBreakdownRows(group, breakdownMetric);
       const total = group.totals[breakdownMetric];
-      return rows.map((row) => formatBreakdownValueParts(row.metrics[breakdownMetric], total));
+      return rows.map((row) => formatBreakdownValueParts(row.metrics[breakdownMetric], total,
+        row.metrics.availability?.[breakdownMetric], group.totals.availability?.[breakdownMetric]));
     });
     breakdownValues.push(...model.models.rows.flatMap((row) =>
       row.effortRows.map((effort) => formatBreakdownValueParts(effort.value, row.effortTotalTokens)),
@@ -1798,15 +1804,16 @@
     const container = el("section", { className: "breakdownGroup" });
     const rows = selectBreakdownRows(breakdownGroup, breakdownMetric);
     container.appendChild(renderBreakdownGroupHeader(titleKey));
+    appendBreakdownQualityNotice(container, breakdownGroup);
     const total = breakdownGroup.totals[breakdownMetric];
     rows.forEach((row) => {
-      container.appendChild(renderBarRow(titleKey, row, total, false));
+      container.appendChild(renderBarRow(titleKey, row, total, false, breakdownGroup.totals.availability?.[breakdownMetric]));
     });
     appendBreakdownOmitted(container, breakdownGroup, rows);
     return container;
   }
 
-  function renderBarRow(titleKey, row, total, interactive) {
+  function renderBarRow(titleKey, row, total, interactive, totalAvailability) {
     const item = el(interactive ? "button" : "div", {
       className: `barRow${interactive ? " modelBarButton" : ""}${titleKey === "projects" ? " projectBarRow" : ""}`,
       ...(interactive ? { type: "button" } : {}),
@@ -1828,11 +1835,12 @@
     const bar = el("span", { className: "barTrack" });
     const fill = el("span", { className: "barFill" });
     const rowValue = titleKey === "modelEffort" ? row.value : row.metrics[breakdownMetric];
-    const share = calculateBreakdownShare(rowValue, total);
+    const availability = titleKey === "modelEffort" ? "available" : row.metrics.availability?.[breakdownMetric] || "available";
+    const share = availability === "unavailable" || totalAvailability === "unavailable" ? 0 : calculateBreakdownShare(rowValue, total);
     fill.style.width = `${share * 100}%`;
-    fill.style.minWidth = nonNegativeInteger(rowValue) > 0 ? "2px" : "0";
+    fill.style.minWidth = availability !== "unavailable" && nonNegativeInteger(rowValue) > 0 ? "2px" : "0";
     bar.appendChild(fill);
-    const valueParts = formatBreakdownValueParts(rowValue, total);
+    const valueParts = formatBreakdownValueParts(rowValue, total, availability, totalAvailability);
     const value = el("span", { className: "barValue" });
     const accessibleValue = el("span", { className: "visuallyHidden" });
     accessibleValue.textContent = valueParts.accessibleText;
@@ -1841,6 +1849,7 @@
     const percentage = el("span", { className: "barPercentage", ariaHidden: "true" });
     percentage.textContent = valueParts.percentageText;
     value.append(accessibleValue, absoluteValue, percentage);
+    value.title = valueParts.accessibleText;
     item.append(label, bar, value);
     return item;
   }
@@ -1848,12 +1857,13 @@
   function renderModelList() {
     const group = el("section", { className: "breakdownGroup modelBreakdownGroup" });
     group.appendChild(renderBreakdownGroupHeader("models"));
+    appendBreakdownQualityNotice(group, model.models);
     const rows = selectBreakdownRows(model.models, breakdownMetric);
     const total = model.models.totals[breakdownMetric];
     rows.forEach((row) => {
       const entry = el("div", { className: "modelBreakdownEntry" });
       const expandable = row.effortRows.length > 0 && row.effortTotalTokens > 0;
-      const item = renderBarRow("models", row, total, expandable);
+      const item = renderBarRow("models", row, total, expandable, model.models.totals.availability?.[breakdownMetric]);
       if (expandable) {
         const expanded = expandedModelIds.includes(row.id);
         item.id = `model-toggle-${row.id}`;
@@ -1865,7 +1875,7 @@
         gutter?.appendChild(chevron);
         const actionText = formatTemplate(text(expanded ? "modelEffortCollapse" : "modelEffortExpand"), row.label);
         item.title = String(row.label);
-        item.setAttribute("aria-label", actionText);
+        item.setAttribute("aria-label", `${actionText}. ${item.querySelector(".visuallyHidden")?.textContent || ""}`);
         item.addEventListener("click", () => toggleExpandedModel(row.id, item));
       }
       entry.appendChild(item);
@@ -1874,6 +1884,14 @@
     });
     appendBreakdownOmitted(group, model.models, rows);
     return group;
+  }
+
+  function appendBreakdownQualityNotice(container, group) {
+    if (nonNegativeInteger(group.totals[breakdownMetric]) === 0 ||
+      group.totals.availability?.[breakdownMetric] !== "partial" && !group.rows.some(row => row.metrics.availability?.[breakdownMetric] === "partial")) return;
+    const note = el("p", { className: "muted breakdownQualityNotice" });
+    note.textContent = text("breakdownObservedValues");
+    container.appendChild(note);
   }
 
   function renderModelEffortPanel(row) {
@@ -2188,9 +2206,20 @@
     return Math.min(1, nonNegativeInteger(value) / normalizedTotal);
   }
 
-  function formatBreakdownValueParts(value, total) {
+  function formatBreakdownValueParts(value, total, availability = "available", totalAvailability = "available") {
+    if (availability === "unavailable") return { absoluteText: "—", percentageText: "", accessibleText: text("breakdownUnavailable") };
     const percentage = formatBreakdownPercentage(value, total, document.documentElement.lang);
-    const absoluteText = formatNumber(value);
+    const numericText = formatNumber(value);
+    const absoluteText = `${availability === "partial" ? "≥ " : ""}${numericText}`;
+    const absoluteAccessible = availability === "partial" ? formatTemplate(text("lowerBoundAria"), numericText) : numericText;
+    // Ratios of partial values describe observed values, never a lower bound on the true share.
+    if (totalAvailability === "unavailable" || nonNegativeInteger(total) === 0) {
+      return { absoluteText, percentageText: "", accessibleText: absoluteAccessible };
+    }
+    if (availability === "partial" || totalAvailability === "partial") {
+      const observedShare = formatTemplate(text("breakdownObservedPercentage"), percentage);
+      return { absoluteText, percentageText: formatTemplate(text("breakdownPercentage"), percentage), accessibleText: `${absoluteAccessible} ${observedShare}` };
+    }
     return {
       absoluteText,
       percentageText: formatTemplate(text("breakdownPercentage"), percentage),
@@ -2425,6 +2454,7 @@
     if (!value || typeof value !== "object" || value.version !== 1) return null;
     if (!value.metrics || !isQualityPayload(value.quality) ||
       typeof value.refreshing !== "boolean" || typeof value.stale !== "boolean") return null;
+    if (value.sourceInventoryIncomplete !== undefined && value.sourceInventoryIncomplete !== true) return null;
     if (!["sessions", "userRequests", "inputTokens", "outputTokens", "totalTokens", "distinctFiles", "linesAdded", "linesRemoved", "changeEvents", "reasoningOutputTokens"]
       .every((key) => isMetricPayload(value.metrics[key]))) return null;
     if (!safeArray(value.days, 40000) || !safeArray(value.files, 500)) return null;
@@ -2517,7 +2547,7 @@
   function isActiveSessionRow(value) {
     if (!value || typeof value !== "object" || !/^[a-f0-9]{24}$/.test(String(value.id || "")) ||
       typeof value.title !== "string" || value.title.length === 0 || value.title.length > 512 ||
-      !["codex", "claude"].includes(value.source) || typeof value.projectLabel !== "string" ||
+      !["codex", "claude", "antigravity"].includes(value.source) || typeof value.projectLabel !== "string" ||
       value.projectLabel.length > 512 || !value.metrics) return false;
     return ["userRequests", "toolCalls", "reasoningTokens", "totalTokens", "changedLines"].every((metric) => {
       const item = value.metrics[metric];
@@ -2547,7 +2577,12 @@
   }
 
   function isBreakdownMetricValues(value) {
-    return Boolean(value && typeof value === "object" &&
+    if (!value || typeof value !== "object") return false;
+    const availability = value.availability;
+    if (availability !== undefined && (!availability || typeof availability !== "object" || Array.isArray(availability) ||
+      Object.entries(availability).some(([key, quality]) => !["sessions", "inputTokens", "outputTokens", "totalTokens"].includes(key) ||
+        !["available", "partial", "unavailable"].includes(quality) || quality === "unavailable" && value[key] !== 0))) return false;
+    return Boolean(
       [value.sessions, value.inputTokens, value.outputTokens, value.totalTokens]
         .every((metric) => Number.isSafeInteger(metric) && metric >= 0));
   }
@@ -2668,7 +2703,7 @@
 
   function normalizeFilters(value) {
     const raw = value && typeof value === "object" ? value : {};
-    const source = raw.source === "codex" || raw.source === "claude" ? raw.source : "all";
+    const source = raw.source === "codex" || raw.source === "claude" || raw.source === "antigravity" ? raw.source : "all";
     const archiveLocation = raw.archiveLocation === "all" || raw.archiveLocation === "archivedOnly" ? raw.archiveLocation : "activeOnly";
     const displayTargets = new Set(["activeVisible", "visibleAllLocations", "archivedVisible", "hiddenAllLocations", "all"]);
     const displayTarget = displayTargets.has(raw.displayTarget) ? raw.displayTarget : "activeVisible";
@@ -2725,6 +2760,7 @@
   function filterSourceValue(source) {
     if (source === "codex") return text("source.codex");
     if (source === "claude") return text("source.claude");
+    if (source === "antigravity") return text("source.antigravity");
     return text("filterAll");
   }
 

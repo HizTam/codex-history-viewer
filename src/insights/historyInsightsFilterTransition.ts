@@ -35,6 +35,6 @@ export function resolveHistoryInsightsDisplayTarget(
   archivedSessionsEnabled: boolean,
 ): HistoryDisplayTarget | null {
   const requiresArchive = application.displayTarget === "visibleAllLocations" || application.displayTarget === "archivedVisible";
-  if (requiresArchive && (application.source === "claude" || !archivedSessionsEnabled)) return null;
+  if (requiresArchive && (application.source === "claude" || application.source === "antigravity" || !archivedSessionsEnabled)) return null;
   return resolveEffectiveHistoryDisplayTarget(application.displayTarget, application.source, archivedSessionsEnabled);
 }

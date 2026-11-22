@@ -5,6 +5,8 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { finished } from "node:stream/promises";
 import * as vscode from "vscode";
+import { isReadOnlyNativeSession } from "../sessions/sessionMutationPolicy";
+import { t } from "../i18n";
 import type { HistoryService } from "./historyService";
 import type { SessionSummary } from "../sessions/sessionTypes";
 import { formatTimeHmsInTimeZone, pad2, toYmdInTimeZone } from "../utils/dateUtils";
@@ -24,6 +26,7 @@ export async function promoteSessionCopyToToday(
   historyService: HistoryService,
   config: CodexHistoryViewerConfig,
 ): Promise<SessionSummary> {
+  if (isReadOnlyNativeSession(session)) throw new Error(t("app.antigravityReadOnlyOperation"));
   const historyIndex = historyService.getIndex();
   const sessionsRoot = historyIndex.sessionsRoot;
   const dateTime = resolveDateTimeSettings();

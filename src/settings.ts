@@ -39,16 +39,19 @@ export interface CodexHistoryViewerConfig {
   sessionsRoot: string;
   codexArchivedSessionsRoot: string;
   claudeSessionsRoot: string;
+  antigravitySessionsRoots: readonly string[];
   enableCodexSource: boolean;
   enableCodexArchivedSessions: boolean;
   enableCodexCompressedSessions?: boolean;
   enableClaudeSource: boolean;
+  enableAntigravitySource: boolean;
   claudeNativeBookmarksEnabled?: boolean;
   branchNavigationEnabled: boolean;
   agentRunsEnabled: boolean;
   handoffEnabled: boolean;
   fileChangeHistoryExplorerContextMenuEnabled: boolean;
   webviewRestoreAfterReload: boolean;
+  enableSqliteCache?: boolean;
   previewOpenOnSelection: boolean;
   previewMaxMessages: number;
   previewTooltipMode: PreviewTooltipMode;
@@ -59,6 +62,7 @@ export interface CodexHistoryViewerConfig {
   resumeOpenTarget: "sidebar" | "panel";
   resumeCodexMethod: ResumeMethod;
   resumeClaudeMethod: ResumeMethod;
+  resumeAntigravityMethod: ResumeMethod;
   historyDateBasis: HistoryDateBasis;
   historyTitleSource: HistoryTitleSource;
   historyStartupMode: ViewStartupMode;
@@ -97,15 +101,17 @@ function getDefaultClaudeSessionsRoot(): string {
 function parseEnabledSources(value: unknown): {
   enableCodexSource: boolean;
   enableClaudeSource: boolean;
+  enableAntigravitySource: boolean;
 } {
   const list = Array.isArray(value) ? value.map((v) => String(v ?? "").trim().toLowerCase()) : [];
   const enableCodexSource = list.includes("codex");
   const enableClaudeSource = list.includes("claude");
+  const enableAntigravitySource = list.includes("antigravity");
 
-  if (list.length === 0 || (!enableCodexSource && !enableClaudeSource)) {
-    return { enableCodexSource: true, enableClaudeSource: true };
+  if (list.length === 0 || (!enableCodexSource && !enableClaudeSource && !enableAntigravitySource)) {
+    return { enableCodexSource: true, enableClaudeSource: true, enableAntigravitySource: false };
   }
-  return { enableCodexSource, enableClaudeSource };
+  return { enableCodexSource, enableClaudeSource, enableAntigravitySource };
 }
 
 function parseLongMessageFoldingMode(value: unknown): LongMessageFoldingMode {
@@ -206,6 +212,11 @@ export function getConfig(): CodexHistoryViewerConfig {
     ""
   ).trim();
   const enabledSources = parseEnabledSources(cfg.get<unknown>("sources.enabled"));
+  const antigravityRootValue = cfg.get<unknown>("antigravity.sessionsRoot");
+  const antigravityRoot = typeof antigravityRootValue === "string" ? antigravityRootValue.trim() : "";
+  const antigravitySessionsRoots = antigravityRoot
+    ? [antigravityRoot]
+    : ["antigravity", "antigravity-cli", "antigravity-ide"].map(name => path.join(os.homedir(), ".gemini", name));
   const resumeOpenTargetRaw = (cfg.get<string>("resume.openTarget") ?? "sidebar").trim().toLowerCase();
   const resumeOpenTarget: "sidebar" | "panel" = resumeOpenTargetRaw === "panel" ? "panel" : "sidebar";
   const resumeCodexMethod = parseResumeMethod(cfg.get<unknown>("resume.codexMethod"));
@@ -245,10 +256,12 @@ export function getConfig(): CodexHistoryViewerConfig {
         ? codexArchivedSessionsRootRaw
         : getDefaultCodexArchivedSessionsRoot(sessionsRoot),
     claudeSessionsRoot: claudeSessionsRootRaw.length > 0 ? claudeSessionsRootRaw : getDefaultClaudeSessionsRoot(),
+    antigravitySessionsRoots,
     enableCodexSource: enabledSources.enableCodexSource,
     enableCodexArchivedSessions: enabledSources.enableCodexSource && codexArchivedSessionsEnabledSetting,
     enableCodexCompressedSessions: enabledSources.enableCodexSource && cfg.get<boolean>("codex.compressedSessions.enabled") === true,
     enableClaudeSource: enabledSources.enableClaudeSource,
+    enableAntigravitySource: enabledSources.enableAntigravitySource,
     claudeNativeBookmarksEnabled: cfg.get<boolean>("claude.nativeBookmarks.enabled") === true,
     branchNavigationEnabled: cfg.get<boolean>("branchNavigation.enabled") ?? false,
     agentRunsEnabled: cfg.get<boolean>("agentRuns.enabled") ?? false,
@@ -256,6 +269,7 @@ export function getConfig(): CodexHistoryViewerConfig {
     fileChangeHistoryExplorerContextMenuEnabled:
       cfg.get<boolean>("fileChangeHistory.explorerContextMenu.enabled") ?? false,
     webviewRestoreAfterReload: cfg.get<boolean>("webview.restoreAfterReload") ?? false,
+    enableSqliteCache: cfg.get<unknown>("cache.sqlite.enabled") === true,
     previewOpenOnSelection: cfg.get<boolean>("preview.openOnSelection") ?? true,
     previewMaxMessages: parseBoundedNumber(cfg.get<number>("preview.maxMessages"), 6, 1, 50),
     previewTooltipMode: parsePreviewTooltipMode(cfg.get<string>("preview.tooltipMode") ?? "full"),
@@ -268,6 +282,7 @@ export function getConfig(): CodexHistoryViewerConfig {
     resumeOpenTarget,
     resumeCodexMethod,
     resumeClaudeMethod,
+    resumeAntigravityMethod: parseResumeMethod(cfg.get<unknown>("resume.antigravityMethod")),
     historyDateBasis,
     historyTitleSource,
     historyStartupMode: parseViewStartupMode(cfg.get<unknown>("history.startupMode")),

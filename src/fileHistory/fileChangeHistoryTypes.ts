@@ -69,6 +69,8 @@ export interface FileChangeHistoryDiffStats {
   claudeMultiEditParsed: number;
   claudeWriteParsed: number;
   claudeBashParsed: number;
+  antigravityUnconfirmedParsed: number;
+  antigravityUnavailable: number;
   noRenderableSkipped: number;
 }
 
@@ -84,6 +86,7 @@ export interface FileChangeHistoryLoadStats {
 export interface FileChangeHistorySourceCounts {
   codex: number;
   claude: number;
+  antigravity: number;
 }
 
 export interface FileChangeHistoryWebviewModel {
@@ -91,7 +94,9 @@ export interface FileChangeHistoryWebviewModel {
   navigationOrigin?: FileChangeHistoryOrigin;
   cards: FileChangeHistoryCard[];
   sourceCounts: FileChangeHistorySourceCounts;
-  enabledSources: { codex: boolean; claude: boolean };
+  enabledSources: { codex: boolean; claude: boolean; antigravity: boolean };
+  antigravityNotice?: "partial" | "unavailable";
+  sourceInventoryIncomplete?: true;
   totalCount: number;
   hasMore: boolean;
   noMore: boolean;

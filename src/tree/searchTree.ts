@@ -108,9 +108,11 @@ export class SearchTreeDataProvider implements vscode.TreeDataProvider<TreeNode>
         vscode.TreeItemCollapsibleState.Expanded,
       );
       const scopeLabel = formatScopeLabel(element);
-      item.description = scopeLabel;
+      const quality = element.incompleteSources.length > 0
+        ? t("search.sources.incomplete", element.incompleteSources.map(sourceName).join(", ")) : "";
+      item.description = [scopeLabel, quality].filter(Boolean).join(" / ");
       item.contextValue = toTreeItemContextValue(element);
-      item.tooltip = t("tree.tooltip.searchRoot", element.query, scopeLabel || t("search.filter.all"), visibleTotalHits);
+      item.tooltip = t("tree.tooltip.searchRoot", element.query, scopeLabel || t("search.filter.all"), visibleTotalHits) + (quality ? `\n${quality}` : "");
       return item;
     }
     if (element instanceof SearchSessionNode) {
@@ -434,7 +436,7 @@ function formatLocationLabel(hit: {
   source?: SearchHit["source"];
 }): string {
   if (hit.inputId) return `[${t("chat.claudeQueuedInput")}]`;
-  if (hit.progressId) return `[${t(hit.progressKind === "thinking" ? "chat.claudeProgress.thinking" : "chat.claudeProgress.narration")}]`;
+  if (hit.progressId) return `[${t(hit.progressKind === "queuedInput" ? "chat.antigravityProgress.queuedInput" : hit.progressKind === "thinking" ? "chat.claudeProgress.thinking" : "chat.claudeProgress.narration")}]`;
   if (
     hit.source === "annotationTag" ||
     hit.source === "annotationNote" ||
@@ -472,7 +474,8 @@ function isSameSearchHit(
 }
 
 function sourceName(source: SessionSource): string {
-  return source === "claude" ? "Claude Code" : "Codex";
+  if (source === "antigravity") return t("history.filter.source.antigravity");
+  return source === "claude" ? t("history.filter.source.claude") : t("history.filter.source.codex");
 }
 
 function getSessionCwd(session: SessionSummary): string | null {

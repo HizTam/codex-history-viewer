@@ -1,6 +1,10 @@
 import { getClaudeAgentDependencyStamp } from "../sessions/claudeAgentHistory";
 import * as fs from "node:fs/promises";
 import * as vscode from "vscode";
+import { STORAGE_CONTRACT_FINGERPRINT } from "../generated/storageContractFingerprint";
+import { SqliteCacheStore } from "../storage/sqliteCacheStore";
+import { SqliteValueCache, type SqliteValueCacheSnapshot } from "../storage/sqliteValueCache";
+import { isRecord, SqliteCacheError } from "../storage/sqliteRuntime";
 import type { CodexHistoryViewerConfig } from "../settings";
 import { isBoundedSessionIdentityKey } from "../sessions/sessionIdentity";
 import type { SessionSummary } from "../sessions/sessionTypes";
@@ -22,6 +26,7 @@ import {
   buildUnsupportedSessionAnalysisEntry,
   ClaudeSessionAnalysisAdapter,
   CodexSessionAnalysisAdapter,
+  analyzeSessionFile,
 } from "./sessionAnalysisAdapter";
 import {
   isSessionAnalysisGraphIdentifier,
@@ -29,6 +34,7 @@ import {
   isSessionAnalysisTimestamp,
   SESSION_ANALYSIS_CACHE_SCHEMA_VERSION,
   SESSION_ANALYSIS_CLAUDE_PARSER_VERSION,
+  SESSION_ANALYSIS_ANTIGRAVITY_PARSER_VERSION,
   SESSION_ANALYSIS_CODEX_PARSER_VERSION,
   SESSION_ANALYSIS_MAX_CACHE_ENTRIES,
   SESSION_ANALYSIS_MAX_FILE_CHANGE_ENTRIES,
@@ -40,6 +46,8 @@ import {
   type SessionAnalysisProgress,
   type SessionAnalysisResult,
 } from "./sessionAnalysisTypes";
+import { antigravityReader } from "../antigravity/antigravityReader";
+import type { AntigravitySessionData } from "../antigravity/antigravityReaderTypes";
 
 const YIELD_INTERVAL = 8;
 export const SESSION_ANALYSIS_MAX_FILE_SIZE_BYTES = 256 * 1024 * 1024;
@@ -124,6 +132,14 @@ interface SharedBuildJob {
   committing: boolean;
   cacheLoaded: boolean;
   completion: Promise<void>;
+  sqlite?: AnalysisSqlitePreparation;
+  loadedSqliteKeys: Set<string>;
+}
+
+interface AnalysisSqlitePreparation {
+  readonly selected: boolean;
+  readonly snapshot?: SqliteValueCacheSnapshot;
+  readonly error?: unknown;
 }
 
 interface SharedBuildAttachment {
@@ -144,10 +160,12 @@ export class SessionAnalysisIndexService {
   private operationQueue: Promise<void> = Promise.resolve();
   private sharedBuildJob: SharedBuildJob | null = null;
   private nextConsumerId = 0;
+  private readonly sqliteValues?: SqliteValueCache;
 
-  constructor(globalStorageUri: vscode.Uri, logger?: DebugLogger) {
+  constructor(globalStorageUri: vscode.Uri, logger?: DebugLogger, private readonly sqliteCache?: SqliteCacheStore) {
     this.cacheUri = vscode.Uri.joinPath(globalStorageUri, SESSION_ANALYSIS_INDEX_FILE_NAME);
     this.logger = logger;
+    this.sqliteValues = sqliteCache ? new SqliteValueCache(sqliteCache, "analysis") : undefined;
   }
 
   public async ensureEntries(options: EnsureSessionAnalysisOptions): Promise<SessionAnalysisResult> {
@@ -183,10 +201,12 @@ export class SessionAnalysisIndexService {
     return this.runExclusive(async () => {
       await this.waitForSharedBuildJob();
       this.throwIfCancelled(options.token);
-      try {
-        await vscode.workspace.fs.delete(this.cacheUri, { recursive: false, useTrash: false });
-      } catch (error) {
-        if (!isFileNotFoundError(error)) throw error;
+      if (!this.sqliteValues || !await this.sqliteCache?.ready()) {
+        try {
+          await vscode.workspace.fs.delete(this.cacheUri, { recursive: false, useTrash: false });
+        } catch (error) {
+          if (!isFileNotFoundError(error)) throw error;
+        }
       }
       this.loaded = true;
       this.cache = null;
@@ -201,7 +221,8 @@ export class SessionAnalysisIndexService {
   ): Promise<StoredSessionAnalysisResult> {
     return this.runExclusive(async () => {
       const context = buildSessionAnalysisCacheContext(config);
-      await this.ensureLoaded(context);
+      const sqlite = await this.prepareSqliteCache(context);
+      await this.ensureLoaded(context, sqlite, new Set(sessions.map(session => session.cacheKey)));
       if (!this.cache || !sameCacheContext(this.cache.context, context)) {
         return { entries: [], generatedAtIso: new Date(0).toISOString() };
       }
@@ -233,6 +254,7 @@ export class SessionAnalysisIndexService {
       committing: false,
       cacheLoaded: false,
       completion: Promise.resolve(),
+      loadedSqliteKeys: new Set(),
     };
     this.sharedBuildJob = job;
     job.completion = Promise.resolve()
@@ -335,7 +357,10 @@ export class SessionAnalysisIndexService {
   }
 
   private async runSharedBuildJob(job: SharedBuildJob): Promise<void> {
-    await this.ensureLoaded(job.context);
+    job.sqlite = await this.prepareSqliteCache(job.context);
+    const initialKeys = new Set(job.sessionsByCacheKey.keys());
+    await this.ensureLoaded(job.context, job.sqlite, initialKeys);
+    for (const key of initialKeys) job.loadedSqliteKeys.add(key);
     job.cacheLoaded = true;
     this.pruneCancelledSharedBuildConsumers(job);
     if (!hasActiveSharedBuildConsumer(job)) throw new SessionAnalysisCancelledError();
@@ -379,6 +404,11 @@ export class SessionAnalysisIndexService {
       if (!isSharedBuildCacheKeyRequested(job, cacheKey)) continue;
       const session = job.sessionsByCacheKey.get(cacheKey);
       if (!session) continue;
+      if (job.sqlite.selected && job.sqlite.snapshot && !job.loadedSqliteKeys.has(cacheKey)) {
+        job.loadedSqliteKeys.add(cacheKey);
+        const loaded = await this.loadSqliteEntries(job.context, job.sqlite.snapshot, new Set([cacheKey]));
+        if (!cache.entries[cacheKey] && loaded?.entries[cacheKey]) cache.entries[cacheKey] = loaded.entries[cacheKey]!;
+      }
       if (historyInventoryRevision !== job.historyInventoryRevision) {
         historyInventory = Array.from(job.historyInventoryByCacheKey.values());
         historyInventoryRevision = job.historyInventoryRevision;
@@ -387,7 +417,9 @@ export class SessionAnalysisIndexService {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const stat = await statSessionFile(session.fsPath);
         const historyPlan = await resolveHistoryPlan(session, historyInventory);
+        const antigravityData = await observeAntigravityAnalysisInput(session, this.createSharedBuildAnalysisToken(job, cacheKey));
         const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan)
+          : session.source === "antigravity" ? antigravityAnalysisSignature(antigravityData)
           : session.source === "claude" ? await getClaudeAgentDependencyStamp(session.fsPath, session.storage.rootPath) : undefined;
         this.pruneCancelledSharedBuildConsumers(job);
         if (!hasActiveSharedBuildConsumer(job)) throw new SessionAnalysisCancelledError();
@@ -414,6 +446,7 @@ export class SessionAnalysisIndexService {
             historyPlan,
             historySignature,
             analysisToken,
+            antigravityData,
           );
           cache.entries[cacheKey] = entry;
           cacheChanged = true;
@@ -472,7 +505,7 @@ export class SessionAnalysisIndexService {
     if (cacheChanged) {
       cache.generatedAtIso = new Date().toISOString();
       try {
-        await this.saveCache(cache, () => this.beginSharedBuildCommit(job));
+        await this.saveCache(cache, () => this.beginSharedBuildCommit(job), job.sqlite, job.activeKeys);
       } catch (error) {
         if (error instanceof SessionAnalysisCancelledError) throw error;
         if (!job.committing) this.beginSharedBuildCommit(job);
@@ -605,7 +638,9 @@ export class SessionAnalysisIndexService {
   ): Promise<SessionAnalysisResult> {
     const context = buildSessionAnalysisCacheContext(options.config);
     options.onProgress?.(progressOf("loadCache", 0, 1, 0, 0));
-    await this.ensureLoaded(context);
+    const sqlite = await this.prepareSqliteCache(context);
+    if (requirePersistence && sqlite.error) throw sqlite.error;
+    if (!requirePersistence) await this.ensureLoaded(context, sqlite, new Set(options.sessions.map(session => session.cacheKey)));
     this.throwIfCancelled(options.token);
     options.onProgress?.(progressOf("loadCache", 1, 1, 0, 0));
 
@@ -628,7 +663,9 @@ export class SessionAnalysisIndexService {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const stat = await statSessionFile(session.fsPath);
         const historyPlan = await resolveHistoryPlan(session, historyInventory);
+        const antigravityData = await observeAntigravityAnalysisInput(session, options.token);
         const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan)
+          : session.source === "antigravity" ? antigravityAnalysisSignature(antigravityData)
           : session.source === "claude" ? await getClaudeAgentDependencyStamp(session.fsPath, session.storage.rootPath) : undefined;
         const cached = cache.entries[session.cacheKey];
         if (cached && stat && isEntryFresh(
@@ -651,6 +688,7 @@ export class SessionAnalysisIndexService {
             historyPlan,
             historySignature,
             options.token,
+            antigravityData,
           );
           break;
         } catch (error) {
@@ -699,11 +737,11 @@ export class SessionAnalysisIndexService {
     if (cacheChanged) {
       cache.generatedAtIso = new Date().toISOString();
       if (requirePersistence) {
-        await this.saveCache(cache, () => this.throwIfCancelled(options.token));
+        await this.saveCache(cache, () => this.throwIfCancelled(options.token), sqlite, activeKeys, options.token);
         this.cache = cache;
       } else {
         try {
-          await this.saveCache(cache);
+          await this.saveCache(cache, undefined, sqlite, activeKeys);
         } catch (error) {
           this.logger?.debug(`analysis.cache write failed error=${sanitizeErrorName(error)}`);
         }
@@ -728,6 +766,10 @@ export class SessionAnalysisIndexService {
       await this.waitForSharedBuildJob();
       this.loaded = true;
       this.cache = null;
+      if (this.sqliteValues && await this.sqliteCache?.ready()) {
+        await this.sqliteCache!.request({ kind: "clearFamily", family: "analysis" });
+        return;
+      }
       try {
         await vscode.workspace.fs.delete(this.cacheUri, { recursive: false, useTrash: false });
       } catch {
@@ -736,7 +778,21 @@ export class SessionAnalysisIndexService {
     });
   }
 
-  private async ensureLoaded(context: SessionAnalysisCacheContext): Promise<void> {
+  private async ensureLoaded(context: SessionAnalysisCacheContext, sqlite?: AnalysisSqlitePreparation, keys?: ReadonlySet<string>): Promise<void> {
+    if (sqlite?.selected) {
+      const previous = this.cache && sameCacheContext(this.cache.context, context) ? this.cache : null;
+      const missing = keys ? new Set([...keys].filter(key => !previous?.entries[key])) : undefined;
+      const loaded = sqlite.snapshot && (!missing || missing.size > 0)
+        ? await this.loadSqliteEntries(context, sqlite.snapshot, missing)
+        : null;
+      if (!previous && !loaded) { this.cache = null; return; }
+      this.cache = {
+        version: SESSION_ANALYSIS_CACHE_SCHEMA_VERSION, context,
+        generatedAtIso: previous?.generatedAtIso ?? loaded?.generatedAtIso ?? new Date(0).toISOString(),
+        entries: { ...loaded?.entries, ...previous?.entries },
+      };
+      return;
+    }
     if (this.loaded) return;
     if (!this.loadPromise) {
       this.loadPromise = (async () => {
@@ -750,6 +806,26 @@ export class SessionAnalysisIndexService {
       });
     }
     await this.loadPromise;
+  }
+
+  private async prepareSqliteCache(context: SessionAnalysisCacheContext): Promise<AnalysisSqlitePreparation> {
+    if (!this.sqliteValues || !await this.sqliteCache?.ready()) return { selected: false };
+    try { return { selected: true, snapshot: await this.sqliteValues.prepare(context) }; }
+    catch (error) {
+      this.logger?.debug("analysis.sqlite cache preparation failed");
+      return { selected: true, error };
+    }
+  }
+
+  private async loadSqliteEntries(context: SessionAnalysisCacheContext, snapshot: SqliteValueCacheSnapshot,
+    keys?: ReadonlySet<string>): Promise<SessionAnalysisCacheFile | null> {
+    try {
+      const document = await this.sqliteValues!.loadPrepared(snapshot, keys);
+      return document ? sanitizeSessionAnalysisCache({ ...document.header, entries: document.entries }, context) : null;
+    } catch {
+      this.logger?.debug("analysis.sqlite cache read failed");
+      return null;
+    }
   }
 
   private createWorkingCache(context: SessionAnalysisCacheContext): {
@@ -784,6 +860,7 @@ export class SessionAnalysisIndexService {
     historyPlan: CodexLogicalHistoryPlan | undefined,
     historySignature: string | undefined,
     token?: AnalysisCancellationToken,
+    antigravityData?: AntigravitySessionData,
   ): Promise<SessionAnalysisEntry> {
     const inFlightKey = [
       session.cacheKey,
@@ -794,7 +871,7 @@ export class SessionAnalysisIndexService {
     const existing = this.inFlightByCacheKey.get(inFlightKey);
     if (existing) {
       const entry = await existing;
-      if (!await isAnalysisInputStable(session, stat, historyPlan, historySignature)) {
+      if (!await isAnalysisInputStable(session, stat, historyPlan, historySignature, token)) {
         throw new SessionAnalysisInputChangedError();
       }
       return entry;
@@ -807,6 +884,7 @@ export class SessionAnalysisIndexService {
       sessionInventory,
       historyPlan,
       historySignature,
+      antigravityData,
       ...(token
         ? {
             token,
@@ -814,18 +892,19 @@ export class SessionAnalysisIndexService {
           }
         : {}),
     };
-    const analysisInputSize = historyPlan
+    const analysisInputSize = session.source === "antigravity" ? undefined : historyPlan
       ? getLogicalHistorySize(historyPlan)
       : stat?.size;
     const exceedsFileSizeLimit =
       analysisInputSize !== undefined && !isSessionAnalysisFileSizeSupported(analysisInputSize);
     const build = exceedsFileSizeLimit
       ? Promise.resolve(buildUnsupportedSessionAnalysisEntry(input, "fileSizeLimit"))
+      : session.source === "antigravity" ? analyzeSessionFile(input)
       : (session.source === "codex" ? this.codexAdapter : this.claudeAdapter).analyze(input);
     this.inFlightByCacheKey.set(inFlightKey, build);
     try {
       const entry = await build;
-      if (!await isAnalysisInputStable(session, stat, historyPlan, historySignature)) {
+      if (!await isAnalysisInputStable(session, stat, historyPlan, historySignature, token)) {
         throw new SessionAnalysisInputChangedError();
       }
       return entry;
@@ -837,6 +916,9 @@ export class SessionAnalysisIndexService {
   private async saveCache(
     cache: SessionAnalysisCacheFile,
     beforeCommit?: () => void,
+    sqlite?: AnalysisSqlitePreparation,
+    activeKeys?: ReadonlySet<string>,
+    token?: AnalysisCancellationToken,
   ): Promise<void> {
     const boundedEntries = buildBoundedPersistedCacheEntries(cache.entries);
     if (boundedEntries.omittedCount > 0) {
@@ -851,9 +933,35 @@ export class SessionAnalysisIndexService {
     this.saveQueue = this.saveQueue
       .catch(() => undefined)
       .then(async () => {
+        if (sqlite?.selected) {
+          if (sqlite.error) throw sqlite.error;
+          if (!sqlite.snapshot) throw new SqliteCacheError("invalidData");
+          const candidates = new Map<string, SessionAnalysisCacheRetentionCandidate>();
+          for (const descriptor of sqlite.snapshot.entries.values()) {
+            if (!descriptor.key.startsWith("entry:")) continue;
+            const cacheKey = descriptor.key.slice(6);
+            if (activeKeys && !activeKeys.has(cacheKey)) continue;
+            let metadata: unknown;
+            try { metadata = JSON.parse(descriptor.metadata); } catch { continue; }
+            if (!isRecord(metadata) || typeof metadata.mtimeMs !== "number" || !Number.isFinite(metadata.mtimeMs)) continue;
+            candidates.set(cacheKey, { cacheKey, mtimeMs: metadata.mtimeMs,
+              ...(typeof metadata.startedAtIso === "string" ? { startedAtIso: metadata.startedAtIso } : {}),
+              ...(typeof metadata.lastActivityAtIso === "string" ? { lastActivityAtIso: metadata.lastActivityAtIso } : {}) });
+          }
+          for (const [key, entry] of Object.entries(snapshot.entries)) if (!activeKeys || activeKeys.has(key)) candidates.set(key, entry);
+          const retainKeys = new Set(selectSessionAnalysisCacheRetentionKeys([...candidates.values()]));
+          const { entries, ...header } = snapshot;
+          await this.sqliteValues!.save(cache.context, { header, entries }, { beforeCommit, snapshot: sqlite.snapshot,
+            preserveUnloaded: true, retainKeys, token: toSqliteCancellationToken(token) });
+          return;
+        }
         await writeJson(this.cacheUri, snapshot, { pretty: false, ...(beforeCommit ? { beforeCommit } : {}) });
       });
-    await this.saveQueue;
+    try { await this.saveQueue; }
+    catch (error) {
+      if (error instanceof vscode.CancellationError && token?.isCancellationRequested) throw new SessionAnalysisCancelledError();
+      throw error;
+    }
   }
 
   private throwIfCancelled(token: AnalysisCancellationToken | undefined): void {
@@ -873,6 +981,24 @@ export class SessionAnalysisIndexService {
       release();
     }
   }
+}
+
+function toSqliteCancellationToken(token?: AnalysisCancellationToken): vscode.CancellationToken | undefined {
+  if (!token) return undefined;
+  return {
+    get isCancellationRequested() { return token.isCancellationRequested; },
+    onCancellationRequested: (listener, thisArgs, disposables) => {
+      // Keep optional-event tokens compatible; synchronous guards still read their original getter.
+      const registration = token.onCancellationRequested?.(() => listener.call(thisArgs, undefined));
+      let disposed = false;
+      const disposable: vscode.Disposable = { dispose: () => {
+        if (disposed) return;
+        disposed = true; registration?.dispose();
+      } };
+      disposables?.push(disposable);
+      return disposable;
+    },
+  };
 }
 
 export function isSessionAnalysisFileSizeSupported(size: number): boolean {
@@ -1014,14 +1140,18 @@ function disposeCancellationRegistration(consumer: SharedBuildConsumer): void {
 
 export function buildSessionAnalysisCacheContext(config: CodexHistoryViewerConfig): SessionAnalysisCacheContext {
   return {
+    storageContractFingerprint: STORAGE_CONTRACT_FINGERPRINT,
     codexSessionsRoot: config.sessionsRoot,
     codexArchivedSessionsRoot: config.codexArchivedSessionsRoot,
     claudeSessionsRoot: config.claudeSessionsRoot,
+    antigravitySessionsRoots: [...(config.antigravitySessionsRoots ?? [])],
     includeCodex: config.enableCodexSource,
     includeCodexArchived: config.enableCodexArchivedSessions,
     includeClaude: config.enableClaudeSource,
+    includeAntigravity: config.enableAntigravitySource === true,
     codexParserVersion: SESSION_ANALYSIS_CODEX_PARSER_VERSION,
     claudeParserVersion: SESSION_ANALYSIS_CLAUDE_PARSER_VERSION,
+    antigravityParserVersion: SESSION_ANALYSIS_ANTIGRAVITY_PARSER_VERSION,
     pathNormalizationVersion: SESSION_ANALYSIS_PATH_NORMALIZATION_VERSION,
   };
 }
@@ -1042,7 +1172,7 @@ export function sanitizeSessionAnalysisCache(
     if (!isSessionAnalysisEntry(entry, key)) continue;
     const expectedParserVersion = entry.source === "codex"
       ? expectedContext.codexParserVersion
-      : expectedContext.claudeParserVersion;
+      : entry.source === "antigravity" ? expectedContext.antigravityParserVersion : expectedContext.claudeParserVersion;
     if (entry.parserVersion !== expectedParserVersion) continue;
     sanitizedEntries[key] = entry;
   }
@@ -1063,14 +1193,18 @@ function sameCacheContextExceptParserVersions(
   if (!left || typeof left !== "object") return false;
   const raw = left as Record<string, unknown>;
   return (
+    raw.storageContractFingerprint === right.storageContractFingerprint &&
     raw.codexSessionsRoot === right.codexSessionsRoot &&
     raw.codexArchivedSessionsRoot === right.codexArchivedSessionsRoot &&
     raw.claudeSessionsRoot === right.claudeSessionsRoot &&
+    JSON.stringify(raw.antigravitySessionsRoots ?? []) === JSON.stringify(right.antigravitySessionsRoots ?? []) &&
     raw.includeCodex === right.includeCodex &&
     raw.includeCodexArchived === right.includeCodexArchived &&
     raw.includeClaude === right.includeClaude &&
+    (raw.includeAntigravity === true) === (right.includeAntigravity === true) &&
     isSafeNonNegativeInteger(raw.codexParserVersion) &&
     isSafeNonNegativeInteger(raw.claudeParserVersion) &&
+    (raw.antigravityParserVersion === undefined || isSafeNonNegativeInteger(raw.antigravityParserVersion)) &&
     raw.pathNormalizationVersion === right.pathNormalizationVersion
   );
 }
@@ -1079,7 +1213,8 @@ function sameCacheContext(left: unknown, right: SessionAnalysisCacheContext): le
   if (!sameCacheContextExceptParserVersions(left, right)) return false;
   return (
     left.codexParserVersion === right.codexParserVersion &&
-    left.claudeParserVersion === right.claudeParserVersion
+    left.claudeParserVersion === right.claudeParserVersion &&
+    (left.antigravityParserVersion ?? SESSION_ANALYSIS_ANTIGRAVITY_PARSER_VERSION) === (right.antigravityParserVersion ?? SESSION_ANALYSIS_ANTIGRAVITY_PARSER_VERSION)
   );
 }
 
@@ -1087,7 +1222,7 @@ function isSessionAnalysisEntry(value: unknown, key: string): value is SessionAn
   if (!value || typeof value !== "object") return false;
   const entry = value as Partial<SessionAnalysisEntry>;
   if (key.length === 0 || key.length > SESSION_ANALYSIS_MAX_PATH_LENGTH) return false;
-  if (entry.cacheKey !== key || (entry.source !== "codex" && entry.source !== "claude")) return false;
+  if (entry.cacheKey !== key || (entry.source !== "codex" && entry.source !== "claude" && entry.source !== "antigravity")) return false;
   if (entry.completeness !== "complete" && entry.completeness !== "partial" && entry.completeness !== "unsupported" && entry.completeness !== "failed") return false;
   if (typeof entry.fsPath !== "string" || entry.fsPath.length > SESSION_ANALYSIS_MAX_PATH_LENGTH || !pathIsAbsolute(entry.fsPath)) return false;
   if (!isBoundedSessionIdentityKey(entry.identityKey)) return false;
@@ -1095,9 +1230,10 @@ function isSessionAnalysisEntry(value: unknown, key: string): value is SessionAn
   if (entry.historySignature !== undefined && !isOptionalBoundedString(entry.historySignature, 256)) return false;
   if (entry.codexRollbackRevision !== undefined && (entry.source !== "codex" || !isSafePositiveInteger(entry.codexRollbackRevision))) return false;
   if (!isStorageLocation(entry.storage) || !isMessageStats(entry.messageStats)) return false;
+  if (entry.source === "antigravity" && (entry.storage?.rootKind !== "antigravitySessions" || entry.storage.archiveState !== "active")) return false;
   const usageStats = entry.usageStats;
   if (!isUsageStats(usageStats) || !isFileChangeStats(entry.fileChangeStats)) return false;
-  if (entry.source === "claude" && usageStats.modelEffortUsage.length !== 0) return false;
+  if (entry.source !== "codex" && usageStats.modelEffortUsage.length !== 0) return false;
   if (!isOptionalSessionAnalysisProjectCwd(entry.projectCwd)) return false;
   if (!isOptionalSessionAnalysisTimestamp(entry.startedAtIso) ||
     !isOptionalSessionAnalysisTimestamp(entry.lastActivityAtIso)) return false;
@@ -1124,7 +1260,7 @@ function isStorageLocation(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
   const raw = value as Record<string, unknown>;
   return (
-    (raw.rootKind === "codexSessions" || raw.rootKind === "codexArchivedSessions" || raw.rootKind === "claudeSessions") &&
+    (raw.rootKind === "codexSessions" || raw.rootKind === "codexArchivedSessions" || raw.rootKind === "claudeSessions" || raw.rootKind === "antigravitySessions") &&
     (raw.archiveState === "active" || raw.archiveState === "archived") &&
     typeof raw.rootPath === "string" && raw.rootPath.length <= SESSION_ANALYSIS_MAX_PATH_LENGTH
   );
@@ -1152,7 +1288,7 @@ function isUsageStats(value: unknown): value is SessionAnalysisEntry["usageStats
   if (!value || typeof value !== "object") return false;
   const raw = value as Record<string, unknown>;
   if (!["inputTokens", "outputTokens", "cachedInputTokens", "cacheReadInputTokens", "cacheCreationInputTokens", "reasoningOutputTokens", "reportedTotalTokens", "derivedTotalTokens"].every((key) => isAnalysisNumber(raw[key]))) return false;
-  if (!["codexLastUsageSum", "codexResponseUsageSum", "codexCumulativeFallback", "claudeMessageSum", "mixedPartial", "unavailable"].includes(String(raw.aggregationMethod))) return false;
+  if (!["codexLastUsageSum", "codexResponseUsageSum", "codexCumulativeFallback", "claudeMessageSum", "antigravityMessageSum", "mixedPartial", "unavailable"].includes(String(raw.aggregationMethod))) return false;
   if (!Array.isArray(raw.modelUsage) || raw.modelUsage.length > 2_000) return false;
   const modelTotals = new Map<string, number>();
   for (const value of raw.modelUsage) {
@@ -1161,6 +1297,7 @@ function isUsageStats(value: unknown): value is SessionAnalysisEntry["usageStats
     if (typeof model.model !== "string" || model.model.length === 0 || model.model.length > 512 ||
       !isSafeNonNegativeInteger(model.inputTokens) || !isSafeNonNegativeInteger(model.outputTokens) ||
       !isSafeNonNegativeInteger(model.totalTokens) || modelTotals.has(model.model)) return false;
+    if (model.availability !== undefined && (!isRecord(model.availability) || !["inputTokens", "outputTokens", "totalTokens"].every(key => ["available", "partial", "unavailable"].includes(String((model.availability as Record<string, unknown>)[key]))))) return false;
     modelTotals.set(model.model, model.totalTokens as number);
   }
   if (!Array.isArray(raw.modelEffortUsage) || raw.modelEffortUsage.length > 2_000) return false;
@@ -1342,7 +1479,7 @@ function isEntryFresh(
   historySignature: string | undefined,
 ): boolean {
   const parserVersion =
-    session.source === "codex" ? SESSION_ANALYSIS_CODEX_PARSER_VERSION : SESSION_ANALYSIS_CLAUDE_PARSER_VERSION;
+    session.source === "codex" ? SESSION_ANALYSIS_CODEX_PARSER_VERSION : session.source === "antigravity" ? SESSION_ANALYSIS_ANTIGRAVITY_PARSER_VERSION : SESSION_ANALYSIS_CLAUDE_PARSER_VERSION;
   return (
     isEntryForSession(entry, session) &&
     entry.mtimeMs === mtimeMs &&
@@ -1406,7 +1543,9 @@ async function isAnalysisInputStable(
   initialStat: { mtimeMs: number; size: number } | null,
   historyPlan: CodexLogicalHistoryPlan | undefined,
   historySignature: string | undefined,
+  token?: AnalysisCancellationToken,
 ): Promise<boolean> {
+  if (session.source === "antigravity") return historySignature === antigravityAnalysisSignature(await observeAntigravityAnalysisInput(session, token));
   if (session.source === "claude" && historySignature !== await getClaudeAgentDependencyStamp(session.fsPath, session.storage.rootPath)) return false;
   if (!historyPlan) {
     return areSameAnalysisFileStamp(initialStat, await statSessionFile(session.fsPath));
@@ -1416,6 +1555,18 @@ async function isAnalysisInputStable(
     if (!current || current.mtimeMs !== segment.mtimeMs || current.size !== segment.size) return false;
   }
   return true;
+}
+
+function antigravityAnalysisSignature(data: AntigravitySessionData | undefined): string {
+  return data ? `antigravity:${data.digest}` : "antigravity:unavailable";
+}
+async function observeAntigravityAnalysisInput(session: SessionSummary, token?: AnalysisCancellationToken): Promise<AntigravitySessionData | undefined> {
+  if (session.source !== "antigravity") return undefined;
+  try { return await antigravityReader.readSession(session.fsPath, token); }
+  catch {
+    if (token?.isCancellationRequested) throw new SessionAnalysisCancelledError();
+    return undefined;
+  }
 }
 
 function areSameAnalysisFileStamp(

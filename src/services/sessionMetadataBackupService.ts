@@ -1,4 +1,9 @@
 import * as path from "node:path";
+import * as os from "node:os";
+import { antigravityReader } from "../antigravity/antigravityReader";
+import { ANTIGRAVITY_UUID } from "../antigravity/antigravityTypes";
+import { getConfig } from "../settings";
+import { isSourceInventoryComplete } from "../sessions/sourceInventory";
 import { claudeAgentIdentity, parseClaudeAgentPath, resolveClaudeRootFromRelativePath } from "../agents/claudeAgentMetadata";
 import { createHash } from "node:crypto";
 import * as vscode from "vscode";
@@ -25,13 +30,14 @@ import {
   type HiddenSessionEntry,
   type HiddenSessionStore,
 } from "./hiddenSessionStore";
-import { normalizeCacheKey } from "../utils/fsUtils";
+import { normalizeCacheKey, normalizeFsPathKey } from "../utils/fsUtils";
 import { scanSessionBookmarkTargets } from "./bookmarkTargetResolver";
 import type { SessionMetadataMutationCoordinator } from "./sessionMetadataMutationCoordinator";
 import type { SessionMetadataImportMapping } from "./importExportService";
 
 export const SESSION_METADATA_BACKUP_FORMAT = "codex-history-viewer.session-metadata";
 export const SESSION_METADATA_BACKUP_VERSION = 1;
+export const SESSION_METADATA_ANTIGRAVITY_BACKUP_VERSION = 2;
 const MAX_BACKUP_SESSIONS = 200_000;
 const MAX_BACKUP_BOOKMARKS_PER_SESSION = 10_000;
 const MAX_BACKUP_BOOKMARKS_TOTAL = 500_000;
@@ -51,6 +57,7 @@ export interface SessionMetadataBackupLocator {
   sessionId?: string;
   rootKind: SessionRootKind;
   relativePath?: string;
+  rootHint?: "antigravity" | "antigravity-cli" | "antigravity-ide" | "custom";
 }
 
 export interface SessionMetadataBackupEntry {
@@ -67,7 +74,7 @@ export interface SessionMetadataBackupEntry {
 
 export interface SessionMetadataBackupFile {
   format: typeof SESSION_METADATA_BACKUP_FORMAT;
-  version: typeof SESSION_METADATA_BACKUP_VERSION;
+  version: typeof SESSION_METADATA_BACKUP_VERSION | typeof SESSION_METADATA_ANTIGRAVITY_BACKUP_VERSION;
   generatedAtIso: string;
   extensionVersion: string;
   scope: "all" | "selection";
@@ -78,6 +85,7 @@ export interface SessionMetadataRestorePreview {
   matched: number;
   matchedCodex: number;
   matchedClaude: number;
+  matchedAntigravity: number;
   unmatched: number;
   ambiguous: number;
   invalidBookmarks: number;
@@ -121,6 +129,7 @@ export interface SessionMetadataStores {
 }
 
 export interface SessionMetadataRestoreOptions {
+  isIndexCurrent?: () => boolean;
   token?: vscode.CancellationToken;
   progress?: vscode.Progress<{ message?: string; increment?: number }>;
   stores?: SessionMetadataStores;
@@ -224,6 +233,7 @@ export function createSessionMetadataBackup(
         ...(sessionId ? { sessionId } : {}),
         rootKind: session.storage.rootKind,
         ...(relativePath ? { relativePath } : {}),
+        ...(session.source === "antigravity" ? { rootHint: antigravityRootHint(session.storage.rootPath) } : {}),
       },
       ...(tags.length > 0 || note
         ? { annotation: { ...(tags.length > 0 ? { tags } : {}), ...(note ? { note } : {}) } }
@@ -237,7 +247,7 @@ export function createSessionMetadataBackup(
 
   return {
     format: SESSION_METADATA_BACKUP_FORMAT,
-    version: SESSION_METADATA_BACKUP_VERSION,
+    version: sessions.some(session => session.source === "antigravity") ? SESSION_METADATA_ANTIGRAVITY_BACKUP_VERSION : SESSION_METADATA_BACKUP_VERSION,
     generatedAtIso: new Date().toISOString(),
     extensionVersion: isBoundedExtensionVersion(extensionVersion) ? extensionVersion : getExtensionVersion(),
     scope: sessions === index.sessions ? "all" : "selection",
@@ -248,7 +258,7 @@ export function createSessionMetadataBackup(
 export function parseSessionMetadataBackup(value: unknown): SessionMetadataBackupFile | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
-  if (raw.format !== SESSION_METADATA_BACKUP_FORMAT || raw.version !== SESSION_METADATA_BACKUP_VERSION) return null;
+  if (raw.format !== SESSION_METADATA_BACKUP_FORMAT || raw.version !== SESSION_METADATA_BACKUP_VERSION && raw.version !== SESSION_METADATA_ANTIGRAVITY_BACKUP_VERSION) return null;
   if (typeof raw.generatedAtIso !== "string" || raw.generatedAtIso.length > 128 || !Number.isFinite(Date.parse(raw.generatedAtIso))) return null;
   if (!isBoundedExtensionVersion(raw.extensionVersion)) return null;
   if (raw.scope !== "all" && raw.scope !== "selection") return null;
@@ -256,7 +266,7 @@ export function parseSessionMetadataBackup(value: unknown): SessionMetadataBacku
   const sessions: SessionMetadataBackupEntry[] = [];
   let bookmarkCount = 0;
   for (const candidate of raw.sessions) {
-    const entry = sanitizeBackupEntry(candidate);
+    const entry = sanitizeBackupEntry(candidate, raw.version);
     if (!entry) return null;
     bookmarkCount += entry.bookmarks?.length ?? 0;
     if (bookmarkCount > MAX_BACKUP_BOOKMARKS_TOTAL) return null;
@@ -264,7 +274,7 @@ export function parseSessionMetadataBackup(value: unknown): SessionMetadataBacku
   }
   return {
     format: SESSION_METADATA_BACKUP_FORMAT,
-    version: SESSION_METADATA_BACKUP_VERSION,
+    version: raw.version,
     generatedAtIso: raw.generatedAtIso,
     extensionVersion: raw.extensionVersion,
     scope: raw.scope,
@@ -310,6 +320,7 @@ export async function restoreSessionMetadata(
   }
   const resolved = await resolveRestoreEntries(backup, index, options);
   if (options?.token?.isCancellationRequested) throw new vscode.CancellationError();
+  if (options?.isIndexCurrent && !options.isIndexCurrent()) throw new SessionMetadataRestoreStaleError();
   const snapshots = snapshotSessionMetadataStores(stores);
   const mode = options?.mode ?? "merge";
   const planFingerprint = buildRestorePlanFingerprint(resolved.entries, snapshots, mode);
@@ -536,31 +547,42 @@ export async function restoreSessionMetadata(
   }
 
   const rollbackActions: Array<() => Promise<void>> = [];
+  const nativeRevision = antigravityReader.getConfigurationRevision(), hasAntigravity = resolved.entries.some(value => value.session.source === "antigravity");
+  const assertCurrent = (): void => {
+    if (options?.isIndexCurrent && !options.isIndexCurrent() || hasAntigravity && (nativeRevision !== antigravityReader.getConfigurationRevision()
+      || !isSourceInventoryComplete(index.sourceInventoryStates, "antigravity", getConfig()))) throw new SessionMetadataRestoreStaleError();
+  };
   try {
     // Persist each metadata family once after the whole import has been validated and staged.
+    assertCurrent();
     if (annotationsChanged) {
       attemptedStores.annotations = true;
       rollbackActions.unshift(() => stores.annotations.replaceAll(snapshots.annotations, { notify: false, skipCoordinator: true }));
       await stores.annotations.replaceAll(Array.from(stagedAnnotations.values()), { notify: false, skipCoordinator: true });
+      assertCurrent();
     }
     if (titlesChanged) {
       rollbackActions.unshift(() => stores.titles.replaceAll(snapshots.titles, { skipCoordinator: true }));
       await stores.titles.replaceAll(Array.from(stagedTitles.values()), { skipCoordinator: true });
+      assertCurrent();
     }
     if (pinsChanged) {
       attemptedStores.pins = true;
       rollbackActions.unshift(() => stores.pins.replaceAll(snapshots.pins, { notify: false, skipCoordinator: true }));
       await stores.pins.replaceAll(Array.from(stagedPins.values()), { notify: false, skipCoordinator: true });
+      assertCurrent();
     }
     if (bookmarksChanged) {
       attemptedStores.bookmarks = true;
       rollbackActions.unshift(() => stores.bookmarks.replaceAll(snapshots.bookmarks, { notify: false, skipCoordinator: true }));
       await stores.bookmarks.replaceAll(Array.from(stagedBookmarks.values()), { notify: false, skipCoordinator: true });
+      assertCurrent();
     }
     if (hiddenChanged) {
       attemptedStores.hidden = true;
       rollbackActions.unshift(() => stores.hidden.replaceAll(snapshots.hidden, { notify: false, skipCoordinator: true }));
       await stores.hidden.replaceAll(Array.from(stagedHiddenByIdentity.values()), { notify: false, skipCoordinator: true });
+      assertCurrent();
     }
   } catch (error) {
     let rollbackFailed = false;
@@ -573,6 +595,7 @@ export async function restoreSessionMetadata(
     }
     notifyChangedStores(stores, attemptedStores);
     if (rollbackFailed) throw new SessionMetadataRestoreRollbackError({ cause: error });
+    if (error instanceof SessionMetadataRestoreStaleError) throw error;
     throw new Error("Metadata restore failed and was rolled back.", { cause: error });
   }
 
@@ -599,14 +622,16 @@ export async function restoreSessionMetadata(
 
 function countMatchedSources(
   entries: readonly ResolvedRestoreEntry[],
-): Pick<SessionMetadataRestorePreview, "matchedCodex" | "matchedClaude"> {
+): Pick<SessionMetadataRestorePreview, "matchedCodex" | "matchedClaude" | "matchedAntigravity"> {
   let matchedCodex = 0;
   let matchedClaude = 0;
+  let matchedAntigravity = 0;
   for (const { session } of entries) {
     if (session.source === "codex") matchedCodex += 1;
     else if (session.source === "claude") matchedClaude += 1;
+    else if (session.source === "antigravity") matchedAntigravity += 1;
   }
-  return { matchedCodex, matchedClaude };
+  return { matchedCodex, matchedClaude, matchedAntigravity };
 }
 
 function calculateRestoreChangeCounts(
@@ -1000,6 +1025,9 @@ async function resolveRestoreEntries(
   for (const entry of backup.sessions) {
     if (options?.token?.isCancellationRequested) throw new vscode.CancellationError();
     const locator = entry.locator;
+    if (locator.source === "antigravity" && (!options?.isIndexCurrent?.() || !isSourceInventoryComplete(index.sourceInventoryStates, "antigravity", getConfig()))) {
+      unmatched += 1; continue;
+    }
     const isClaudeChild = locator.source === "claude" && (locator.identityKey?.startsWith("claude:agent:") === true ||
       !!(locator.relativePath && parseClaudeAgentPath(path.resolve("claude-backup-scope", locator.relativePath), path.resolve("claude-backup-scope"))));
     let candidates = locator.identityKey ? byIdentityKey.get(locator.identityKey) ?? [] : [];
@@ -1021,7 +1049,10 @@ async function resolveRestoreEntries(
         .map((cacheKey) => index.byCacheKey.get(cacheKey))
         .filter((candidate): candidate is SessionSummary => candidate !== undefined);
     }
-    const matching = candidates.filter((candidate) => candidate.source === locator.source);
+    const exactIdentity = candidates.some(candidate => candidate.identityKey === locator.identityKey);
+    const matching = candidates.filter((candidate) => candidate.source === locator.source && (locator.source !== "antigravity" ||
+      candidate.meta.id === locator.sessionId && (!locator.relativePath || toPortableRelativePath(candidate.storage.rootPath, candidate.fsPath) === locator.relativePath)
+      && (exactIdentity || antigravityRootHint(candidate.storage.rootPath) === locator.rootHint)));
     if (matching.length === 0) {
       unmatched += 1;
       continue;
@@ -1031,6 +1062,15 @@ async function resolveRestoreEntries(
       continue;
     }
     const session = matching[0]!;
+    if (session.source === "antigravity") {
+      try {
+        const metadata = await antigravityReader.readMetadata(session.fsPath, options?.token);
+        if (metadata.conversationId !== locator.sessionId || !options?.isIndexCurrent?.()) { unmatched += 1; continue; }
+      } catch (error) {
+        if (options?.token?.isCancellationRequested) throw new vscode.CancellationError();
+        unmatched += 1; continue;
+      }
+    }
     seenSessions.add(session.identityKey);
     entries.push({ entry, session, bookmarks: [], bookmarksComplete: true });
   }
@@ -1297,7 +1337,7 @@ function toBackupBookmark(value: BookmarkEntry): SessionMetadataBackupBookmark |
   };
 }
 
-function sanitizeBackupEntry(value: unknown): SessionMetadataBackupEntry | null {
+function sanitizeBackupEntry(value: unknown, version: 1 | 2): SessionMetadataBackupEntry | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   if (!raw.locator || typeof raw.locator !== "object" || Array.isArray(raw.locator)) return null;
@@ -1308,13 +1348,18 @@ function sanitizeBackupEntry(value: unknown): SessionMetadataBackupEntry | null 
       ? locatorRaw.identityKey
       : "";
   if (locatorRaw.identityKey !== undefined && !identityKey) return null;
-  if (locatorRaw.source !== "codex" && locatorRaw.source !== "claude") return null;
+  if (locatorRaw.source !== "codex" && locatorRaw.source !== "claude" && (locatorRaw.source !== "antigravity" || version !== 2)) return null;
   if (identityKey && !isPortableStableIdentityKey(locatorRaw.source, identityKey)) return null;
   if (!isSessionRootKind(locatorRaw.rootKind)) return null;
   const sessionId = sanitizeOptionalSessionId(locatorRaw.sessionId);
   if (sessionId === null) return null;
   const relativePath = sanitizeRelativePath(locatorRaw.relativePath);
   if (locatorRaw.relativePath !== undefined && !relativePath) return null;
+  const rootHint = locatorRaw.rootHint;
+  if (locatorRaw.source === "antigravity" && (locatorRaw.rootKind !== "antigravitySessions" || !sessionId || !ANTIGRAVITY_UUID.test(sessionId)
+    || relativePath !== `conversations/${sessionId}.db` || typeof rootHint !== "string" || !["antigravity", "antigravity-cli", "antigravity-ide", "custom"].includes(rootHint)
+    || identityKey && !identityKey.endsWith(`:id:${sessionId}`))) return null;
+  if (locatorRaw.source !== "antigravity" && (locatorRaw.rootKind === "antigravitySessions" || rootHint !== undefined)) return null;
   if (!identityKey && !sessionId && !relativePath) return null;
   if (raw.annotation !== undefined && (!raw.annotation || typeof raw.annotation !== "object" || Array.isArray(raw.annotation))) {
     return null;
@@ -1345,6 +1390,7 @@ function sanitizeBackupEntry(value: unknown): SessionMetadataBackupEntry | null 
       ...(sessionId ? { sessionId } : {}),
       rootKind: locatorRaw.rootKind,
       ...(relativePath ? { relativePath } : {}),
+      ...(locatorRaw.source === "antigravity" ? { rootHint: rootHint as SessionMetadataBackupLocator["rootHint"] } : {}),
     },
     ...(tags.length > 0 || note
       ? { annotation: { ...(tags.length > 0 ? { tags } : {}), ...(note ? { note } : {}) } }
@@ -1410,6 +1456,7 @@ function hasPortableStableIdentity(session: SessionSummary): boolean {
 }
 
 function isPortableStableIdentityKey(source: SessionSource, identityKey: string): boolean {
+  if (source === "antigravity") return /^antigravity:root:[0-9a-f]{64}:id:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(identityKey);
   if (source === "claude" && identityKey.startsWith("claude:agent:")) {
     try {
       const scope: unknown = JSON.parse(identityKey.slice("claude:agent:".length));
@@ -1507,7 +1554,14 @@ function appendMapValue<K, V>(map: Map<K, V[]>, key: K, value: V): void {
 }
 
 function isSessionRootKind(value: unknown): value is SessionRootKind {
-  return value === "codexSessions" || value === "codexArchivedSessions" || value === "claudeSessions";
+  return value === "codexSessions" || value === "codexArchivedSessions" || value === "claudeSessions" || value === "antigravitySessions";
+}
+
+function antigravityRootHint(root: string): NonNullable<SessionMetadataBackupLocator["rootHint"]> {
+  for (const name of ["antigravity", "antigravity-cli", "antigravity-ide"] as const) {
+    if (normalizeFsPathKey(root) === normalizeFsPathKey(path.join(os.homedir(), ".gemini", name))) return name;
+  }
+  return "custom";
 }
 
 function isBookmarkKind(value: unknown): value is BookmarkTargetKind {

@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { readJson, writeJson } from "../storage/jsonStorage";
-import { normalizeWhitespace } from "../utils/textUtils";
+import { hasCodexPageSnapshotPrefix, isCodexSelectedPageSnapshotText, normalizeWhitespace } from "../utils/textUtils";
 import { normalizeCacheKey } from "../utils/fsUtils";
 import type { PerformanceProbe } from "../performance/performanceCounters";
 import { buildCanonicalFingerprint } from "../utils/canonicalFingerprint";
@@ -24,7 +24,7 @@ interface CodexTitleCacheFileV1 {
 }
 
 interface SessionIndexEntry {
-  threadName: string;
+  threadName?: string;
   updatedAt?: string;
 }
 
@@ -36,7 +36,8 @@ function normalizeSessionId(value: unknown): string | undefined {
 }
 
 function sanitizeThreadName(value: unknown): string | undefined {
-  const normalized = normalizeWhitespace(typeof value === "string" ? value : "").trim();
+  if (typeof value !== "string") return undefined;
+  const normalized = hasCodexPageSnapshotPrefix(value) ? value.trim() : normalizeWhitespace(value);
   if (!normalized) return undefined;
   return normalized.length > 300 ? `${normalized.slice(0, 299)}...` : normalized;
 }
@@ -48,7 +49,9 @@ function sanitizeTimestampIso(value: unknown): string | undefined {
 
 function sanitizeCacheEntry(value: unknown): CodexTitleCacheEntry | null {
   if (!value || typeof value !== "object") return null;
-  const threadName = sanitizeThreadName((value as any).threadName);
+  const rawName = (value as any).threadName;
+  if (isCodexSelectedPageSnapshotText(rawName)) return null;
+  const threadName = sanitizeThreadName(rawName);
   const lastSeenAt = (value as any).lastSeenAt;
   if (!threadName || typeof lastSeenAt !== "number" || !Number.isFinite(lastSeenAt)) return null;
 
@@ -114,8 +117,14 @@ async function readSessionIndexEntries(indexPath: string): Promise<Map<string, S
     }
 
     const sessionId = normalizeSessionId(obj?.id);
+    if (!sessionId) continue;
+    if (isCodexSelectedPageSnapshotText(obj?.thread_name)) {
+      // A full native record can invalidate a previously truncated generated cache entry.
+      result.set(sessionId, {});
+      continue;
+    }
     const threadName = sanitizeThreadName(obj?.thread_name);
-    if (!sessionId || !threadName) continue;
+    if (!threadName) continue;
 
     result.set(sessionId, {
       threadName,
@@ -170,7 +179,7 @@ export class CodexTitleStore {
     sessionIds: readonly string[];
     pruneToSessionIds: boolean;
     performanceProbe?: PerformanceProbe;
-  }): Promise<Map<string, string>> {
+  }): Promise<Map<string, string | null>> {
     const sessionIds = Array.from(
       new Set(params.sessionIds.map((sessionId) => normalizeSessionId(sessionId)).filter((sessionId): sessionId is string => !!sessionId)),
     );
@@ -193,6 +202,10 @@ export class CodexTitleStore {
         if (!liveEntry) continue;
 
         const current = bucket.entries[sessionId];
+        if (liveEntry.threadName === undefined) {
+          if (current) { delete bucket.entries[sessionId]; dirty = true; }
+          continue;
+        }
         if (
           !current ||
           current.threadName !== liveEntry.threadName ||
@@ -227,8 +240,11 @@ export class CodexTitleStore {
       }
     }
 
-    const resolved = new Map<string, string>();
+    const resolved = new Map<string, string | null>();
     for (const sessionId of sessionIds) {
+      const liveEntry = liveEntries?.get(sessionId);
+      // An explicitly hidden title must not fall back to the stale summary copy.
+      if (liveEntry && liveEntry.threadName === undefined) { resolved.set(sessionId, null); continue; }
       const threadName = bucket.entries[sessionId]?.threadName;
       if (threadName) resolved.set(sessionId, threadName);
     }

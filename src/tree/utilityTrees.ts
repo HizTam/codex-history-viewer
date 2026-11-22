@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { t } from "../i18n";
 import { safeDisplayPath } from "../utils/textUtils";
 import { formatBytesForUi } from "../utils/formatBytes";
+import type { HistorySourceInventoryState } from "../sessions/sessionTypes";
 
 type UtilityNode = ActionNode | InfoNode;
 type UtilityIcon = vscode.ThemeIcon | vscode.Uri | { light: vscode.Uri; dark: vscode.Uri };
@@ -144,9 +145,12 @@ export interface StatusSnapshot {
   enableCodexSource: boolean;
   enableCodexArchivedSessions: boolean;
   enableClaudeSource: boolean;
+  enableAntigravitySource: boolean;
   codexSessionCount: number;
   codexArchivedSessionCount: number;
   claudeSessionCount: number;
+  antigravitySessionCount: number;
+  antigravityInventoryStatus: HistorySourceInventoryState["status"];
   pinCount: number;
   missingPinCount: number;
   presetCount: number;
@@ -164,6 +168,7 @@ export interface StatusSnapshot {
   codexSessionsRoot: string;
   codexArchivedSessionsRoot: string;
   claudeSessionsRoot: string;
+  antigravitySessionsRoots: readonly string[];
   lastRefreshAt: number | null;
   extensionVersion: string;
 }
@@ -234,6 +239,9 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
         ),
       );
     }
+
+    if (s.enableAntigravitySource) items.push(makeInfo("status.sessions.antigravity", t("status.label.sessionsAntigravity"),
+      s.antigravityInventoryStatus === "complete" ? String(s.antigravitySessionCount) : t("status.sessionsUnverified", s.antigravitySessionCount), new vscode.ThemeIcon("list-unordered")));
 
     items.push(
       makeInfo("status.pins", t("status.label.pins"), String(s.pinCount), new vscode.ThemeIcon("pinned")),
@@ -306,9 +314,9 @@ export class StatusTreeDataProvider implements vscode.TreeDataProvider<UtilityNo
       );
     }
 
-    items.push(
-      makeInfo("status.version", t("status.label.version"), s.extensionVersion, new vscode.ThemeIcon("info")),
-    );
+    if (s.enableAntigravitySource) s.antigravitySessionsRoots.forEach((root, index) => items.push(makeInfo(`status.sessionsRoot.antigravity.${index}`, t("status.label.sessionsRootAntigravity"),
+      safeDisplayPath(root, 64), new vscode.ThemeIcon("folder-opened"), makeCopyPathTooltip(root), root)));
+    items.push(makeInfo("status.version", t("status.label.version"), s.extensionVersion, new vscode.ThemeIcon("info")));
 
     return items;
   }

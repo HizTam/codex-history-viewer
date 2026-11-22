@@ -1,10 +1,10 @@
 import type { Ymd } from "../utils/dateUtils";
 
-export type SessionSource = "codex" | "claude";
+export type SessionSource = "codex" | "claude" | "antigravity";
 export type SessionSourceFilter = "all" | SessionSource;
 export type SessionArchiveState = "active" | "archived";
 export type ArchiveLocationFilter = "activeOnly" | "all" | "archivedOnly";
-export type SessionRootKind = "codexSessions" | "codexArchivedSessions" | "claudeSessions";
+export type SessionRootKind = "codexSessions" | "codexArchivedSessions" | "claudeSessions" | "antigravitySessions";
 
 export interface SessionStorageLocation {
   rootKind: SessionRootKind;
@@ -16,6 +16,7 @@ export interface HistoryRoots {
   codexSessionsRoot: string;
   codexArchivedSessionsRoot: string;
   claudeSessionsRoot: string;
+  antigravitySessionsRoots: readonly string[];
 }
 
 // Minimal session info extracted from JSONL (for display/search/actions).
@@ -33,6 +34,11 @@ export interface SessionMetaInfo {
   codexFork?: CodexForkMetadata;
   codexHistoryBase?: CodexHistoryBaseMetadata;
   codexStandaloneHistory?: true; // Paginated ordinal-zero metadata with no declared history base.
+  antigravity?: {
+    profile: "sqliteStepsV1";
+    availability: "available" | "metadataOnly" | "unavailable";
+    issues: readonly import("../antigravity/antigravityTypes").AntigravityIssue[];
+  };
 }
 
 export interface ClaudeAgentMetadata {
@@ -115,4 +121,13 @@ export interface HistoryIndex {
   byYmd: Map<string, SessionSummary[]>; // key: YYYY-MM-DD
   byYm: Map<string, Map<string, SessionSummary[]>>; // YYYY -> (MM -> sessions)
   byY: Map<string, Map<string, Map<string, SessionSummary[]>>>; // YYYY -> MM -> DD -> sessions
+  sourceInventoryStates: Readonly<Record<SessionSource, HistorySourceInventoryState>>;
+}
+
+export interface HistorySourceInventoryState {
+  readonly status: "disabled" | "cached" | "complete" | "partial" | "unavailable";
+  readonly configKey: string;
+  readonly configRevision: number;
+  readonly generation: number;
+  readonly allowedRoots: readonly string[];
 }

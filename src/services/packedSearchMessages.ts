@@ -56,11 +56,11 @@ export async function packSearchMessages(
     if (role < 0 || source < 0 ||
         (message.inputId !== undefined && typeof message.inputId !== "string") ||
         (message.progressId !== undefined && typeof message.progressId !== "string") ||
-        (message.progressKind !== undefined && message.progressKind !== "narration" && message.progressKind !== "thinking")) {
+        (message.progressKind !== undefined && message.progressKind !== "narration" && message.progressKind !== "thinking" && message.progressKind !== "queuedInput")) {
       throw new TypeError("Invalid indexed message metadata");
     }
     messageIndexes[ordinal] = message.messageIndex;
-    const progress = message.progressKind === "narration" ? 1 : message.progressKind === "thinking" ? 2 : 0;
+    const progress = message.progressKind === "narration" ? 1 : message.progressKind === "thinking" ? 2 : message.progressKind === "queuedInput" ? 3 : 0;
     kinds[ordinal] = (role << 4) | (progress << 2) | source;
     if (message.inputId !== undefined || message.progressId !== undefined) {
       extras.push(Object.freeze({
@@ -160,7 +160,7 @@ function createPackedReader(data: PackedData): PackedSearchMessageReader {
         text,
         ...(extra?.inputId !== undefined ? { inputId: extra.inputId } : {}),
         ...(extra?.progressId !== undefined ? { progressId: extra.progressId } : {}),
-        ...(progress ? { progressKind: progress === 1 ? "narration" as const : "thinking" as const } : {}),
+        ...(progress ? { progressKind: progress === 1 ? "narration" as const : progress === 2 ? "thinking" as const : "queuedInput" as const } : {}),
       });
       byteStart = byteEnd;
       repairStart = repairEnd;

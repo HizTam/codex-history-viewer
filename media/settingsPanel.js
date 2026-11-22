@@ -483,10 +483,13 @@
     const disabled = Boolean(setting.disabledReason);
     const control = createControl(setting, disabled);
     const primaryInput = control.querySelector("input, select");
-    if (timingBadge && primaryInput) {
-      // Preserve other descriptions while announcing when this setting takes effect.
+    const disabledReason = setting.disabledReason
+      ? element("p", "setting-disabled-reason", setting.disabledReason)
+      : null;
+    if (disabledReason) disabledReason.id = "setting-disabled-reason-" + setting.key;
+    if (primaryInput && (timingBadge || disabledReason)) {
       const describedBy = primaryInput.getAttribute("aria-describedby");
-      primaryInput.setAttribute("aria-describedby", [describedBy, timingBadge.id].filter(Boolean).join(" "));
+      primaryInput.setAttribute("aria-describedby", [describedBy, timingBadge?.id, disabledReason?.id].filter(Boolean).join(" "));
     }
     controlArea.append(control);
     const actionSlot = element("div", "setting-action-slot");
@@ -506,9 +509,7 @@
     header.append(controlArea);
     row.append(header);
 
-    if (setting.disabledReason) {
-      row.append(element("p", "setting-disabled-reason", setting.disabledReason));
-    }
+    if (disabledReason) row.append(disabledReason);
     const statusValue = settingStatuses.get(setting.key);
     const status = element(
       "div",
@@ -527,6 +528,8 @@
       container.append(badge(snapshot.labels.codexBadge, "source codex"));
     } else if (setting.sourceBadge === "claude") {
       container.append(badge(snapshot.labels.claudeBadge, "source claude"));
+    } else if (setting.sourceBadge === "antigravity") {
+      container.append(badge(snapshot.labels.antigravityBadge, "source antigravity"));
     }
     if (setting.experimental) {
       container.append(badge(snapshot.labels.experimental, "experimental"));
@@ -811,6 +814,12 @@
     for (const cardModel of snapshot.maintenanceCards) {
       const card = element("section", "maintenance-card");
       card.append(element("h3", "card-title", cardModel.title));
+      if (typeof cardModel.description === "string") {
+        const description = element("p", "maintenance-description", cardModel.description);
+        description.setAttribute("role", "status");
+        description.setAttribute("aria-live", "polite");
+        card.append(description);
+      }
       for (const action of cardModel.actions) {
         const row = element("div", "maintenance-row");
         const copy = element("div", "maintenance-copy");

@@ -30,6 +30,8 @@ const MAX_FILE_ROWS = 500;
 const MAX_BREAKDOWN_VISIBLE_ROWS = 32;
 const MAX_BREAKDOWN_CANDIDATE_ROWS = 128;
 const MAX_MODEL_EFFORT_ROWS = 32;
+// Keep aggregation state host-local; the DTO carries only non-default metric quality.
+const breakdownMetricInputs = new WeakMap<HistoryInsightsBreakdownMetricValues, Map<HistoryInsightsBreakdownMetric, AnalysisNumber>>();
 const MAX_TOOL_VISIBLE_ROWS = 32;
 const MAX_TOOL_CANDIDATE_ROWS = 128;
 const MAX_ACTIVE_SESSION_ROWS_PER_METRIC = 20;
@@ -43,6 +45,7 @@ export interface HistoryInsightsAggregationInput {
   generatedAtIso?: string;
   refreshing?: boolean;
   stale?: boolean;
+  sourceInventoryIncomplete?: boolean;
   isFileHistoryPathSupported?: (normalizedPath: string) => boolean;
   isFileOpenSupported?: (normalizedPath: string) => boolean;
   projectContextBySessionKey?: ReadonlyMap<string, HistoryInsightsAggregationProjectContext>;
@@ -171,6 +174,10 @@ export function aggregateHistoryInsights(input: HistoryInsightsAggregationInput)
     dayByYmd.set(reference.bucketLocalDate, day);
 
     if (!entry) {
+      for (const metric of ["inputTokens", "outputTokens", "totalTokens"] as const) {
+        addAnalysisMetric(source, metric, { availability: "unavailable" }, numericState);
+        addAnalysisMetric(project.metrics, metric, { availability: "unavailable" }, numericState);
+      }
       appendUnavailableMetrics(metricValues);
       for (const metrics of Object.values(detailMetricValues)) metrics.push({ availability: "unavailable" });
       appendUnavailableDayMetrics(day, numericState);
@@ -235,9 +242,9 @@ export function aggregateHistoryInsights(input: HistoryInsightsAggregationInput)
         metrics.sessions = addAndTrack(metrics.sessions, 1, numericState);
         sessionModels.add(model.model);
       }
-      metrics.inputTokens = addAndTrack(metrics.inputTokens, model.inputTokens, numericState);
-      metrics.outputTokens = addAndTrack(metrics.outputTokens, model.outputTokens, numericState);
-      metrics.totalTokens = addAndTrack(metrics.totalTokens, model.totalTokens, numericState);
+      for (const metric of ["inputTokens", "outputTokens", "totalTokens"] as const) {
+        addAnalysisMetric(metrics, metric, { value: model[metric], availability: model.availability?.[metric] ?? "available" }, numericState);
+      }
       modelMetrics.set(model.model, metrics);
     }
     for (const usage of entry.usageStats.modelEffortUsage) {
@@ -406,6 +413,7 @@ export function aggregateHistoryInsights(input: HistoryInsightsAggregationInput)
     generatedAtIso: input.generatedAtIso ?? new Date().toISOString(),
     refreshing: input.refreshing === true,
     stale: input.stale === true,
+    ...(input.sourceInventoryIncomplete || Object.values(input.snapshot.sourceInventoryStates ?? {}).some(status => status !== "complete") ? { sourceInventoryIncomplete: true as const } : {}),
     dateBasis: input.snapshot.dateBasis,
     dateTimeSettingsKey: input.snapshot.dateTimeSettingsKey,
     chips: input.snapshot.descriptor.chips.slice(0, 20),
@@ -654,8 +662,16 @@ function addAnalysisMetric(
   metric: AnalysisNumber,
   numericState: NumericAggregationState,
 ): void {
-  if (metric.availability === "unavailable" || typeof metric.value !== "number") return;
-  target[key] = addAndTrack(target[key], metric.value, numericState);
+  const inputs = breakdownMetricInputs.get(target) ?? new Map<HistoryInsightsBreakdownMetric, AnalysisNumber>();
+  const normalized: AnalysisNumber = metric.availability === "unavailable" || typeof metric.value !== "number"
+    ? { availability: "unavailable" } : metric;
+  const previous = inputs.get(key);
+  const combined = previous ? sumAnalysisNumbers(previous, normalized, numericState) : normalized.availability === "unavailable"
+    ? { ...normalized } : sumAnalysisNumbers({ value: 0, availability: "available" }, normalized, numericState);
+  inputs.set(key, combined);
+  breakdownMetricInputs.set(target, inputs);
+  target[key] = combined.value ?? 0;
+  if (combined.availability !== "available") (target.availability ??= {})[key] = combined.availability;
 }
 
 function buildBreakdown<TRow extends HistoryInsightsBreakdownRow>(
@@ -666,7 +682,8 @@ function buildBreakdown<TRow extends HistoryInsightsBreakdownRow>(
   const positiveRowCounts = emptyBreakdownMetrics();
   for (const row of rows) {
     for (const metric of BREAKDOWN_METRICS) {
-      totals[metric] = addAndTrack(totals[metric], row.metrics[metric], numericState);
+      if (metric === "sessions") totals.sessions = addAndTrack(totals.sessions, row.metrics.sessions, numericState);
+      else addAnalysisMetric(totals, metric, { value: row.metrics[metric], availability: row.metrics.availability?.[metric] ?? "available" }, numericState);
       if (row.metrics[metric] > 0) {
         positiveRowCounts[metric] = addAndTrack(positiveRowCounts[metric], 1, numericState);
       }

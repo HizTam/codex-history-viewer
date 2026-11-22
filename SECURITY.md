@@ -1,6 +1,6 @@
 # Security Policy
 
-Last updated: 2026-11-12
+Last updated: 2026-11-22
 
 ## Supported Versions
 
@@ -18,9 +18,9 @@ Use the latest published release of Codex History Viewer whenever possible. Olde
 | 1.2.2 through 2.7.x | Does not include all current Markdown and KaTeX dependency security updates; upgrade to 2.19.0 or later. |
 | 1.2.1 and earlier | Do not install or redistribute historical VSIX files. |
 
-## Dependencies Shipped in 2.21.0
+## Dependencies Shipped in 3.0.0
 
-Version 2.21.0 retains the Markdown, diagram-rendering, and decompression dependency versions used in 2.20.2. The Markdown renderer and the sanitizer and math renderer used by Mermaid were last updated in 2.19.0.
+Version 3.0.0 retains the Markdown, diagram-rendering, and decompression dependency versions used in 2.21.0. The Markdown renderer and the sanitizer and math renderer used by Mermaid were last updated in 2.19.0.
 
 | Component | Bundled version | Use |
 | --- | --- | --- |
@@ -144,6 +144,18 @@ Search and analysis caches contain derived history data, which may include messa
 
 Version 2.20.2 reads and writes local file-backed search caches incrementally, including local `vscode-userdata` storage, and retains indexed message text in segmented byte buffers until it is needed. Other storage providers retain the provider-based read and write fallback. These changes reduce JavaScript heap pressure; they do not impose a limit on total RAM or disk usage. Large individual sessions and concurrent readers retaining older index snapshots may temporarily require additional memory. Source history files are not rewritten by search indexing.
 
+### SQLite cache mode
+
+File-based caching is the default. The SQLite cache is opt-in and stores generated history, search, and analysis data in the extension's local storage on its host. The editor's extension host supplies SQLite through `node:sqlite`. The extension checks the host's SQLite version, Worker support, and required FTS5 features. It accepts SQLite 3.51.3 and later and the patched releases 3.44.6 and 3.50.7 for the SQLite version check. [SQLite WAL-reset fix](https://sqlite.org/wal.html#the_wal_reset_bug)
+
+If SQLite mode is enabled but cannot be used, the extension falls back to file-based caching. The settings page shows the active cache mode and the reason for the fallback. The cache database uses the same data protection precautions described above.
+
+### Antigravity history databases
+
+The extension reads supported local Antigravity databases through a dedicated Worker using read-only connections. It validates the file location and expected database structure and disables SQLite extension loading. SQLite can create or update WAL and shared-memory sidecar files during read-only access to a WAL-mode database. The extension treats those sidecar operations as part of SQLite's normal access. [SQLite read-only WAL databases](https://sqlite.org/wal.html#read_only_databases)
+
+Reading Antigravity history and writing a generated SQLite cache are separate operations. Antigravity histories can be read in file-based cache mode when the host supports the reader. Extension-managed annotations and generated data are stored separately from the source database.
+
 ### Codex usage-limit and credit displays
 
 The optional usage-limit and credit displays read values already recorded in local Codex session history. These displays do not access provider APIs or authentication files. The values are recorded snapshots and may differ from the current remaining allowance or credit balance.
@@ -157,6 +169,10 @@ Saved progress updates and thinking text use the existing untrusted-content rend
 Queued text is displayed as additional user input only when its saved origin explicitly identifies a human and its fields pass validation. Internal notifications, forwarded input, metadata-only records, and rendered system-reminder wrappers are excluded. Accepted text is rendered as plain text and may be included in search, clipboard content, Markdown output, and generated Resume and Handoff context. Raw correlation identifiers remain in the extension host; cards and search navigation use derived identifiers.
 
 Delivered internal task notifications are accepted only when their saved origin identifies a supported task notification, and remain separate from human input. Notification details and raw text are displayed as bounded plain text. Recorded output-file and worktree paths are not opened, linked, or read to display these details.
+
+### Claude Code voice call transcripts and Advisor records
+
+Voice call cards display text from saved local records. They keep transcripts separate from ordinary requests and turn counts and let you copy the text or include it in Markdown. Advisor cards show saved call and result status and may display available plain-text advice in the detailed view.
 
 ### Files sent by Claude Code
 

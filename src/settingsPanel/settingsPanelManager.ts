@@ -3,6 +3,10 @@ import { randomBytes } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { probeSqliteCacheAvailability, type SqliteCacheRuntimeAvailability, type SqliteCacheStore } from "../storage/sqliteCacheStore";
+import type { SqliteCacheErrorCode } from "../storage/sqliteRuntime";
+import { antigravityReader } from "../antigravity/antigravityReader";
+import type { AntigravityErrorCode } from "../antigravity/antigravityTypes";
 import { getExtensionVersion } from "../extensionVersion";
 import { resolveUiLanguage, t } from "../i18n";
 import { RemoteCodexController } from "./remoteCodexController";
@@ -35,6 +39,7 @@ import type {
 
 const VIEW_TYPE = "codexHistoryViewer.settings";
 const CONFIGURATION_SECTION = "codexHistoryViewer";
+const SQLITE_CACHE_SETTING = "cache.sqlite.enabled";
 const GLOBAL_TARGET_ID = "global";
 const WORKSPACE_TARGET_ID = "workspace";
 const MAX_MESSAGE_KEY_LENGTH = 256;
@@ -168,10 +173,25 @@ export class SettingsPanelManager implements vscode.Disposable {
   private operationQueue: Promise<void> = Promise.resolve();
   private operationActive = false;
   private snapshotRequestedDuringOperation = false;
+  private sqliteCacheAvailability?: SqliteCacheRuntimeAvailability;
+  private sqliteCacheAvailabilityCheck?: vscode.CancellationTokenSource;
   private disposed = false;
 
-  public constructor(private readonly context: vscode.ExtensionContext) {
+  public constructor(private readonly context: vscode.ExtensionContext, private readonly sqliteCache?: SqliteCacheStore) {
     this.remoteCodex = new RemoteCodexController(context);
+    if (sqliteCache) {
+      if (sqliteCache.getStatus().backend === "sqlite") this.sqliteCacheAvailability = { available: true };
+      this.disposables.push(sqliteCache.onDidChangeStatus(status => {
+        if (status.backend === "sqlite") this.sqliteCacheAvailability = { available: true };
+        this.scheduleSnapshot();
+      }));
+    }
+    let nativeStatusKey = "";
+    this.disposables.push(antigravityReader.onDidChangeStatus(status => {
+      if (status.state === "running") return;
+      const key = JSON.stringify([status.state, status.reason, antigravityReader.getConfigurationFailureCount()]);
+      if (key !== nativeStatusKey) { nativeStatusKey = key; this.scheduleSnapshot(); }
+    }));
     this.disposables.push(
       vscode.workspace.onDidChangeConfiguration((event) => {
         if (event.affectsConfiguration(CONFIGURATION_SECTION)) {
@@ -280,6 +300,7 @@ export class SettingsPanelManager implements vscode.Disposable {
       return;
     }
     this.disposed = true;
+    this.sqliteCacheAvailabilityCheck?.cancel();
     if (this.publishTimer) {
       clearTimeout(this.publishTimer);
       this.publishTimer = undefined;
@@ -324,6 +345,7 @@ export class SettingsPanelManager implements vscode.Disposable {
         return;
       }
       case "ready":
+        void this.checkSqliteCacheAvailability();
         await this.publishSnapshot(generation);
         return;
       case "selectTarget":
@@ -568,6 +590,12 @@ export class SettingsPanelManager implements vscode.Disposable {
         return;
       }
       nextValue = cloneSettingValue(validation.value);
+    }
+
+    const sqliteUnavailable = this.getSqliteCacheEnablingDisabledReason(definitionItem.relativeKey, nextValue);
+    if (sqliteUnavailable) {
+      await this.rejectUpdate(request.requestId, sqliteUnavailable, generation);
+      return;
     }
 
     try {
@@ -1025,6 +1053,11 @@ export class SettingsPanelManager implements vscode.Disposable {
         ? cloneSettingValue(entry.value as SettingsPanelValue)
         : undefined;
       if (fingerprintValue(currentValue) !== fingerprintValue(nextValue)) {
+        const sqliteUnavailable = this.getSqliteCacheEnablingDisabledReason(definitionItem.relativeKey, nextValue);
+        if (sqliteUnavailable) {
+          await this.postMaintenanceFailed(requestId, sqliteUnavailable, generation);
+          return;
+        }
         changes.push({
           target,
           definitionItem,
@@ -1456,8 +1489,9 @@ export class SettingsPanelManager implements vscode.Disposable {
       canReset:
         state.modified &&
         (state.invalid || definitionItem.control !== "switch" || target.kind !== "global"),
-      disabledReason:
-        definitionItem.dependency && !definitionItem.dependency.isSatisfied(values)
+      disabledReason: definitionItem.relativeKey === SQLITE_CACHE_SETTING
+        ? this.getSqliteCacheDisabledReason()
+        : definitionItem.dependency && !definitionItem.dependency.isSatisfied(values)
           ? t(definitionItem.dependency.reasonKey)
           : undefined,
       overriddenBy: this.getOverrideLabel(definitionItem, target),
@@ -1518,6 +1552,7 @@ export class SettingsPanelManager implements vscode.Disposable {
         experimental: t("settingsPanel.experimental"),
         codexBadge: t("settingsPanel.sourceBadge.codex"),
         claudeBadge: t("settingsPanel.sourceBadge.claude"),
+        antigravityBadge: t("settingsPanel.sourceBadge.antigravity"),
         resourceImpact: t("settingsPanel.resourceImpact"),
         windowReloadLabel: t("settingsPanel.applyTiming.windowReload.label"),
         windowReloadDescription: t("settingsPanel.applyTiming.windowReload.description"),
@@ -1581,7 +1616,14 @@ export class SettingsPanelManager implements vscode.Disposable {
       {
         id: "cache",
         title: t("settingsPanel.maintenance.card.cache"),
+        description: this.cacheBackendDescription(),
         actions: [action("rebuildCache"), action("rebuildSearchIndex")]
+      },
+      {
+        id: "antigravity-reader",
+        title: t("settingsPanel.antigravity.title"),
+        description: this.antigravityReaderDescription(),
+        actions: []
       },
       {
         id: "cleanup",
@@ -1641,6 +1683,77 @@ export class SettingsPanelManager implements vscode.Disposable {
       licenseText: this.getBundledDocumentText(this.licenseText),
       thirdPartyText: this.getBundledDocumentText(this.thirdPartyText)
     };
+  }
+
+  private async checkSqliteCacheAvailability(): Promise<void> {
+    if (this.disposed || this.sqliteCacheAvailability || this.sqliteCacheAvailabilityCheck) return;
+
+    const check = new vscode.CancellationTokenSource();
+    this.sqliteCacheAvailabilityCheck = check;
+    const result = await probeSqliteCacheAvailability(check.token).catch((): SqliteCacheRuntimeAvailability => ({
+      available: false,
+      reason: "worker"
+    }));
+    this.sqliteCacheAvailabilityCheck = undefined;
+    const cancelled = check.token.isCancellationRequested;
+    check.dispose();
+    if (cancelled || this.disposed) return;
+    this.sqliteCacheAvailability ??= result;
+    this.scheduleSnapshot();
+  }
+
+  private getSqliteCacheDisabledReason(): string | undefined {
+    const availability = this.sqliteCacheAvailability;
+    if (!availability) return t("settingsPanel.cacheAvailability.checking");
+    if (availability.available) return undefined;
+    const reason = availability.reason === "unsafeVersion"
+      ? t("settingsPanel.cacheAvailability.versionGuidance")
+      : this.cacheBackendFailureReason(availability.reason);
+    return t("settingsPanel.cacheAvailability.unavailable", reason);
+  }
+
+  private getSqliteCacheEnablingDisabledReason(relativeKey: string, value: unknown): string | undefined {
+    return relativeKey === SQLITE_CACHE_SETTING && value === true ? this.getSqliteCacheDisabledReason() : undefined;
+  }
+
+  private cacheBackendDescription(): string {
+    const status = this.sqliteCache?.getStatus() ?? { backend: "legacy" };
+    if (status.backend === "uninitialized") return t("settingsPanel.cacheBackend.uninitialized");
+    if (status.backend === "probing") return t("settingsPanel.cacheBackend.probing");
+    if (status.backend === "sqlite") return t("settingsPanel.cacheBackend.sqlite");
+    if (!status.reason) return t("settingsPanel.cacheBackend.legacy");
+    return t("settingsPanel.cacheBackend.legacyReason", this.cacheBackendFailureReason(status.reason));
+  }
+
+  private cacheBackendFailureReason(reason: SqliteCacheErrorCode): string {
+    const reasons: Readonly<Partial<Record<SqliteCacheErrorCode, string>>> = {
+      runtime: t("settingsPanel.sqliteRuntimeUnavailable"), unsafeVersion: t("settingsPanel.cacheBackend.reason.unsafeVersion"),
+      fts: t("settingsPanel.cacheBackend.reason.fts"), storage: t("settingsPanel.cacheBackend.reason.storage"),
+      foreignDatabase: t("settingsPanel.cacheBackend.reason.foreignDatabase"), schema: t("settingsPanel.cacheBackend.reason.schema"),
+      corrupt: t("settingsPanel.cacheBackend.reason.corrupt"), full: t("settingsPanel.cacheBackend.reason.full"),
+      io: t("settingsPanel.cacheBackend.reason.io"), worker: t("settingsPanel.cacheBackend.reason.worker"), busy: t("settingsPanel.cacheBackend.reason.busy"),
+      resourceLimit: t("settingsPanel.cacheBackend.reason.resourceLimit"),
+    };
+    return reasons[reason] ?? t("settingsPanel.cacheBackend.reason.unavailable");
+  }
+
+  private antigravityReaderDescription(): string {
+    const status = antigravityReader.getStatus();
+    if (status.state === "disabled") return t("settingsPanel.antigravity.disabled");
+    if (status.state === "idle" || status.state === "running") {
+      const failures = antigravityReader.getConfigurationFailureCount();
+      return failures ? t("settingsPanel.antigravity.partialRoots", failures) : t("settingsPanel.antigravity.waiting");
+    }
+    const reasons: Record<AntigravityErrorCode, string> = {
+      runtime: t("settingsPanel.sqliteRuntimeUnavailable"), storage: t("settingsPanel.antigravity.reason.storage"),
+      schema: t("settingsPanel.antigravity.reason.schema"), format: t("settingsPanel.antigravity.reason.format"),
+      corrupt: t("settingsPanel.antigravity.reason.corrupt"), busy: t("settingsPanel.antigravity.reason.busy"),
+      sourceChanged: t("settingsPanel.antigravity.reason.sourceChanged"), sourceUnavailable: t("settingsPanel.antigravity.reason.sourceUnavailable"),
+      cancelled: t("settingsPanel.antigravity.reason.cancelled"), deadline: t("settingsPanel.antigravity.reason.deadline"),
+      stalled: t("settingsPanel.antigravity.reason.stalled"), limit: t("settingsPanel.antigravity.reason.limit"),
+    };
+    const reason = reasons[status.reason ?? "sourceUnavailable"];
+    return status.state === "stopping" ? t("settingsPanel.antigravity.stopping", reason) : t("settingsPanel.antigravity.unavailable", reason);
   }
 
   private getBundledDocumentText(document: string | undefined): string {

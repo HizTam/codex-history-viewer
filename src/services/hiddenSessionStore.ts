@@ -257,7 +257,7 @@ function sanitizeHiddenSession(value: unknown): HiddenSessionEntry | null {
   const raw = value as Record<string, unknown>;
   if (!isBoundedSessionIdentityKey(raw.identityKey)) return null;
   if (/[\u0000-\u001f\u007f]/u.test(raw.identityKey)) return null;
-  if (raw.source !== "codex" && raw.source !== "claude") return null;
+  if (raw.source !== "codex" && raw.source !== "claude" && raw.source !== "antigravity") return null;
   if (!raw.identityKey.startsWith(`${raw.source}:`)) return null;
   const fsPath = sanitizeSessionPath(raw.fsPath);
   const cacheKey = normalizeCacheKey(fsPath);

@@ -1,6 +1,7 @@
 import { detectClaudeMaterializedMessageRole } from "./chatAttachments";
 import { extractCompactUserText } from "../utils/textUtils";
 import type { ClaudePastedPromptResolution } from "./claudePastedPrompt";
+import type { ChatAttachment } from "./chatTypes";
 
 // Upstream marks generated compaction summaries explicitly; never classify by prose or language.
 export function isClaudeCompactSummaryRecord(value: unknown): boolean {
@@ -21,4 +22,19 @@ export function extractClaudeCompactUserText(
   return extractCompactUserText(text, {
     preserveClaudeInterruptionText: shutdownFlag || pastedPrompt?.preserveSessionText === true,
   });
+}
+
+// Keep ordinary parsing and legacy voice compatibility on the same turn-start predicate.
+export function isClaudeHumanTurnStart(
+  value: unknown,
+  compactUserText: string | null,
+  attachments: readonly ChatAttachment[],
+  hasToolResults: boolean,
+): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (record.isMeta === true || record.isSidechain === true || isClaudeCompactSummaryRecord(record)) return false;
+  if (compactUserText) return true;
+  if (hasToolResults) return false;
+  return attachments.some(attachment => attachment.type === "image" || attachment.type === "document");
 }

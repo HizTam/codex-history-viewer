@@ -1,16 +1,16 @@
 {
   "schemaVersion": 1,
   "files": {
-    "l10n/bundle.l10n.ja.json": "18edc08fc065e84d6e9f885ab3c332f0eb5dec51e178edd22ae14eda366335dc",
-    "package.nls.ja.json": "ae9f77a8d44373844873268f284df9e409b2bfbbd6f6d9906697ab04fdcdea96",
-    "l10n/bundle.l10n.json": "f5ce2bd137e8d8deae270dd2d7229b5a31939d810528d4888bfe587e47852b51",
-    "package.nls.en.json": "0d6373ee0d7aa8f6261c500ef1952c9b2c5ddd45e39c6874dfcba68d72c7d49c",
-    "package.nls.json": "0d6373ee0d7aa8f6261c500ef1952c9b2c5ddd45e39c6874dfcba68d72c7d49c",
-    "src/generated/localeCatalog.ts": "ae5aeed7049a63a9137ad508f88184acfd8391795fd65cc43146910832a4ea9c",
-    "src/generated/defaultRuntimeMessages.ts": "fa7f77f507d7a674b43160a32820c6aef5fbae6f7eefa85161b71384b782edde",
-    "src/generated/uiCommandAliases.ts": "a26347a9a023d8ffbc5e442d0b159a63b2fe6da59083a5fce82bdb96c60727f2",
-    "src/generated/webviewI18n.ts": "9605b08484d8df0210eb13362d10de266c4a5b05c1c6a9520f375da50eb84194",
-    "media/generated/localization.js": "5ffbea203035e39453042ab2ecc08a4a32da88057354669fa2d48f3584e6c3cc"
+    "l10n/bundle.l10n.ja.json": "1249a896c753548f5d5c4e1931583723f7954f3bb487052850e96df06d9cd2df",
+    "package.nls.ja.json": "15f5b652d46917afa8265470efef06e28256a628faf4c22ad15ab0c3aae9cd28",
+    "l10n/bundle.l10n.json": "d6d6d583cafa78f1d7dd60eeff20c6773e088ebb084f5f077956eb37be69f1f8",
+    "package.nls.en.json": "ec1d77377dad14055e5fa50e6406b7486c81ff2c8d9fa25e57fc2eda4ebbe53d",
+    "package.nls.json": "ec1d77377dad14055e5fa50e6406b7486c81ff2c8d9fa25e57fc2eda4ebbe53d",
+    "src/generated/localeCatalog.ts": "827e5d7e8430bf6158349f2e453ec0e3915265b08825b9d0341849151afbf081",
+    "src/generated/defaultRuntimeMessages.ts": "51bf9b13a2aed0b20ca4f53c53a6f05357f8151add33d304e5c7433576cfc47d",
+    "src/generated/uiCommandAliases.ts": "5abfb7b2fb587fea32a48eb624841ad5482bcb86e9d180df83965ee988a6ee50",
+    "src/generated/webviewI18n.ts": "95c874fd1158c10a8b4acd5d74c0a514cf11d0e69d1a444083e1f3bd07134844",
+    "media/generated/localization.js": "100dcaff46f12ec585f86e290aef6760ce4365770e30d4dcecf5cb36218fda83"
   },
-  "packageHash": "925e726b5c21961abd66e3467f16ccde25fceb441e60e092d22dc72e015efdcd"
+  "packageHash": "9468c509521976441d803a8c4eb2fb5ec9d882a3b4076f5203cb9ec395921e89"
 }

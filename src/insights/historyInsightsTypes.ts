@@ -1,4 +1,4 @@
-import type { ArchiveLocationFilter, SessionSource, SessionSourceFilter } from "../sessions/sessionTypes";
+import type { ArchiveLocationFilter, SessionSource, SessionSourceFilter, HistorySourceInventoryState } from "../sessions/sessionTypes";
 import type { HistorySortOrder, HistoryViewMode } from "../tree/historyTree";
 import type { DateScope } from "../types/dateScope";
 import type { ProjectSelection, ProjectSelectionGroup } from "../types/projectSelection";
@@ -53,6 +53,7 @@ export interface HistoryInsightsSnapshot {
   dateBasis: "started" | "lastActivity";
   dateTimeSettingsKey: string;
   references: HistoryInsightsSessionReference[];
+  sourceInventoryStates?: Partial<Record<SessionSource, HistorySourceInventoryState["status"]>>;
   descriptor: HistoryInsightsFilterDescriptor;
 }
 
@@ -141,7 +142,7 @@ export interface HistoryInsightsFilterPresentation {
 }
 
 export type HistoryInsightsFilterSelection =
-  | { filter: "source"; source: SessionSource }
+  | { filter: "source"; source: SessionSourceFilter }
   | { filter: "archiveLocation"; displayTarget: HistoryDisplayTarget }
   | { filter: "projects"; projects: { kind: "all" } | { kind: "group"; group: ProjectSelectionGroup } }
   | { filter: "tags"; tags: string[] };
@@ -174,6 +175,7 @@ export interface HistoryInsightsBreakdownMetricValues {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  availability?: Partial<Record<HistoryInsightsBreakdownMetric, AnalysisAvailability>>;
 }
 
 export interface HistoryInsightsBreakdownRow {
@@ -296,6 +298,7 @@ export interface HistoryInsightsModel {
   generatedAtIso: string;
   refreshing: boolean;
   stale: boolean;
+  sourceInventoryIncomplete?: true;
   dateBasis: HistoryInsightsSnapshot["dateBasis"];
   dateTimeSettingsKey: string;
   chips: string[];

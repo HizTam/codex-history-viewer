@@ -3,7 +3,7 @@ import type { RemoteCodexModel } from "./remoteCodexController";
 export type SettingsPanelValue = boolean | number | string | readonly string[];
 
 export type SettingsTargetKind = "global" | "workspace" | "workspaceFolder";
-export type SettingsSourceBadge = "codex" | "claude";
+export type SettingsSourceBadge = "codex" | "claude" | "antigravity";
 export type SettingsApplyTiming = "windowReload" | "sessionReload";
 
 export interface SettingsTargetModel {
@@ -98,6 +98,7 @@ export interface SettingsMaintenanceActionModel {
 export interface SettingsMaintenanceCardModel {
   id: string;
   title: string;
+  description?: string;
   actions: readonly SettingsMaintenanceActionModel[];
 }
 
@@ -144,6 +145,7 @@ export interface SettingsPanelLabels {
   experimental: string;
   codexBadge: string;
   claudeBadge: string;
+  antigravityBadge: string;
   resourceImpact: string;
   windowReloadLabel: string;
   windowReloadDescription: string;

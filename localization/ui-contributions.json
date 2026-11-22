@@ -457,8 +457,8 @@
         "title": "%cmd.openFileChangeHistory%",
         "category": "%cmd.category%",
         "icon": {
-          "light": "resources/icons/light/source-both.svg",
-          "dark": "resources/icons/dark/source-both.svg"
+          "light": "resources/icons/light/source-all.svg",
+          "dark": "resources/icons/dark/source-all.svg"
         }
       }
     },
@@ -1819,10 +1819,10 @@
       "expandLocales": false,
       "value": {
         "command": "codexHistoryViewer.ui.cycleHistorySourceAll",
-        "title": "Codex + Claude Code",
+        "title": "%ui.command.historyMenuSourceAll%",
         "icon": {
-          "light": "resources/icons/light/source-both.svg",
-          "dark": "resources/icons/dark/source-both.svg"
+          "light": "resources/icons/light/source-all.svg",
+          "dark": "resources/icons/dark/source-all.svg"
         }
       }
     },
@@ -1852,10 +1852,10 @@
       "expandLocales": false,
       "value": {
         "command": "codexHistoryViewer.ui.pinnedSourceAll",
-        "title": "Codex + Claude Code",
+        "title": "%ui.command.historyMenuSourceAll%",
         "icon": {
-          "light": "resources/icons/light/source-both.svg",
-          "dark": "resources/icons/dark/source-both.svg"
+          "light": "resources/icons/light/source-all.svg",
+          "dark": "resources/icons/dark/source-all.svg"
         }
       }
     },
@@ -2530,6 +2530,97 @@
       "titleKey": "ui.command.historyMenuCompressionUncompressed",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.historyMenuCompressionUncompressed"
+      }
+    },
+    {
+      "expandLocales": false,
+      "value": {
+        "command": "codexHistoryViewer.ui.cycleHistorySourceAntigravity",
+        "title": "Antigravity",
+        "icon": {
+          "light": "resources/icons/light/source-antigravity.svg",
+          "dark": "resources/icons/dark/source-antigravity.svg"
+        }
+      }
+    },
+    {
+      "expandLocales": false,
+      "value": {
+        "command": "codexHistoryViewer.ui.pinnedSourceAntigravity",
+        "title": "Antigravity",
+        "icon": {
+          "light": "resources/icons/light/source-antigravity.svg",
+          "dark": "resources/icons/dark/source-antigravity.svg"
+        }
+      }
+    },
+    {
+      "expandLocales": true,
+      "titleKey": "ui.command.historyMenuSourceAntigravity",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.historyMenuSourceAntigravity"
+      }
+    },
+    {
+      "expandLocales": true,
+      "titleKey": "ui.command.historyMenuSourceAntigravityChecked",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.historyMenuSourceAntigravityChecked"
+      }
+    },
+    {
+      "expandLocales": true,
+      "titleKey": "ui.command.resumeSessionInAntigravity",
+      "value": { "command": "codexHistoryViewer.ui.{locale}.resumeSessionInAntigravity" }
+    },
+    {
+      "expandLocales": false,
+      "value": { "command": "codexHistoryViewer.resumeSessionInAntigravity", "title": "%cmd.resumeSessionInAntigravity%", "category": "%cmd.category%" }
+    },
+    {
+      "expandLocales": true,
+      "titleKey": "ui.command.resumeSessionInAntigravityCli",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.resumeSessionInAntigravityCli",
+        "icon": "$(terminal)"
+      }
+    },
+    {
+      "expandLocales": false,
+      "value": {
+        "command": "codexHistoryViewer.resumeSessionInAntigravityCli",
+        "title": "%cmd.resumeSessionInAntigravityCli%",
+        "category": "%cmd.category%"
+      }
+    },
+    {
+      "expandLocales": false,
+      "value": {
+        "command": "codexHistoryViewer.handoffToAntigravity",
+        "title": "%cmd.handoffToAntigravity%",
+        "category": "%cmd.category%"
+      }
+    },
+    {
+      "expandLocales": true,
+      "titleKey": "ui.command.handoffToAntigravity",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.handoffToAntigravity"
+      }
+    },
+    {
+      "expandLocales": false,
+      "value": {
+        "command": "codexHistoryViewer.handoffToCodex",
+        "title": "%cmd.handoffToCodex%",
+        "category": "%cmd.category%"
+      }
+    },
+    {
+      "expandLocales": true,
+      "titleKey": "ui.command.handoffToCodex",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.handoffToCodex"
       }
     }
   ],
@@ -4809,7 +4900,7 @@
       "menu": "codexHistoryViewer.handoffSubmenu.{locale}",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.createHandoffFile",
-        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
         "group": "navigation@2"
       }
     },
@@ -4818,7 +4909,7 @@
       "menu": "codexHistoryViewer.handoffSubmenu.{locale}",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.copyHandoffPrompt",
-        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
         "group": "navigation@3"
       }
     },
@@ -4827,7 +4918,7 @@
       "menu": "codexHistoryViewer.handoffSubmenu.{locale}",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.copyHandoffPath",
-        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
         "group": "navigation@3.5"
       }
     },
@@ -4836,7 +4927,7 @@
       "menu": "codexHistoryViewer.handoffSubmenu.{locale}",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.openSessionHandoff",
-        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
         "group": "navigation@4"
       }
     },
@@ -5750,7 +5841,7 @@
       "menu": "view/item/context",
       "value": {
         "submenu": "codexHistoryViewer.handoffSubmenu.{locale}",
-        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled && {localeCondition}",
+        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled && {localeCondition}",
         "group": "navigation@0.5"
       }
     },
@@ -6182,7 +6273,7 @@
       "menu": "codexHistoryViewer.historySourceSubmenu.{locale}",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.historyMenuSourceCodexChecked",
-        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'codex'",
+        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'codex' && codexHistoryViewer.availableSourceCodex",
         "group": "5_historySource@2"
       }
     },
@@ -6191,7 +6282,7 @@
       "menu": "codexHistoryViewer.historySourceSubmenu.{locale}",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.historyMenuSourceCodex",
-        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'codex'",
+        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'codex' && codexHistoryViewer.availableSourceCodex",
         "group": "5_historySource@2"
       }
     },
@@ -6200,7 +6291,7 @@
       "menu": "codexHistoryViewer.historySourceSubmenu.{locale}",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.historyMenuSourceClaudeChecked",
-        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'claude'",
+        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'claude' && codexHistoryViewer.availableSourceClaude",
         "group": "5_historySource@3"
       }
     },
@@ -6209,7 +6300,7 @@
       "menu": "codexHistoryViewer.historySourceSubmenu.{locale}",
       "value": {
         "command": "codexHistoryViewer.ui.{locale}.historyMenuSourceClaude",
-        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'claude'",
+        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.availableSourceClaude",
         "group": "5_historySource@3"
       }
     },
@@ -6355,6 +6446,177 @@
         "command": "codexHistoryViewer.ui.{locale}.historyMenuCompressionUncompressed",
         "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historyCompressionFilter != 'uncompressed'",
         "group": "7_historyCompression@3"
+      }
+    },
+    {
+      "expandLocales": false,
+      "menu": "commandPalette",
+      "value": {
+        "command": "codexHistoryViewer.ui.cycleHistorySourceAntigravity",
+        "when": "false"
+      }
+    },
+    {
+      "expandLocales": false,
+      "menu": "commandPalette",
+      "value": {
+        "command": "codexHistoryViewer.ui.pinnedSourceAntigravity",
+        "when": "false"
+      }
+    },
+    {
+      "expandLocales": true,
+      "menu": "commandPalette",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.historyMenuSourceAntigravity",
+        "when": "false"
+      }
+    },
+    {
+      "expandLocales": true,
+      "menu": "commandPalette",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.historyMenuSourceAntigravityChecked",
+        "when": "false"
+      }
+    },
+    {
+      "expandLocales": false,
+      "menu": "view/title",
+      "value": {
+        "command": "codexHistoryViewer.ui.pinnedSourceAntigravity",
+        "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedSourceSwitchable && codexHistoryViewer.pinnedSourceFilter == 'antigravity'",
+        "group": "navigation@10"
+      }
+    },
+    {
+      "expandLocales": false,
+      "menu": "view/title",
+      "value": {
+        "command": "codexHistoryViewer.ui.cycleHistorySourceAntigravity",
+        "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'antigravity'",
+        "group": "navigation@9"
+      }
+    },
+    {
+      "expandLocales": true,
+      "menu": "codexHistoryViewer.historySourceSubmenu.{locale}",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.historyMenuSourceAntigravityChecked",
+        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'antigravity' && codexHistoryViewer.availableSourceAntigravity",
+        "group": "5_historySource@4"
+      }
+    },
+    {
+      "expandLocales": true,
+      "menu": "codexHistoryViewer.historySourceSubmenu.{locale}",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.historyMenuSourceAntigravity",
+        "when": "view == codexHistoryViewer.historyView && {localeCondition} && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'antigravity' && codexHistoryViewer.availableSourceAntigravity",
+        "group": "5_historySource@4"
+      }
+    },
+    {
+      "expandLocales": false,
+      "menu": "commandPalette",
+      "value": {
+        "command": "codexHistoryViewer.resumeSessionInAntigravity",
+        "when": "false"
+      }
+    },
+    {
+      "expandLocales": true,
+      "menu": "commandPalette",
+      "value": { "command": "codexHistoryViewer.ui.{locale}.resumeSessionInAntigravity", "when": "false" }
+    },
+    {
+      "expandLocales": true,
+      "menu": "view/item/context",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.resumeSessionInAntigravity",
+        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.hidden)?(?:\\.customTitle)?\\.cliResumeIdValid$/ && isWorkspaceTrusted && !remoteName && config.codexHistoryViewer.resume.antigravityMethod != 'cli' && {localeCondition}",
+        "group": "navigation@0"
+      }
+    },
+    {
+      "expandLocales": false,
+      "menu": "commandPalette",
+      "value": { "command": "codexHistoryViewer.resumeSessionInAntigravityCli", "when": "false" }
+    },
+    {
+      "expandLocales": true,
+      "menu": "commandPalette",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.resumeSessionInAntigravityCli",
+        "when": "false"
+      }
+    },
+    {
+      "expandLocales": true,
+      "menu": "view/item/context",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.resumeSessionInAntigravityCli",
+        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.hidden)?(?:\\.customTitle)?\\.cliResumeIdValid$/ && isWorkspaceTrusted && (config.codexHistoryViewer.resume.antigravityMethod == 'cli' || config.codexHistoryViewer.resume.antigravityMethod == 'both') && {localeCondition}",
+        "group": "navigation@0.1"
+      }
+    },
+    {
+      "expandLocales": true,
+      "menu": "commandPalette",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.handoffToAntigravity",
+        "when": "false"
+      }
+    },
+    {
+      "expandLocales": false,
+      "menu": "commandPalette",
+      "value": {
+        "command": "codexHistoryViewer.handoffToAntigravity",
+        "when": "false"
+      }
+    },
+    {
+      "expandLocales": true,
+      "menu": "codexHistoryViewer.handoffSubmenu.{locale}",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.handoffToAntigravity",
+        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+        "group": "navigation@1.2"
+      }
+    },
+    {
+      "expandLocales": true,
+      "menu": "commandPalette",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.handoffToCodex",
+        "when": "false"
+      }
+    },
+    {
+      "expandLocales": false,
+      "menu": "commandPalette",
+      "value": {
+        "command": "codexHistoryViewer.handoffToCodex",
+        "when": "false"
+      }
+    },
+    {
+      "expandLocales": true,
+      "menu": "codexHistoryViewer.handoffSubmenu.{locale}",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.handoffToCodex",
+        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+        "group": "navigation@1.1"
+      }
+    },
+    {
+      "expandLocales": true,
+      "menu": "codexHistoryViewer.handoffSubmenu.{locale}",
+      "value": {
+        "command": "codexHistoryViewer.ui.{locale}.handoffToClaude",
+        "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+        "group": "navigation@1"
       }
     }
   ],
@@ -7188,6 +7450,46 @@
       "expandLocales": true,
       "id": "codexHistoryViewer.ui.{locale}.undoLastAction",
       "target": "codexHistoryViewer.undoLastAction"
+    },
+    {
+      "expandLocales": true,
+      "id": "codexHistoryViewer.ui.{locale}.historyMenuSourceAntigravity",
+      "target": "codexHistoryViewer.setHistorySourceFilterAntigravity"
+    },
+    {
+      "expandLocales": true,
+      "id": "codexHistoryViewer.ui.{locale}.historyMenuSourceAntigravityChecked",
+      "target": "codexHistoryViewer.setHistorySourceFilterAntigravity"
+    },
+    {
+      "expandLocales": false,
+      "id": "codexHistoryViewer.ui.cycleHistorySourceAntigravity",
+      "target": "codexHistoryViewer.cycleHistorySourceFilter"
+    },
+    {
+      "expandLocales": false,
+      "id": "codexHistoryViewer.ui.pinnedSourceAntigravity",
+      "target": "codexHistoryViewer.cyclePinnedSourceFilter"
+    },
+    {
+      "expandLocales": true,
+      "id": "codexHistoryViewer.ui.{locale}.resumeSessionInAntigravity",
+      "target": "codexHistoryViewer.resumeSessionInAntigravity"
+    },
+    {
+      "expandLocales": true,
+      "id": "codexHistoryViewer.ui.{locale}.resumeSessionInAntigravityCli",
+      "target": "codexHistoryViewer.resumeSessionInAntigravityCli"
+    },
+    {
+      "expandLocales": true,
+      "id": "codexHistoryViewer.ui.{locale}.handoffToAntigravity",
+      "target": "codexHistoryViewer.handoffToAntigravity"
+    },
+    {
+      "expandLocales": true,
+      "id": "codexHistoryViewer.ui.{locale}.handoffToCodex",
+      "target": "codexHistoryViewer.handoffToCodex"
     }
   ]
 }

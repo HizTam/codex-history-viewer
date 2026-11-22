@@ -1,6 +1,8 @@
 // Data model for the chat-like webview.
 import type { ChatToolPresentation } from "../tools/toolTypes";
+import type { ClaudeAdvisorStatus } from "./claudeAdvisor";
 import type { FilePresentationKind } from "../utils/fileKind";
+import type { SessionRootKind, SessionSource } from "../sessions/sessionTypes";
 
 export type ChatRole = "developer" | "user" | "assistant";
 export type ChatWebviewPathMode = "recorded" | "relocated";
@@ -14,7 +16,7 @@ export interface ChatSessionMeta {
   cliVersion?: string;
   modelProvider?: string;
   source?: string;
-  historySource?: "codex" | "claude";
+  historySource?: SessionSource;
 }
 
 export interface ChatSessionAnnotation {
@@ -24,7 +26,7 @@ export interface ChatSessionAnnotation {
 
 export interface ChatSessionLocation {
   archiveState: "active" | "archived";
-  rootKind: "codexSessions" | "codexArchivedSessions" | "claudeSessions";
+  rootKind: SessionRootKind;
 }
 
 export type ChatTimelineItem =
@@ -33,7 +35,9 @@ export type ChatTimelineItem =
   | ChatTaskNotificationItem
   | ChatSystemReminderItem
   | ChatClaudeProgressItem
+  | ChatAntigravityProgressItem
   | ChatClaudeQueuedInputItem
+  | ChatClaudeVoiceCallItem
   | ChatProtocolContextItem
   | ChatToolItem
   | ChatSystemEventItem
@@ -59,6 +63,7 @@ export interface ChatTurnSummary {
   startedAtIso?: string;
   completedAtIso?: string;
   updatedAtIso?: string;
+  runningActivityAtIso?: string;
   firstItemIndex?: number;
   lastItemIndex?: number;
   firstMessageIndex?: number;
@@ -68,10 +73,12 @@ export interface ChatTurnSummary {
   toolCount: number;
   patchGroupCount: number;
   patchEntryCount: number;
+  antigravityChangedFiles?: Readonly<{ count: number; incomplete: boolean }>;
   usageRecordCount: number;
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  tokenAvailability?: Readonly<{ inputTokens: "available" | "partial" | "unavailable"; outputTokens: "available" | "partial" | "unavailable"; totalTokens: "available" | "partial" | "unavailable" }>;
   systemEventCount: number;
 }
 
@@ -139,7 +146,7 @@ export interface ChatDocumentAttachment {
 export interface ChatFileReferenceAttachment {
   id?: string;
   type: "fileReference";
-  source: "codexFilesMentioned" | "codexFilesPasted" | "claudeIdeOpenedFile" | "claudeSendUserFile";
+  source: "codexFilesMentioned" | "codexFilesPasted" | "claudeIdeOpenedFile" | "claudeSendUserFile" | "antigravity";
   label?: string;
   displayLabel?: ChatAttachmentDisplayLabel;
   path?: string;
@@ -267,6 +274,7 @@ export interface ChatMessageItem {
   effort?: string;
   text: string;
   requestText?: string;
+  codexAnswerRestricted?: true;
   // Verified native terminal input remains a user message.
   isTerminalInput?: true;
   questionReplies?: readonly ChatQuestionReply[];
@@ -337,6 +345,33 @@ export interface ChatClaudeQueuedInputItem {
   isBookmarked?: boolean;
 }
 
+export interface ChatAntigravityProgressItem {
+  type: "antigravityProgress";
+  source: "antigravity";
+  kind: "thinking" | "redactedThinking" | "queuedInput";
+  progressId: string;
+  body: string;
+  durationMs?: number;
+  timestampIso?: string;
+  turnId?: string;
+  bookmarkKey?: string;
+  isBookmarked?: boolean;
+}
+
+export interface ChatClaudeVoiceCallItem {
+  type: "claudeVoiceCall";
+  source: "claude";
+  voiceCallId: string;
+  body: string;
+  timestampIso?: string;
+  turnId?: string;
+  messageIndex?: number;
+  truncated?: true;
+  invalidContent?: true;
+  bookmarkKey?: string;
+  isBookmarked?: boolean;
+}
+
 export interface ChatProtocolContextItem {
   type: "protocolContext";
   source: "codex" | "claude";
@@ -357,6 +392,7 @@ export interface ChatToolItem {
   callId?: string;
   argumentsText?: string;
   outputText?: string;
+  advisor?: { id: string; status: ClaudeAdvisorStatus; truncated?: true };
   attachments?: ChatAttachment[];
   sentFiles?: ChatSentFilesPresentation;
   detailsOmitted?: boolean;
@@ -494,6 +530,7 @@ export interface ChatPatchGroupItem {
   entryCount: number;
   totalAdded: number;
   totalRemoved: number;
+  statsAvailability?: Readonly<{ added: boolean; removed: boolean }>;
   entries: ChatPatchEntry[];
   bookmarkKey?: string;
   isBookmarked?: boolean;
@@ -511,8 +548,10 @@ export interface ChatPatchEntry {
   changeType: ChatPatchChangeType;
   added: number;
   removed: number;
+  statsAvailability?: Readonly<{ added: boolean; removed: boolean }>;
   detailsOmitted?: boolean;
   hunks: ChatPatchHunk[];
+  detailsUnavailable?: "nativeFormat" | "limit";
 }
 
 export interface ChatPatchHunk {
@@ -530,7 +569,7 @@ export interface ChatPatchRow {
 
 export interface ChatNoteItem {
   type: "note";
-  noticeKind?: "historyIncomplete";
+  noticeKind?: "historyIncomplete" | "antigravityPartial";
   alwaysVisible?: boolean;
   timestampIso?: string;
   title: string;
@@ -539,7 +578,28 @@ export interface ChatNoteItem {
   isBookmarked?: boolean;
 }
 
+export interface ChatAntigravityTurnFileDiff {
+  readonly path: string;
+  readonly stats?: Readonly<{ added: number; removed: number }>;
+  readonly rows?: readonly {
+    readonly kind: "add" | "delete" | "context";
+    readonly text: string;
+    readonly noFinalNewline?: true;
+  }[];
+}
+
+export interface ChatAntigravityTurnFileChanges {
+  readonly id: string;
+  readonly afterItemIndex: number;
+  readonly editItemIndices: readonly number[];
+  readonly files: readonly ChatAntigravityTurnFileDiff[];
+  readonly countIncomplete: boolean;
+  readonly running: boolean;
+  readonly stats?: Readonly<{ added: number; removed: number }>;
+}
+
 export interface ChatSessionModel {
+  antigravityTurnFileChanges?: readonly ChatAntigravityTurnFileChanges[];
   identityKey?: string;
   compressed?: boolean;
   codexHasRollback?: boolean;

@@ -1,19 +1,23 @@
 /* Progress stays distinct from final answers without depending on color alone. */
-.bubble.claudeProgressCard {
+.bubble.claudeProgressCard,
+.bubble.antigravityProgressCard {
   border-inline-start: 3px solid var(--vscode-descriptionForeground);
 }
 .claudeProgressTag {
   font-weight: 600;
 }
-.claudeProgressBody {
+.claudeProgressBody,
+.antigravityProgressBody {
   overflow-wrap: anywhere;
 }
-.claudeThinking > summary {
+.claudeThinking > summary,
+.antigravityThinking > summary {
   cursor: pointer;
   padding-block: 4px;
   color: var(--vscode-descriptionForeground);
 }
-.claudeThinking > summary:focus-visible {
+.claudeThinking > summary:focus-visible,
+.antigravityThinking > summary:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: 2px;
 }
@@ -4250,7 +4254,76 @@ body.vscode-high-contrast-light .turnQuotaTooltip {
   background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 12%, var(--chv-tool-bg) 88%);
 }
 
-.patchGroupCard {
+.antigravityTurnChangesCard {
+  min-width: 0;
+}
+
+.antigravityEditRecords > summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.antigravityTurnFile {
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+
+.antigravityTurnFile > summary {
+  font-weight: inherit;
+}
+
+.antigravityTurnFile .patchGroupFilePath {
+  direction: rtl;
+  text-align: left;
+}
+
+.antigravityTurnFile > summary:focus-visible,
+.antigravityTurnChangesCard .patchGroupFileToggle:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+
+.antigravityTurnFileChevron {
+  width: 7px;
+  height: 7px;
+  margin-inline: 5px;
+  border: solid var(--chv-muted);
+  border-width: 0 1px 1px 0;
+  transform: rotate(-45deg);
+}
+
+.antigravityTurnFile[open] > summary .antigravityTurnFileChevron {
+  transform: rotate(45deg);
+}
+
+.antigravityTurnFileDiff {
+  max-height: 36em;
+  overflow: auto;
+  padding: 6px;
+  background: var(--vscode-editor-background);
+}
+
+.antigravityDiffLine {
+  display: block;
+  min-height: 1em;
+}
+
+.antigravityDiffLine-add {
+  background: var(--vscode-diffEditor-insertedLineBackground);
+}
+
+.antigravityDiffLine-delete {
+  background: var(--vscode-diffEditor-removedLineBackground);
+}
+
+.antigravityDiffNoFinalNewline {
+  display: block;
+  color: var(--vscode-descriptionForeground);
+}
+
+.patchGroupCard,
+.antigravityTurnChangesCard {
   gap: 10px;
 }
 
@@ -6917,4 +6990,11 @@ body.vscode-high-contrast-light #mermaidPaneRoot {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   min-width: 0;
+}
+
+.nativeSourceUnavailable {
+  margin: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--vscode-inputValidation-warningBorder);
+  background: var(--vscode-inputValidation-warningBackground);
 }

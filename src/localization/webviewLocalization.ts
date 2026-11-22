@@ -34,9 +34,12 @@ function projectLocalizedModel(panel: LocalizedPanelKind, value: unknown): unkno
   // Reproject marked UI labels, never user-supplied names or analysis data.
   if (panel === "chat" && Array.isArray((value as { items?: unknown }).items)) {
     const model = value as import("../chat/chatTypes").ChatSessionModel;
-    return { ...model, items: model.items.map(item => item.type === "note" && item.noticeKind === "historyIncomplete"
-      ? { ...item, title: t("chat.historyIncomplete.title"), text: t("chat.historyIncomplete.message") }
-      : item) };
+    return { ...model, items: model.items.map(item => {
+      if (item.type !== "note") return item;
+      if (item.noticeKind === "historyIncomplete") return { ...item, title: t("chat.historyIncomplete.title"), text: t("chat.historyIncomplete.message") };
+      if (item.noticeKind === "antigravityPartial") return { ...item, title: t("antigravity.history.partialTitle"), text: t("antigravity.history.partial") };
+      return item;
+    }) };
   }
   if (panel === "insights") {
     const model = value as import("../insights/historyInsightsTypes").HistoryInsightsModel;

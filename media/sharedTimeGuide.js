@@ -385,7 +385,8 @@
     resolvePosition(item, index, total) {
       const strategy = this.options.positionStrategy === "scroll" ? "scroll" : "index";
       if (strategy === "scroll") {
-        const position = this.resolveScrollPosition(item.element);
+        const element = this.options.getPositionElement?.(item.element) ?? item.element;
+        const position = this.resolveScrollPosition(element);
         if (Number.isFinite(position)) return position;
       }
       if (total <= 1) return 0;
@@ -500,7 +501,8 @@
       const referenceTop = rootRect.top + Math.min(rootRect.height * CURRENT_REFERENCE_RATIO, CURRENT_REFERENCE_MAX_PX);
       let current = items[0];
       for (const item of items) {
-        const rect = item.element.getBoundingClientRect();
+        const element = this.options.getPositionElement?.(item.element) ?? item.element;
+        const rect = element.getBoundingClientRect();
         if (rect.top <= referenceTop) current = item;
         else break;
       }

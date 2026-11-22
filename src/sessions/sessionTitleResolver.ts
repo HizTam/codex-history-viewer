@@ -4,32 +4,37 @@ import {
   sanitizeCachedCodexAgentMetadata,
 } from "../agents/codexAgentMetadata";
 import type { HistoryTitleSource } from "../settings";
-import { isCodexProtocolContextStartText, normalizeWhitespace } from "../utils/textUtils";
+import { hasCodexPageSnapshotPrefix, isCodexProtocolContextStartText, normalizeWhitespace } from "../utils/textUtils";
 import type { PreviewMessage, SessionSummary } from "./sessionTypes";
 
-function sanitizeTitle(value: unknown): string | undefined {
-  const normalized = normalizeWhitespace(typeof value === "string" ? value : "").trim();
+function sanitizeTitle(value: unknown, preserveWhitespace = false): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = preserveWhitespace ? value.trim() : normalizeWhitespace(value);
   if (!normalized) return undefined;
   return normalized.length > 300 ? `${normalized.slice(0, 299)}...` : normalized;
 }
 
-export function isSessionProtocolContextTitle(value: unknown): boolean {
-  const normalized = normalizeWhitespace(typeof value === "string" ? value : "").trim();
-  return isCodexProtocolContextStartText(normalized);
+export function isSessionProtocolContextTitle(value: unknown, source?: SessionSummary["source"]): boolean {
+  return typeof value === "string" && isCodexProtocolContextStartText(value, source === "codex");
 }
 
-export function resolvePreviewSessionTitleCandidate(messages: readonly PreviewMessage[]): string | undefined {
+function sanitizeGeneratedTitle(value: unknown, source?: SessionSummary["source"]): string | undefined {
+  if (isSessionProtocolContextTitle(value, source)) return undefined;
+  return sanitizeTitle(value, source === "codex" && hasCodexPageSnapshotPrefix(value));
+}
+
+export function resolvePreviewSessionTitleCandidate(messages: readonly PreviewMessage[], source?: SessionSummary["source"]): string | undefined {
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index]!;
     if (message.role !== "user") continue;
-    const userText = sanitizeTitle(message.text);
-    if (!userText || isSessionProtocolContextTitle(userText)) continue;
+    const userText = sanitizeGeneratedTitle(message.text, source);
+    if (!userText) continue;
     if (isUiTitleGenerationPrompt(userText)) {
       const nextAssistant = messages
         .slice(index + 1)
         .find((candidate) => candidate.role === "assistant" && sanitizeTitle(candidate.text));
-      const generatedTitle = sanitizeTitle(nextAssistant?.text);
-      if (generatedTitle && !isSessionProtocolContextTitle(generatedTitle)) return generatedTitle;
+      const generatedTitle = sanitizeGeneratedTitle(nextAssistant?.text, source);
+      if (generatedTitle) return generatedTitle;
     }
     return userText;
   }
@@ -38,12 +43,12 @@ export function resolvePreviewSessionTitleCandidate(messages: readonly PreviewMe
 
 function resolveNativeTitle(
   session: SessionSummary,
-  codexTitlesById: ReadonlyMap<string, string>,
+  codexTitlesById: ReadonlyMap<string, string | null>,
 ): string | undefined {
   if (session.source === "codex") {
     const sessionId = typeof session.meta.id === "string" ? session.meta.id.trim() : "";
-    const nativeTitle = sanitizeTitle((sessionId && codexTitlesById.get(sessionId)) ?? session.nativeTitle);
-    return nativeTitle && !isSessionProtocolContextTitle(nativeTitle) ? nativeTitle : undefined;
+    const liveTitle = codexTitlesById.get(sessionId);
+    return liveTitle === null ? undefined : sanitizeGeneratedTitle(liveTitle ?? session.nativeTitle, "codex");
   }
 
   return sanitizeTitle(session.nativeTitle);
@@ -52,7 +57,7 @@ function resolveNativeTitle(
 export function resolveSessionDisplayTitle(params: {
   session: SessionSummary;
   titleSource: HistoryTitleSource;
-  codexTitlesById?: ReadonlyMap<string, string>;
+  codexTitlesById?: ReadonlyMap<string, string | null>;
   customTitle?: string;
 }): SessionSummary {
   const codexTitlesById = params.codexTitlesById ?? new Map<string, string>();
@@ -82,23 +87,17 @@ export function resolveSessionDisplayTitle(params: {
 
 function resolveGeneratedTitle(session: SessionSummary): string {
   const fileNameFallback = sanitizeTitle(path.basename(session.fsPath)) ?? session.fsPath;
-  const snippet = sanitizeTitle(session.snippet);
-  const snippetIsUsable = Boolean(
-    snippet &&
-    !isSessionProtocolContextTitle(snippet) &&
-    snippet !== fileNameFallback,
-  );
-  if (snippetIsUsable) return snippet!;
+  const snippet = sanitizeGeneratedTitle(session.snippet, session.source);
+  if (snippet && snippet !== fileNameFallback) return snippet;
 
-  const previewTitle = resolvePreviewSessionTitleCandidate(session.previewMessages);
+  const previewTitle = resolvePreviewSessionTitleCandidate(session.previewMessages, session.source);
   if (previewTitle) return previewTitle;
 
   const metadata = sanitizeCachedCodexAgentMetadata(session.meta.codexAgent).value;
   const taskLabel = resolveCodexAgentTaskLabel(metadata, "");
   if (taskLabel) return taskLabel;
 
-  if (snippet && !isSessionProtocolContextTitle(snippet)) return snippet;
-  return fileNameFallback;
+  return snippet ?? fileNameFallback;
 }
 
 function isUiTitleGenerationPrompt(text: string): boolean {
@@ -108,7 +107,7 @@ function isUiTitleGenerationPrompt(text: string): boolean {
 export function resolveSessionDisplayTitles(params: {
   sessions: readonly SessionSummary[];
   titleSource: HistoryTitleSource;
-  codexTitlesById?: ReadonlyMap<string, string>;
+  codexTitlesById?: ReadonlyMap<string, string | null>;
   getCustomTitle?: (session: SessionSummary) => string | undefined;
 }): SessionSummary[] {
   return params.sessions.map((session) =>

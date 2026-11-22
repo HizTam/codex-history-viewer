@@ -68,8 +68,7 @@ export class CodexAgentRunsService {
     return Boolean(
       this.presentationEnabled &&
       this.graph &&
-      this.graph.index === this.historyService.getIndex() &&
-      this.graph.indexGeneration === this.historyService.getIndexGeneration(),
+      this.graph.indexGeneration === this.currentCoreGeneration(),
     );
   }
 
@@ -79,7 +78,7 @@ export class CodexAgentRunsService {
       return false;
     }
     const index = this.historyService.getIndex();
-    const indexGeneration = this.historyService.getIndexGeneration();
+    const indexGeneration = this.currentCoreGeneration();
     const graph = buildAgentGraph(
       index,
       indexGeneration,
@@ -87,14 +86,17 @@ export class CodexAgentRunsService {
       this.logger,
     );
     if (
-      index !== this.historyService.getIndex() ||
-      indexGeneration !== this.historyService.getIndexGeneration() ||
+      indexGeneration !== this.currentCoreGeneration() ||
       !this.presentationEnabled
     ) {
       return false;
     }
     this.graph = graph;
     return true;
+  }
+
+  private currentCoreGeneration(): number {
+    return this.historyService.getSourceIndexGeneration ? this.historyService.getSourceIndexGeneration("codex") + this.historyService.getSourceIndexGeneration("claude") : this.historyService.getIndexGeneration();
   }
 
   public isHistorySessionVisible(session: SessionSummary): boolean {
@@ -535,6 +537,7 @@ function buildAgentGraph(
   logger?: DebugLogger,
 ): AgentGraph {
   const codexSessions = index.sessions
+    .filter(session => session.source !== "antigravity")
     .slice()
     .sort((left, right) => compareOrdinal(left.identityKey, right.identityKey));
   const sessionByIdentity = new Map(codexSessions.map((session) => [session.identityKey, session]));

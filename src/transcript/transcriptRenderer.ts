@@ -1,8 +1,11 @@
 import { isClaudeTaskNotificationRecord, projectClaudeTaskNotification } from "../chat/claudeTaskNotification";
+import { isClaudeVoiceCallRecord, projectClaudeVoiceCall, readClaudeVoiceCallLegacyPresentation } from "../chat/claudeVoiceCall";
 import { extractClaudeSystemReminder } from "../chat/claudeSystemReminder";
 import { isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
 import { extractClaudeProgress } from "../chat/claudeProgress";
+import { getClaudeAdvisorStatusLabel, isClaudeAdvisorBlock, readClaudeAdvisorEvents } from "../chat/claudeAdvisor";
 import { ClaudeQueuedInputTracker } from "../chat/claudeQueuedInput";
+import { renderAntigravityTranscript } from "./antigravityTranscriptRenderer";
 import * as path from "node:path";
 import { t } from "../i18n";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
@@ -10,6 +13,7 @@ import { normalizeWhitespace } from "../utils/textUtils";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { readSessionJsonlRecords } from "../sessions/codexHistoryBase";
+import { readCodexAnswerRestriction } from "../sessions/codexAnswerVisibility";
 import { formatYmdHmInTimeZone, formatYmdHmsInTimeZone } from "../utils/dateUtils";
 import {
   buildAttachmentSummaryLines,
@@ -18,6 +22,7 @@ import {
   extractClaudeRequestInterruptionContent,
   extractCodexMessageContent,
   hasSuppressedInputAudioImageCandidate,
+  extractCodexProtocolContextText,
   selectClaudeControlContent,
 } from "../chat/chatAttachments";
 import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
@@ -31,6 +36,7 @@ import {
 } from "../chat/codexResponseItems";
 import {
   normalizeCodexCorrelationId,
+  isCodexCompanionPageRecord,
   readCodexAsyncQuestionMessage,
   readCodexControlToolKind,
   readCodexRolloutRecordKind,
@@ -53,6 +59,7 @@ export async function renderTranscript(
     sessionInventory?: readonly SessionSummary[];
   },
 ): Promise<{ content: string; messageLineMap: Map<number, number> }> {
+  if (path.extname(fsPath).toLowerCase() === ".db") return renderAntigravityTranscript(fsPath, options);
   const timeZone = options.timeZone;
 
   const lines: string[] = [];
@@ -101,7 +108,7 @@ export async function renderTranscript(
     sessionInventory: options.sessionInventory,
   })) {
     const obj = record.value;
-    if (historySource === "claude") {
+    if (historySource === "claude" && !isClaudeVoiceCallRecord(obj)) {
       const input = queuedInputs.accept(obj, record.lineIndex);
       if (input) {
         claudeThinkingState.durationMs = undefined;
@@ -111,7 +118,7 @@ export async function renderTranscript(
         continue;
       }
     }
-    if (obj?.type === "system") claudeThinkingState.durationMs = undefined;
+    if (obj?.type === "system" && !isClaudeVoiceCallRecord(obj)) claudeThinkingState.durationMs = undefined;
 
     const codexResult = await renderCodexRecord(lines, messageLineMap, {
       obj,
@@ -177,6 +184,20 @@ async function renderCodexRecord(
   const { obj, timeZone, state } = params;
   let { msgIndex, lastToolCallId } = params;
 
+  const restricted = readCodexAnswerRestriction(obj);
+  if (restricted) {
+    const question = restricted.kind === "event" ? restricted.asyncQuestion : undefined;
+    if (question && state.seenAsyncQuestionIds.has(question.itemId)) return { handled: true, msgIndex, lastToolCallId };
+    if (question) state.seenAsyncQuestionIds.add(question.itemId);
+    if (restricted.kind === "message" ? restricted.transcriptIndex : question?.hadText) {
+      msgIndex += 1;
+      messageLineMap.set(msgIndex, lines.length + 1);
+      lines.push(`## [#${msgIndex}] Assistant`, "", t("chat.codexAnswer.restricted"), "");
+      lastToolCallId = undefined;
+    }
+    return { handled: true, msgIndex, lastToolCallId };
+  }
+  if (isCodexCompanionPageRecord(obj)) return { handled: true, msgIndex, lastToolCallId };
   const asyncQuestion = readCodexAsyncQuestionMessage(obj);
   if (asyncQuestion) {
     if (state.seenAsyncQuestionIds.has(asyncQuestion.itemId)) {
@@ -207,8 +228,12 @@ async function renderCodexRecord(
       return { handled: true, msgIndex, lastToolCallId };
     }
 
-    const extracted = await extractCodexMessageContent(obj?.payload?.content, undefined, { enabled: false }, { role });
-    const text = normalizeWhitespace(extracted.text);
+    const content = obj?.payload?.content;
+    const protocolText = role === "user" ? extractCodexProtocolContextText(content) : null;
+    const extracted = protocolText === null
+      ? await extractCodexMessageContent(content, undefined, { enabled: false }, { role })
+      : { text: protocolText, attachments: [] };
+    const text = protocolText ?? normalizeWhitespace(extracted.text);
     const attachmentLines = buildAttachmentSummaryLines(extracted.attachments);
     if (!text && attachmentLines.length === 0) {
       if (hasSuppressedInputAudioImageCandidate(obj?.payload?.content)) {
@@ -219,7 +244,7 @@ async function renderCodexRecord(
     }
 
     const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
-    const ctx = role !== "assistant" && isBoilerplateUserMessage(text) ? " (context)" : "";
+    const ctx = protocolText !== null || (role !== "assistant" && isBoilerplateUserMessage(text)) ? " (context)" : "";
 
     if (role === "user" || role === "assistant") {
       msgIndex += 1;
@@ -356,6 +381,19 @@ async function renderClaudeRecord(
   const { obj, timeZone } = params;
   let { msgIndex, lastToolCallId } = params;
 
+  if (isClaudeVoiceCallRecord(obj)) {
+    const legacy = await readClaudeVoiceCallLegacyPresentation(obj);
+    const voice = projectClaudeVoiceCall(obj, params.lineIndex)!;
+    msgIndex += legacy.messageIncrement;
+    if (legacy.messageIncrement) messageLineMap.set(msgIndex, lines.length + 1);
+    lines.push(`## ${t("chat.claudeVoiceCall.title")}`, "", t("chat.claudeVoiceCall.description"), "");
+    if (voice.timestampIso) lines.push(`- Timestamp: \`${formatIsoToLocal(voice.timestampIso, timeZone, { withSeconds: true })}\``, "");
+    if (voice.invalidContent) lines.push(t("chat.claudeVoiceCall.unavailable"), "");
+    else appendPlainTextCodeBlock(lines, voice.body);
+    if (voice.truncated) lines.push(t("chat.crossSession.truncated"), "");
+    return { handled: true, msgIndex, lastToolCallId };
+  }
+
   const role = detectClaudeMessageRole(obj);
   if (!role) return { handled: false, msgIndex, lastToolCallId };
 
@@ -438,7 +476,11 @@ async function renderClaudeRecord(
   const attachmentLines = buildAttachmentSummaryLines(extracted.attachments);
   const ts = typeof obj?.timestamp === "string" ? obj.timestamp : undefined;
   const progress = extractClaudeProgress(obj, params.lineIndex);
+  const advisorEvents = role === "assistant" ? readClaudeAdvisorEvents(obj) : [];
+  const advisorMillis = advisorEvents.length && ts && ts.length <= 128 ? Date.parse(ts) : NaN;
+  const advisorTimestamp = Number.isFinite(advisorMillis) ? new Date(advisorMillis).toISOString() : undefined;
   let progressCursor = 0;
+  let advisorCursor = 0;
   const addThinkingDuration = (duration: number | undefined): void => {
     if (duration === undefined) return;
     const total = (params.thinkingState.durationMs ?? 0) + duration;
@@ -451,9 +493,20 @@ async function renderClaudeRecord(
     params.thinkingState.durationMs = undefined;
   };
   // Preserve block order and carry empty thinking time to the next exported output once.
-  const appendProgressThrough = (blockIndex: number): void => {
-    while (progressCursor < progress.length && progress[progressCursor]!.blockIndex <= blockIndex) {
-      const entry = progress[progressCursor++]!;
+  const appendAnnotationsThrough = (blockIndex: number): void => {
+    while (true) {
+      const entry = progress[progressCursor];
+      const advisor = advisorEvents[advisorCursor];
+      if (advisor && advisor.blockIndex <= blockIndex && (!entry || advisor.blockIndex < entry.blockIndex)) {
+        advisorCursor += 1;
+        lines.push(`## [tool] ${t("chat.claudeAdvisor.title")}`);
+        if (advisorTimestamp) lines.push(`- Timestamp: \`${formatIsoToLocal(advisorTimestamp, timeZone, { withSeconds: true })}\``);
+        lines.push("", getClaudeAdvisorStatusLabel(advisor.status), "");
+        lastToolCallId = undefined;
+        continue;
+      }
+      if (!entry || entry.blockIndex > blockIndex) return;
+      progressCursor += 1;
       if (entry.kind === "thinking" && !entry.body) {
         addThinkingDuration(entry.durationMs);
         continue;
@@ -465,8 +518,8 @@ async function renderClaudeRecord(
       lastToolCallId = undefined;
     }
   };
-  const firstTextBlock = progress.length > 0 && Array.isArray(rawContent)
-    ? rawContent.findIndex((block: any) => typeof block?.text === "string" && block.text.trim()) : -1;
+  const firstTextBlock = (progress.length > 0 || advisorEvents.length > 0) && Array.isArray(rawContent)
+    ? rawContent.findIndex((block: any) => typeof block?.text === "string" && block.text.trim() && !isClaudeAdvisorBlock(block)) : -1;
   const toolBlockIndexes = Array.isArray(rawContent)
     ? rawContent.flatMap((block: any, index: number) => block?.type === "tool_use" ? [index] : []) : [];
 
@@ -474,7 +527,7 @@ async function renderClaudeRecord(
   const appendMessageThrough = (blockIndex: number): void => {
     if (!messagePending || firstTextBlock > blockIndex) return;
     messagePending = false;
-    appendProgressThrough(firstTextBlock);
+    appendAnnotationsThrough(firstTextBlock);
     const ctx = role !== "assistant" && (isBoilerplateUserMessage(text) || isClaudeCompactSummaryRecord(obj)) ? " (context)" : "";
     msgIndex += 1;
     messageLineMap.set(msgIndex, lines.length + 1);
@@ -488,7 +541,7 @@ async function renderClaudeRecord(
 
   for (const [toolCallIndex, toolCall] of parsed.toolCalls.entries()) {
     appendMessageThrough(toolBlockIndexes[toolCallIndex] ?? Number.POSITIVE_INFINITY);
-    appendProgressThrough(toolBlockIndexes[toolCallIndex] ?? Number.POSITIVE_INFINITY);
+    appendAnnotationsThrough(toolBlockIndexes[toolCallIndex] ?? Number.POSITIVE_INFINITY);
     const name = normalizeWhitespace(toolCall.name ?? "") || "tool_use";
     const callId = toolCall.callId;
     const args = formatJsonIfPossible(toolCall.argumentsText ?? "") ?? (toolCall.argumentsText ?? "");
@@ -510,7 +563,7 @@ async function renderClaudeRecord(
   }
 
   appendMessageThrough(Number.POSITIVE_INFINITY);
-  appendProgressThrough(Number.POSITIVE_INFINITY);
+  appendAnnotationsThrough(Number.POSITIVE_INFINITY);
 
   for (const toolResult of parsed.toolResults) {
     const callId = toolResult.callId;
@@ -533,6 +586,7 @@ async function renderClaudeRecord(
     lines.push("```");
     lines.push(``);
   }
+
 
   return { handled: true, msgIndex, lastToolCallId };
 }

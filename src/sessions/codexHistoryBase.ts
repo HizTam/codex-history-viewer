@@ -1,4 +1,5 @@
 import { resolveClaudeAgentHistory } from "./claudeAgentHistory";
+import { CodexAnswerVisibility } from "./codexAnswerVisibility";
 import { open, stat, type FileHandle } from "node:fs/promises";
 import * as path from "node:path";
 import type {
@@ -70,6 +71,7 @@ export interface SessionJsonlReadOptions {
   readonly onCodexRollback?: () => void;
   readonly sessionInventory?: readonly SessionSummary[];
   readonly plan?: CodexLogicalHistoryPlan;
+  readonly exactLeafPath?: boolean;
   readonly token?: { readonly isCancellationRequested: boolean };
   readonly cancellationErrorFactory?: () => Error;
   readonly performanceProbe?: PerformanceProbe;
@@ -189,9 +191,9 @@ export function findCodexHistoryParent(
 export async function resolveCodexLogicalHistoryPlan(
   leafFsPath: string,
   sessionInventory: readonly SessionSummary[] | undefined,
-  options: { verifyLeafHeader?: boolean } = {},
+  options: { verifyLeafHeader?: boolean; exactLeafPath?: boolean } = {},
 ): Promise<CodexLogicalHistoryPlan> {
-  leafFsPath = await resolveSessionFilePath(leafFsPath) ?? leafFsPath;
+  if (!options.exactLeafPath) leafFsPath = await resolveSessionFilePath(leafFsPath) ?? leafFsPath;
   const catalog = sessionInventory ? getOrBuildCatalog(sessionInventory) : buildCatalog([]);
   const leafKey = normalizeCacheKey(leafFsPath);
   let leaf: HistoryPlanSession | undefined = catalog.byPath.get(leafKey);
@@ -276,7 +278,7 @@ async function* readSessionJsonlEntries(
       : undefined;
   let plan = providedPlan ?? (
     source === "codex" && options.sessionInventory
-      ? await resolveCodexLogicalHistoryPlan(fsPath, options.sessionInventory)
+      ? await resolveCodexLogicalHistoryPlan(fsPath, options.sessionInventory, { exactLeafPath: options.exactLeafPath })
       : uncheckedPhysicalPlan(fsPath)
   );
   let projection: CodexRollbackProjection | undefined;
@@ -288,11 +290,14 @@ async function* readSessionJsonlEntries(
   }
   let rangeIndex = 0;
   let lineIndex = 0;
+  const answerVisibility = parseRecords && source === "codex" ? new CodexAnswerVisibility() : undefined;
   for (const segment of plan.segments) {
     throwIfCancelled(options.token, options.cancellationErrorFactory);
     performanceProbe?.add("segmentCount");
     // A resolved plan is a point-in-time snapshot; do not consume bytes appended after it was fixed.
-    const physicalPath = await resolveSessionFilePath(segment.fsPath) ?? segment.fsPath;
+    const physicalPath = options.exactLeafPath && segment.isLeaf
+      ? segment.fsPath
+      : await resolveSessionFilePath(segment.fsPath) ?? segment.fsPath;
     const readEndByteOffset = segment.endByteOffset ?? (
       !isCompressedSessionFile(physicalPath) && (providedPlan || projection) && Number.isSafeInteger(segment.size) && segment.size >= 0
         ? segment.size
@@ -334,6 +339,8 @@ async function* readSessionJsonlEntries(
             performanceProbe?.add("malformedLineCount");
             continue;
           }
+          const projected = answerVisibility?.project(value);
+          if (projected) value = await projected;
           yield {
             value,
             lineIndex,
@@ -378,7 +385,9 @@ async function resolveRollbackProjection(
     throwIfCancelled(options.token, options.cancellationErrorFactory);
     if (segment.endByteOffset === 0 || (hasProvidedPlan && segment.size === 0)) continue;
     options.performanceProbe?.add("statCount");
-    const physicalPath = await resolveSessionFilePath(segment.fsPath) ?? segment.fsPath;
+    const physicalPath = options.exactLeafPath && segment.isLeaf
+      ? segment.fsPath
+      : await resolveSessionFilePath(segment.fsPath) ?? segment.fsPath;
     const state = await stat(physicalPath);
     segments.push({
       ...segment,

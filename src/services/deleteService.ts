@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { isReadOnlyNativeSession } from "../sessions/sessionMutationPolicy";
 import type { CodexHistoryViewerConfig } from "../settings";
 import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
 import { t } from "../i18n";
@@ -64,11 +65,18 @@ export async function deleteSessionsWithConfirmation(params: {
   const { element, selection, historyIndex, config, globalStorageUri } = params;
 
   const targets = selection && selection.length >= 1 ? selection : element ? [element] : [];
-  const selected = collectSessionsFromTargets(historyIndex, targets).flatMap((session) => {
+  const candidates = new Map<string, SessionSummary>();
+  for (const target of targets) {
+    const sessions = collectSessionsFromTarget(historyIndex, target);
+    if (sessions.some(isReadOnlyNativeSession)) { void vscode.window.showErrorMessage(t("app.antigravityReadOnlyOperation")); return null; }
+    for (const session of sessions) candidates.set(normalizeCacheKey(session.fsPath), session);
+  }
+  const selected = [...candidates.values()].flatMap((session) => {
     const current = findSessionHistorySource(historyIndex, session.cacheKey);
     return current?.identityKey === session.identityKey ? [current] : [];
   });
   if (selected.length === 0) return null;
+  if (selected.some(isReadOnlyNativeSession)) { void vscode.window.showErrorMessage(t("app.antigravityReadOnlyOperation")); return null; }
   let historyInventory = historyIndex.historySources ?? historyIndex.sessions;
   let sessions = collectCodexRolloutDeletionTargets(selected, historyInventory);
   const count = selected.length;
@@ -111,6 +119,7 @@ export async function deleteSessionsWithConfirmation(params: {
   }
 
   const useTrash = config.deleteUseTrash;
+  if (sessions.some(isReadOnlyNativeSession)) { void vscode.window.showErrorMessage(t("app.antigravityReadOnlyOperation")); return null; }
   const quarantineDir = vscode.Uri.joinPath(globalStorageUri, "deleted");
   const undoDir = vscode.Uri.joinPath(globalStorageUri, "undo-delete");
   await vscode.workspace.fs.createDirectory(quarantineDir);
@@ -123,6 +132,7 @@ export async function deleteSessionsWithConfirmation(params: {
   );
   const undoItems: DeletedSessionUndoItem[] = [];
   for (const s of deletionPlan.orderedTargets) {
+    if (isReadOnlyNativeSession(s)) throw new Error(t("app.antigravityReadOnlyOperation"));
     const dependencyKeys = deletionPlan.dependencyKeysByTarget.get(s.cacheKey) ?? [];
     let dependencyFailed = false;
     for (const cacheKey of dependencyKeys) {
@@ -265,18 +275,6 @@ async function fileExists(fsPath: string): Promise<boolean> {
   }
 }
 
-function collectSessionsFromTargets(index: HistoryIndex, targets: readonly unknown[]): SessionSummary[] {
-  const byKey = new Map<string, SessionSummary>();
-
-  for (const target of targets) {
-    for (const s of collectSessionsFromTarget(index, target)) {
-      byKey.set(normalizeCacheKey(s.fsPath), s);
-    }
-  }
-
-  return Array.from(byKey.values());
-}
-
 function collectSessionsFromTarget(index: HistoryIndex, target: unknown): SessionSummary[] {
   if (target instanceof SessionNode) return [target.session];
   if (target instanceof SearchSessionNode) return [target.session];
@@ -289,7 +287,7 @@ function collectSessionsFromTarget(index: HistoryIndex, target: unknown): Sessio
     const days = index.byY.get(target.year)?.get(target.month);
     if (!days) return [];
     const out: SessionSummary[] = [];
-    for (const [, list] of days) out.push(...list);
+    for (const list of days.values()) for (const session of list) out.push(session);
     return out;
   }
   if (target instanceof YearNode) {
@@ -297,7 +295,7 @@ function collectSessionsFromTarget(index: HistoryIndex, target: unknown): Sessio
     if (!months) return [];
     const out: SessionSummary[] = [];
     for (const [, days] of months) {
-      for (const [, list] of days) out.push(...list);
+      for (const list of days.values()) for (const session of list) out.push(session);
     }
     return out;
   }

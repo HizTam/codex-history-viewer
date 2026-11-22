@@ -52,11 +52,11 @@ export function parseHistoryFilterStateV2(value: unknown): HistoryFilterStateV2 
   const projects = parseProjectSelection(raw.projects);
   const tags = parseTagsStrict(raw.tags);
   if (!date || !projects || !tags) return null;
-  if (raw.source !== "all" && raw.source !== "codex" && raw.source !== "claude") return null;
+  if (raw.source !== "all" && raw.source !== "codex" && raw.source !== "claude" && raw.source !== "antigravity") return null;
   if (raw.archiveLocation !== "activeOnly" && raw.archiveLocation !== "all" && raw.archiveLocation !== "archivedOnly") {
     return null;
   }
-  if (raw.source === "claude" && raw.archiveLocation !== "all") return null;
+  if ((raw.source === "claude" || raw.source === "antigravity") && raw.archiveLocation !== "all") return null;
   return {
     version: 2,
     date,
@@ -86,7 +86,7 @@ export function parseHistoryFilterStateV3(value: unknown): HistoryFilterStateV3 
   const projects = parseProjectSelection(raw.projects);
   const tags = parseTagsStrict(raw.tags);
   if (!date || !projects || !tags) return null;
-  if (raw.source !== "all" && raw.source !== "codex" && raw.source !== "claude") return null;
+  if (raw.source !== "all" && raw.source !== "codex" && raw.source !== "claude" && raw.source !== "antigravity") return null;
   if (!isHistoryDisplayTarget(raw.displayTarget)) return null;
   if (raw.compression !== undefined && !isHistoryCompressionFilter(raw.compression)) return null;
   return {
@@ -124,7 +124,7 @@ export function migrateHistoryDisplayTargetPreferenceFromV2(
 ): HistoryDisplayTarget {
   // V2 stored Claude's effective location as all while preserving the Codex preference separately.
   return historyDisplayTargetFromArchiveLocation(
-    state.source === "claude" ? legacyArchivePreference : state.archiveLocation,
+    state.source === "claude" || state.source === "antigravity" ? legacyArchivePreference : state.archiveLocation,
   );
 }
 
@@ -169,7 +169,7 @@ export function resolveEffectiveHistoryDisplayTarget(
   source: SessionSourceFilter,
   archivedSessionsEnabled: boolean,
 ): HistoryDisplayTarget {
-  if (source !== "claude" && archivedSessionsEnabled) return preferred;
+  if ((source === "codex" || source === "all") && archivedSessionsEnabled) return preferred;
   if (preferred === "hiddenAllLocations" || preferred === "all") return preferred;
   return "activeVisible";
 }

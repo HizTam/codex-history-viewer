@@ -1,20 +1,20 @@
-# Codex History Viewer - Codex and Claude Code
+# Codex History Viewer - Codex, Claude Code and Antigravity
 
-Browse, search, organize, and resume past Codex CLI / Claude Code sessions through the official VS Code extensions or prepared CLI commands.
+Browse, search, and organize past Codex CLI, Claude Code, and Antigravity sessions. Resume sessions through supported editor extensions or prepared CLI commands.
 
-Latest release: **2.21.0** (2026-11-12).
+Latest release: **3.0.0** (2026-11-22).
 
 ![Codex History Viewer screenshot](media/screenshot.png)
 
 ## Why Use This Extension?
 
-Codex and Claude Code sessions can become hard to revisit once they are no longer active in the editor. Codex History Viewer keeps those local session files useful by presenting them in a searchable session history browser inside VS Code.
+Codex, Claude Code, and Antigravity sessions can become hard to revisit once they are no longer active in the editor. Codex History Viewer keeps those local session files useful by presenting them in a searchable session history browser inside VS Code.
 
 Use it to find past prompts, reuse useful answers, inspect file changes, organize sessions with tags and notes, resume same-source sessions, and prepare handoff context for other AI tools.
 
 ## Highlights
 
-- **Revisit past Codex CLI and Claude Code sessions** that are no longer easy to access from the active editor flow.
+- **Revisit past Codex CLI, Claude Code, and Antigravity sessions** that are no longer easy to access from the active editor flow.
 - Browse sessions in a year / month / day tree, a sortable session list, or project views with related project groups.
 - Choose independent startup defaults for History and Pinned, or restore each workspace's previous view state.
 - Open History Insights to review activity, token usage, file changes, and breakdowns by source, model, project, and tool.
@@ -24,7 +24,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Search across prompts, responses, tool output, tags, notes, and attachment metadata, with shared search history.
 - View sessions in the Session Viewer with Markdown, including individually copyable tables, GFM task lists, Mermaid diagrams, code highlighting, math rendering, tool cards, and file-change diffs.
 - Manage the extension's primary settings from a categorized settings page, with supported User, Workspace, and Workspace Folder targets, scope-specific JSON backups, maintenance actions, and project resource links.
-- Enable an opt-in turn timeline for Codex and Claude Code sessions to see turn boundaries, turn summaries, completed-turn folding, and running state in live mode, with optional displays for remaining Codex usage limits and credits.
+- Enable an opt-in turn timeline for Codex, Claude Code, and Antigravity to see turn boundaries, summaries, completed-turn folding, and running state in live mode. Antigravity turn totals use ≥ to show the confirmed lower bound. Codex can also show usage limits and credits.
 - Use Agent Runs to distinguish Codex and Claude Code sub-agent sessions and inspect parent, sibling, and descendant relationships in a right-side tree, with additional items loaded on request. (Disabled by default.)
 - Use Branch Navigation to inspect and switch between locally forked Codex histories, histories before and after Codex prompt edits, and Claude Code **Fork conversation** histories in their respective session views. (Disabled by default.)
 - Show Codex / Claude Code request interruptions as dedicated timeline cards.
@@ -32,7 +32,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Read progress updates and expandable thinking text saved in Claude Code histories, with search, bookmarks, copying, and Markdown export.
 - Inspect Claude Code task notifications with expandable details.
 - View files sent by Claude Code with their names, descriptions, and delivery status, and open local files from their names.
-- Open File AI Change History for a workspace file, including directly from a Session Viewer diff card, to review Codex / Claude Code diffs that touched that file.
+- Open File AI Change History for a workspace file, including directly from a Session Viewer diff card, to review recorded changes that touched that file.
 - Bookmark important history cards and use date-guide markers to revisit them quickly.
 - Optionally display Claude Code extension bookmarks as read-only marks in a different color from this extension's own bookmarks.
 - Keep open session tabs up to date with header-controlled auto-refresh modes.
@@ -41,9 +41,9 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 - Organize sessions with pins, tags, notes, custom titles, project aliases, project associations, saved searches, search history, display modes, and filters.
 - Keep Pinned filters independent from History/Search, including project scope, source, visibility, tags, and saved sort preferences.
 - Experimental opt-in restoration for session tabs, File AI Change History, History Insights, and the dedicated settings page after Reload Window or VS Code restart.
-- Resume past sessions through the official Codex and Claude Code VS Code extensions or prepare commands for resuming them with the CLI.
+- Resume eligible past sessions through the official extensions or prepare commands for resuming them with the CLI.
 - Copy session IDs and session file paths from the Session Viewer or tree context menus, and reveal session files in their containing folders.
-- Export and restore original session data together with extension-managed metadata such as tags, notes, custom titles, hidden state, pins, and timeline bookmarks.
+- Export and restore original Codex and Claude Code session data, or back up extension-managed metadata for any supported source.
 - Create handoff files and prompts when moving work to another AI tool, and copy the handoff file path directly.
 
 ## Quick Start
@@ -53,7 +53,7 @@ Use it to find past prompts, reuse useful answers, inspect file changes, organiz
 3. Browse **History** and use its **...** menu to change the layout, filters, and sort order.
 4. Select a session to open it. Use the header toggle or **Open Session in Dedicated Tab** to keep it in a dedicated tab.
 5. Use **Pinned** for saved sessions and **Search...** to find past messages.
-6. Use the session's **Resume** action to continue work with Codex or Claude Code.
+6. Use the session's **Resume** action to continue work with its provider.
 
 See the [Command Reference](docs/commands.md) for additional actions.
 
@@ -81,11 +81,13 @@ The Session Viewer renders local session files as readable timelines. It support
 
 Use **Open Session as Markdown** for a transcript document.
 
-Markdown tables use clearer cell spacing and separators, wrap long content, and scroll horizontally within the table when needed. Each table has an action for copying only that table in its original Markdown form.
+Markdown tables use visible cell separators, wrap long content, and scroll horizontally within the table when needed. Each table has an action for copying only that table in its original Markdown form.
 
 Fenced `mermaid` blocks render as inline diagrams. Each diagram can switch between Light and Dark display modes, open in a non-modal right-side pane for fit-to-view, zoom, scroll, drag-to-pan, and keyboard navigation, and be saved as SVG, PNG, or Mermaid source (`.mmd`).
 
-Choose Extension, CLI, or both as the resume method separately for Codex and Claude Code. CLI actions prepare a command in a new terminal for review; press Enter to run it.
+Choose Extension, CLI, or both as the resume method separately for Codex, Claude Code, and Antigravity. CLI actions prepare a command in a new terminal for review; press Enter to run it. Antigravity CLI resume is limited to its standard CLI history folder.
+
+Extension resume passes the conversation ID to the official extension. The history folders configured in this viewer are not passed along: the official extension resolves the ID in its own history location. If that location has no matching ID, the conversation cannot be opened. If it contains a copy with the same ID, that copy may open instead. Resume does not copy or import histories between locations.
 
 If a Codex prompt edit creates a new history file, the Session Viewer stays on its current file. Use **Go to main history** to switch to the edited continuation.
 
@@ -97,7 +99,7 @@ The toggle next to **Custom Title** switches between dedicated and temporary tab
 
 Large histories can use the `auto`, `normal`, or `simplified` performance mode. Heavy tool details and large diff rows can be deferred until **Show details** is enabled or an individual entry is expanded.
 
-Codex and Claude Code sessions can use an opt-in turn timeline. `basic` mode shows turn start/end markers, range rails, summaries, token counts, duration, and manual folding for completed turns. `live` mode adds running-turn indicators, elapsed time, and update activity effects.
+Codex, Claude Code, and Antigravity sessions can use an opt-in turn timeline. `basic` mode shows turn start/end markers, range rails, summaries, token counts, duration, and manual folding for completed turns. `live` mode adds running-turn indicators, elapsed time, and update activity effects.
 
 For Codex, use **Open Settings > Session View > Usage limits** to select **Weekly limit**, **5-hour limit**, and **Credits** individually. This setting is off by default and requires Basic or Live turn timeline mode. Selected items appear at the end of completed or folded turn summaries and at the right of the running turn's timeline row in Live mode.
 
@@ -164,7 +166,7 @@ Search follows the current History target, including date, project scope, projec
 
 Opening a search result can pass its query to the viewer's in-page search, which supports the same query syntax. Search history is shared across Search, the Session Viewer, and File AI Change History.
 
-Project aliases are shown in Search scope and result display, but they are not added to the search index or treated as searchable hit text.
+Search shows project aliases in its scope and results. Query matching uses indexed session data.
 
 The search index can be tuned with `codexHistoryViewer.search.indexToolContent`:
 
@@ -194,17 +196,17 @@ This feature reads histories already compressed by Codex. It does not add a comm
 
 ## Session Data Export and Restore
 
-**Export Sessions** can save either a sanitized Markdown transcript or the original session data. **Export original session data** includes the provider session files and extension-managed metadata for tags, notes, custom titles, hidden state, pins, and bookmarks for messages and other timeline entries.
+**Export Sessions** can save a sanitized Markdown transcript or metadata-only JSON for any supported source. For Codex and Claude Code, **Export original session data** includes the provider session files and extension-managed metadata for tags, notes, custom titles, hidden state, pins, and bookmarks for messages and other timeline entries.
 
 Read-only bookmarks displayed from the Claude Code extension are separate from extension-managed metadata and are not included in metadata exports or restored by **Import Sessions**.
 
-**Import Sessions** can restore the session data and its metadata together, or restore only the selected part when that option is available. For Codex sessions, the active or archived storage location is also restored. A confirmation summarizes the planned session-data and metadata changes before anything is written.
+**Import Sessions** can restore Codex or Claude Code session data and metadata together, or restore only the selected part when that option is available. Metadata-only JSON can also be merged into uniquely matched current sessions, including Antigravity. For Codex sessions, the active or archived storage location is also restored. A confirmation summarizes the planned session-data and metadata changes before anything is written.
 
 Original-data export and import preserve compressed Codex files. If an import overwrites an existing history stored in the other format, the incoming data is converted to the destination's format before replacing it. Markdown export produces a readable transcript from either format.
 
 ## Handoff to Other AI
 
-Handoff actions appear under **Handoff to Other AI** for eligible active Codex / Claude Code sessions when `codexHistoryViewer.handoff.enabled` is enabled. They can create a reusable handoff file, copy a prompt that points another AI to that file, copy the handoff file path to the clipboard, or open the handoff file for manual use. Codex sessions can also be handed off directly to Claude Code when the Claude Code extension is available.
+Handoff actions appear under **Handoff to Other AI** for eligible active sessions when `codexHistoryViewer.handoff.enabled` is enabled. They can create a reusable handoff file, copy a prompt that points another AI to that file, copy the handoff file path to the clipboard, or open the handoff file for manual use. See [Handoff Actions](docs/commands.md#handoff-actions) for supported routes.
 
 After a handoff file is created, the completion notification can open the file, copy the handoff prompt, or copy the generated file's absolute path to the clipboard.
 
@@ -216,19 +218,19 @@ When project associations are configured, handoff generation follows the associa
 
 ## File AI Change History
 
-File AI Change History starts from a workspace file and shows the Codex / Claude Code changes that touched that file over time.
+File AI Change History starts from a workspace file and shows the Codex, Claude Code, and Antigravity changes recorded for that file over time.
 
 ![File AI Change History screenshot](media/screenshot_2.png)
 
 Use it when you want to answer questions such as:
 
 - Which AI session changed this file?
-- How did this file evolve across Codex and Claude Code sessions?
+- How did this file evolve across sessions?
 - What was the surrounding session context for a specific diff?
 
 Open this view with the **File AI Change History** icon on a Session Viewer diff card, or run **Show File AI Change History** for a workspace file. The Explorer file context menu entry is opt-in: enable **File Change History > Explorer Context Menu: Enabled** to use it from Explorer.
 
-The view is scoped to the current workspace and selected file. It supports Codex / Claude Code source toggles, in-page search with shared query history and richer query syntax, incremental **Load more**, previous/next navigation, and **Open in History** links back to the matching diff card in the original session. Diff code is syntax-highlighted when the language can be determined from the file path; otherwise, it is displayed as plain text.
+The view is scoped to the current workspace and selected file. It supports history source toggles, in-page search with shared query history and richer query syntax, incremental **Load more**, previous/next navigation, and **Open in History** links back to the matching diff card in the original session. Diff code is syntax-highlighted when the language can be determined from the file path; otherwise, it is displayed as plain text.
 
 File AI Change History follows project associations when resolving related history, so associated project displays and path mappings are reflected when possible. Hidden sessions remain part of its candidate history.
 
@@ -284,9 +286,10 @@ On Linux Remote SSH, **Open Settings > Maintenance > Troubleshooting** includes 
 
 Common settings include:
 
-- `codexHistoryViewer.sources.enabled`: enable `codex` (Codex), `claude` (Claude Code), or both. VS Code Settings and `settings.json` use the stored identifiers `codex` and `claude`.
+- `codexHistoryViewer.sources.enabled`: choose one or more of `codex` (Codex), `claude` (Claude Code), and `antigravity` (Antigravity).
 - `codexHistoryViewer.sessionsRoot`: Codex sessions root.
 - `codexHistoryViewer.claude.sessionsRoot`: Claude Code sessions root.
+- `codexHistoryViewer.antigravity.sessionsRoot`: absolute local Antigravity history folder. The default searches `~/.gemini/antigravity`, `~/.gemini/antigravity-cli`, and `~/.gemini/antigravity-ide`.
 - `codexHistoryViewer.claude.nativeBookmarks.enabled`: automatically display Claude Code extension bookmarks as read-only marks. Disabled by default; requires the Claude Code source and `codexHistoryViewer.ui.timeGuide.enabled`.
 - `codexHistoryViewer.agentRuns.enabled`: enable Agent Runs for Codex and Claude Code. This is one shared setting; an existing enabled value applies to both sources. Disabled by default and marked as affecting resource usage.
 - `codexHistoryViewer.branchNavigation.enabled`: enable Branch Navigation for locally forked Codex histories, histories before and after Codex prompt edits, and Claude Code Fork conversation histories. Disabled by default and marked as affecting resource usage.
@@ -295,6 +298,7 @@ Common settings include:
 - `codexHistoryViewer.handoff.enabled`: show cross-agent handoff actions.
 - `codexHistoryViewer.resume.codexMethod`: choose Extension, CLI, or Extension and CLI for resuming Codex sessions.
 - `codexHistoryViewer.resume.claudeMethod`: choose Extension, CLI, or Extension and CLI for resuming Claude Code sessions.
+- `codexHistoryViewer.resume.antigravityMethod`: choose an available resume method for Antigravity sessions.
 - `codexHistoryViewer.preview.tooltipMode`: choose Detailed, Compact, or Title Only for session tree item tooltips.
 - `codexHistoryViewer.preview.maxMessages`: set the maximum number of user/assistant messages collected for Detailed tooltips. This is not a guaranteed visible count; VS Code limits tooltip height to approximately 50% of the window, so some collected messages may be outside the visible area.
 - `codexHistoryViewer.sessionRow.showTimestamp`: show or hide timestamps in History, Pinned, and Search session rows while keeping them available in tooltips.
@@ -305,12 +309,18 @@ Common settings include:
 - `codexHistoryViewer.chat.openPosition`: open the session view at the top, the last viewed message, or the latest rendered card.
 - `codexHistoryViewer.chat.stickyUserPrompt`: keep the current user prompt visible while scrolling the session timeline.
 - `codexHistoryViewer.chat.performanceMode`: choose the default session rendering performance mode.
-- `codexHistoryViewer.chat.turnTimeline.mode`: enable the opt-in turn timeline for Codex and Claude Code sessions with `off`, `basic`, or `live`.
+- `codexHistoryViewer.chat.turnTimeline.mode`: enable the opt-in turn timeline with `off`, `basic`, or `live`.
 - `codexHistoryViewer.chat.turnQuota.windows`: choose any combination of Codex usage limits and credits to display: `weekly`, `fiveHour`, and `credits`. Requires `basic` or `live` turn timeline mode.
 - `codexHistoryViewer.webview.restoreAfterReload`: experimental opt-in to restoring session tabs, File AI Change History, History Insights, and the dedicated settings page after Reload Window or VS Code restart.
 - `codexHistoryViewer.images.enabled`: show supported image attachments.
 - `codexHistoryViewer.ui.timeGuide.enabled`: enable compact date guides and bookmark controls.
 - `codexHistoryViewer.ui.language`: choose `auto`, `en`, or `ja`.
+
+### Cache backend
+
+File-based caching (JSON/JSONL) is the default for History, Search, and History Insights. To opt in to SQLite, turn on **Use SQLite cache** under **Open Settings > General > Cache** (`codexHistoryViewer.cache.sqlite.enabled`). The switch shows why it is unavailable when the runtime check fails. Changes take effect after **Reload Window** or a VS Code restart.
+
+For official desktop VS Code, **1.123.0 or later** is the compatibility guideline. The extension checks the `node:sqlite` and Worker capabilities of the host that runs it, including in forks and remote environments. If SQLite mode is enabled but cannot be used, the extension falls back to file-based caching and shows the reason in **Maintenance**. Antigravity history reading works with either cache backend on compatible hosts.
 
 ### Startup Display
 
@@ -360,11 +370,12 @@ See the [Command Reference](docs/commands.md) for view buttons, context menus, a
 - If the official Codex extension stops reopening a session, try `Developer: Reload Webviews`, then `Developer: Restart Extension Host`, then `Developer: Reload Window`.
 - **Move to Archive** and **Move to Codex History** use the official Codex provider when available. Moving archived sessions back to normal history can fall back to a filesystem move if needed.
 
-## What's New in 2.21.0
+## What's New in 3.0.0
 
-- Added support for displaying the remaining percentages for the 5-hour and weekly usage limits and the remaining credit balance in the Codex turn timeline. Disabled by default; requires Basic or Live turn timeline mode.
-- Agent Runs for Codex and Claude Code now supports loading additional items beyond the initial display limits.
-- Fixed Codex audio references being displayed as image attachments.
+- Added Antigravity as a history source.
+- Added an optional SQLite cache and reduced memory usage when searching large histories.
+- Added cards for saved Claude Code voice call transcripts and Advisor calls.
+- Fixed Codex page-selection and snapshot records affecting user messages, search results, and session titles.
 
 ## Changelog
 
@@ -372,11 +383,11 @@ See [CHANGELOG](CHANGELOG.md).
 
 ## Security
 
-Use Codex History Viewer v2.19.0 or later. See [SECURITY](SECURITY.md) for the Markdown and diagram-rendering security updates and the development/build Node.js **24.22.3** security update. Do not install or redistribute v1.2.1 or earlier VSIX files.
+Use Codex History Viewer v2.19.0 or later. See [SECURITY](SECURITY.md) for the Markdown and diagram-rendering security updates and the development/build Node.js **24.22.3** security update, plus the safeguards for SQLite caching and Antigravity history reading. Do not install or redistribute v1.2.1 or earlier VSIX files.
 
 ## Privacy
 
-This extension reads local session files and renders them inside VS Code. For Claude Code sessions in the standard local project layout, it can also read matching entries from `.claude/history.jsonl` and hash-verified text files from `.claude/paste-cache` to identify pasted or truncated input. These auxiliary files remain local, and unverifiable data is ignored. If **Display Claude Code bookmarks** is enabled, it also reads the Claude Code extension's local bookmark data. The extension does not implement any network communication and does not send session content anywhere.
+This extension reads local session files and renders them inside VS Code. Antigravity history databases are opened in read-only mode. For Claude Code sessions in the standard local project layout, it can also read matching entries from `.claude/history.jsonl` and hash-verified text files from `.claude/paste-cache` to identify pasted or truncated input. These auxiliary files remain local, and unverifiable data is ignored. If **Display Claude Code bookmarks** is enabled, it also reads the Claude Code extension's local bookmark data. The extension does not implement any network communication and does not send session content anywhere.
 
 Buttons for GitHub, GitHub Sponsors, and project resources open fixed GitHub pages in your external browser only when selected. The extension does not add session content or local paths to those URLs.
 
@@ -394,13 +405,13 @@ This includes, for example, live lookups of account quota, subscription status, 
 
 ## Supported Providers
 
-Codex History Viewer currently focuses on Codex and Claude Code session history.
+Codex History Viewer supports Codex, Claude Code, and Antigravity session history.
 
 Support for additional providers may be considered in the future at the maintainer's discretion, and only when they can be routinely used, tested, and maintained by the maintainer over the long term without compromising the extension's quality, compatibility, or security.
 
 ## Disclaimer
 
-Codex History Viewer is an independent project and is not affiliated with, endorsed by, or officially associated with OpenAI, Anthropic, Codex, or Claude Code.
+Codex History Viewer is an independent project and is not affiliated with, endorsed by, or officially associated with OpenAI, Anthropic, Google, Codex, Claude Code, or Antigravity.
 
 This extension works with locally stored session and history files created by official tools and extensions. Their file formats and internal behaviors may change without notice, which may affect compatibility.
 

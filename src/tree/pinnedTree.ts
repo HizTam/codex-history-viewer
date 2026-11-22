@@ -1040,14 +1040,15 @@ function normalizeTagKey(value: string): string {
 }
 
 function normalizeSourceFilter(value: SessionSourceFilter): SessionSourceFilter {
-  if (value === "codex" || value === "claude") return value;
+  if (value === "codex" || value === "claude" || value === "antigravity") return value;
   return "all";
 }
 
 function inferSourceFromFsPath(
   fsPath: string,
-  config: Pick<CodexHistoryViewerConfig, "sessionsRoot" | "codexArchivedSessionsRoot" | "claudeSessionsRoot">,
+  config: Pick<CodexHistoryViewerConfig, "sessionsRoot" | "codexArchivedSessionsRoot" | "claudeSessionsRoot" | "antigravitySessionsRoots">,
 ): SessionSource | null {
+  if ((config.antigravitySessionsRoots ?? []).some(root => isPathInsideRoot(fsPath, root)) && path.extname(fsPath) === ".db") return "antigravity";
   if (isPathInsideRoot(fsPath, config.sessionsRoot)) return "codex";
   if (isPathInsideRoot(fsPath, config.codexArchivedSessionsRoot)) return "codex";
   if (isPathInsideRoot(fsPath, config.claudeSessionsRoot)) return "claude";

@@ -1,8 +1,10 @@
 import { parseHistoryViewMode } from "../types/historyViewMode";
 import type { SessionSummary } from "../sessions/sessionTypes";
+import type { SourceInventoryStates } from "../sessions/sourceInventory";
 import { sanitizeDateScope } from "../types/dateScope";
 import { isValidYyyyMmDd } from "../utils/dateUtils";
-import { normalizeProjectKey } from "../utils/fsUtils";
+import * as path from "node:path";
+import { normalizeFsPathKey, normalizeProjectKey } from "../utils/fsUtils";
 import { parseProjectSelection, projectSelectionFromCwds } from "../types/projectSelection";
 import { sanitizeHistoryInsightsDateRange } from "./historyInsightsDateRange";
 import type { HistoryInsightsSnapshot } from "./historyInsightsTypes";
@@ -16,6 +18,26 @@ import {
 export interface ResolvedHistoryInsightsSnapshot {
   snapshot: HistoryInsightsSnapshot;
   sessions: SessionSummary[];
+}
+
+export function isHistoryInsightsInventoryIncomplete(snapshot: HistoryInsightsSnapshot, current?: SourceInventoryStates): boolean {
+  if (Object.values(snapshot.sourceInventoryStates ?? {}).some(status => status !== "complete")) return true;
+  const sources = new Set(snapshot.references.map(reference => reference.source));
+  if (snapshot.descriptor.source !== "all") sources.add(snapshot.descriptor.source);
+  for (const source of sources) {
+    const state = current?.[source];
+    if (state ? state.status !== "complete" : source === "antigravity") return true;
+  }
+  if (snapshot.references.some(reference => reference.source === "antigravity" && !isNativeReferenceInventoryVerified(reference, current))) return true;
+  return false;
+}
+
+function isNativeReferenceInventoryVerified(reference: HistoryInsightsSnapshot["references"][number], current?: SourceInventoryStates): boolean {
+  const inventory = current?.antigravity;
+  if (inventory?.status !== "complete" || !path.isAbsolute(reference.cacheKey)) return false;
+  // A complete scan of another root cannot establish deletion in the saved namespace.
+  return inventory.allowedRoots.some(root => normalizeFsPathKey(path.dirname(path.dirname(reference.cacheKey))) === normalizeFsPathKey(root)
+    && path.basename(path.dirname(reference.cacheKey)) === "conversations" && /^[a-f0-9-]{36}\.db$/u.test(path.basename(reference.cacheKey)));
 }
 
 const HISTORY_INSIGHTS_SORT_ORDER_VALUES: Readonly<Record<HistoryInsightsSnapshot["descriptor"]["sortOrder"], true>> = {
@@ -32,6 +54,7 @@ const HISTORY_INSIGHTS_SORT_ORDER_VALUES: Readonly<Record<HistoryInsightsSnapsho
 export function resolveHistoryInsightsSnapshot(
   snapshot: HistoryInsightsSnapshot,
   currentSessions: readonly SessionSummary[],
+  sourceInventoryStates?: SourceInventoryStates,
 ): ResolvedHistoryInsightsSnapshot {
   const byCacheKey = new Map(currentSessions.map((session) => [session.cacheKey, session]));
   const byIdentityKey = new Map(currentSessions.map((session) => [session.identityKey, session]));
@@ -75,8 +98,11 @@ export function resolveHistoryInsightsSnapshot(
     });
   }
   if (snapshot.references.length > 0 && sessions.length === 0) {
+    const unverified = references.filter(reference => reference.source === "antigravity"
+      ? !isNativeReferenceInventoryVerified(reference, sourceInventoryStates)
+      : sourceInventoryStates?.[reference.source] ? sourceInventoryStates[reference.source].status !== "complete" : false);
     return {
-      snapshot: { ...snapshot, references: [] },
+      snapshot: { ...snapshot, references: unverified },
       sessions,
     };
   }
@@ -96,6 +122,14 @@ export function sanitizeHistoryInsightsSnapshot(value: unknown): HistoryInsights
   if (!Number.isSafeInteger(raw.generation) || Number(raw.generation) < 0) return null;
   if (raw.dateBasis !== "started" && raw.dateBasis !== "lastActivity") return null;
   if (!Array.isArray(raw.references) || raw.references.length > 200_000) return null;
+  const sourceInventoryStates: NonNullable<HistoryInsightsSnapshot["sourceInventoryStates"]> = {};
+  if (raw.sourceInventoryStates !== undefined) {
+    if (!raw.sourceInventoryStates || typeof raw.sourceInventoryStates !== "object" || Array.isArray(raw.sourceInventoryStates)) return null;
+    for (const [source, status] of Object.entries(raw.sourceInventoryStates)) {
+      if (!["codex", "claude", "antigravity"].includes(source) || typeof status !== "string" || !["disabled", "cached", "complete", "partial", "unavailable"].includes(status)) return null;
+      sourceInventoryStates[source as keyof typeof sourceInventoryStates] = status as NonNullable<HistoryInsightsSnapshot["sourceInventoryStates"]>["codex"];
+    }
+  }
   const references: HistoryInsightsSnapshot["references"] = [];
   const seenCacheKeys = new Set<string>();
   const seenIdentityKeys = new Set<string>();
@@ -108,7 +142,7 @@ export function sanitizeHistoryInsightsSnapshot(value: unknown): HistoryInsights
     const projectKey = boundedString(reference.projectKey, 32_768);
     const projectLabel = boundedString(reference.projectLabel, 512);
     if (!cacheKey || !identityKey || !isValidYyyyMmDd(bucketLocalDate)) return null;
-    if (reference.source !== "codex" && reference.source !== "claude") return null;
+    if (reference.source !== "codex" && reference.source !== "claude" && reference.source !== "antigravity") return null;
     if (seenCacheKeys.has(cacheKey) || seenIdentityKeys.has(identityKey)) return null;
     seenCacheKeys.add(cacheKey);
     seenIdentityKeys.add(identityKey);
@@ -127,7 +161,7 @@ export function sanitizeHistoryInsightsSnapshot(value: unknown): HistoryInsights
     : descriptor.displayTarget;
   const viewMode = parseHistoryViewMode(descriptor.viewMode);
   const sortOrder = descriptor.sortOrder;
-  if (source !== "all" && source !== "codex" && source !== "claude") return null;
+  if (source !== "all" && source !== "codex" && source !== "claude" && source !== "antigravity") return null;
   if (archiveLocation !== "activeOnly" && archiveLocation !== "all" && archiveLocation !== "archivedOnly") return null;
   if (displayTarget !== undefined && !isHistoryDisplayTarget(displayTarget)) return null;
   if (descriptor.compression !== undefined && !isHistoryCompressionFilter(descriptor.compression)) return null;
@@ -152,6 +186,7 @@ export function sanitizeHistoryInsightsSnapshot(value: unknown): HistoryInsights
     dateBasis: raw.dateBasis,
     dateTimeSettingsKey,
     references,
+    ...(raw.sourceInventoryStates !== undefined ? { sourceInventoryStates } : {}),
     descriptor: {
       ...(descriptor.compression ? { compression: descriptor.compression } : {}),
       date,

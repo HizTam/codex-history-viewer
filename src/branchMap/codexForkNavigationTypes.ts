@@ -107,6 +107,7 @@ export interface CodexForkPresentationState {
 export interface CodexForkHistoryInventory {
   getIndex(): HistoryIndex;
   getIndexGeneration(): number;
+  getSourceIndexGeneration?(source: "codex"): number;
   hasCompleteCodexAgentMetadata(): boolean;
   isCodexAgentMetadataVerified(session: SessionSummary): boolean;
   ensureCodexAgentMetadata(options?: {

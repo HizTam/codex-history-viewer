@@ -153,7 +153,7 @@ export class CodexForkNavigationService {
     if (options.shouldContinue?.() === false) throw new CodexForkNavigationSupersededError();
 
     const index = this.historyService.getIndex();
-    const indexGeneration = this.historyService.getIndexGeneration();
+    const indexGeneration = this.currentCodexGeneration();
     const sourceBase = findSessionHistorySource(index, baseSession.cacheKey);
     if (
       !sourceBase ||
@@ -290,7 +290,7 @@ export class CodexForkNavigationService {
   ): ResolvedCodexForkNavigationTarget | undefined {
     if (
       snapshot.source !== "codex" ||
-      snapshot.indexGeneration !== this.historyService.getIndexGeneration()
+      snapshot.indexGeneration !== this.currentCodexGeneration()
     ) {
       return undefined;
     }
@@ -329,7 +329,7 @@ export class CodexForkNavigationService {
     occurrenceId: string,
     activeChatMessageIndex?: number,
   ): Promise<ResolvedCodexForkNavigationTarget | undefined> {
-    const generation = this.historyService.getIndexGeneration();
+    const generation = this.currentCodexGeneration();
     const resolved = this.resolveTarget(
       snapshot,
       activeSessionCacheKey,
@@ -343,7 +343,7 @@ export class CodexForkNavigationService {
     if (!expected || expected.signature !== resolved.target.inventorySignature) return undefined;
     if (!await this.validateSnapshotInventory(snapshot)) return undefined;
     if (
-      generation !== this.historyService.getIndexGeneration() ||
+      generation !== this.currentCodexGeneration() ||
       snapshot.indexGeneration !== generation
     ) {
       return undefined;
@@ -587,12 +587,14 @@ export class CodexForkNavigationService {
   ): void {
     if (
       options.shouldContinue?.() === false ||
-      capturedIndex !== this.historyService.getIndex() ||
-      capturedGeneration !== this.historyService.getIndexGeneration()
+      !this.historyService.getSourceIndexGeneration && capturedIndex !== this.historyService.getIndex() ||
+      capturedGeneration !== this.currentCodexGeneration()
     ) {
       throw new CodexForkNavigationSupersededError();
     }
   }
+
+  private currentCodexGeneration(): number { return this.historyService.getSourceIndexGeneration?.("codex") ?? this.historyService.getIndexGeneration(); }
 }
 
 export function buildCodexForkChatBranchNavigationModel(

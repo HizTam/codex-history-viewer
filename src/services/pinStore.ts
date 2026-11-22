@@ -295,7 +295,7 @@ function sanitizePinEntry(value: unknown): PinEntry | null {
   if (typeof fsPath !== "string" || typeof pinnedAt !== "number") return null;
   const identityKey = typeof (value as any).identityKey === "string" ? (value as any).identityKey.trim() : "";
   const source =
-    (value as any).source === "codex" || (value as any).source === "claude" ? (value as any).source : undefined;
+    (value as any).source === "codex" || (value as any).source === "claude" || (value as any).source === "antigravity" ? (value as any).source : undefined;
   const archiveState = sanitizeArchiveState((value as any).archiveState);
   const rootKind = sanitizeRootKind((value as any).rootKind);
   return {
@@ -338,7 +338,7 @@ function sanitizeArchiveState(value: unknown): SessionArchiveState | undefined {
 }
 
 function sanitizeRootKind(value: unknown): SessionRootKind | undefined {
-  if (value === "codexSessions" || value === "codexArchivedSessions" || value === "claudeSessions") return value;
+  if (value === "codexSessions" || value === "codexArchivedSessions" || value === "claudeSessions" || value === "antigravitySessions") return value;
   return undefined;
 }
 

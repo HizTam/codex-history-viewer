@@ -1,5 +1,6 @@
 import { SUPPORTED_LOCALES, matchLocale } from "../localization/localeCatalog";
 import { parseHistoryViewMode } from "../types/historyViewMode";
+import { isAbsolute } from "node:path";
 import type {
   SettingsApplyTiming,
   SettingsControlKind,
@@ -127,19 +128,23 @@ function enumDependency(relativeKey: string, expected: string, reasonKey: string
 
 const CODEX_SOURCE = includesSource("codex");
 const CLAUDE_SOURCE = includesSource("claude");
+const ANTIGRAVITY_SOURCE = includesSource("antigravity");
 
 export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
   definition("ui.language", "general", "general.display", "select", "application", "auto", {
     options: [option("ui.language", "auto"), ...SUPPORTED_LOCALES.map((locale) => ({ value: locale, labelKey: "", locale }))]
   }),
   definition("delete.useTrash", "general", "general.safety", "switch", "application", true),
+  definition("cache.sqlite.enabled", "general", "general.cache", "switch", "application", false, {
+    applyTiming: "windowReload"
+  }),
   definition("webview.restoreAfterReload", "general", "general.startup", "switch", "window", false, {
     experimental: true,
     applyTiming: "windowReload"
   }),
 
   definition("sources.enabled", "sources", "sources.load", "multi", "application", ["codex"], {
-    options: ["codex", "claude"].map((value) => option("sources.enabled", value, true))
+    options: ["codex", "claude", "antigravity"].map((value) => option("sources.enabled", value, true))
   }),
   definition("sessionsRoot", "sources", "sources.codex", "path", "application", "", {
     dependency: CODEX_SOURCE,
@@ -186,6 +191,10 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
       isSatisfied: (values) => CLAUDE_SOURCE.isSatisfied(values) && values.get("ui.timeGuide.enabled") === true
     },
     sourceBadge: "claude"
+  }),
+  definition("antigravity.sessionsRoot", "sources", "sources.antigravity", "path", "application", "", {
+    dependency: ANTIGRAVITY_SOURCE,
+    sourceBadge: "antigravity"
   }),
 
   definition("preview.openOnSelection", "history", "history.behavior", "switch", "application", true),
@@ -484,6 +493,11 @@ export const SETTINGS_DEFINITIONS: readonly SettingsDefinition[] = [
       sourceBadge: "claude"
     }
   ),
+  definition("resume.antigravityMethod", "resume", "resume.resume", "select", "application", "extension", {
+    options: ["extension", "cli", "both"].map(value => option("resume.antigravityMethod", value, true)),
+    presentation: "resumeActions",
+    sourceBadge: "antigravity"
+  }),
   definition("handoff.enabled", "resume", "resume.integration", "switch", "application", true),
   definition(
     "fileChangeHistory.explorerContextMenu.enabled",
@@ -640,6 +654,7 @@ export function validateSettingValue(
       trimmed.length > PATH_MAX_LENGTH ||
       PATH_CONTROL_CHARACTERS.test(trimmed) ||
       (PATH_URI_SCHEME_PREFIX.test(trimmed) && !WINDOWS_DRIVE_PREFIX.test(trimmed))
+      || definitionItem.relativeKey === "antigravity.sessionsRoot" && trimmed !== "" && (!isAbsolute(trimmed) || trimmed.startsWith("\\\\"))
     ) {
       return { ok: false, error: "invalid" };
     }

@@ -1,4 +1,5 @@
 import type { PerformanceProbe } from "../performance/performanceCounters";
+import { CodexAnswerVisibility } from "../sessions/codexAnswerVisibility";
 import {
   readSessionJsonlLines,
   type CodexLogicalHistoryPlan,
@@ -54,6 +55,7 @@ export async function* readAnalysisRecordEnvelopes(
 ): AsyncGenerator<AnalysisRecordEnvelope> {
   let previousSourceFsPath: string | undefined;
   let segmentKey = "";
+  const answerVisibility = source === "codex" ? new CodexAnswerVisibility() : undefined;
   for await (const record of readSessionJsonlLines(fsPath, source, options)) {
     if (record.sourceFsPath !== previousSourceFsPath) {
       previousSourceFsPath = record.sourceFsPath;
@@ -82,8 +84,10 @@ export async function* readAnalysisRecordEnvelopes(
       continue;
     }
     try {
-      const value: unknown = JSON.parse(record.line);
+      let value: unknown = JSON.parse(record.line);
       options.performanceProbe?.add("parseSuccessCount");
+      const projected = answerVisibility?.project(value);
+      if (projected) value = await projected;
       const codexRecordKind = source === "codex" ? readCodexRolloutRecordKind(value) : undefined;
       const codexControlToolKind = source === "codex" ? readCodexControlToolKind(value) : undefined;
       const codexContextManagementKind = source === "codex"

@@ -1,6 +1,7 @@
 import { resolveUiLanguage } from "../i18n";
 import { buildWebviewI18n, postLocalizedMessage, localizationBootstrap } from "../localization/webviewLocalization";
 import * as path from "node:path";
+import { lstat } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { hasClaudeAgentPathShape, isClaudePathPart } from "../agents/claudeAgentMetadata";
 import { isBoundedSessionIdentityKey } from "../sessions/sessionIdentity";
@@ -22,17 +23,20 @@ import { isSafeSentFilePath } from "./claudeSentFiles";
 import { createTimelineBookmarkTargetBuilder } from "../services/bookmarkTargetResolver";
 import { copyTimelineBookmarkIndexOffset } from "../services/bookmarkIdentity";
 import { isClaudeProgressId } from "./claudeProgress";
+import { copyAntigravityTargetFingerprint, isAntigravityProgressId } from "../antigravity/antigravityIdentity";
+import { captureAntigravitySourceScope, hasAntigravitySessionPermission, isAntigravitySourceScopeCurrent, type AntigravitySourceScope } from "../antigravity/antigravitySessionScope";
+import type { AntigravityResumeService } from "../antigravity/antigravityResume";
 import { isClaudeQueuedInputId } from "./claudeQueuedInput";
 import { ClaudeNativeBookmarkReader, isClaudeBookmarkSessionId } from "../services/claudeNativeBookmarkReader";
 import type { ChatOpenPositionStore } from "../services/chatOpenPositionStore";
 import type { SessionSummary } from "../sessions/sessionTypes";
-import { buildSessionSummary } from "../sessions/sessionSummary";
+import { buildSessionSummary, resolveSessionIdentityKey } from "../sessions/sessionSummary";
 import { resolveCodexLogicalHistoryPlan } from "../sessions/codexHistoryBase";
 import { areCodexRolloutRevisionsRelated, findSessionHistorySource } from "../sessions/codexRolloutRevisions";
 import { stableTextSha256 } from "../utils/stableTextHash";
 import { isSessionProtocolContextTitle } from "../sessions/sessionTitleResolver";
 import { elapsedMs, formatDebugFields, nowMs, safeDebugBasename, sanitizeDebugError } from "../services/debugLogUtils";
-import { normalizeCacheKey, normalizeProjectKey } from "../utils/fsUtils";
+import { normalizeCacheKey, normalizeFsPathKey, normalizeProjectKey } from "../utils/fsUtils";
 import { collectLocalLinkBaseDirs, openLinkedFileInEditor, resolveLocalFileLinkTarget } from "../utils/localFileLinks";
 import {
   buildChatPatchEntryDetails,
@@ -96,6 +100,10 @@ import type {
   CodexAgentRunsWebviewNode,
 } from "../agents/codexAgentRunsTypes";
 import type { SessionIconResolver } from "../ui/sessionIconResolver";
+import { antigravityReader } from "../antigravity/antigravityReader";
+import { sourceInventoryConfigKey } from "../sessions/sourceInventory";
+import { verifyAntigravityCliResume } from "../antigravity/antigravityCliResume";
+import { CliResumeProbeScheduler } from "../cliResume/cliResumeAvailability";
 import {
   isCliResumeSessionEligible,
   validateCliResumeSessionId,
@@ -169,9 +177,26 @@ type MissingSessionHandler = (fsPath: string) => Promise<void> | void;
 type ChatTabMode = "temporary" | "dedicated";
 export type ChatPanelKind = "reusable" | "session" | "branch";
 export type ChatWebviewAutoRefreshMode = "off" | "preserve" | "follow";
+// Reject replacements between the separate metadata and timeline streams of a startup selection.
+async function readStartupFileStamp(fsPath: string): Promise<string | undefined> {
+  try {
+    const stat = await lstat(fsPath, { bigint: true });
+    return stat.isFile() ? [stat.dev, stat.ino, stat.birthtimeNs, stat.size, stat.mtimeNs, stat.ctimeNs].join(":") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type StartupSessionSelection = {
+  readonly session: SessionSummary;
+  readonly isCurrent?: () => boolean;
+  readonly isDisplayed?: () => boolean;
+};
 type ChatPanelState = {
+  startupSelection?: StartupSessionSelection;
   fsPath: string;
-  historySource?: "codex" | "claude";
+  restoredIdentityKey?: string;
+  historySource?: SessionSummary["source"];
   sessionId?: string;
   sessionInfoRevision?: number;
   revealMessageIndex?: number;
@@ -200,6 +225,7 @@ type SessionInfoAction = "copySessionId" | "copySessionFilePath" | "revealSessio
 type SearchHistoryWebviewCandidate = SearchHistoryEntry & { key: string };
 type ExistingChatPanel = { panel: vscode.WebviewPanel; kind: ChatPanelKind };
 type SessionPanelOpenOptions = {
+  startupSelection?: () => boolean;
   revealMessageIndex?: number;
   revealTarget?: FileChangeHistoryRevealTarget;
   pageSearchSeed?: SessionPageSearchSeed;
@@ -291,6 +317,7 @@ type ChatCliResumeSnapshot = {
   revision: number;
   codex: ChatCliResumeTargetSnapshot;
   claude: ChatCliResumeTargetSnapshot;
+  antigravity: ChatCliResumeTargetSnapshot;
 };
 type ChatResumeActionSnapshot = {
   available: boolean;
@@ -367,6 +394,9 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly codexAgentRuns: CodexAgentRunsService;
   private readonly sessionIconResolver: SessionIconResolver;
   private readonly resumeMethodStore: ResumeMethodStore;
+  private readonly nativeResumeProbes = new CliResumeProbeScheduler();
+  private readonly nativeResumeCapabilityByPanel = new WeakMap<vscode.WebviewPanel, { revision: number; readerRevision: number; identityKey: string; available: boolean }>();
+  private resumeDisposed = false;
   private readonly mermaidPreferenceStore: MermaidPreferenceStore;
   private readonly onMissingSession?: MissingSessionHandler;
   private readonly logger?: DebugLogger;
@@ -391,6 +421,8 @@ export class ChatPanelManager implements vscode.Disposable {
   private readonly bookmarkTargetsByPanel = new WeakMap<vscode.WebviewPanel, Map<string, BookmarkTarget>>();
   private readonly readyByPanel = new WeakMap<vscode.WebviewPanel, boolean>();
   private readonly imageDataByPanel = new WeakMap<vscode.WebviewPanel, Map<string, SaveableChatImage>>();
+  private readonly startupImageRequestsByPanel = new WeakMap<vscode.WebviewPanel, Set<string>>();
+  private readonly nativeSourceScopeByPanel = new WeakMap<vscode.WebviewPanel, AntigravitySourceScope>();
   private readonly documentDataByPanel = new WeakMap<vscode.WebviewPanel, Map<string, SaveableChatDocument>>();
   private readonly sentFileTargetsByPanel = new WeakMap<vscode.WebviewPanel, Map<string, string>>();
   private readonly fileHistoryTargetsByPanel = new WeakMap<vscode.WebviewPanel, Map<string, string>>();
@@ -458,6 +490,7 @@ export class ChatPanelManager implements vscode.Disposable {
     logger?: DebugLogger,
     initialHistoryReady?: Promise<void>,
     private readonly nativeBookmarkReader?: ClaudeNativeBookmarkReader,
+    private readonly antigravityResumeService?: AntigravityResumeService,
   ) {
     this.extensionUri = extensionUri;
     this.historyService = historyService;
@@ -495,6 +528,7 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   public dispose(): void {
+    this.resumeDisposed = true; this.nativeResumeProbes.dispose();
     this.nativeBookmarkDisposed = true;
     this.nativeBookmarkGeneration += 1;
     if (this.nativeBookmarkTimer) clearTimeout(this.nativeBookmarkTimer);
@@ -756,6 +790,29 @@ export class ChatPanelManager implements vscode.Disposable {
     for (const panel of this.getOpenPanels()) refresh(panel);
   }
 
+  public finishStartupSelectionReads(): void {
+    for (const panel of this.getOpenPanels()) this.finishStartupSelectionRead(panel);
+  }
+
+  private finishStartupSelectionRead(panel: vscode.WebviewPanel): void {
+    const state = this.stateByPanel.get(panel);
+    const deferredImages = this.startupImageRequestsByPanel?.get(panel);
+    if (!state || (!state.startupSelection && !deferredImages) || state.startupSelection?.isCurrent) return;
+    const sequence = this.sessionDataRequestSequenceByPanel.get(panel);
+    const scope = this.nativeSourceScopeByPanel.get(panel);
+    if (!scope || (sequence !== undefined && this.sessionDataInFlightSequencesByPanel.get(panel)?.has(sequence)) ||
+        this.historyService.getStartupPreview()) return;
+    if (!isAntigravitySourceScopeCurrent(scope, getConfig(), this.historyService.getIndex())) {
+      this.revokeNativePanelCapabilities(panel);
+      void postLocalizedMessage(panel.webview, "chat", { type: "nativeSourceUnavailable", i18n: this.buildI18n() });
+      return;
+    }
+    state.startupSelection = undefined;
+    this.startupImageRequestsByPanel.delete(panel);
+    // The body reader already collected these bytes for this panel and identity.
+    for (const imageId of deferredImages ?? []) this.sendImageDataToPanel(panel, { imageId, fsPath: state.fsPath });
+  }
+
   public refreshResumePresentation(): void {
     for (const panel of this.getOpenPanels()) {
       if (!this.readyByPanel.get(panel)) continue;
@@ -764,6 +821,7 @@ export class ChatPanelManager implements vscode.Disposable {
         type: "resumePresentation",
         snapshot: this.buildCliResumeSnapshot(panel, revision),
       });
+      void this.refreshAntigravityResumeCapability(panel, revision);
     }
   }
 
@@ -1084,6 +1142,10 @@ export class ChatPanelManager implements vscode.Disposable {
 
     const sessionFileAvailable = await this.ensureSessionFileAvailable(session.fsPath);
     if (!isRequestCurrent()) return;
+    if (options.startupSelection && (!sessionFileAvailable || !options.startupSelection())) {
+      void vscode.window.showInformationMessage(t("app.openSessionFailed"));
+      return;
+    }
     if (!sessionFileAvailable) {
       const matching = this.findExistingSessionPanel(session.fsPath);
       const matchingState = matching ? this.stateByPanel.get(matching.panel) : undefined;
@@ -1146,7 +1208,9 @@ export class ChatPanelManager implements vscode.Disposable {
       kind = "session";
     }
 
-    this.commitSessionPanel(panel, session, { ...options, kind });
+    this.commitSessionPanel(panel, session, { ...options, kind }, options.startupSelection
+      ? () => reusableOpenGeneration === undefined || this.reusableOpenGeneration === reusableOpenGeneration
+      : undefined);
     if (this.readyByPanel.get(panel)) {
       await this.sendSessionData(panel, {
         isRequestCurrent,
@@ -1235,6 +1299,7 @@ export class ChatPanelManager implements vscode.Disposable {
     panel: vscode.WebviewPanel,
     session: SessionSummary,
     options: SessionPanelOpenOptions & { kind: ChatPanelKind },
+    startupSelectionCurrent?: () => boolean,
   ): void {
     const key = normalizeCacheKey(session.fsPath);
     const prevState = this.stateByPanel.get(panel);
@@ -1245,6 +1310,7 @@ export class ChatPanelManager implements vscode.Disposable {
 
     const nextState: ChatPanelState = {
       fsPath: session.fsPath,
+      ...(options.startupSelection ? { startupSelection: { session, isCurrent: startupSelectionCurrent, isDisplayed: options.startupSelection } } : {}),
       historySource: session.source,
       revealMessageIndex: options.revealMessageIndex,
       revealTarget: options.revealTarget,
@@ -1300,6 +1366,8 @@ export class ChatPanelManager implements vscode.Disposable {
     this.cancelLiveRunningExpiry(panel);
     this.liveExpiryRefreshPendingByPanel.delete(panel);
     this.imageDataByPanel.delete(panel);
+    this.startupImageRequestsByPanel?.delete(panel);
+    this.nativeSourceScopeByPanel.delete(panel);
     this.documentDataByPanel.delete(panel);
     this.sentFileTargetsByPanel.delete(panel);
     this.fileHistoryTargetsByPanel.delete(panel);
@@ -1508,12 +1576,14 @@ export class ChatPanelManager implements vscode.Disposable {
     }
     await this.initialHistoryReady;
     const restoredSession = this.historyService.findByFsPath(restored.fsPath);
+    const nativeRestore = path.extname(restored.fsPath).toLowerCase() === ".db";
+    const nativeInventoryUnverified = nativeRestore && !this.isNativePathInventoryVerified(restored.fsPath);
     if ((hasClaudeAgentPathShape(restored.fsPath, getConfig().claudeSessionsRoot) && !restoredSession?.meta.claudeAgent) ||
-        (restored.identityKey && restoredSession?.identityKey !== restored.identityKey)) {
+        (restored.identityKey && restoredSession?.identityKey !== restored.identityKey && !(nativeInventoryUnverified && !restoredSession))) {
       await this.handleMissingSession(panel, restored.fsPath);
       return;
     }
-    if (!(await this.ensureSessionFileAvailable(restored.fsPath))) {
+    if (!nativeInventoryUnverified && !(await this.ensureSessionFileAvailable(restored.fsPath))) {
       await this.handleMissingSession(panel, restored.fsPath);
       return;
     }
@@ -1527,7 +1597,8 @@ export class ChatPanelManager implements vscode.Disposable {
     const session = this.historyService.findByFsPath(restored.fsPath);
     this.stateByPanel.set(panel, {
       fsPath: restored.fsPath,
-      historySource: session?.source,
+      historySource: session?.source ?? (nativeRestore ? "antigravity" : undefined),
+      ...(restored.identityKey ? { restoredIdentityKey: restored.identityKey } : {}),
       revealMessageIndex: restored.revealMessageIndex,
       revealTarget: restored.revealTarget,
       restoreScrollY: restored.scrollY,
@@ -1708,8 +1779,13 @@ export class ChatPanelManager implements vscode.Disposable {
     ) {
       this.codexAgentRunNavigationSequenceByPanel.set(panel, requestSequence);
     }
+    if ((type === "copySessionId" || type === "copySessionFilePath" || type === "revealSessionFile" || type === "rememberOpenPosition") &&
+        state.startupSelection?.session.source === "antigravity" && !this.isNativePanelScopeCurrent(panel, state)) return;
+    if (type === "requestImageData" && this.deferStartupImageRequest(panel, state, msg)) return;
+
     if (
       type !== "ready" &&
+      type !== "retryNativeSource" &&
       type !== "viewLayoutSuspended" &&
       type !== "viewLayoutReady" &&
       type !== "copy" &&
@@ -1730,6 +1806,12 @@ export class ChatPanelManager implements vscode.Disposable {
     }
 
     switch (type) {
+      case "retryNativeSource": {
+        if (state.historySource !== "antigravity") return;
+        await this.sendSessionData(panel, { detailMode: state.detailMode, restoreScrollY: state.restoreScrollY,
+          restoreSelectedMessageIndex: state.restoreTopMessageIndex, preserveUiState: true });
+        return;
+      }
       case "openClaudeOwner": {
         await this.openClaudeOwner(panel, msg);
         return;
@@ -1871,7 +1953,8 @@ export class ChatPanelManager implements vscode.Disposable {
         try {
           const uri = vscode.Uri.file(state.fsPath);
           const stat = await vscode.workspace.fs.stat(uri);
-          if (this.stateByPanel.get(panel) !== state) return;
+          if (this.stateByPanel.get(panel) !== state ||
+              (state.startupSelection?.session.source === "antigravity" && !this.isNativePanelScopeCurrent(panel, state))) return;
           if ((stat.type & vscode.FileType.File) === 0) {
             throw new Error();
           }
@@ -2197,6 +2280,7 @@ export class ChatPanelManager implements vscode.Disposable {
     method: ResumeActionMethod,
     splitInvocation: SplitResumeInvocation | undefined,
   ): Promise<void> {
+    if (!this.isNativePanelScopeCurrent(panel, receivedState)) return;
     const request = this.resolveResumeActionRequest(panel, receivedState, msg, method);
     if (!request) return;
     const { revision, origin, source } = request;
@@ -2211,15 +2295,21 @@ export class ChatPanelManager implements vscode.Disposable {
 
     const commandId =
       method === "extension"
-        ? source === "claude"
+        ? source === "antigravity" ? "codexHistoryViewer.resumeSessionInAntigravity" : source === "claude"
           ? "codexHistoryViewer.resumeSessionInClaude"
           : "codexHistoryViewer.resumeSessionInCodex"
-        : source === "claude"
+        : source === "antigravity" ? "codexHistoryViewer.resumeSessionInAntigravityCli" : source === "claude"
           ? "codexHistoryViewer.resumeSessionInClaudeCli"
           : "codexHistoryViewer.resumeSessionInCodexCli";
-    const succeeded = await vscode.commands.executeCommand<boolean>(commandId, {
-      fsPath: receivedState.fsPath,
-    });
+    const session = source === "antigravity" ? this.findPanelSessionByFsPath(receivedState.fsPath) : undefined;
+    const isNativeInvocationCurrent = (): boolean => !this.resumeDisposed && this.readyByPanel.get(panel) === true
+      && this.stateByPanel.get(panel) === receivedState && this.getResumeRevision(panel) === revision
+      && !!session && this.findPanelSessionByFsPath(receivedState.fsPath)?.identityKey === session.identityKey
+      && this.isNativePanelScopeCurrent(panel, receivedState);
+    const succeeded = source === "antigravity" && method === "extension"
+      ? session && isNativeInvocationCurrent() && await this.antigravityResumeService?.resume(session, { owner: panel, isCurrent: isNativeInvocationCurrent })
+      : await vscode.commands.executeCommand<boolean>(commandId, { fsPath: receivedState.fsPath });
+    if (source === "antigravity" && !isNativeInvocationCurrent()) return;
     if (!succeeded || sequence === undefined) return;
 
     try {
@@ -2268,10 +2358,10 @@ export class ChatPanelManager implements vscode.Disposable {
     if (origin === null) return null;
 
     const session = this.findPanelSessionByFsPath(receivedState.fsPath);
-    if (!session || (session.source !== "codex" && session.source !== "claude")) return null;
+    if (!session || (session.source !== "codex" && session.source !== "claude" && session.source !== "antigravity")) return null;
     const source: ResumeSource = session.source;
     const config = getConfig();
-    const configuredMethod = source === "codex" ? config.resumeCodexMethod : config.resumeClaudeMethod;
+    const configuredMethod = source === "codex" ? config.resumeCodexMethod : source === "antigravity" ? config.resumeAntigravityMethod : config.resumeClaudeMethod;
     if (origin === "split") {
       if (configuredMethod !== "both") return null;
     } else if (configuredMethod !== method) {
@@ -2589,6 +2679,7 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private publishPagedAgentRuns(panel: vscode.WebviewPanel, session: SessionSummary): void {
+    if (session.source === "antigravity") return;
     const pager = this.codexAgentRuns.createComponentPager(
       session, t("codexAgentRuns.subagent"), t("codexAgentRuns.guardian"),
     );
@@ -4326,6 +4417,7 @@ export class ChatPanelManager implements vscode.Disposable {
         !sent && this.canRecoverResumePresentation(panel, request, options);
       const recoveryRevision = this.getResumeRevision(panel);
       this.completeSessionDataRequest(panel, request);
+      this.finishStartupSelectionRead(panel);
       if (recoverResumePresentation) {
         void postLocalizedMessage(panel.webview, "chat", {
           type: "resumePresentation",
@@ -4344,17 +4436,74 @@ export class ChatPanelManager implements vscode.Disposable {
     resumeRevision: number,
     options?: ChatSessionDataOptions,
   ): Promise<boolean> {
-    const isCurrent = (): boolean =>
-      this.isSessionDataRequestCurrent(panel, request, currentState, options);
-    // Wait for referenced history files before rendering a restored paginated session.
-    await this.initialHistoryReady;
+    const native = state.historySource === "antigravity" || path.extname(state.fsPath).toLowerCase() === ".db";
+    const startupSelection = state.startupSelection;
+    const startupNative = native && Boolean(startupSelection && this.historyService.getStartupNativeReadIndex(startupSelection.session));
+    const getNativeIndex = () => {
+      const current = this.historyService.getIndex();
+      return startupNative && startupSelection && !this.historyService.resolveStartupSelection(startupSelection.session)
+        ? this.historyService.getStartupNativeReadIndex(startupSelection.session) ?? current
+        : current;
+    };
+    let checkCoreSelection = false;
+    let nativeScope: AntigravitySourceScope | undefined;
+    let scopeCaptured = false, scopeNoticeSent = false;
+    const rejectRead = (): false => {
+      if (!scopeNoticeSent) {
+        scopeNoticeSent = true;
+        if (native) {
+          this.revokeNativePanelCapabilities(panel);
+          void postLocalizedMessage(panel.webview, "chat", { type: "nativeSourceUnavailable", i18n: this.buildI18n() });
+        } else {
+          void vscode.window.showInformationMessage(t("app.openSessionFailed"));
+        }
+      }
+      return false;
+    };
+    const isCurrent = (): boolean => {
+      if (!this.isSessionDataRequestCurrent(panel, request, currentState, options) || startupSelection?.isCurrent?.() === false) return false;
+      if (startupSelection?.isDisplayed?.() === false ||
+          (checkCoreSelection && startupSelection && !this.historyService.resolveStartupSelection(startupSelection.session))) return rejectRead();
+      if (native && scopeCaptured && (!nativeScope || !isAntigravitySourceScopeCurrent(nativeScope, getConfig(), getNativeIndex()))) return rejectRead();
+      return true;
+    };
+    // Restored and referenced history still waits for the initial inventory.
+    if (startupNative) {
+      try {
+        await antigravityReader.ready();
+      } catch {
+        if (isCurrent()) await postLocalizedMessage(panel.webview, "chat", { type: "nativeSourceUnavailable", i18n: this.buildI18n() });
+        return false;
+      }
+    } else {
+      await this.initialHistoryReady;
+    }
+    checkCoreSelection = !native && startupSelection !== undefined;
     if (!isCurrent()) return false;
+    if (native) {
+      const index = getNativeIndex();
+      const nativeSession = startupNative ? index.byCacheKey.get(normalizeCacheKey(state.fsPath))
+        : this.historyService.findByFsPath(state.fsPath);
+      const config = getConfig();
+      // Only an explicit live tree selection can use the temporary index.
+      if (!hasAntigravitySessionPermission(config, index, nativeSession) ||
+          (startupSelection && !this.historyService.resolveStartupSelection(startupSelection.session, startupNative)) ||
+          (state.restoredIdentityKey && nativeSession.identityKey !== state.restoredIdentityKey)) {
+        this.revokeNativePanelCapabilities(panel);
+        await postLocalizedMessage(panel.webview, "chat", { type: "nativeSourceUnavailable", i18n: this.buildI18n() });
+        return false;
+      }
+      nativeScope = captureAntigravitySourceScope(config, index, [nativeSession]);
+      scopeCaptured = true;
+    }
     const physicalPath = await resolveSessionFilePath(state.fsPath);
     if (!isCurrent()) return false;
+    if (startupSelection && physicalPath !== startupSelection.session.fsPath) return rejectRead();
     if (physicalPath) state.fsPath = physicalPath;
     const sessionFileAvailable = await this.ensureSessionFileAvailable(state.fsPath);
     if (!isCurrent()) return false;
     if (!sessionFileAvailable) {
+      if (startupSelection) return rejectRead();
       if (!options?.stateOverride && currentState) {
         await this.handleMissingSession(panel, currentState.fsPath);
       }
@@ -4369,6 +4518,9 @@ export class ChatPanelManager implements vscode.Disposable {
       return false;
     }
     const detailMode = resolveSessionDetailMode(options?.detailMode, state);
+    const startupFileStamp = checkCoreSelection ? await readStartupFileStamp(state.fsPath) : undefined;
+    if (!isCurrent()) return false;
+    if (checkCoreSelection && startupFileStamp === undefined) return rejectRead();
     const totalStartedAt = nowMs();
     let buildMs = 0;
     let statsMs = 0;
@@ -4392,16 +4544,25 @@ export class ChatPanelManager implements vscode.Disposable {
       const source = inventory.find(session => session.cacheKey === normalizeCacheKey(state.fsPath))?.source
         ?? state.historySource ?? (path.basename(state.fsPath).toLowerCase().startsWith("rollout-") ? "codex" : "claude");
       const historyPlan = source === "codex"
-        ? await resolveCodexLogicalHistoryPlan(state.fsPath, inventory, { verifyLeafHeader: true }) : undefined;
+        ? await resolveCodexLogicalHistoryPlan(state.fsPath, inventory, { verifyLeafHeader: true, exactLeafPath: checkCoreSelection }) : undefined;
       if (!isCurrent()) return false;
       const buildOptions = {
         claudeSessionsRoot: config.claudeSessionsRoot,
         images: config.images,
         includeDetails: detailMode === "full",
         includeNotificationDetails: true,
+        includeAntigravityTurnFileChanges: source === "antigravity",
+        ...(startupNative ? {
+          foregroundAntigravityRead: {
+            get isCancellationRequested() {
+              return !isCurrent();
+            },
+          },
+        } : {}),
         turnTimelineMode: config.chatTurnTimelineMode,
         sessionInventory: inventory,
         ...(historyPlan ? { historyPlan } : {}),
+        exactHistoryLeafPath: checkCoreSelection,
       } as const;
       if (shouldCollectLiveActivity) {
         const built = await buildChatSessionModelWithActivityEvidence(state.fsPath, buildOptions);
@@ -4410,6 +4571,14 @@ export class ChatPanelManager implements vscode.Disposable {
       } else {
         model = await buildChatSessionModel(state.fsPath, buildOptions);
       }
+      if (!isCurrent()) return false;
+      if (startupSelection) {
+        const selected = startupSelection.session;
+        const modelSource = model.meta.historySource ?? source;
+        const identity = native ? model.identityKey
+          : resolveSessionIdentityKey(modelSource, model.meta, model.fsPath, normalizeCacheKey(model.fsPath), selected.storage.rootPath);
+        if (model.fsPath !== selected.fsPath || modelSource !== selected.source || identity !== selected.identityKey) return rejectRead();
+      }
       if (historyPlan && !historyPlan.complete) {
         model.items.unshift({ type: "note", noticeKind: "historyIncomplete", alwaysVisible: true, title: t("chat.historyIncomplete.title"), text: t("chat.historyIncomplete.message") });
       }
@@ -4417,7 +4586,11 @@ export class ChatPanelManager implements vscode.Disposable {
       buildMs = elapsedMs(buildStartedAt);
     } catch (error) {
       if (!isCurrent()) return false;
-      if (!options?.stateOverride && currentState) {
+      if (state.historySource === "antigravity" || path.extname(state.fsPath).toLowerCase() === ".db") {
+        await postLocalizedMessage(panel.webview, "chat", { type: "nativeSourceUnavailable", i18n: this.buildI18n() });
+        return false;
+      }
+      if (!startupSelection && !options?.stateOverride && currentState) {
         const stillAvailable = await this.ensureSessionFileAvailable(currentState.fsPath);
         if (!isCurrent()) return false;
         if (!stillAvailable) {
@@ -4441,7 +4614,7 @@ export class ChatPanelManager implements vscode.Disposable {
     const sessionCwd = typeof model.meta?.cwd === "string" ? model.meta.cwd : undefined;
     const historySource = model.meta?.historySource ?? state.historySource;
     const sessionId =
-      historySource === "codex" || historySource === "claude"
+      historySource === "codex" || historySource === "claude" || historySource === "antigravity"
         ? validateCliResumeSessionId(model.meta?.id, historySource) ?? undefined
         : undefined;
     const sessionDisplayCwd = sessionCwd ? (this.projectAssociationStore.getDisplayCwd(sessionCwd) ?? sessionCwd) : undefined;
@@ -4465,6 +4638,11 @@ export class ChatPanelManager implements vscode.Disposable {
       restoreScrollY: undefined,
       restoreTopMessageIndex: undefined,
     };
+    const pendingNativeConfirmation = nativeScope && startupSelection &&
+      !isAntigravitySourceScopeCurrent(nativeScope, getConfig(), this.historyService.getIndex());
+    nextState.startupSelection = pendingNativeConfirmation
+      ? { session: startupSelection.session, isDisplayed: startupSelection.isDisplayed }
+      : undefined;
     const summary = this.findPanelSessionByFsPath(nextState.fsPath);
     let preparedLiveActivity: PreparedLiveSessionActivity | undefined;
     if (
@@ -4486,7 +4664,9 @@ export class ChatPanelManager implements vscode.Disposable {
     statsMs = elapsedMs(statsStartedAt);
     if (!isCurrent()) return false;
     if (options?.validatePreparedState && !await options.validatePreparedState()) return false;
+    const finalFileStamp = checkCoreSelection ? await readStartupFileStamp(state.fsPath) : undefined;
     if (!isCurrent()) return false;
+    if (checkCoreSelection && finalFileStamp !== startupFileStamp) return rejectRead();
     if (options?.commitStateTransition && !options.commitStateTransition()) return false;
     if (!isCurrent()) return false;
     if (currentState && normalizeCacheKey(currentState.fsPath) !== normalizeCacheKey(nextState.fsPath)) {
@@ -4500,6 +4680,8 @@ export class ChatPanelManager implements vscode.Disposable {
       ? { ...nextState, pageSearchSeed: undefined }
       : nextState;
     this.stateByPanel.set(panel, committedState);
+    if (nativeScope) this.nativeSourceScopeByPanel.set(panel, nativeScope);
+    else this.nativeSourceScopeByPanel.delete(panel);
     this.markSessionDataTransitionCommitted(panel, request, committedState);
     this.sessionDataCommitSequenceByPanel.set(panel, request.sequence);
     let effectiveLiveActivityAtMs: number | undefined;
@@ -4666,12 +4848,20 @@ export class ChatPanelManager implements vscode.Disposable {
       this.recoverUndeliveredPagedAgentRuns(panel);
     }
     const delivered = await delivery;
+    if (nativeScope && (this.stateByPanel.get(panel) !== committedState || !isAntigravitySourceScopeCurrent(nativeScope, getConfig(), getNativeIndex()))) {
+      if (this.stateByPanel.get(panel) === committedState) {
+        this.revokeNativePanelCapabilities(panel);
+        void postLocalizedMessage(panel.webview, "chat", { type: "nativeSourceUnavailable", i18n: this.buildI18n() });
+      }
+      return false;
+    }
     if (delivered) {
       this.rememberDeliveredResumePresentation(panel, committedState, webviewModel, summary, request.sequence);
     }
     const deliveryIsCurrent =
       delivered && this.sessionDataCommitSequenceByPanel.get(panel) === request.sequence;
     if (!deliveryIsCurrent) return false;
+    void this.refreshAntigravityResumeCapability(panel, resumeRevision);
     const latestState = this.stateByPanel.get(panel);
     if (
       !latestState ||
@@ -4863,7 +5053,7 @@ export class ChatPanelManager implements vscode.Disposable {
         this.historyService.getIndex().historySources ?? this.historyService.getIndex().sessions,
         state.turnTimelineMode ?? getConfig().chatTurnTimelineMode,
       );
-      if (this.stateByPanel.get(panel) !== state) return;
+      if (this.stateByPanel.get(panel) !== state || !this.isNativePanelScopeCurrent(panel, state)) return;
       if (!entry) {
         await postLocalizedMessage(panel.webview, "chat", {
           type: "patchEntryDetailsFailed",
@@ -4898,7 +5088,7 @@ export class ChatPanelManager implements vscode.Disposable {
         }),
       );
     } catch (error) {
-      if (this.stateByPanel.get(panel) !== state) return;
+      if (this.stateByPanel.get(panel) !== state || !this.isNativePanelScopeCurrent(panel, state)) return;
       await postLocalizedMessage(panel.webview, "chat", {
         type: "patchEntryDetailsFailed",
         fsPath: state.fsPath,
@@ -4927,6 +5117,7 @@ export class ChatPanelManager implements vscode.Disposable {
   private async saveImageFromPanel(panel: vscode.WebviewPanel, msg: any): Promise<void> {
     const state = this.stateByPanel.get(panel);
     if (!this.isCurrentPanelSessionRequest(state, msg, "saveImage")) return;
+    if (!this.isNativePanelScopeCurrent(panel, state)) return;
 
     const imageId = typeof msg?.imageId === "string" ? msg.imageId.trim() : "";
     if (!imageId) return;
@@ -4951,7 +5142,7 @@ export class ChatPanelManager implements vscode.Disposable {
         [t("chat.image.saveFilter")]: [decoded.extension.slice(1)],
       },
     });
-    if (!targetUri) return;
+    if (!targetUri || this.stateByPanel.get(panel) !== state || !this.isNativePanelScopeCurrent(panel, state)) return;
 
     try {
       await vscode.workspace.fs.writeFile(targetUri, decoded.bytes);
@@ -4961,10 +5152,25 @@ export class ChatPanelManager implements vscode.Disposable {
     }
   }
 
+  private deferStartupImageRequest(panel: vscode.WebviewPanel, state: ChatPanelState, message: unknown): boolean {
+    if (!state.startupSelection) return false;
+    const scope = this.nativeSourceScopeByPanel.get(panel);
+    if (!scope || isAntigravitySourceScopeCurrent(scope, getConfig(), this.historyService.getIndex()) ||
+        !this.isStartupNativeScopeCurrent(state, scope)) return false;
+    const { imageId, fsPath } = (message ?? {}) as { imageId?: unknown; fsPath?: unknown };
+    if (typeof imageId === "string" && fsPath === state.fsPath && this.imageDataByPanel.get(panel)?.has(imageId)) {
+      const requests = this.startupImageRequestsByPanel.get(panel) ?? new Set();
+      requests.add(imageId);
+      this.startupImageRequestsByPanel.set(panel, requests);
+    }
+    return true;
+  }
+
   private sendImageDataToPanel(panel: vscode.WebviewPanel, msg: any): void {
     const state = this.stateByPanel.get(panel);
     const imageId = typeof msg?.imageId === "string" ? msg.imageId.trim() : "";
     if (!state || !imageId || imageId.length > 160) return;
+    if (!this.isNativePanelScopeCurrent(panel, state)) return;
 
     const requestedFsPath = typeof msg?.fsPath === "string" ? msg.fsPath.trim() : "";
     if (requestedFsPath && normalizeCacheKey(requestedFsPath) !== normalizeCacheKey(state.fsPath)) {
@@ -5200,9 +5406,22 @@ export class ChatPanelManager implements vscode.Disposable {
       const session = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
       const config = getConfig();
       const buildTarget = (target: CliResumeTarget): ChatCliResumeTargetSnapshot => {
-        const configuredMethod = target === "codex" ? config.resumeCodexMethod : config.resumeClaudeMethod;
-        const extension = evaluateExtensionResumeAction(session, target);
-        const cli = this.evaluateCliResumeAction(session, target);
+        const configuredMethod = target === "codex" ? config.resumeCodexMethod : target === "antigravity" ? config.resumeAntigravityMethod : config.resumeClaudeMethod;
+        let extension = evaluateExtensionResumeAction(session, target);
+        let cli = this.evaluateCliResumeAction(session, target);
+        if (target === "antigravity" && session?.source === "antigravity") {
+          const scope = this.nativeSourceScopeByPanel?.get(panel);
+          if (!scope || !isAntigravitySourceScopeCurrent(scope, config, this.historyService.getIndex())) {
+            extension = { available: false, reason: "rootUnverified" };
+            cli = { available: false, reason: "rootUnverified" };
+          }
+          if (!vscode.workspace.isTrusted) extension = { available: false, reason: "workspaceUntrusted" };
+          else if (vscode.env.remoteName) extension = { available: false, reason: "remoteHostMismatch" };
+        }
+        if (target === "antigravity" && cli.available) {
+          const capability = this.nativeResumeCapabilityByPanel.get(panel);
+          if (!capability?.available || capability.revision !== revision || capability.readerRevision !== antigravityReader.getConfigurationRevision() || capability.identityKey !== session?.identityKey) cli = { available: false, reason: "rootUnverified" };
+        }
         const preferred = this.resumeMethodStore.get(target);
         const other: ResumeActionMethod = preferred === "extension" ? "cli" : "extension";
         const preferredAction = preferred === "extension" ? extension : cli;
@@ -5224,6 +5443,7 @@ export class ChatPanelManager implements vscode.Disposable {
         revision,
         codex: buildTarget("codex"),
         claude: buildTarget("claude"),
+        antigravity: buildTarget("antigravity"),
       };
     } catch {
       // Resume is optional UI and must not block delivery of the session model.
@@ -5238,8 +5458,24 @@ export class ChatPanelManager implements vscode.Disposable {
         revision,
         codex: unavailable,
         claude: unavailable,
+        antigravity: unavailable,
       };
     }
+  }
+
+  private async refreshAntigravityResumeCapability(panel: vscode.WebviewPanel, revision: number): Promise<void> {
+    const state = this.stateByPanel.get(panel), session = state ? this.findPanelSessionByFsPath(state.fsPath) : undefined;
+    if (!state || !session || session.source !== "antigravity") return;
+    const readerRevision = antigravityReader.getConfigurationRevision();
+    const current = (): boolean => !this.resumeDisposed && this.readyByPanel.get(panel) === true && this.stateByPanel.get(panel) === state && this.getResumeRevision(panel) === revision
+      && this.findPanelSessionByFsPath(state.fsPath)?.identityKey === session.identityKey && antigravityReader.getConfigurationRevision() === readerRevision
+      && !!this.nativeSourceScopeByPanel?.get(panel) && isAntigravitySourceScopeCurrent(this.nativeSourceScopeByPanel.get(panel)!, getConfig(), this.historyService.getIndex());
+    try {
+      const result = await this.nativeResumeProbes.schedule(() => verifyAntigravityCliResume(session, readerRevision), () => !current(), 1500);
+      if (!current()) return;
+      this.nativeResumeCapabilityByPanel.set(panel, { revision, readerRevision, identityKey: session.identityKey, available: result.status === "completed" && result.value });
+      await postLocalizedMessage(panel.webview, "chat", { type: "resumePresentation", snapshot: this.buildCliResumeSnapshot(panel, revision) });
+    } catch { this.logger?.debug("Antigravity resume capability delivery unavailable"); }
   }
 
   private evaluateCliResumeAction(
@@ -5350,6 +5586,14 @@ export class ChatPanelManager implements vscode.Disposable {
     const turns = Array.isArray(model.turns) ? model.turns : [];
     if (turns.length === 0) return model;
 
+    if (model.meta.historySource === "antigravity") {
+      const latest = turns.at(-1);
+      const live = latest?.displayStatus === "running" && config.chatTurnTimelineMode === "live"
+        && isPanelObservingLiveSession(state, this.readyByPanel.get(panel) === true)
+        && isLiveActivityFresh(latest.runningActivityAtIso ? Date.parse(latest.runningActivityAtIso) : undefined, Date.now());
+      return { ...model, turns: turns.map(turn => ({ ...turn, displayStatus: live && turn === latest ? "running" : turn.status })), liveRunningTurnId: live ? latest.id : undefined };
+    }
+
     const activeTurnId = normalizeChatTurnId(model.activeTurnId);
     const activeTurn = activeTurnId ? turns.find((turn) => normalizeChatTurnId(turn.id) === activeTurnId) : undefined;
     let liveRunningTurnId: string | undefined;
@@ -5392,6 +5636,10 @@ export class ChatPanelManager implements vscode.Disposable {
     effectiveActivityAtMs: number | undefined,
   ): void {
     this.cancelLiveRunningExpiry(panel);
+    if (model.meta.historySource === "antigravity") {
+      const timestamp = model.turns?.find(turn => turn.id === model.liveRunningTurnId)?.runningActivityAtIso;
+      effectiveActivityAtMs = timestamp ? Date.parse(timestamp) : undefined;
+    }
     if (
       !model.liveRunningTurnId ||
       !state.sessionId ||
@@ -5601,10 +5849,38 @@ export class ChatPanelManager implements vscode.Disposable {
   }
 
   private async ensurePanelSessionFile(panel: vscode.WebviewPanel, state: ChatPanelState): Promise<boolean> {
+    if (!this.isNativePanelScopeCurrent(panel, state)) return false;
     const available = await this.ensureSessionFileAvailable(state.fsPath);
     if (this.stateByPanel.get(panel) !== state) return false;
+    if (!this.isNativePanelScopeCurrent(panel, state)) return false;
     if (available) return true;
     await this.handleMissingSession(panel, state.fsPath);
+    return false;
+  }
+
+  private revokeNativePanelCapabilities(panel: vscode.WebviewPanel): void {
+    this.nativeSourceScopeByPanel?.delete(panel);
+    this.imageDataByPanel?.delete(panel);
+    this.startupImageRequestsByPanel?.delete(panel);
+    this.documentDataByPanel?.delete(panel);
+    this.fileHistoryTargetsByPanel?.delete(panel);
+    this.patchEntryDetailRequestsByPanel?.delete(panel);
+    this.bookmarkTargetsByPanel?.delete(panel);
+    this.nativeResumeCapabilityByPanel?.delete(panel);
+  }
+
+  private isStartupNativeScopeCurrent(state: ChatPanelState, scope: AntigravitySourceScope): boolean {
+    const preview = state.startupSelection && this.historyService.getStartupNativeReadIndex(state.startupSelection.session);
+    return Boolean(preview && isAntigravitySourceScopeCurrent(scope, getConfig(), preview));
+  }
+
+  private isNativePanelScopeCurrent(panel: vscode.WebviewPanel, state: ChatPanelState): boolean {
+    if (state.historySource !== "antigravity" && path.extname(state.fsPath).toLowerCase() !== ".db") return true;
+    const scope = this.nativeSourceScopeByPanel?.get(panel);
+    if (scope && isAntigravitySourceScopeCurrent(scope, getConfig(), this.historyService.getIndex())) return true;
+    if (scope && this.isStartupNativeScopeCurrent(state, scope)) return false;
+    this.revokeNativePanelCapabilities(panel);
+    if (this.stateByPanel.get(panel) === state) void postLocalizedMessage(panel.webview, "chat", { type: "nativeSourceUnavailable", i18n: this.buildI18n() });
     return false;
   }
 
@@ -5613,6 +5889,11 @@ export class ChatPanelManager implements vscode.Disposable {
     fsPath: string,
     options: { showMessage?: boolean; notify?: boolean } = {},
   ): Promise<void> {
+    if (path.extname(fsPath).toLowerCase() === ".db" && !this.isNativePathInventoryVerified(fsPath)) {
+      // An unavailable source does not establish deletion; preserve its serialized tab state.
+      if (panel) await postLocalizedMessage(panel.webview, "chat", { type: "nativeSourceUnavailable", i18n: this.buildI18n() });
+      return;
+    }
     if (panel) this.disposePanel(panel);
 
     if (options.showMessage ?? true) {
@@ -5624,6 +5905,12 @@ export class ChatPanelManager implements vscode.Disposable {
     } catch {
       // A failed refresh notification must not break panel disposal.
     }
+  }
+
+  private isNativePathInventoryVerified(fsPath: string): boolean {
+    const inventory = this.historyService.getIndex().sourceInventoryStates?.antigravity;
+    return inventory?.status === "complete" && path.basename(path.dirname(fsPath)) === "conversations" &&
+      inventory.allowedRoots.some(root => normalizeFsPathKey(root) === normalizeFsPathKey(path.dirname(path.dirname(fsPath))));
   }
 
   private getOpenPanels(): vscode.WebviewPanel[] {
@@ -5893,6 +6180,7 @@ function sanitizeDebugValue(value: unknown): string | undefined {
 }
 
 function debugSessionName(fsPath: string): string {
+  if (path.extname(fsPath).toLowerCase() === ".db") return "native-database";
   const normalized = String(fsPath || "").replace(/\\/g, "/");
   const fileName = normalized.split("/").filter(Boolean).pop() ?? "unknown";
   return sanitizeDebugToken(fileName, "unknown");
@@ -5949,7 +6237,7 @@ async function readSessionFingerprint(fsPath: string): Promise<SessionFileFinger
 
 function isActiveTurnTimelineSessionPath(
   fsPath: string,
-  source: "codex" | "claude" | undefined,
+  source: SessionSummary["source"] | undefined,
   summary: SessionSummary | undefined,
   config: ReturnType<typeof getConfig>,
 ): boolean {
@@ -6016,7 +6304,7 @@ function sanitizePageSearchSeed(value: unknown): SessionPageSearchSeed | undefin
     caseSensitive: source.caseSensitive === true,
     ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
     ...(source.autoOpen === false ? { autoOpen: false } : {}),
-    ...(isClaudeProgressId(source.preferredProgressId) ? { preferredProgressId: source.preferredProgressId } : {}),
+    ...((isClaudeProgressId(source.preferredProgressId) || isAntigravityProgressId(source.preferredProgressId)) ? { preferredProgressId: source.preferredProgressId } : {}),
     ...(isClaudeQueuedInputId(source.preferredInputId) ? { preferredInputId: source.preferredInputId } : {}),
   };
 }
@@ -6229,19 +6517,20 @@ function toFullToolItem(item: ChatToolItem): ChatToolItem {
 function toSummaryToolItem(item: ChatToolItem): ChatToolItem {
   const hasHeavyDetails =
     item.detailsOmitted === true || hasNonEmptyString(item.argumentsText) || hasNonEmptyString(item.outputText);
-  return {
+  return copyAntigravityTargetFingerprint(item, {
     type: "tool",
     messageIndex: item.messageIndex,
     turnId: item.turnId,
     timestampIso: item.timestampIso,
     name: item.name,
     callId: item.callId,
+    ...(item.advisor ? { advisor: { ...item.advisor } } : {}),
     attachments: item.attachments?.map((attachment) => toWebviewAttachment(attachment)),
     sentFiles: item.sentFiles ? { ...item.sentFiles } : undefined,
     execution: item.execution ? { ...item.execution } : undefined,
     presentation: item.presentation ? { ...item.presentation } : undefined,
     ...(hasHeavyDetails ? { detailsOmitted: true } : {}),
-  };
+  });
 }
 
 function toFullPatchGroupItem(item: ChatPatchGroupItem): ChatPatchGroupItem {
@@ -6316,7 +6605,7 @@ async function buildChatPerformanceStats(fsPath: string, model: ChatSessionModel
       stats.messageChars += (item.stdout?.length ?? 0) + (item.stderr?.length ?? 0);
       continue;
     }
-    if (item.type === "crossSessionMessage" || item.type === "taskNotification" || item.type === "systemReminder" || item.type === "claudeProgress" || item.type === "claudeQueuedInput") {
+    if (item.type === "crossSessionMessage" || item.type === "taskNotification" || item.type === "systemReminder" || item.type === "claudeProgress" || item.type === "claudeQueuedInput" || item.type === "claudeVoiceCall" || item.type === "antigravityProgress") {
       stats.messageChars += typeof item.body === "string" ? item.body.length : 0;
       if (item.type === "taskNotification" && item.presentation) stats.messageChars += countNotificationPresentationText(item.presentation.entries);
       continue;

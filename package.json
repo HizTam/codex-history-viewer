@@ -3,7 +3,7 @@
   "displayName": "%ext.displayName%",
   "description": "%ext.description%",
   "icon": "resources/extension-icon.png",
-  "version": "2.21.0",
+  "version": "3.0.0",
   "publisher": "hiztam",
   "author": "HizTam",
   "license": "MIT",
@@ -21,6 +21,8 @@
     "Anthropic",
     "Claude",
     "Claude Code",
+    "Google",
+    "Antigravity",
     "AI Prompts",
     "AI Prompt",
     "History",
@@ -394,8 +396,8 @@
         "title": "%cmd.openFileChangeHistory%",
         "category": "%cmd.category%",
         "icon": {
-          "light": "resources/icons/light/source-both.svg",
-          "dark": "resources/icons/dark/source-both.svg"
+          "light": "resources/icons/light/source-all.svg",
+          "dark": "resources/icons/dark/source-all.svg"
         }
       },
       {
@@ -1683,10 +1685,10 @@
       },
       {
         "command": "codexHistoryViewer.ui.cycleHistorySourceAll",
-        "title": "Codex + Claude Code",
+        "title": "%ui.command.historyMenuSourceAll%",
         "icon": {
-          "light": "resources/icons/light/source-both.svg",
-          "dark": "resources/icons/dark/source-both.svg"
+          "light": "resources/icons/light/source-all.svg",
+          "dark": "resources/icons/dark/source-all.svg"
         }
       },
       {
@@ -1707,10 +1709,10 @@
       },
       {
         "command": "codexHistoryViewer.ui.pinnedSourceAll",
-        "title": "Codex + Claude Code",
+        "title": "%ui.command.historyMenuSourceAll%",
         "icon": {
-          "light": "resources/icons/light/source-both.svg",
-          "dark": "resources/icons/dark/source-both.svg"
+          "light": "resources/icons/light/source-all.svg",
+          "dark": "resources/icons/dark/source-all.svg"
         }
       },
       {
@@ -2448,6 +2450,92 @@
       {
         "command": "codexHistoryViewer.ui.en.historyMenuCompressionUncompressed",
         "title": "%generated.ui.en.command.historyMenuCompressionUncompressed%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.cycleHistorySourceAntigravity",
+        "title": "Antigravity",
+        "icon": {
+          "light": "resources/icons/light/source-antigravity.svg",
+          "dark": "resources/icons/dark/source-antigravity.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.pinnedSourceAntigravity",
+        "title": "Antigravity",
+        "icon": {
+          "light": "resources/icons/light/source-antigravity.svg",
+          "dark": "resources/icons/dark/source-antigravity.svg"
+        }
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.historyMenuSourceAntigravity",
+        "title": "%generated.ui.ja.command.historyMenuSourceAntigravity%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.historyMenuSourceAntigravity",
+        "title": "%generated.ui.en.command.historyMenuSourceAntigravity%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.historyMenuSourceAntigravityChecked",
+        "title": "%generated.ui.ja.command.historyMenuSourceAntigravityChecked%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.historyMenuSourceAntigravityChecked",
+        "title": "%generated.ui.en.command.historyMenuSourceAntigravityChecked%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.resumeSessionInAntigravity",
+        "title": "%generated.ui.ja.command.resumeSessionInAntigravity%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.resumeSessionInAntigravity",
+        "title": "%generated.ui.en.command.resumeSessionInAntigravity%"
+      },
+      {
+        "command": "codexHistoryViewer.resumeSessionInAntigravity",
+        "title": "%cmd.resumeSessionInAntigravity%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.resumeSessionInAntigravityCli",
+        "icon": "$(terminal)",
+        "title": "%generated.ui.ja.command.resumeSessionInAntigravityCli%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.resumeSessionInAntigravityCli",
+        "icon": "$(terminal)",
+        "title": "%generated.ui.en.command.resumeSessionInAntigravityCli%"
+      },
+      {
+        "command": "codexHistoryViewer.resumeSessionInAntigravityCli",
+        "title": "%cmd.resumeSessionInAntigravityCli%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.handoffToAntigravity",
+        "title": "%cmd.handoffToAntigravity%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.handoffToAntigravity",
+        "title": "%generated.ui.ja.command.handoffToAntigravity%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.handoffToAntigravity",
+        "title": "%generated.ui.en.command.handoffToAntigravity%"
+      },
+      {
+        "command": "codexHistoryViewer.handoffToCodex",
+        "title": "%cmd.handoffToCodex%",
+        "category": "%cmd.category%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.ja.handoffToCodex",
+        "title": "%generated.ui.ja.command.handoffToCodex%"
+      },
+      {
+        "command": "codexHistoryViewer.ui.en.handoffToCodex",
+        "title": "%generated.ui.en.command.handoffToCodex%"
       }
     ],
     "submenus": [
@@ -4252,6 +4340,78 @@
         {
           "command": "codexHistoryViewer.ui.en.historyMenuCompressionUncompressed",
           "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.cycleHistorySourceAntigravity",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.pinnedSourceAntigravity",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuSourceAntigravity",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuSourceAntigravity",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuSourceAntigravityChecked",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuSourceAntigravityChecked",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.resumeSessionInAntigravity",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.resumeSessionInAntigravity",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.resumeSessionInAntigravity",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.resumeSessionInAntigravityCli",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.resumeSessionInAntigravityCli",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.resumeSessionInAntigravityCli",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.handoffToAntigravity",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.handoffToAntigravity",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.handoffToAntigravity",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.handoffToCodex",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.handoffToCodex",
+          "when": "false"
+        },
+        {
+          "command": "codexHistoryViewer.handoffToCodex",
+          "when": "false"
         }
       ],
       "codexHistoryViewer.sessionInfoSubmenu.ja": [
@@ -4296,23 +4456,38 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.createHandoffFile",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@2"
         },
         {
           "command": "codexHistoryViewer.ui.ja.copyHandoffPrompt",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@3"
         },
         {
           "command": "codexHistoryViewer.ui.ja.copyHandoffPath",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@3.5"
         },
         {
           "command": "codexHistoryViewer.ui.ja.openSessionHandoff",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@4"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.handoffToAntigravity",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@1.2"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.handoffToCodex",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@1.1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.handoffToClaude",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@1"
         }
       ],
       "codexHistoryViewer.handoffSubmenu.en": [
@@ -4323,23 +4498,38 @@
         },
         {
           "command": "codexHistoryViewer.ui.en.createHandoffFile",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@2"
         },
         {
           "command": "codexHistoryViewer.ui.en.copyHandoffPrompt",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@3"
         },
         {
           "command": "codexHistoryViewer.ui.en.copyHandoffPath",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@3.5"
         },
         {
           "command": "codexHistoryViewer.ui.en.openSessionHandoff",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
           "group": "navigation@4"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.handoffToAntigravity",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@1.2"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.handoffToCodex",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@1.1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.handoffToClaude",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled",
+          "group": "navigation@1"
         }
       ],
       "view/title": [
@@ -5282,6 +5472,16 @@
           "submenu": "codexHistoryViewer.historyCompressionSubmenu.en",
           "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja')",
           "group": "2_historyOptions@6"
+        },
+        {
+          "command": "codexHistoryViewer.ui.pinnedSourceAntigravity",
+          "when": "view == codexHistoryViewer.pinnedView && codexHistoryViewer.pinnedSourceSwitchable && codexHistoryViewer.pinnedSourceFilter == 'antigravity'",
+          "group": "navigation@10"
+        },
+        {
+          "command": "codexHistoryViewer.ui.cycleHistorySourceAntigravity",
+          "when": "view == codexHistoryViewer.historyView && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'antigravity'",
+          "group": "navigation@9"
         }
       ],
       "view/item/context": [
@@ -5327,12 +5527,12 @@
         },
         {
           "submenu": "codexHistoryViewer.handoffSubmenu.ja",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled && (codexHistoryViewer.uiLang == 'ja')",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled && (codexHistoryViewer.uiLang == 'ja')",
           "group": "navigation@0.5"
         },
         {
           "submenu": "codexHistoryViewer.handoffSubmenu.en",
-          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled && (codexHistoryViewer.uiLang != 'ja')",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.(codex|claude|antigravity)(?:\\.codexAgentChild)?(?:\\.codexAgentParent)?(?:\\.codexAgentParentAvailable)?(?:\\.hidden)?(?:\\.customTitle)?(?:\\.cliResumeIdValid)?$/ && codexHistoryViewer.handoffEnabled && (codexHistoryViewer.uiLang != 'ja')",
           "group": "navigation@0.5"
         },
         {
@@ -5559,6 +5759,26 @@
           "command": "codexHistoryViewer.copyStatusPath",
           "when": "view == codexHistoryViewer.statusView && viewItem == codexHistoryViewer.utilityInfo.copyable",
           "group": "inline"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.resumeSessionInAntigravity",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.hidden)?(?:\\.customTitle)?\\.cliResumeIdValid$/ && isWorkspaceTrusted && !remoteName && config.codexHistoryViewer.resume.antigravityMethod != 'cli' && (codexHistoryViewer.uiLang == 'ja')",
+          "group": "navigation@0"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.resumeSessionInAntigravity",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.hidden)?(?:\\.customTitle)?\\.cliResumeIdValid$/ && isWorkspaceTrusted && !remoteName && config.codexHistoryViewer.resume.antigravityMethod != 'cli' && (codexHistoryViewer.uiLang != 'ja')",
+          "group": "navigation@0"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.resumeSessionInAntigravityCli",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.hidden)?(?:\\.customTitle)?\\.cliResumeIdValid$/ && isWorkspaceTrusted && (config.codexHistoryViewer.resume.antigravityMethod == 'cli' || config.codexHistoryViewer.resume.antigravityMethod == 'both') && (codexHistoryViewer.uiLang == 'ja')",
+          "group": "navigation@0.1"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.resumeSessionInAntigravityCli",
+          "when": "viewItem =~ /^codexHistoryViewer\\.(session|sessionPinned|searchSession|searchHit)\\.antigravity(?:\\.hidden)?(?:\\.customTitle)?\\.cliResumeIdValid$/ && isWorkspaceTrusted && (config.codexHistoryViewer.resume.antigravityMethod == 'cli' || config.codexHistoryViewer.resume.antigravityMethod == 'both') && (codexHistoryViewer.uiLang != 'ja')",
+          "group": "navigation@0.1"
         }
       ],
       "codexHistoryViewer.pinnedDisplayTargetSubmenu.ja": [
@@ -5810,23 +6030,33 @@
         },
         {
           "command": "codexHistoryViewer.ui.ja.historyMenuSourceCodexChecked",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'codex'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'codex' && codexHistoryViewer.availableSourceCodex",
           "group": "5_historySource@2"
         },
         {
           "command": "codexHistoryViewer.ui.ja.historyMenuSourceCodex",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'codex'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'codex' && codexHistoryViewer.availableSourceCodex",
           "group": "5_historySource@2"
         },
         {
           "command": "codexHistoryViewer.ui.ja.historyMenuSourceClaudeChecked",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'claude'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'claude' && codexHistoryViewer.availableSourceClaude",
           "group": "5_historySource@3"
         },
         {
           "command": "codexHistoryViewer.ui.ja.historyMenuSourceClaude",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'claude'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.availableSourceClaude",
           "group": "5_historySource@3"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuSourceAntigravityChecked",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'antigravity' && codexHistoryViewer.availableSourceAntigravity",
+          "group": "5_historySource@4"
+        },
+        {
+          "command": "codexHistoryViewer.ui.ja.historyMenuSourceAntigravity",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang == 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'antigravity' && codexHistoryViewer.availableSourceAntigravity",
+          "group": "5_historySource@4"
         }
       ],
       "codexHistoryViewer.historySourceSubmenu.en": [
@@ -5842,23 +6072,33 @@
         },
         {
           "command": "codexHistoryViewer.ui.en.historyMenuSourceCodexChecked",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'codex'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'codex' && codexHistoryViewer.availableSourceCodex",
           "group": "5_historySource@2"
         },
         {
           "command": "codexHistoryViewer.ui.en.historyMenuSourceCodex",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'codex'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'codex' && codexHistoryViewer.availableSourceCodex",
           "group": "5_historySource@2"
         },
         {
           "command": "codexHistoryViewer.ui.en.historyMenuSourceClaudeChecked",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'claude'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'claude' && codexHistoryViewer.availableSourceClaude",
           "group": "5_historySource@3"
         },
         {
           "command": "codexHistoryViewer.ui.en.historyMenuSourceClaude",
-          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'claude'",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'claude' && codexHistoryViewer.availableSourceClaude",
           "group": "5_historySource@3"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuSourceAntigravityChecked",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter == 'antigravity' && codexHistoryViewer.availableSourceAntigravity",
+          "group": "5_historySource@4"
+        },
+        {
+          "command": "codexHistoryViewer.ui.en.historyMenuSourceAntigravity",
+          "when": "view == codexHistoryViewer.historyView && (codexHistoryViewer.uiLang != 'ja') && codexHistoryViewer.historySourceSwitchable && codexHistoryViewer.historySourceFilter != 'antigravity' && codexHistoryViewer.availableSourceAntigravity",
+          "group": "5_historySource@4"
         }
       ],
       "codexHistoryViewer.historyDisplayTargetSubmenu.ja": [
@@ -6042,11 +6282,13 @@
             "type": "string",
             "enum": [
               "codex",
-              "claude"
+              "claude",
+              "antigravity"
             ],
             "enumItemLabels": [
               "Codex",
-              "Claude Code"
+              "Claude Code",
+              "Antigravity"
             ]
           },
           "uniqueItems": true,
@@ -6082,6 +6324,13 @@
           "description": "%cfg.claudeSessionsRoot%",
           "scope": "application",
           "order": 20
+        },
+        "codexHistoryViewer.antigravity.sessionsRoot": {
+          "type": "string",
+          "default": "",
+          "description": "%cfg.antigravitySessionsRoot%",
+          "scope": "application",
+          "order": 20.5
         },
         "codexHistoryViewer.agentRuns.enabled": {
           "type": "boolean",
@@ -6399,6 +6648,13 @@
           "description": "%cfg.webview.restoreAfterReload%",
           "scope": "window",
           "order": 67
+        },
+        "codexHistoryViewer.cache.sqlite.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "%cfg.cacheSqliteEnabled%",
+          "scope": "application",
+          "order": 68
         },
         "codexHistoryViewer.autoRefresh.enabled": {
           "type": "boolean",
@@ -6746,6 +7002,28 @@
           "default": false,
           "scope": "application",
           "description": "%cfg.claudeNativeBookmarksEnabled%"
+        },
+        "codexHistoryViewer.resume.antigravityMethod": {
+          "type": "string",
+          "default": "extension",
+          "enum": [
+            "extension",
+            "cli",
+            "both"
+          ],
+          "enumItemLabels": [
+            "%cfg.resumeMethod.labelExtension%",
+            "%cfg.resumeMethod.labelCli%",
+            "%cfg.resumeMethod.labelBoth%"
+          ],
+          "enumDescriptions": [
+            "%cfg.resumeMethod.enumExtension%",
+            "%cfg.resumeMethod.enumCli%",
+            "%cfg.resumeMethod.enumBoth%"
+          ],
+          "description": "%cfg.resumeAntigravityMethod%",
+          "scope": "application",
+          "order": 123
         }
       }
     }
@@ -6754,7 +7032,7 @@
     "vscode:prepublish": "npm run -s generate:l10n && npm run -s check:l10n && npm run check:renderer && npm run check:katex && npm run compile",
     "clean:dist": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build:webview": "npm run -s generate:l10n && node scripts/build-webview-shiki.mjs",
-    "compile": "npm run clean:dist && npm run build:webview && tsc -p . && npm run build:zstd",
+    "compile": "npm run clean:dist && npm run build:webview && npm run -s generate:cache-contract && tsc -p . && npm run build:zstd",
     "watch:webview": "node scripts/watch-localization.mjs --webview",
     "watch": "node scripts/watch-localization.mjs",
     "package": "npm run -s generate:l10n && npm run -s check:l10n && vsce package --allow-missing-repository",
@@ -6763,7 +7041,8 @@
     "check:katex": "node scripts/sync-katex-vendor.mjs --check",
     "check:renderer": "node scripts/check-renderer-dependencies.mjs",
     "sync:katex": "node scripts/sync-katex-vendor.mjs --write",
-    "typecheck": "npm run -s generate:l10n && npm run -s check:l10n && tsc -p . --noEmit",
+    "typecheck": "npm run -s generate:l10n && npm run -s check:l10n && npm run -s generate:cache-contract && tsc -p . --noEmit",
+    "generate:cache-contract": "node scripts/generate-storage-contract.mjs --write",
     "build:zstd": "node scripts/build-zstd.mjs",
     "generate:l10n": "node scripts/generate-localization.mjs --write"
   },
@@ -6786,7 +7065,7 @@
     "@shikijs/themes": "^4.4.3",
     "@types/node": "^20.19.43",
     "@types/vscode": "~1.90.0",
-    "@vscode/vsce": "^4.1.0",
+    "@vscode/vsce": "^4.1.1",
     "esbuild": "^0.28.2",
     "js-yaml": "4.3.2",
     "katex": "0.18.9",

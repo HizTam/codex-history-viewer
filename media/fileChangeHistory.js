@@ -168,7 +168,7 @@
       const modelReason = typeof msg.reason === "string" ? msg.reason : "";
       sourceFilter = normalizeSourceFilterForModel(sourceFilter, model);
       const revealCard = typeof msg.revealCardId === "string" ? modelCardById.get(msg.revealCardId) : null;
-      if (revealCard && (revealCard.source === "codex" || revealCard.source === "claude")) {
+      if (revealCard && (revealCard.source === "codex" || revealCard.source === "claude" || revealCard.source === "antigravity")) {
         sourceFilter = { ...sourceFilter, [revealCard.source]: true };
         persistSourceFilter();
       }
@@ -204,8 +204,8 @@
           updateDateGuideCurrent();
           persistRestoreState();
         });
-      } else if (reloadScrollAnchor) restoreScrollAnchor(reloadScrollAnchor, scrollTop, persistRestoreState, "reloadAnchor");
-      else if (msg.scrollAnchor) restoreScrollAnchor(msg.scrollAnchor, scrollTop, persistRestoreState, "reloadAnchor");
+      } else if (msg.scrollAnchor) restoreScrollAnchor(msg.scrollAnchor, scrollTop, persistRestoreState, "reloadAnchor");
+      else if (reloadScrollAnchor) restoreScrollAnchor(reloadScrollAnchor, scrollTop, persistRestoreState, "reloadAnchor");
       else if (loadMoreScrollAnchor) restoreScrollAnchor(loadMoreScrollAnchor, scrollTop, persistRestoreState, "loadMoreAnchor");
       else restoreScroll(scrollTop, persistRestoreState);
       return;
@@ -217,9 +217,19 @@
       return;
     }
     if (msg.type === "stale") {
+      const scrollTop = getScrollRoot().scrollTop;
       staleReason = msg.reason || staleReason;
       dismissedStale = false;
+      if (msg.sourceInvalidated === true) {
+        // The invalidation owns the terminal UI transition; stale tasks never end this loading state.
+        viewState = { kind: "content" };
+        loadingMore = false;
+        pendingLoadMoreScrollAnchor = null;
+        if (model) model = { ...model, hasMore: false, sourceInventoryIncomplete: true,
+          ...(model.enabledSources?.antigravity || model.cards?.some(card => card.source === "antigravity") ? { antigravityNotice: "unavailable" } : {}) };
+      }
       render();
+      restoreScroll(scrollTop);
       return;
     }
     if (msg.type === "loadMoreStarted") {
@@ -520,7 +530,12 @@
     const enabled = model.enabledSources || {};
     if (enabled.codex) stats.appendChild(sourceCountToggle("codex", counts.codex || 0));
     if (enabled.claude) stats.appendChild(sourceCountToggle("claude", counts.claude || 0));
+    if (enabled.antigravity) stats.appendChild(sourceCountToggle("antigravity", counts.antigravity || 0));
     info.appendChild(stats);
+    if (model.antigravityNotice) {
+      const notice = el("div", { className: "toolbarStats", role: "status", textContent: model.antigravityNotice === "unavailable" ? i18n.antigravityUnavailable : i18n.antigravityPartial });
+      info.appendChild(notice);
+    }
     return info;
   }
 
@@ -810,8 +825,8 @@
     summaryPath.textContent = card.displayPath || "";
     summary.appendChild(summaryPath);
     const summaryCounts = el("span", { className: "diffDetailsCounts" });
-    summaryCounts.appendChild(countBadge(card.added, "added"));
-    summaryCounts.appendChild(countBadge(card.removed, "removed"));
+    summaryCounts.appendChild(countBadge(card.added, "added", card.entry?.statsAvailability?.added !== false));
+    summaryCounts.appendChild(countBadge(card.removed, "removed", card.entry?.statsAvailability?.removed !== false));
     summary.appendChild(summaryCounts);
     details.appendChild(summary);
     details.appendChild(renderDiff(card.entry || {}, hugeDiff ? "" : inferFileChangeLanguage(card)));
@@ -824,7 +839,7 @@
     const hunks = Array.isArray(entry.hunks) ? entry.hunks : [];
     if (hunks.length === 0) {
       const empty = el("div", { className: "emptyDiff" });
-      empty.textContent = text("patchNoDiff", localization.defaults["patchNoDiff"]);
+      empty.textContent = entry.detailsUnavailable ? entry.detailsUnavailable === "limit" ? i18n.patchDiffLimit : i18n.patchDiffUnavailable : text("patchNoDiff", localization.defaults["patchNoDiff"]);
       wrap.appendChild(empty);
       return wrap;
     }
@@ -1950,13 +1965,16 @@
   }
 
   function requestToolbarReload() {
-    pendingReloadScrollAnchor = captureVisibleCardAnchor();
+    const previous = webviewState.restore;
+    const keepPrevious = model?.sourceInventoryIncomplete === true && model.cards?.length === 0
+      && previous?.target?.fsPath === model.target.fsPath && previous?.target?.workspaceRoot === model.target.workspaceRoot;
+    pendingReloadScrollAnchor = keepPrevious ? previous.scrollAnchor : captureVisibleCardAnchor();
     debugWebview("reloadAnchor", "captured", {
       hasCard: !!(pendingReloadScrollAnchor && pendingReloadScrollAnchor.cardId),
       cardIndex: pendingReloadScrollAnchor ? pendingReloadScrollAnchor.cardIndex : undefined,
       scrollTop: pendingReloadScrollAnchor ? pendingReloadScrollAnchor.scrollTop : undefined,
     });
-    vscode.postMessage({ type: "reload" });
+    vscode.postMessage({ type: "reload", scrollAnchor: pendingReloadScrollAnchor });
   }
 
   function captureVisibleCardAnchor() {
@@ -2085,15 +2103,16 @@
   function isSourceVisible(source) {
     if (source === "codex") return sourceFilter.codex !== false;
     if (source === "claude") return sourceFilter.claude !== false;
+    if (source === "antigravity") return sourceFilter.antigravity !== false;
     return true;
   }
 
   function toggleSourceFilter(source) {
-    if (source !== "codex" && source !== "claude") return;
+    if (source !== "codex" && source !== "claude" && source !== "antigravity") return;
     const enabled = (model && model.enabledSources) || {};
     const next = normalizeSourceFilter(sourceFilter);
     next[source] = !next[source];
-    const enabledSources = ["codex", "claude"].filter((item) => enabled[item]);
+    const enabledSources = ["codex", "claude", "antigravity"].filter((item) => enabled[item]);
     if (enabledSources.length > 0 && !enabledSources.some((item) => next[item])) return;
     const anchor = captureVisibleCardAnchor();
     const anchorCard = findModelCardById(anchor && anchor.cardId);
@@ -2171,15 +2190,16 @@
     const next = {
       codex: raw.codex !== false,
       claude: raw.claude !== false,
+      antigravity: raw.antigravity !== false,
     };
-    if (!next.codex && !next.claude) return { codex: true, claude: true };
+    if (!next.codex && !next.claude && !next.antigravity) return { codex: true, claude: true, antigravity: true };
     return next;
   }
 
   function normalizeSourceFilterForModel(filter, currentModel) {
     const next = normalizeSourceFilter(filter);
     const enabled = (currentModel && currentModel.enabledSources) || {};
-    const enabledSources = ["codex", "claude"].filter((source) => enabled[source]);
+    const enabledSources = ["codex", "claude", "antigravity"].filter((source) => enabled[source]);
     if (enabledSources.length > 0 && !enabledSources.some((source) => next[source])) {
       for (const source of enabledSources) next[source] = true;
     }
@@ -2194,9 +2214,11 @@
     if (!sourceCounts || typeof sourceCounts !== "object") return totalCount;
     const codexCount = normalizePositiveInteger(sourceCounts.codex);
     const claudeCount = normalizePositiveInteger(sourceCounts.claude);
+    const antigravityCount = normalizePositiveInteger(sourceCounts.antigravity);
     let visibleCount = 0;
     if (isSourceVisible("codex")) visibleCount += codexCount;
     if (isSourceVisible("claude")) visibleCount += claudeCount;
+    if (isSourceVisible("antigravity")) visibleCount += antigravityCount;
     return Math.min(totalCount, visibleCount);
   }
 
@@ -2222,14 +2244,17 @@
     if (typeof vscode.setState !== "function") return;
     if (!model || !model.target || typeof model.target !== "object") return;
     const cards = Array.isArray(model.cards) ? model.cards : [];
+    const previous = webviewState.restore;
+    const keepPrevious = model.sourceInventoryIncomplete === true && previous?.target?.fsPath === model.target.fsPath && previous?.target?.workspaceRoot === model.target.workspaceRoot;
+    const previousCount = keepPrevious && Number.isSafeInteger(previous.cardCount) && previous.cardCount >= 0 && previous.cardCount <= 0xffffffff ? previous.cardCount : 0;
     webviewState = {
       ...webviewState,
       restore: {
         version: 1,
         target: model.target,
         navigationOrigin: model.navigationOrigin,
-        cardCount: cards.length,
-        scrollAnchor: captureVisibleCardAnchor(),
+        cardCount: Math.max(cards.length, previousCount),
+        scrollAnchor: keepPrevious && cards.length === 0 ? previous.scrollAnchor : captureVisibleCardAnchor(),
       },
     };
     vscode.setState(webviewState);
@@ -2802,9 +2827,13 @@
       : formatTemplate(text("resultCountMany", localization.defaults["resultCountMany"]), count);
   }
 
-  function countBadge(value, kind) {
+  function countBadge(value, kind, available = true) {
     const patchKind = kind === "added" ? "add" : "remove";
     const badge = el("span", { className: `countBadge ${kind} patchCountBadge patchCountBadge-${patchKind}` });
+    if (!available) {
+      badge.textContent = "—"; badge.title = patchKind === "add" ? i18n.patchAddedUnavailable : i18n.patchRemovedUnavailable;
+      badge.setAttribute("aria-label", badge.title); return badge;
+    }
     const safeValue = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
     badge.textContent = `${patchKind === "add" ? "+" : "-"}${safeValue}`;
     return badge;
@@ -2837,7 +2866,7 @@
 
   function sourceCountToggle(source, count) {
     const chip = el("button", { type: "button", className: `toolbarSourceCount toolbarSourceCount-${source}` });
-    const label = source === "codex" ? "Codex" : "Claude Code";
+    const label = source === "codex" ? "Codex" : source === "antigravity" ? "Antigravity" : "Claude Code";
     const active = isSourceVisible(source);
     chip.title = `${label} ${Number(count || 0)}`;
     chip.setAttribute("aria-label", chip.title);

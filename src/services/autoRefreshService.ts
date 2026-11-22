@@ -4,17 +4,20 @@ import { parseClaudeAgentPath } from "../agents/claudeAgentMetadata";
 import { isSessionFile, isCompressedSessionFile } from "../utils/sessionFileReader";
 import * as vscode from "vscode";
 import type { CodexHistoryViewerConfig } from "../settings";
-import { normalizeCacheKey, pathExists } from "../utils/fsUtils";
+import { normalizeCacheKey, normalizeFsPathKey, pathExists } from "../utils/fsUtils";
 import {
   createSessionFileFingerprint,
   hasSessionFileFingerprintChanged,
   type SessionFileFingerprint,
 } from "../chat/liveActivity";
 import type { DebugLogger } from "./logger";
+import { sanitizeDebugError } from "./debugLogUtils";
+import { antigravityReader } from "../antigravity/antigravityReader";
+import { antigravityWatchStamp, antigravityWatchTarget } from "../antigravity/antigravityWatch";
 
 interface WatchRoot {
-  source: "codex" | "claude";
-  rootKind: "codexSessions" | "codexArchivedSessions" | "claudeSessions";
+  source: "codex" | "claude" | "antigravity";
+  rootKind: "codexSessions" | "codexArchivedSessions" | "claudeSessions" | "antigravitySessions";
   root: string;
   pattern: string;
 }
@@ -40,6 +43,11 @@ export class AutoRefreshService implements vscode.Disposable {
   private lastRefreshAt = 0;
   private resumeGraceUntil = 0;
   private rootSignature = "";
+  private requestedRootsKey = "";
+  private configurationRevision = 0;
+  private nativeRoots: readonly string[] = [];
+  private polling = false;
+  private readonly nativeStampByKey = new Map<string, string>();
   private timer: NodeJS.Timeout | null = null;
   private timerDueAt = 0;
   private pollingTimer: NodeJS.Timeout | null = null;
@@ -58,6 +66,14 @@ export class AutoRefreshService implements vscode.Disposable {
 
   public async configure(config: CodexHistoryViewerConfig, visible: boolean, focused: boolean): Promise<void> {
     if (this.disposed) return;
+    const revision = ++this.configurationRevision;
+    const requestedRootsKey = JSON.stringify([config.autoRefresh.enabled, config.enableCodexSource, config.sessionsRoot, config.enableCodexArchivedSessions,
+      config.codexArchivedSessionsRoot, config.enableCodexCompressedSessions, config.enableClaudeSource, config.claudeSessionsRoot, config.enableAntigravitySource, config.antigravitySessionsRoots]);
+    if (requestedRootsKey !== this.requestedRootsKey) {
+      this.requestedRootsKey = requestedRootsKey; this.enabled = false; this.nativeRoots = []; this.rootSignature = "";
+      this.pendingFsPaths.clear(); this.pendingObservedAtByKey.clear(); this.polledFingerprintByKey.clear(); this.nativeStampByKey.clear();
+      this.clearTimer(); this.clearPollingTimer(); this.disposeWatchers();
+    }
 
     this.visible = visible;
     this.focused = focused;
@@ -79,8 +95,9 @@ export class AutoRefreshService implements vscode.Disposable {
       return;
     }
 
-    const roots = await resolveWatchRoots(config);
-    if (this.disposed) return;
+    const roots = await resolveWatchRoots(config, () => this.logger?.debug("autoRefresh native watchers unavailable"));
+    if (this.disposed || revision !== this.configurationRevision) return;
+    this.nativeRoots = [...new Set(roots.filter(root => root.source === "antigravity").map(root => root.root))];
 
     this.enabled = true;
     const nextSignature = buildRootSignature(roots);
@@ -106,7 +123,7 @@ export class AutoRefreshService implements vscode.Disposable {
 
     if (!wasRunnable) this.markResumeGrace();
     if (this.pendingFsPaths.size > 0) this.schedule();
-    this.pollOpenTargets();
+    void this.pollOpenTargets();
   }
 
   public setFocused(focused: boolean): void {
@@ -122,7 +139,7 @@ export class AutoRefreshService implements vscode.Disposable {
 
     if (!wasRunnable) this.markResumeGrace();
     if (this.pendingFsPaths.size > 0) this.schedule();
-    this.pollOpenTargets();
+    void this.pollOpenTargets();
   }
 
   public dispose(): void {
@@ -133,6 +150,7 @@ export class AutoRefreshService implements vscode.Disposable {
     this.pendingFsPaths.clear();
     this.pendingObservedAtByKey.clear();
     this.polledFingerprintByKey.clear();
+    this.nativeStampByKey.clear(); this.nativeRoots = []; this.configurationRevision++;
   }
 
   private rebuildWatchers(roots: readonly WatchRoot[]): void {
@@ -163,6 +181,16 @@ export class AutoRefreshService implements vscode.Disposable {
   private onFileEvent(kind: "create" | "change" | "delete", uri: vscode.Uri, root?: WatchRoot): void {
     if (this.disposed || !this.enabled) return;
     if (uri.scheme !== "file") return;
+    if (root?.source === "antigravity") {
+      if (!this.nativeRoots.includes(root.root)) return;
+      const target = antigravityWatchTarget(root.root, uri.fsPath); if (!target) return;
+      this.markPendingFsPath(target);
+      if (path.basename(target) === "conversation_summaries.db") for (const open of this.pollTargets?.() ?? []) {
+        if (path.dirname(open) === path.join(root.root, "conversations") && antigravityWatchTarget(root.root, open) === open) this.markPendingFsPath(open);
+      }
+      if (this.canRun()) this.schedule();
+      return;
+    }
     // A sidecar event invalidates its transcript, including deletion of metadata alone.
     const fsPath = root?.source === "claude" && uri.fsPath.endsWith(".meta.json")
       ? uri.fsPath.replace(/\.meta\.json$/u, ".jsonl") : uri.fsPath;
@@ -226,6 +254,7 @@ export class AutoRefreshService implements vscode.Disposable {
     }
 
     const changedFsPaths = Array.from(this.pendingFsPaths);
+    const revision = this.configurationRevision;
     this.pendingFsPaths.clear();
     for (const fsPath of changedFsPaths) {
       this.pendingObservedAtByKey.delete(normalizeCacheKey(fsPath));
@@ -233,13 +262,15 @@ export class AutoRefreshService implements vscode.Disposable {
     this.refreshInFlight = true;
     try {
       await this.refresh(changedFsPaths);
-      this.lastRefreshAt = Date.now();
-      this.logger?.debug("autoRefresh refreshed history");
+      if (revision === this.configurationRevision && !this.disposed) {
+        this.lastRefreshAt = Date.now();
+        this.logger?.debug("autoRefresh refreshed history");
+      }
     } catch (error) {
-      for (const fsPath of changedFsPaths) {
+      for (const fsPath of revision === this.configurationRevision ? changedFsPaths : []) {
         this.markPendingFsPath(fsPath);
       }
-      this.logger?.debug(`autoRefresh failed: ${formatError(error)}`);
+      this.logger?.debug(`autoRefresh failed: ${sanitizeDebugError(error)}`);
     } finally {
       this.refreshInFlight = false;
     }
@@ -263,7 +294,7 @@ export class AutoRefreshService implements vscode.Disposable {
     if (this.pollingTimer || this.disposed || !this.canRun() || !this.pollTargets) return;
     this.pollingTimer = setTimeout(() => {
       this.pollingTimer = null;
-      this.pollOpenTargets();
+      void this.pollOpenTargets();
     }, Math.max(0, Math.ceil(delayMs)));
   }
 
@@ -277,59 +308,74 @@ export class AutoRefreshService implements vscode.Disposable {
     return this.enabled && this.visible && this.focused;
   }
 
-  private pollOpenTargets(): void {
-    if (this.disposed || !this.canRun() || !this.pollTargets) return;
+  private async pollOpenTargets(): Promise<void> {
+    if (this.disposed || !this.canRun() || !this.pollTargets || this.polling) return;
+    this.polling = true;
+    const revision = this.configurationRevision;
+    try {
+     const targetByKey = new Map<string, string>();
+      for (const fsPath of this.pollTargets()
+        .map((fsPath) => (typeof fsPath === "string" ? fsPath.trim() : ""))
+        .filter((fsPath) => fsPath && (isSessionFile(fsPath) && (this.includeCompressed || !isCompressedSessionFile(fsPath)) || this.nativeRoots.some(root => path.dirname(fsPath) === path.join(root, "conversations") && antigravityWatchTarget(root, fsPath) === fsPath)))) {
+        const key = normalizeCacheKey(fsPath);
+        if (!targetByKey.has(key)) targetByKey.set(key, fsPath);
+      }
+      const targetKeys = new Set(targetByKey.keys());
 
-    const targetByKey = new Map<string, string>();
-    for (const fsPath of this.pollTargets()
-      .map((fsPath) => (typeof fsPath === "string" ? fsPath.trim() : ""))
-      .filter((fsPath) => fsPath && isSessionFile(fsPath) && (this.includeCompressed || !isCompressedSessionFile(fsPath)))) {
-      const key = normalizeCacheKey(fsPath);
-      if (!targetByKey.has(key)) targetByKey.set(key, fsPath);
-    }
-    const targetKeys = new Set(targetByKey.keys());
+      for (const [key, fsPath] of targetByKey) {
+        const nativeRoot = this.nativeRoots.find(root => path.dirname(fsPath) === path.join(root, "conversations") && antigravityWatchTarget(root, fsPath) === fsPath);
+        if (nativeRoot) {
+          const stamp = await antigravityWatchStamp(nativeRoot, fsPath);
+          if (this.disposed || !this.canRun() || revision !== this.configurationRevision) return;
+          const previous = this.nativeStampByKey.get(key); this.nativeStampByKey.set(key, stamp);
+          if (previous !== stamp) { this.markPendingFsPath(fsPath); this.schedule(); }
+          continue;
+        }
+        const previousFingerprint = this.polledFingerprintByKey.get(key);
 
-    for (const [key, fsPath] of targetByKey) {
-      const previousFingerprint = this.polledFingerprintByKey.get(key);
-
-      try {
-        const stat = fs.statSync(fsPath);
-        const nextFingerprint = stat.isFile()
-          ? createSessionFileFingerprint(stat.mtimeMs, stat.size)
-          : undefined;
-        if (!nextFingerprint) {
+        try {
+          const stat = fs.statSync(fsPath);
+          const nextFingerprint = stat.isFile()
+            ? createSessionFileFingerprint(stat.mtimeMs, stat.size)
+            : undefined;
+          if (!nextFingerprint) {
+            if (previousFingerprint) {
+              this.polledFingerprintByKey.delete(key);
+              this.markPendingFsPath(fsPath);
+              this.logger?.debug("autoRefresh poll missing file");
+              this.schedule();
+            }
+            continue;
+          }
+          this.polledFingerprintByKey.set(key, nextFingerprint);
+          // The first observation must also catch writes made before monitoring began.
+          if (!previousFingerprint || hasSessionFileFingerprintChanged(previousFingerprint, nextFingerprint)) {
+            this.markPendingFsPath(fsPath);
+            this.logger?.debug(`autoRefresh poll change initial=${!previousFingerprint}`);
+            this.schedule();
+          }
+        } catch {
           if (previousFingerprint) {
             this.polledFingerprintByKey.delete(key);
             this.markPendingFsPath(fsPath);
-            this.logger?.debug(`autoRefresh poll missing file=${path.basename(fsPath)}`);
+            this.logger?.debug("autoRefresh poll missing file");
             this.schedule();
           }
-          continue;
-        }
-        this.polledFingerprintByKey.set(key, nextFingerprint);
-        // The first observation must also catch writes made before monitoring began.
-        if (!previousFingerprint || hasSessionFileFingerprintChanged(previousFingerprint, nextFingerprint)) {
-          this.markPendingFsPath(fsPath);
-          this.logger?.debug(`autoRefresh poll change initial=${!previousFingerprint}`);
-          this.schedule();
-        }
-      } catch {
-        if (previousFingerprint) {
-          this.polledFingerprintByKey.delete(key);
-          this.markPendingFsPath(fsPath);
-          this.logger?.debug(`autoRefresh poll missing file=${path.basename(fsPath)}`);
-          this.schedule();
         }
       }
-    }
 
-    for (const key of Array.from(this.polledFingerprintByKey.keys())) {
-      if (targetKeys.has(key)) continue;
-      this.polledFingerprintByKey.delete(key);
-      if (!this.hasPendingPathKey(key)) this.pendingObservedAtByKey.delete(key);
-    }
+      for (const key of Array.from(this.polledFingerprintByKey.keys())) {
+        if (targetKeys.has(key)) continue;
+        this.polledFingerprintByKey.delete(key);
+        if (!this.hasPendingPathKey(key)) this.pendingObservedAtByKey.delete(key);
+      }
+      for (const key of this.nativeStampByKey.keys()) if (!targetKeys.has(key)) this.nativeStampByKey.delete(key);
 
-    if (targetByKey.size > 0) this.schedulePolling(this.getPollingIntervalMs());
+      if (targetByKey.size > 0) this.schedulePolling(this.getPollingIntervalMs());
+    } catch {
+      this.logger?.debug("autoRefresh polling unavailable");
+      if (revision === this.configurationRevision) this.schedulePolling(this.getPollingIntervalMs());
+    } finally { this.polling = false; }
   }
 
   private getPollingIntervalMs(): number {
@@ -380,7 +426,7 @@ export class AutoRefreshService implements vscode.Disposable {
   }
 }
 
-async function resolveWatchRoots(config: CodexHistoryViewerConfig): Promise<WatchRoot[]> {
+async function resolveWatchRoots(config: CodexHistoryViewerConfig, nativeUnavailable: () => void): Promise<WatchRoot[]> {
   const candidates: WatchRoot[] = [];
   if (config.enableCodexSource) {
     candidates.push({ source: "codex", rootKind: "codexSessions", root: config.sessionsRoot,
@@ -398,13 +444,23 @@ async function resolveWatchRoots(config: CodexHistoryViewerConfig): Promise<Watc
     candidates.push({ source: "claude", rootKind: "claudeSessions", root: config.claudeSessionsRoot, pattern: "*/*.jsonl" });
     candidates.push({ source: "claude", rootKind: "claudeSessions", root: config.claudeSessionsRoot, pattern: "*/*/subagents/**/agent-*.{jsonl,meta.json}" });
   }
+  let nativeRoots: readonly string[] = [];
+  if (config.enableAntigravitySource) {
+    try { nativeRoots = await antigravityReader.readyFor(config.antigravitySessionsRoots ?? [], true); }
+    catch { nativeUnavailable(); }
+  }
+  for (const root of nativeRoots) {
+    for (const pattern of ["conversation_summaries.db{,-wal}", "conversations/*.db{,-wal}", "brain/*/.system_generated/logs/transcript{,_full}.jsonl"]) {
+      candidates.push({ source: "antigravity", rootKind: "antigravitySessions", root, pattern });
+    }
+  }
 
   const out: WatchRoot[] = [];
   const seen = new Set<string>();
   for (const candidate of candidates) {
     const root = String(candidate.root ?? "").trim();
     if (!root || !(await pathExists(root))) continue;
-    const key = `${candidate.rootKind}:${normalizeCacheKey(root)}:${candidate.pattern}`;
+    const key = `${candidate.rootKind}:${normalizeFsPathKey(root)}:${candidate.pattern}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push({ ...candidate, root });
@@ -414,11 +470,7 @@ async function resolveWatchRoots(config: CodexHistoryViewerConfig): Promise<Watc
 
 function buildRootSignature(roots: readonly WatchRoot[]): string {
   return roots
-    .map((root) => `${root.rootKind}:${normalizeCacheKey(root.root)}:${root.pattern}`)
+    .map((root) => `${root.rootKind}:${normalizeFsPathKey(root.root)}:${root.pattern}`)
     .sort()
     .join("|");
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

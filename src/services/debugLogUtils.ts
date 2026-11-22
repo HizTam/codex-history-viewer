@@ -25,6 +25,8 @@ export function formatDebugFields(eventName: string, fields: Record<string, Debu
 export function safeDebugBasename(fsPath: unknown, fallback = "unknown"): string {
   const text = typeof fsPath === "string" ? fsPath.trim() : "";
   if (!text) return fallback;
+  // Native database filenames contain conversation IDs and must never enter diagnostic output.
+  if (path.extname(text).toLowerCase() === ".db") return "native-database";
   return sanitizeDebugToken(path.basename(text.replace(/\\/g, "/")), fallback);
 }
 

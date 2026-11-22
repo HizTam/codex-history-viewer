@@ -1,15 +1,23 @@
 import { normalizeHistoryViewMode } from "./types/historyViewMode";
 import { UI_COMMAND_ALIASES } from "./generated/uiCommandAliases";
 import { isClaudeProgressId } from "./chat/claudeProgress";
+import { isAntigravityProgressId } from "./antigravity/antigravityIdentity";
+import { antigravityReader } from "./antigravity/antigravityReader";
 import { isClaudeQueuedInputId } from "./chat/claudeQueuedInput";
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
+import { isSourceInventoryComplete } from "./sessions/sourceInventory";
+import { exportSessionMetadata, importSessionMetadata } from "./ui/sessionMetadataTransfer";
+import { AntigravityHandoffActions } from "./antigravity/antigravityHandoffActions";
 import * as vscode from "vscode";
+import { SqliteCacheStore } from "./storage/sqliteCacheStore";
 import { getExtensionVersion } from "./extensionVersion";
 import { resolveHistoryStartupState, resolvePinnedStartupState, type ProjectDisplayMode } from "./types/viewStartupState";
 import { isCompressedSessionFile } from "./utils/sessionFileReader";
 import { resolveUiLanguage, t } from "./i18n";
 import { getConfig, type CodexHistoryViewerConfig } from "./settings";
 import {
+  HistoryInventoryIncompleteError,
   HistoryService,
   isHistoryOperationSupersededError,
   type HistoryRefreshResult,
@@ -30,6 +38,7 @@ import { TranscriptContentProvider } from "./transcript/transcriptProvider";
 import { TranscriptDocumentLinkProvider } from "./transcript/transcriptDocumentLinkProvider";
 import { renderResumeContext } from "./transcript/resumeRenderer";
 import { promoteSessionCopyToToday } from "./services/promoteService";
+import { isReadOnlyNativeSession } from "./sessions/sessionMutationPolicy";
 import {
   archiveSessionToArchived,
   moveSessionFileNoOverwrite,
@@ -113,7 +122,10 @@ import {
   createHandoff,
   isHandoffPathRewriteStale,
   readHandoffMetadata,
-  resolveHandoffLocation,
+  selectCurrentHandoffLocation,
+  canReuseHandoffFile,
+  type HandoffLocation,
+  type HandoffSelection,
 } from "./services/handoffService";
 import type { TreeNode } from "./tree/treeNodes";
 import {
@@ -193,6 +205,7 @@ import { buildMetadataRestoreConfirmation } from "./ui/metadataRestoreConfirmati
 import { CliResumeProbeScheduler } from "./cliResume/cliResumeAvailability";
 import { CliResumeCwdResolver } from "./cliResume/cliResumeCwd";
 import { CliResumeService, type CliResumeTargetResolution } from "./cliResume/cliResumeService";
+import { AntigravityResumeService } from "./antigravity/antigravityResume";
 import { validateCliResumeSessionId } from "./cliResume/cliResumeValidation";
 import { ResumeMethodStore } from "./services/resumeMethodStore";
 import { MermaidPreferenceStore } from "./services/mermaidPreferenceStore";
@@ -487,7 +500,13 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     logger,
     metadataMutationCoordinator,
   );
-  const historyService = new HistoryService(context.globalStorageUri, config, titleOverrideStore, logger);
+  // Keep the selected cache backend for this Extension Host's lifetime.
+  const sqliteCache = new SqliteCacheStore(context.globalStorageUri, { enabled: config.enableSqliteCache === true });
+  context.subscriptions.push(antigravityReader);
+  context.subscriptions.push(sqliteCache);
+  const historyService = new HistoryService(context.globalStorageUri, config, titleOverrideStore, logger, sqliteCache);
+  const antigravityResumeService = new AntigravityResumeService(historyService);
+  context.subscriptions.push(antigravityResumeService);
   const cliResumeProbeScheduler = new CliResumeProbeScheduler();
   let historyRefreshQueue: Promise<void> = Promise.resolve();
   const initialAuthoritativeHistoryRefreshSettled = createDeferred<void>();
@@ -500,7 +519,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   };
   const codexAgentRuns = new CodexAgentRunsService(historyService, logger);
   const sessionIconResolver = new SessionIconResolver(context.extensionUri);
-  const sessionAnalysisIndex = new SessionAnalysisIndexService(context.globalStorageUri, logger);
+  const sessionAnalysisIndex = new SessionAnalysisIndexService(context.globalStorageUri, logger, sqliteCache);
   const claudeBranchNavigation = new ClaudeBranchNavigationService(
     historyService,
     sessionAnalysisIndex,
@@ -523,7 +542,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       };
     },
   });
-  const searchIndexService = new SearchIndexService(context.globalStorageUri, logger);
+  const searchIndexService = new SearchIndexService(context.globalStorageUri, logger, sqliteCache);
   const transcriptProvider = new TranscriptContentProvider(historyService, annotationStore, projectAssociationStore);
   const chatPanels = new ChatPanelManager(
     context.extensionUri,
@@ -548,6 +567,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     nativeBookmarkDirectory
       ? new ClaudeNativeBookmarkReader(nativeBookmarkDirectory)
       : undefined,
+    antigravityResumeService,
   );
   const fileChangeHistoryService = new FileChangeHistoryService(projectAssociationStore);
   const fileChangeHistoryPanels = new FileChangeHistoryPanelManager(
@@ -562,7 +582,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     logger,
     initialAuthoritativeHistoryRefreshSettled.promise,
   );
-  const settingsPanel = new SettingsPanelManager(context);
+  const settingsPanel = new SettingsPanelManager(context, sqliteCache);
   chatPanels.setSearchHistoryPeerRefresh(() => fileChangeHistoryPanels.refreshSearchHistoryCandidates());
   if (config.webviewRestoreAfterReload) {
     chatPanels.registerSerializer(context.subscriptions);
@@ -868,7 +888,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     projectAssociationStore,
     annotationStore,
     {
-      waitForCurrentHistoryIndex: async (isRequestCurrent, requireAuthoritative) => {
+      waitForCurrentHistoryIndex: async (isRequestCurrent, requireAuthoritative, requiredSources) => {
         if (!requireAuthoritative) {
           const snapshot = await waitForCurrentHistorySearchIndex({
             refreshState: Object.freeze({ queue: historyRefreshQueue }),
@@ -891,6 +911,11 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
         const currentConfig = Object.freeze({ ...getConfig() });
         await refreshState.queue;
         if (!isRequestCurrent() || !historyService.isCurrentIndexForConfig(currentConfig)) return null;
+        if (requiredSources) {
+          const index = historyService.getIndex();
+          if (!requiredSources.every(source => isSourceInventoryComplete(index.sourceInventoryStates, source, currentConfig))) return null;
+          return Object.freeze({ config: currentConfig, sessions: Object.freeze(Array.from(index.sessions)), historySources: Object.freeze(Array.from(index.historySources ?? index.sessions)) });
+        }
         const authoritativeConfig = authoritativeHistoryIndexConfig;
         const authoritativeInventoryGeneration = authoritativeHistoryInventoryGeneration;
         const currentInventoryGeneration = historyService.getIndexInventoryGeneration();
@@ -1064,13 +1089,14 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     const out: SessionSourceFilter[] = ["all"];
     if (cfg.enableCodexSource || cfg.enableCodexArchivedSessions) out.push("codex");
     if (cfg.enableClaudeSource) out.push("claude");
+    if (cfg.enableAntigravitySource) out.push("antigravity");
     return out;
   };
 
   const buildSourceFilterSummary = (sourceFilter: SessionSourceFilter = historySourceFilter): string => {
     if (sourceFilter === "all") return "";
     const sourceLabel =
-      sourceFilter === "codex" ? t("history.filter.source.codex") : t("history.filter.source.claude");
+      sourceFilter === "codex" ? t("history.filter.source.codex") : sourceFilter === "antigravity" ? t("history.filter.source.antigravity") : t("history.filter.source.claude");
     return t("history.filter.sourceLabel", sourceLabel);
   };
 
@@ -1195,13 +1221,14 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   const resolvePinnedEntrySource = (
     fsPath: string,
     cfg: CodexHistoryViewerConfig,
-  ): "codex" | "claude" | null => {
+  ): SessionSummary["source"] | null => {
     const session = historyService.findByFsPath(fsPath);
     if (session) return session.source;
 
     if (isPathInsideRoot(fsPath, cfg.sessionsRoot)) return "codex";
     if (isPathInsideRoot(fsPath, cfg.codexArchivedSessionsRoot)) return "codex";
     if (isPathInsideRoot(fsPath, cfg.claudeSessionsRoot)) return "claude";
+    if ((cfg.antigravitySessionsRoots ?? []).some(root => isPathInsideRoot(fsPath, root)) && path.extname(fsPath).toLowerCase() === ".db") return "antigravity";
 
     const base = path.basename(fsPath).toLowerCase();
     if (base.startsWith("rollout-")) return "codex";
@@ -1210,11 +1237,12 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   };
 
   const isSourceEnabledInConfig = (
-    source: "codex" | "claude" | null,
+    source: SessionSummary["source"] | null,
     cfg: CodexHistoryViewerConfig,
   ): boolean => {
     if (source === "codex") return cfg.enableCodexSource || cfg.enableCodexArchivedSessions;
     if (source === "claude") return cfg.enableClaudeSource;
+    if (source === "antigravity") return cfg.enableAntigravitySource === true;
     return false;
   };
 
@@ -1227,7 +1255,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   const isPinVisibleInStatus = (pin: PinEntry, cfg: CodexHistoryViewerConfig): boolean => {
     if (isArchivedPinEntry(pin, cfg) && !cfg.enableCodexArchivedSessions) return false;
     if (isCompressedSessionFile(pin.fsPath) && !cfg.enableCodexCompressedSessions) return false;
-    const source = resolvePinnedEntrySource(pin.fsPath, cfg);
+    const source = pin.source ?? resolvePinnedEntrySource(pin.fsPath, cfg);
     return isSourceEnabledInConfig(source, cfg);
   };
 
@@ -1239,7 +1267,9 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     for (const p of pins) {
       if (!isPinVisibleInStatus(p, cfg)) continue;
       pinCount += 1;
-      if (!historyService.findByFsPath(p.fsPath)) missingPinCount += 1;
+      const source = p.source ?? resolvePinnedEntrySource(p.fsPath, cfg), states = historyService.getIndex().sourceInventoryStates;
+      if (!historyService.findByFsPath(p.fsPath) && source && isSourceInventoryComplete(states, source, cfg)
+        && states[source].allowedRoots.some(root => isPathInsideRoot(p.fsPath, root))) missingPinCount += 1;
     }
 
     return { pinCount, missingPinCount };
@@ -1267,9 +1297,12 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       enableCodexSource: cfg.enableCodexSource,
       enableCodexArchivedSessions: cfg.enableCodexArchivedSessions,
       enableClaudeSource: cfg.enableClaudeSource,
+      enableAntigravitySource: cfg.enableAntigravitySource,
       codexSessionCount,
       codexArchivedSessionCount,
       claudeSessionCount,
+      antigravitySessionCount: sessions.filter(session => session.source === "antigravity").length,
+      antigravityInventoryStatus: historyService.getIndex().sourceInventoryStates.antigravity.status,
       pinCount: pinCounters.pinCount,
       missingPinCount: pinCounters.missingPinCount,
       presetCount: searchPresetStore.getAll().length,
@@ -1287,6 +1320,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       codexSessionsRoot: cfg.sessionsRoot,
       codexArchivedSessionsRoot: cfg.codexArchivedSessionsRoot,
       claudeSessionsRoot: cfg.claudeSessionsRoot,
+      antigravitySessionsRoots: cfg.antigravitySessionsRoots,
       lastRefreshAt: lastHistoryRefreshAt,
       extensionVersion: getExtensionVersion(context.extension.packageJSON),
     };
@@ -1397,7 +1431,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   };
 
   const resolveProjectAssociationDndTarget = (target: unknown): ProjectNode | RelatedGroupNode | null => {
-    if (!(target instanceof ProjectNode || target instanceof RelatedGroupNode)) return null;
+    if (historyProvider.isStartupElement(target) || !(target instanceof ProjectNode || target instanceof RelatedGroupNode)) return null;
     return target.cwd ? target : null;
   };
 
@@ -1618,6 +1652,10 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.codexCompressedSessionsEnabled", getConfig().enableCodexCompressedSessions === true);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectDisplay", historyProjectDisplay);
     void vscode.commands.executeCommand("setContext", "codexHistoryViewer.historyProjectScope", historyProjectScope);
+    const sourceConfig = getConfig();
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.availableSourceCodex", sourceConfig.enableCodexSource || sourceConfig.enableCodexArchivedSessions);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.availableSourceClaude", sourceConfig.enableClaudeSource);
+    void vscode.commands.executeCommand("setContext", "codexHistoryViewer.availableSourceAntigravity", sourceConfig.enableAntigravitySource === true);
     void vscode.commands.executeCommand(
       "setContext",
       "codexHistoryViewer.sourceCodexEnabled",
@@ -2247,6 +2285,13 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
 
   const toggleHistorySource = async (source: "codex" | "claude"): Promise<void> => {
     await applyHistoryFilters((current) => {
+      const choices = getHistorySourceOptionsForPrompt();
+      if (choices[0] !== "all" || !choices.includes(source)) return {};
+      if (choices.length === 3) {
+        const other = choices.find(choice => choice !== "all" && choice !== source);
+        return { source: current.source === "all" ? other : "all" };
+      }
+      // The saved filter supports all sources or one source. Preserve the legacy toggles with three enabled.
       const codexEnabledNow = isCodexSourceEnabled(current.source);
       const claudeEnabledNow = isClaudeSourceEnabled(current.source);
       const codexEnabledNext = source === "codex" ? !codexEnabledNow : codexEnabledNow;
@@ -2256,14 +2301,15 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   };
 
   const cycleHistorySourceFilter = async (): Promise<void> => {
-    await applyHistoryFilters((current) => ({
-      source: current.source === "all" ? "codex" : current.source === "codex" ? "claude" : "all",
-    }), { persist: true });
+    await applyHistoryFilters(current => {
+      const choices = getHistorySourceOptionsForPrompt();
+      return { source: choices[(choices.indexOf(current.source) + 1) % choices.length] ?? "all" };
+    }, { persist: true });
   };
 
   const cyclePinnedSourceFilter = async (): Promise<void> => {
-    const nextSource: SessionSourceFilter =
-      pinnedSourceFilter === "all" ? "codex" : pinnedSourceFilter === "codex" ? "claude" : "all";
+    const choices = getHistorySourceOptionsForPrompt();
+    const nextSource = choices[(choices.indexOf(pinnedSourceFilter) + 1) % choices.length] ?? "all";
     await applyPinnedSourceFilter(nextSource, { persist: true });
   };
 
@@ -2328,7 +2374,8 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
         e.affectsConfiguration("codexHistoryViewer.codex.archivedSessions.enabled") ||
         e.affectsConfiguration("codexHistoryViewer.codex.compressedSessions.enabled") ||
         e.affectsConfiguration("codexHistoryViewer.claude.sessionsRoot") ||
-        e.affectsConfiguration("codexHistoryViewer.claudeSessionsRoot");
+        e.affectsConfiguration("codexHistoryViewer.claudeSessionsRoot") ||
+        e.affectsConfiguration("codexHistoryViewer.antigravity.sessionsRoot");
       const historyDateBasisChanged = e.affectsConfiguration("codexHistoryViewer.history.dateBasis");
       const historyTitleSourceChanged = e.affectsConfiguration("codexHistoryViewer.history.titleSource");
       const sessionRowDisplayChanged =
@@ -2454,7 +2501,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
         historyInsightsPanels.refreshI18n();
       }
       if (searchIndexToolContentChanged) fileChangeHistoryPanels.notifySettingsChanged("indexToolContent");
-      if (sourcesEnabledChanged) fileChangeHistoryPanels.notifySettingsChanged("sources");
+      if (sourcesEnabledChanged || sessionsRootChanged) fileChangeHistoryPanels.notifySettingsChanged("sources");
       void ensureAlwaysShowHeaderActions();
       if (searchIndexToolContentChanged) promptSearchIndexRebuild();
 
@@ -2496,15 +2543,16 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
             );
           })
         : undefined;
-      const configurationHistoryRefresh = refreshHistoryIndex(false, normalizedHistorySourceConstraint);
+      const configurationHistoryRefresh = refreshHistoryIndexWithResult(false, normalizedHistorySourceConstraint);
       const configurationRefresh = vscode.window.withProgress(
         { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
         async () => {
-          await configurationHistoryRefresh;
+          const result = await configurationHistoryRefresh;
           if (configurationRefreshGeneration !== historyConfigurationRefreshGeneration) return;
           refreshViews({ clearSearch: true, reloadProjectAssociations: true });
           controlProvider.refresh();
           chatPanels.refreshTitles();
+          if (!result.coreInventoryComplete) throw new HistoryInventoryIncompleteError();
           failedHistoryConfigurationRefreshGeneration = null;
           pendingHistoryConfigurationRefreshGeneration = null;
         },
@@ -2608,7 +2656,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     }),
   );
 
-  const resolveActiveSelection = (): readonly unknown[] => {
+  const resolveRawActiveSelection = (): readonly unknown[] => {
     // Prefer selection from the last interacted view to avoid bulk actions on the wrong view.
     if (lastSelectionSource === "pinned" && pinnedView.selection.length > 0) return pinnedView.selection;
     if (lastSelectionSource === "history" && historyView.selection.length > 0) return historyView.selection;
@@ -2619,6 +2667,11 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     if (historyView.selection.length > 0) return historyView.selection;
     if (searchView.selection.length > 0) return searchView.selection;
     return [];
+  };
+
+  const resolveActiveSelection = (): readonly unknown[] => {
+    const selected = resolveRawActiveSelection();
+    return selected.some(node => historyProvider.isStartupElement(node)) ? [] : selected;
   };
 
   const resolveSelectionForElement = (element: unknown): readonly unknown[] | null => {
@@ -2634,7 +2687,8 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     // If there is multi-selection, apply the same operation to the whole selection.
     if (element === undefined) return resolveActiveSelection();
     const selection = resolveSelectionForElement(element);
-    return selection && selection.length > 1 ? selection : [element];
+    const targets = selection && selection.length > 1 ? selection : [element];
+    return targets.some(node => historyProvider.isStartupElement(node)) ? [] : targets;
   };
 
   const collectOpenTargets = (
@@ -2893,7 +2947,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     try {
       await claudeExtension.activate();
       const commands = new Set(await vscode.commands.getCommands(true));
-      if (!commands.has(CLAUDE_CODE_OPEN_COMMAND)) return false;
+      if (!commands.has(CLAUDE_CODE_OPEN_COMMAND) || !await canReuseHandoffFile(context.globalStorageUri, handoff)) return false;
       await vscode.commands.executeCommand(CLAUDE_CODE_OPEN_COMMAND, undefined, handoff.promptText);
       return true;
     } catch {
@@ -2901,9 +2955,10 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     }
   };
 
-  const openHandoffDocument = async (handoffUri: vscode.Uri): Promise<boolean> => {
+  const openHandoffDocument = async (location: HandoffLocation): Promise<boolean> => {
     try {
-      await vscode.window.showTextDocument(handoffUri, { preview: false });
+      if (!await canReuseHandoffFile(context.globalStorageUri, location)) throw new Error("Handoff is unavailable.");
+      await vscode.window.showTextDocument(location.handoffUri, { preview: false });
       return true;
     } catch {
       void vscode.window.showErrorMessage(t("handoff.openFileFailed"));
@@ -2913,6 +2968,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
 
   const copyHandoffPrompt = async (handoff: HandoffResult): Promise<boolean> => {
     try {
+      if (!await canReuseHandoffFile(context.globalStorageUri, handoff)) return false;
       await vscode.env.clipboard.writeText(handoff.promptText);
       return true;
     } catch {
@@ -2922,6 +2978,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
 
   const copyHandoffPath = async (handoff: HandoffResult): Promise<boolean> => {
     try {
+      if (!await canReuseHandoffFile(context.globalStorageUri, handoff)) return false;
       await vscode.env.clipboard.writeText(handoff.handoffPath);
       return true;
     } catch {
@@ -2940,7 +2997,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       copyPathAction,
     );
     if (choice === openAction) {
-      await openHandoffDocument(handoff.handoffUri);
+      await openHandoffDocument(handoff);
       return;
     }
     if (choice === copyPromptAction) {
@@ -2963,13 +3020,13 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   const showHandoffPromptCopied = async (message: string, handoff: HandoffResult): Promise<void> => {
     const openAction = t("handoff.action.openFile");
     const choice = await vscode.window.showInformationMessage(message, openAction);
-    if (choice === openAction) await openHandoffDocument(handoff.handoffUri);
+    if (choice === openAction) await openHandoffDocument(handoff);
   };
 
   const resolveSourceSessionsRootForHandoff = (
     session: SessionSummary,
     cfg: CodexHistoryViewerConfig,
-  ): string => session.source === "claude" ? cfg.claudeSessionsRoot : cfg.sessionsRoot;
+  ): string => session.source === "antigravity" ? session.storage.rootPath : session.source === "claude" ? cfg.claudeSessionsRoot : cfg.sessionsRoot;
 
   const isProjectKeyInside = (candidateKey: string, parentKey: string): boolean => {
     if (!candidateKey || !parentKey) return false;
@@ -3040,7 +3097,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   const buildExistingHandoffResult = (
     session: SessionSummary,
     target: HandoffTarget,
-    location: ReturnType<typeof resolveHandoffLocation>,
+    location: HandoffLocation,
   ): HandoffResult => ({
     directoryUri: location.directoryUri,
     handoffUri: location.handoffUri,
@@ -3072,27 +3129,37 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     return "cancel";
   };
 
+  const selectHandoffSafely = async (options: Parameters<typeof selectCurrentHandoffLocation>[0]): Promise<HandoffSelection | undefined> => {
+    try { return await selectCurrentHandoffLocation(options); }
+    catch {
+      void vscode.window.showErrorMessage(t("handoff.createFailed"));
+      return undefined;
+    }
+  };
+
   const prepareHandoff = async (
     session: SessionSummary,
     target: HandoffTarget,
-    options?: { existing?: "confirm" | "reuse" },
+    options?: { existing?: "confirm" | "reuse"; selection?: HandoffSelection },
   ): Promise<HandoffResult | null> => {
     const latestConfig = getConfig();
     const sourceSessionsRoot = resolveSourceSessionsRootForHandoff(session, latestConfig);
-    const location = resolveHandoffLocation({
+    const selection = options?.selection ?? await selectHandoffSafely({
       globalStorageUri: context.globalStorageUri,
       session,
       sourceSessionsRoot,
       target,
     });
+    if (!selection) return null;
+    const { location } = selection;
     const pathRewrite = buildHandoffPathRewriteContext(session);
 
-    if (await pathExists(location.handoffPath)) {
+    if (await canReuseHandoffFile(context.globalStorageUri, location)) {
       const stale = await isExistingHandoffStale(location.metadataUri, pathRewrite);
-      if (options?.existing === "reuse" && !stale) return buildExistingHandoffResult(session, target, location);
+      if (options?.existing === "reuse" && !stale && await canReuseHandoffFile(context.globalStorageUri, location)) return buildExistingHandoffResult(session, target, location);
       const choice = options?.existing === "reuse" ? "recreate" : await confirmExistingHandoffReuse(stale);
       if (choice === "cancel") return null;
-      if (choice === "reuse") return buildExistingHandoffResult(session, target, location);
+      if (choice === "reuse" && await canReuseHandoffFile(context.globalStorageUri, location)) return buildExistingHandoffResult(session, target, location);
     }
 
     try {
@@ -3102,6 +3169,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
         target,
         sourceSessionsRoot,
         pathRewrite,
+        selection,
         sessionInventory:
           historyService.getIndex().historySources ?? historyService.getIndex().sessions,
       });
@@ -3115,51 +3183,60 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     await refreshStorageStats();
     statusProvider.refresh();
   };
+  const nativeHandoffActions = new AntigravityHandoffActions({
+    globalStorageUri: context.globalStorageUri, history: historyService,
+    sourceRoot: session => resolveSourceSessionsRootForHandoff(session, getConfig()), pathRewrite: buildHandoffPathRewriteContext, refreshStorage: refreshHandoffStorageState,
+  });
+  context.subscriptions.push(nativeHandoffActions);
 
   const openSessionHandoff = async (elementOrArgs?: unknown): Promise<boolean> => {
     const session = resolveSingleSessionTarget(elementOrArgs);
     if (!session) return false;
+    if (session.source === "antigravity") return nativeHandoffActions.run(session, null, "open");
     if (!getConfig().handoffEnabled) {
       void vscode.window.showErrorMessage(t("handoff.disabled"));
       return false;
     }
 
     const latestConfig = getConfig();
-    const location = resolveHandoffLocation({
+    const selection = await selectHandoffSafely({
       globalStorageUri: context.globalStorageUri,
       session,
       sourceSessionsRoot: resolveSourceSessionsRootForHandoff(session, latestConfig),
     });
+    if (!selection) return false;
+    const { location } = selection;
     const target = resolveDefaultHandoffTargetForSource(session.source);
     const pathRewrite = buildHandoffPathRewriteContext(session);
-    if (!(await pathExists(location.handoffPath))) {
+    if (!await canReuseHandoffFile(context.globalStorageUri, location)) {
       const createAction = t("handoff.action.createFile");
       const choice = await vscode.window.showInformationMessage(t("handoff.sessionMissing"), createAction);
       if (choice !== createAction) return false;
 
-      const handoff = await prepareHandoff(session, target, { existing: "reuse" });
+      const handoff = await prepareHandoff(session, target, { existing: "reuse", selection });
       if (!handoff) return false;
       await refreshHandoffStorageState();
-      return openHandoffDocument(handoff.handoffUri);
+      return openHandoffDocument(handoff);
     }
 
     if (await isExistingHandoffStale(location.metadataUri, pathRewrite)) {
       const choice = await confirmStaleHandoffOpen();
       if (choice === "cancel") return false;
       if (choice === "recreate") {
-        const handoff = await prepareHandoff(session, target, { existing: "reuse" });
+        const handoff = await prepareHandoff(session, target, { existing: "reuse", selection });
         if (!handoff) return false;
         await refreshHandoffStorageState();
-        return openHandoffDocument(handoff.handoffUri);
+        return openHandoffDocument(handoff);
       }
     }
 
-    return openHandoffDocument(location.handoffUri);
+    return openHandoffDocument(location);
   };
 
   const copyHandoffPromptToClipboard = async (elementOrArgs?: unknown): Promise<boolean> => {
     const session = resolveSingleSessionTarget(elementOrArgs);
     if (!session) return false;
+    if (session.source === "antigravity") return nativeHandoffActions.run(session, null, "copyPrompt");
     if (!getConfig().handoffEnabled) {
       void vscode.window.showErrorMessage(t("handoff.disabled"));
       return false;
@@ -3167,14 +3244,15 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
 
     const target = resolveDefaultHandoffTargetForSource(session.source);
     const latestConfig = getConfig();
-    const location = resolveHandoffLocation({
+    const selection = await selectHandoffSafely({
       globalStorageUri: context.globalStorageUri,
       session,
       sourceSessionsRoot: resolveSourceSessionsRootForHandoff(session, latestConfig),
       target,
     });
-    const existed = await pathExists(location.handoffPath);
-    const handoff = await prepareHandoff(session, target, { existing: "reuse" });
+    if (!selection) return false;
+    const existed = await canReuseHandoffFile(context.globalStorageUri, selection.location);
+    const handoff = await prepareHandoff(session, target, { existing: "reuse", selection });
     if (!handoff) return false;
     await refreshHandoffStorageState();
 
@@ -3190,6 +3268,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   const copyHandoffPathToClipboard = async (elementOrArgs?: unknown): Promise<boolean> => {
     const session = resolveSingleSessionTarget(elementOrArgs);
     if (!session || session.storage.archiveState !== "active") return false;
+    if (session.source === "antigravity") return nativeHandoffActions.run(session, null, "copyPath");
     if (!getConfig().handoffEnabled) {
       void vscode.window.showErrorMessage(t("handoff.disabled"));
       return false;
@@ -3197,20 +3276,22 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
 
     const target = resolveDefaultHandoffTargetForSource(session.source);
     const latestConfig = getConfig();
-    const location = resolveHandoffLocation({
+    const selection = await selectHandoffSafely({
       globalStorageUri: context.globalStorageUri,
       session,
       sourceSessionsRoot: resolveSourceSessionsRootForHandoff(session, latestConfig),
       target,
     });
-    const existed = await pathExists(location.handoffPath);
+    if (!selection) return false;
+    const { location } = selection;
+    const existed = await canReuseHandoffFile(context.globalStorageUri, location);
     let reusable = existed && !await isExistingHandoffStale(location.metadataUri, buildHandoffPathRewriteContext(session));
-    let handoff = await prepareHandoff(session, target, { existing: "reuse" });
+    let handoff = await prepareHandoff(session, target, { existing: "reuse", selection });
     if (!handoff) return false;
-    if (!(await pathExists(handoff.handoffPath))) {
+    if (!await canReuseHandoffFile(context.globalStorageUri, handoff)) {
       reusable = false;
-      handoff = await prepareHandoff(session, target, { existing: "reuse" });
-      if (!handoff || !(await pathExists(handoff.handoffPath))) return false;
+      handoff = await prepareHandoff(session, target, { existing: "reuse", selection });
+      if (!handoff || !await canReuseHandoffFile(context.globalStorageUri, handoff)) return false;
     }
     if (!reusable) await refreshHandoffStorageState();
 
@@ -3230,6 +3311,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   const createHandoffFileForSession = async (elementOrArgs?: unknown): Promise<boolean> => {
     const session = resolveSingleSessionTarget(elementOrArgs);
     if (!session) return false;
+    if (session.source === "antigravity") return nativeHandoffActions.run(session, null, "create");
     if (!getConfig().handoffEnabled) {
       void vscode.window.showErrorMessage(t("handoff.disabled"));
       return false;
@@ -3246,6 +3328,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   const runHandoffToClaude = async (elementOrArgs: unknown): Promise<boolean> => {
     const session = resolveSingleSessionTarget(elementOrArgs);
     if (!session) return false;
+    if (session.source === "antigravity") return nativeHandoffActions.run(session, "claude", "dispatch");
     if (!ensureCodexToClaudeHandoffReady(session)) return false;
 
     const handoff = await prepareHandoff(session, "claude");
@@ -3316,6 +3399,8 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     right: CodexHistoryViewerConfig,
   ): boolean =>
     hasSameCodexAgentRunsInventoryConfig(left, right) &&
+    (left.enableAntigravitySource === true) === (right.enableAntigravitySource === true) &&
+    JSON.stringify(left.antigravitySessionsRoots ?? []) === JSON.stringify(right.antigravitySessionsRoots ?? []) &&
     left.previewMaxMessages === right.previewMaxMessages &&
     left.historyDateBasis === right.historyDateBasis &&
     left.historyTitleSource === right.historyTitleSource;
@@ -3402,7 +3487,9 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       chatPanels.setCodexAgentRunsLoading(!indexReadyAtStart || requiresBackfill);
       let queued: Promise<void>;
       if (requiresHistoryRefresh) {
-        queued = refreshHistoryIndex(false);
+        queued = refreshHistoryIndexWithResult(false).then(result => {
+          if (!result.coreInventoryComplete) throw new HistoryInventoryIncompleteError();
+        });
       } else {
         queued = historyRefreshQueue.then(
           () => ensureCodexAgentMetadataForCurrentConfig(activationGeneration, requiresBackfill),
@@ -3538,7 +3625,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     activationGeneration: number,
     options: { refreshStorage: boolean; refreshResult?: HistoryRefreshResult },
   ): Promise<number> => {
-    if (options.refreshResult && !options.refreshResult.inventoryComplete) return activationGeneration;
+    if (options.refreshResult && !options.refreshResult.coreInventoryComplete) return activationGeneration;
     const indexGenerationBeforeAgentFinalization = historyService.getIndexGeneration();
     if (isCurrentAgentRunsHistoryIndex(config, activationGeneration)) {
       try {
@@ -3607,7 +3694,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
 
   const performHistoryIndexRefresh = async (
     forceRebuildCache: boolean,
-  ): Promise<{ activationGeneration: number; refreshResult: HistoryRefreshResult }> => {
+  ): Promise<{ config: CodexHistoryViewerConfig; activationGeneration: number; refreshResult: HistoryRefreshResult }> => {
     const latestConfig = getConfig();
     const agentRunsActivationGeneration = codexAgentRunsActivationGeneration;
     historyService.updateConfig(latestConfig);
@@ -3633,6 +3720,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     }
     if (!hasSameHistoryIndexConfig(latestConfig, getConfig())) {
       return {
+        config: latestConfig,
         activationGeneration: agentRunsActivationGeneration,
         refreshResult: Object.freeze({
           presentationChanged: false,
@@ -3641,6 +3729,8 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
           cacheWrite: "skippedIncomplete",
           unstableFileCount: 0,
           inventoryComplete: false,
+          coreInventoryComplete: false,
+          sourceInventoryStates: historyService.getIndex().sourceInventoryStates,
           discoveryFailureCount: 0,
         }),
       };
@@ -3651,7 +3741,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
         forceRebuildCache,
         shouldStart: () => hasSameHistoryIndexConfig(latestConfig, getConfig()),
       });
-      if (refreshResult.inventoryComplete) markAuthoritativeHistoryIndex(latestConfig);
+      if (refreshResult.coreInventoryComplete) markAuthoritativeHistoryIndex(latestConfig);
     } catch (error) {
       transitionAgentRunsToMatchingIndexLoading(latestConfig, agentRunsActivationGeneration);
       throw error;
@@ -3667,6 +3757,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       ? refreshResult
       : Object.freeze({ ...refreshResult, presentationChanged: true });
     return {
+      config: latestConfig,
       activationGeneration: completedActivationGeneration,
       refreshResult: completedRefreshResult,
     };
@@ -3709,6 +3800,11 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       ) {
         return completed.refreshResult;
       }
+      // An incomplete scan cannot authorize the previous index. Wait for the next refresh trigger.
+      if (completed.activationGeneration === codexAgentRunsActivationGeneration &&
+          !completed.refreshResult.coreInventoryComplete && hasSameHistoryIndexConfig(completed.config, getConfig())) {
+        return completed.refreshResult;
+      }
       retryCount += 1;
       logger.debug(`history.refresh staleAfterCompletion retry=${retryCount}`);
     }
@@ -3742,7 +3838,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       },
       (result) => {
         if (
-          result.inventoryComplete &&
+          result.coreInventoryComplete &&
           refreshConfigurationGeneration === historyConfigurationRefreshGeneration
         ) {
           failedHistoryConfigurationRefreshGeneration = null;
@@ -3770,7 +3866,19 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       if (hasSameHistoryIndexConfig(config, getConfig())) {
         historyService.updateConfig(config);
       }
-      const snapshot = await historyService.rebuildSnapshot(config, token, dateTime);
+      const generation = historyService.getIndexGeneration();
+      let snapshot: HistoryRebuildSnapshot;
+      try {
+        snapshot = await historyService.rebuildSnapshot(config, token, dateTime);
+      } catch (error) {
+        if (historyService.getIndexGeneration() !== generation) {
+          refreshHistoryPresentationViews();
+          chatPanels.refreshResumePresentation();
+          statusProvider.refresh();
+          controlProvider.refresh();
+        }
+        throw error;
+      }
       onRebuilt?.(snapshot);
       if (snapshot.adopted) {
         markAuthoritativeHistoryIndex(snapshot.config);
@@ -3835,6 +3943,8 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       includeCodex: snapshot.config.enableCodexSource,
       includeCodexArchived: snapshot.config.enableCodexArchivedSessions,
       includeClaude: snapshot.config.enableClaudeSource,
+      antigravitySessionsRoots: snapshot.config.antigravitySessionsRoots,
+      includeAntigravity: snapshot.config.enableAntigravitySource,
       indexToolContent: snapshot.config.searchIndexToolContent,
       token,
       progress,
@@ -4196,21 +4306,22 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
           getCanonicalProjectKey: getSearchCanonicalProjectKey,
           isRequestCurrent: isCurrentSearchGeneration,
           sessionInventory: snapshot.sessions,
+          getCurrentHistoryIndex: () => historyService.getIndex(),
         },
       );
-      if (!results || !isCurrentSearchGeneration()) return false;
+      if (!results || !isCurrentSearchGeneration() || results.isCurrent?.() === false) return false;
 
       const savedHistory = await searchHistoryStore.save({
         projectKey: searchScope.searchHistoryProjectKey,
         queryInput: results.request.queryInput,
       });
-      if (!isCurrentSearchGeneration()) return false;
+      if (!isCurrentSearchGeneration() || results.isCurrent?.() === false) return false;
       if (savedHistory) {
         chatPanels.refreshSearchHistoryCandidates();
         fileChangeHistoryPanels.refreshSearchHistoryCandidates();
       }
       await persistLastSearchRequest(results.request);
-      if (!isCurrentSearchGeneration()) return false;
+      if (!isCurrentSearchGeneration() || results.isCurrent?.() === false) return false;
       searchProvider.setResults(results);
       lastPublishedSearch = {
         queryInput: results.request.queryInput,
@@ -5132,6 +5243,25 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand("codexHistoryViewer.openStartupSession", async (element: unknown) => {
+      if (historyView.selection.length > 1) return;
+      const session = historyProvider.resolveStartupSelection(element);
+      if (!session) {
+        void vscode.window.showInformationMessage(t("app.openSessionFailed"));
+        return;
+      }
+      const reusable = getConfig().previewOpenOnSelection;
+      await chatPanels.openSessionPreferExisting(session, {
+        fallbackKind: reusable ? "reusable" : "session",
+        promoteReusable: !reusable,
+        preserveFocus: reusable,
+        startupSelection: () => Boolean(historyProvider.resolveStartupSelection(element)),
+        isRequestCurrent: () => !startup.disposed,
+      });
+    }),
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.openSessionReusable", async (element?: unknown) => {
       await openReusableSessionFromElement(element);
     }),
@@ -5435,11 +5565,25 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     ),
   );
 
+  context.subscriptions.push(vscode.commands.registerCommand("codexHistoryViewer.resumeSessionInAntigravityCli", async (elementOrArgs?: unknown) =>
+    cliResumeService.prepare(elementOrArgs, "antigravity")));
+  context.subscriptions.push(vscode.commands.registerCommand("codexHistoryViewer.resumeSessionInAntigravity", async (elementOrArgs?: unknown) => {
+    const session = resolveSingleSessionTarget(elementOrArgs);
+    if (!session) { void vscode.window.showErrorMessage(t("app.resumeSessionInAntigravityFailed")); return false; }
+    return antigravityResumeService.resume(session);
+  }));
+
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.handoffToClaude", async (elementOrArgs?: unknown) =>
       runHandoffToClaude(elementOrArgs),
     ),
   );
+  context.subscriptions.push(vscode.commands.registerCommand("codexHistoryViewer.handoffToAntigravity", async (input?: unknown) => {
+    const session = resolveSingleSessionTarget(input); return session && session.source !== "antigravity" ? nativeHandoffActions.run(session, "antigravity", "dispatch") : false;
+  }));
+  context.subscriptions.push(vscode.commands.registerCommand("codexHistoryViewer.handoffToCodex", async (input?: unknown) => {
+    const session = resolveSingleSessionTarget(input); return session?.source === "antigravity" ? nativeHandoffActions.run(session, "codex", "dispatch") : false;
+  }));
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.copyHandoffPrompt", copyHandoffPromptToClipboard),
@@ -5843,12 +5987,16 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
 
       const mode = await vscode.window.showQuickPick(
         [
-          { label: t("export.format.rawJsonl"), value: "raw" as const },
+          ...(!sessions.some(session => session.source === "antigravity") ? [{ label: t("export.format.rawJsonl"), value: "raw" as const }] : []),
           { label: t("export.format.sanitizedMarkdown"), value: "masked" as const },
+          { label: t("metadataBackup.exportTitle"), value: "metadata" as const },
         ],
         { title: t("export.format.title") },
       );
       if (!mode) return;
+      if (mode.value === "metadata") {
+        await exportSessionMetadata(historyService.getIndex(), metadataStores, sessions, getExtensionVersion(context.extension.packageJSON)); return;
+      }
 
       const result =
         mode.value === "masked"
@@ -5895,10 +6043,14 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
             label: t("import.duplicate.overwrite"),
             mode: "overwrite" as const,
           },
+          { label: t("metadataBackup.importTitle"), mode: "metadata" as const },
         ],
         { title: t("import.duplicate.title") },
       );
       if (!modePick) return;
+      if (modePick.mode === "metadata") {
+        await importSessionMetadata(historyService, metadataStores, metadataMutationCoordinator, refreshAfterMetadataRestore); return;
+      }
 
       const before = historyService.getIndex();
       const latestConfig = getConfig();
@@ -6044,9 +6196,21 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.cleanupMissingPins", async () => {
-      const missingPins = pinStore
-        .getAll()
-        .filter((pin) => !historyService.findByFsPath(pin.fsPath));
+      const candidates = pinStore.getAll().filter(pin => !historyService.findByFsPath(pin.fsPath));
+      const canRemoveMissingPin = async (pin: PinEntry): Promise<boolean> => {
+        const cfg = getConfig(), index = historyService.getIndex(), source = pin.source ?? resolvePinnedEntrySource(pin.fsPath, cfg);
+        if (!source || !isSourceInventoryComplete(index.sourceInventoryStates, source, cfg) || historyService.findByFsPath(pin.fsPath)
+          || !index.sourceInventoryStates[source].allowedRoots.some(root => isPathInsideRoot(pin.fsPath, root))) return false;
+        try { await fs.lstat(pin.fsPath); return false; }
+        catch (error) {
+          // Only confirmed absence in the same authoritative snapshot permits metadata removal.
+          return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT" && historyService.getIndex() === index && hasSameHistoryIndexConfig(cfg, getConfig()));
+        }
+      };
+      const missingPins: PinEntry[] = [];
+      for (const pin of candidates) if (await canRemoveMissingPin(pin)) missingPins.push(pin);
+      const skippedCount = candidates.length - missingPins.length;
+      if (skippedCount) void vscode.window.showInformationMessage(t("pins.missingUnverifiedSkipped", skippedCount));
       const missingPaths = missingPins.map((pin) => pin.fsPath);
       if (missingPaths.length === 0) {
         void vscode.window.showInformationMessage(t("pins.noMissing"));
@@ -6059,12 +6223,13 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
         { id: "confirm", title: t("common.ok") },
       );
       if (choice?.id !== "confirm") return;
-
-      const { unpinned } = await pinStore.unpinMany(missingPaths);
+      const confirmedPins: PinEntry[] = [];
+      for (const pin of missingPins) if (await canRemoveMissingPin(pin)) confirmedPins.push(pin);
+      const { unpinned } = await pinStore.unpinMany(confirmedPins.map(pin => pin.fsPath));
       refreshViews();
       if (unpinned > 0) {
         pushUndoAction(t("undo.label.cleanupMissingPins", unpinned), async () => {
-          await pinStore.restore(missingPins);
+          await pinStore.restore(confirmedPins);
           refreshViews();
         });
         offerUndo(t("app.cleanupMissingPinsDone", unpinned));
@@ -6299,7 +6464,8 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
 
   const resolveProjectAliasTarget = (element?: unknown): ProjectTreeTarget | null => {
     // Project alias commands require an explicit tree target to avoid guessing the wrong workspace.
-    return (element instanceof ProjectNode || element instanceof RelatedGroupNode) && element.cwd ? element : null;
+    return !historyProvider.isStartupElement(element) && (element instanceof ProjectNode || element instanceof RelatedGroupNode) && element.cwd
+      ? element : null;
   };
 
   const clearProjectAliasForProject = async (project: ProjectTreeTarget): Promise<boolean> => {
@@ -6423,7 +6589,8 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   };
 
   const resolveProjectAssociationTarget = (element?: unknown): ProjectTreeTarget | null => {
-    return (element instanceof ProjectNode || element instanceof RelatedGroupNode) && element.cwd ? element : null;
+    return !historyProvider.isStartupElement(element) && (element instanceof ProjectNode || element instanceof RelatedGroupNode) && element.cwd
+      ? element : null;
   };
 
   const getProjectAssociationSessionCounts = (cwds: readonly string[]): { active: number; archived: number; total: number } => {
@@ -7646,6 +7813,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
   registerHistorySourceFilterCommand("codexHistoryViewer.setHistorySourceFilterAll", "all");
   registerHistorySourceFilterCommand("codexHistoryViewer.setHistorySourceFilterCodex", "codex");
   registerHistorySourceFilterCommand("codexHistoryViewer.setHistorySourceFilterClaude", "claude");
+  registerHistorySourceFilterCommand("codexHistoryViewer.setHistorySourceFilterAntigravity", "antigravity");
 
   const registerHistoryDisplayTargetCommand = (commandId: string, displayTarget: HistoryDisplayTarget): void => {
     context.subscriptions.push(
@@ -7746,6 +7914,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
         if (!byKey.has(key)) byKey.set(key, s);
       }
       const selectedSessions = Array.from(byKey.values());
+      if (selectedSessions.some(isReadOnlyNativeSession)) { void vscode.window.showErrorMessage(t("app.antigravityReadOnlyOperation")); return; }
       const sessions = selectedSessions.filter((s) => s.storage.archiveState !== "archived");
       if (sessions.length === 0) {
         if (selectedSessions.length > 0) void vscode.window.showInformationMessage(t("app.promoteArchivedUnsupported"));
@@ -8033,11 +8202,13 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
 
   context.subscriptions.push(
     vscode.commands.registerCommand("codexHistoryViewer.deleteSessions", async (element?: unknown) => {
+      if (historyProvider.isStartupElement(element)) return;
       // When an element is provided, prefer selection from the view it belongs to (avoid bulk-deleting from the wrong view).
       const viewSelection =
         element === undefined
-          ? resolveActiveSelection()
+          ? resolveRawActiveSelection()
           : resolveSelectionForElement(element) ?? [];
+      if (viewSelection.some(node => historyProvider.isStartupElement(node))) return;
       const selection =
         element === undefined
           ? viewSelection.length >= 1
@@ -8239,6 +8410,22 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       pinnedProvider.setProjectScopeFilter(null);
       updatePinnedViewDescription();
     });
+  const resolveRequestedHistoryStartup = () => startup.historyPending
+    ? resolveHistoryStartupState({
+        startupMode: config.historyStartupMode,
+        viewMode: config.historyDefaultViewMode,
+        display: config.historyDefaultProjectDisplay,
+        scope: config.historyDefaultProjectScope,
+      }, {
+        viewMode: historyViewModeRaw,
+        display: historyProjectDisplayRaw,
+        legacyGrouped: historyLegacyGroupedRaw,
+        scope: historyProjectScopeRaw,
+        projects: historyProjectSelection,
+        corrupt: historyFilterStateCorrupt,
+      }, resolveCurrentHistoryProjectSelection(historyProjectSelection))
+    : { viewMode: historyViewMode, display: historyProjectDisplay, scope: historyProjectScope, projects: historyProjectSelection };
+
   const finishStartupViews = async (indexAvailable: boolean): Promise<void> => {
     if (startupViewsCompleted) return;
     startupViewsCompleted = true;
@@ -8255,26 +8442,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       try {
         await enqueueHistoryStateTransition(async () => {
           if (startup.disposed) return;
-          const requested = startup.historyPending
-            ? resolveHistoryStartupState({
-                startupMode: config.historyStartupMode,
-                viewMode: config.historyDefaultViewMode,
-                display: config.historyDefaultProjectDisplay,
-                scope: config.historyDefaultProjectScope,
-              }, {
-                viewMode: historyViewModeRaw,
-                display: historyProjectDisplayRaw,
-                legacyGrouped: historyLegacyGroupedRaw,
-                scope: historyProjectScopeRaw,
-                projects: historyProjectSelection,
-                corrupt: historyFilterStateCorrupt,
-              }, resolveCurrentHistoryProjectSelection(historyProjectSelection))
-            : {
-                viewMode: historyViewMode,
-                display: historyProjectDisplay,
-                scope: historyProjectScope,
-                projects: historyProjectSelection,
-              };
+          const requested = resolveRequestedHistoryStartup();
           const projectsChanged = !isSameProjectSelection(requested.projects, historyProjectSelection);
           const nextFilterState = createHistoryFilterStateV3({
             date: historyFilter,
@@ -8375,8 +8543,17 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     }
   };
 
+  const updateStartupPreviewPresentation = (): void => {
+    if (startup.disposed) return;
+    const requested = resolveRequestedHistoryStartup();
+    const safeScope = (!startup.historyPending || requested.scope !== "currentGroup") &&
+      isSameProjectSelection(requested.projects, historyProjectSelection);
+    historyProvider.setStartupPresentation(safeScope && historyService.getStartupPreview() ? requested.viewMode : undefined, requested.display === "project");
+  };
+
   const completeInitialTreeLoad = (): void => {
     if (startup.disposed) return;
+    if (historyService.getStartupPreview()) updateStartupPreviewPresentation();
     historyProvider.markInitialLoadComplete();
     pinnedProvider.markInitialLoadComplete();
     refreshViews();
@@ -8384,6 +8561,12 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     // Restored panels can become ready before the initial History snapshot exists.
     chatPanels.refreshTitles();
     chatPanels.refreshResumePresentation();
+  };
+
+  const finishInitialHistoryValidation = (): void => {
+    historyService.endStartupPreview();
+    initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
+    if (!startup.disposed) chatPanels.finishStartupSelectionReads();
   };
 
   const runInitialBackgroundRefresh = (): void => {
@@ -8400,10 +8583,28 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       } catch (error) {
         logger.debug(`history.backgroundRefresh failed error=${sanitizeDebugError(error)}`);
       } finally {
-        initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
+        finishInitialHistoryValidation();
       }
     })();
   };
+
+  // Watcher setup can resolve a new canonical root without starting a History scan.
+  context.subscriptions.push(antigravityReader.onDidChangeStatus(() => {
+    if (startup.disposed) return;
+    try {
+      if (!historyService.reconcileAntigravityRootPermissions()) return;
+      refreshHistoryPresentationViews();
+      chatPanels.refreshTitles();
+      chatPanels.refreshResumePresentation();
+      statusProvider.refresh();
+    } catch (error) {
+      logger.debug("history native scope presentation failed");
+    }
+  }));
+
+  // The startup projection is owned by the History view and expires at the first full refresh.
+  historyService.startStartupPreview(updateStartupPreviewPresentation);
+  context.subscriptions.push({ dispose: () => historyService.endStartupPreview() });
 
   // Initial load on activation.
   let loadedCachedIndex = false;
@@ -8413,7 +8614,7 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     logger.debug(`history.cacheImmediate failed error=${sanitizeDebugError(error)}`);
   }
   if (startup.disposed) {
-    initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
+    finishInitialHistoryValidation();
     return;
   }
 
@@ -8421,14 +8622,14 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
     try {
       await finishStartupViews(true);
       if (startup.disposed) {
-        initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
+        finishInitialHistoryValidation();
         return;
       }
       completeInitialTreeLoad();
       runCodexAgentRunsConfigurationChange("activation.cached");
       runInitialBackgroundRefresh();
     } catch (error) {
-      initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
+      finishInitialHistoryValidation();
       throw error;
     }
   } else {
@@ -8437,8 +8638,8 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Window, title: t("app.loadingHistory") },
         async () => {
-          await refreshHistoryIndex(false);
-          initialIndexAvailable = true;
+          const refreshed = await refreshHistoryIndexWithResult(false);
+          initialIndexAvailable = refreshed.coreInventoryComplete;
         },
       );
     } finally {
@@ -8446,11 +8647,12 @@ async function activateExtension(context: vscode.ExtensionContext, startup: View
         await finishStartupViews(initialIndexAvailable);
         completeInitialTreeLoad();
       } finally {
-        initialAuthoritativeHistoryRefreshSettled.resolve(undefined);
+        finishInitialHistoryValidation();
       }
     }
     if (startup.disposed) return;
-    runCodexAgentRunsConfigurationChange("activation.refreshed");
+    if (initialIndexAvailable) runCodexAgentRunsConfigurationChange("activation.refreshed");
+    else settleAgentRunsAfterHistoryRefreshFailure(true);
   }
   await autoRefreshService.configure(getConfig(), computeAutoRefreshConsumerVisible(), vscode.window.state.focused);
 }
@@ -8548,7 +8750,7 @@ function sanitizeTagFilter(value: unknown): string[] {
 
 function sanitizeHistorySourceFilter(value: unknown): SessionSourceFilter {
   const s = typeof value === "string" ? value.trim().toLowerCase() : "";
-  if (s === "codex" || s === "claude") return s;
+  if (s === "codex" || s === "claude" || s === "antigravity") return s;
   return "all";
 }
 
@@ -8633,10 +8835,11 @@ function matchesArchiveLocationFilter(session: SessionSummary, archiveLocationFi
 }
 
 function resolveLockedHistorySource(config: CodexHistoryViewerConfig): SessionSourceFilter | null {
-  const codexAvailable = config.enableCodexSource || config.enableCodexArchivedSessions;
-  if (codexAvailable && !config.enableClaudeSource) return "codex";
-  if (!codexAvailable && config.enableClaudeSource) return "claude";
-  return null;
+  const enabled: SessionSourceFilter[] = [];
+  if (config.enableCodexSource || config.enableCodexArchivedSessions) enabled.push("codex");
+  if (config.enableClaudeSource) enabled.push("claude");
+  if (config.enableAntigravitySource) enabled.push("antigravity");
+  return enabled.length === 1 ? enabled[0]! : null;
 }
 
 function resolveConstrainedHistorySourceFilter(
@@ -8644,7 +8847,11 @@ function resolveConstrainedHistorySourceFilter(
   config: CodexHistoryViewerConfig,
 ): SessionSourceFilter {
   const locked = resolveLockedHistorySource(config);
-  return locked ?? sanitizeHistorySourceFilter(sourceFilter);
+  if (locked) return locked;
+  const source = sanitizeHistorySourceFilter(sourceFilter);
+  if (source === "codex" && !config.enableCodexSource && !config.enableCodexArchivedSessions
+    || source === "claude" && !config.enableClaudeSource || source === "antigravity" && !config.enableAntigravitySource) return "all";
+  return source;
 }
 
 function isPathInsideRoot(fsPath: string, rootPath: string): boolean {
@@ -8761,6 +8968,7 @@ async function promptHistoryFilter(
   const sourceLabelByValue = (source: SessionSourceFilter): string => {
     if (source === "codex") return t("history.filter.source.codex");
     if (source === "claude") return t("history.filter.source.claude");
+    if (source === "antigravity") return t("history.filter.source.antigravity");
     return t("history.filter.source.all");
   };
 
@@ -9081,7 +9289,7 @@ function sanitizeSessionPageSearchSeed(value: unknown): SessionPageSearchSeed | 
     caseSensitive: source.caseSensitive === true,
     ...(typeof preferredMessageIndex === "number" ? { preferredMessageIndex } : {}),
     ...(source.autoOpen === false ? { autoOpen: false } : {}),
-    ...(isClaudeProgressId(source.preferredProgressId) ? { preferredProgressId: source.preferredProgressId } : {}),
+    ...((isClaudeProgressId(source.preferredProgressId) || isAntigravityProgressId(source.preferredProgressId)) ? { preferredProgressId: source.preferredProgressId } : {}),
     ...(isClaudeQueuedInputId(source.preferredInputId) ? { preferredInputId: source.preferredInputId } : {}),
   };
 }

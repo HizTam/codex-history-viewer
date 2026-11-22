@@ -91,6 +91,70 @@ export function readCodexContextManagementKind(
   return undefined;
 }
 
+const COMPANION_PAGE_OUTPUT_ID_PATTERN = /^fco_[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
+const COMPANION_PAGE_PART_PATTERN = /^codex_apps_selected_page_part_([1-9][0-9]{0,14})_of_([1-9][0-9]{0,14})$/u;
+const COMPANION_PAGE_FRAGMENT_BYTES = 3_500;
+const COMPANION_PAGE_OPEN_LIMIT = 1_024;
+const COMPANION_PAGE_INSTRUCTIONS_LIMIT = 16_384;
+
+// Additional context in paginated rollouts is distinct from similarly named tool calls.
+export function isCodexCompanionPageRecord(value: unknown): boolean {
+  if (!isRecord(value) || value.type !== "response_item" || !isRecord(value.payload)) return false;
+  const payload = value.payload;
+  if (payload.type === "function_call_output") {
+    const name = payload.name;
+    if (typeof name !== "string" || (name !== "codex_apps_open_page" && !name.startsWith("codex_apps_selected_page_part_"))) {
+      return false;
+    }
+    if (!isRecord(value.metadata) || value.metadata.additional_context_tool_output !== true ||
+      payload.namespace !== "agent" || typeof payload.id !== "string" || !COMPANION_PAGE_OUTPUT_ID_PATTERN.test(payload.id) ||
+      (payload.call_id !== undefined && payload.call_id !== null) || typeof payload.output !== "string") {
+      return false;
+    }
+    const meta = payload.internal_chat_message_metadata_passthrough;
+    if (!isRecord(meta) || !normalizeCodexCorrelationId(meta.turn_id) ||
+      typeof meta.create_time !== "number" || !Number.isFinite(meta.create_time) || meta.create_time <= 0) {
+      return false;
+    }
+    if (name === "codex_apps_open_page") return isCodexOpenPageSnapshot(payload.output);
+    const match = COMPANION_PAGE_PART_PATTERN.exec(name);
+    if (!match || Number(match[1]) > Number(match[2])) return false;
+    const prefix = `Companion Page snapshot part ${match[1]} of ${match[2]}:\n`;
+    const output = payload.output;
+    return output.length > prefix.length && output.length <= prefix.length + COMPANION_PAGE_FRAGMENT_BYTES &&
+      output.startsWith(prefix) && Buffer.byteLength(output.slice(prefix.length), "utf8") <= COMPANION_PAGE_FRAGMENT_BYTES;
+  }
+  if (payload.type !== "message" || payload.role !== "developer" ||
+    !isRecord(value.metadata) || value.metadata.client_authored !== false) return false;
+  const meta = payload.internal_chat_message_metadata_passthrough;
+  if (!isRecord(meta) || !Array.isArray(meta.content_item_kinds) || meta.content_item_kinds.length !== 1 ||
+    !Array.isArray(meta.content_item_metadata) || meta.content_item_metadata.length !== 1 ||
+    !Array.isArray(payload.content) || payload.content.length !== 1) return false;
+
+  const kind = meta.content_item_kinds[0];
+  const tag = kind === "additional_content.codex_apps_open_page_instructions" ? "codex_apps_open_page_instructions"
+    : kind === "additional_content.codex_apps_selected_page_instructions" ? "codex_apps_selected_page_instructions"
+      : undefined;
+  const block = payload.content[0];
+  const origin = meta.content_item_metadata[0]?.provenance;
+  return tag !== undefined && isRecord(origin) && origin.type === "harness" && origin.hook === false &&
+    isRecord(block) && block.type === "input_text" && typeof block.text === "string" &&
+    block.text.length <= COMPANION_PAGE_INSTRUCTIONS_LIMIT &&
+    block.text.startsWith(`<${tag}>`) && block.text.endsWith(`</${tag}>`);
+}
+
+function isCodexOpenPageSnapshot(text: string): boolean {
+  if (text.length > COMPANION_PAGE_OPEN_LIMIT) return false;
+  try {
+    const snapshot: unknown = JSON.parse(text);
+    if (!isRecord(snapshot) || !Object.hasOwn(snapshot, "page_id") || Object.keys(snapshot).length !== 1) return false;
+    const id: unknown = snapshot.page_id;
+    return id === null || (typeof id === "string" && id.length > 0 && id.length <= 256 && !/\s/u.test(id) && !CONTROL_CHARACTERS.test(id));
+  } catch {
+    return false;
+  }
+}
+
 // Projects the completed async question item into the existing assistant-message contract.
 export function readCodexAsyncQuestionMessage(value: unknown): CodexAsyncQuestionMessage | undefined {
   if (!isRecord(value) || value.type !== "event_msg" || !isRecord(value.payload)) return undefined;

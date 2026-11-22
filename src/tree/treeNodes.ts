@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import type { SessionSummary } from "../sessions/sessionTypes";
+import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { t } from "../i18n";
 import type { CodexAgentRelationKind } from "../agents/codexAgentRunsTypes";
 import { hasValidCliResumeSessionId } from "../cliResume/cliResumeValidation";
@@ -16,6 +16,7 @@ export type TreeNode =
   | ProjectMonthNode
   | ProjectDayNode
   | SessionNode
+  | StartupHistorySessionNode
   | SearchRootNode
   | SearchSessionNode
   | SearchHitNode
@@ -236,6 +237,12 @@ export class SessionNode {
   }
 }
 
+export class StartupHistorySessionNode {
+  public readonly kind = "startupHistorySession";
+
+  constructor(public readonly summary: SessionSummary) {}
+}
+
 export class MissingPinnedNode {
   public readonly kind = "missingPinned";
   public readonly fsPath: string;
@@ -252,7 +259,7 @@ export class PinnedDropHintNode {
 export interface SearchHit {
   progressId?: string;
   inputId?: string;
-  progressKind?: "narration" | "thinking";
+  progressKind?: "narration" | "thinking" | "queuedInput";
   messageIndex: number; // 1-based (display order for user/assistant)
   role: "user" | "assistant" | "developer" | "tool";
   source?: "message" | "toolArguments" | "toolOutput" | "annotationTag" | "annotationNote" | "customTitle" | "originalTitle";
@@ -274,6 +281,7 @@ export class SearchRootNode {
   public readonly scopeKind: "all" | "year" | "month" | "day" | "range";
   public readonly scopeValue?: string;
   public readonly totalHits: number;
+  public readonly incompleteSources: readonly SessionSource[];
   public readonly pageSearchSeed?: SessionPageSearchSeed;
 
   constructor(params: {
@@ -281,12 +289,14 @@ export class SearchRootNode {
     scopeKind: "all" | "year" | "month" | "day" | "range";
     scopeValue?: string;
     totalHits: number;
+    incompleteSources?: readonly SessionSource[];
     pageSearchSeed?: SessionPageSearchSeed;
   }) {
     this.query = params.query;
     this.scopeKind = params.scopeKind;
     this.scopeValue = params.scopeValue;
     this.totalHits = params.totalHits;
+    this.incompleteSources = Object.freeze([...(params.incompleteSources ?? [])]);
     this.pageSearchSeed = params.pageSearchSeed;
   }
 }
@@ -348,6 +358,8 @@ export function toTreeItemContextValue(
 ): string {
   // Centralize contextValue strings used by package.json menus/viewItem conditions.
   switch (node.kind) {
+    case "startupHistorySession":
+      return "codexHistoryViewer.startupHistory";
     case "year":
       return "codexHistoryViewer.year";
     case "month":

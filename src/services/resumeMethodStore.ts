@@ -1,11 +1,12 @@
 import * as vscode from "vscode";
 
 export type ResumeActionMethod = "extension" | "cli";
-export type ResumeSource = "codex" | "claude";
+export type ResumeSource = "codex" | "claude" | "antigravity";
 
 const RESUME_METHOD_KEYS: Record<ResumeSource, string> = {
   codex: "codexHistoryViewer.resume.lastMethod.codex.v1",
   claude: "codexHistoryViewer.resume.lastMethod.claude.v1",
+  antigravity: "codexHistoryViewer.resume.lastMethod.antigravity.v1",
 };
 
 type SourceState = {
@@ -24,6 +25,7 @@ export class ResumeMethodStore implements vscode.Disposable {
   private readonly state: Record<ResumeSource, SourceState> = {
     codex: { nextSequence: 0, highestSuccessfulSequence: 0, mutationQueue: Promise.resolve() },
     claude: { nextSequence: 0, highestSuccessfulSequence: 0, mutationQueue: Promise.resolve() },
+    antigravity: { nextSequence: 0, highestSuccessfulSequence: 0, mutationQueue: Promise.resolve() },
   };
 
   public readonly onDidChange = this.onDidChangeEmitter.event;

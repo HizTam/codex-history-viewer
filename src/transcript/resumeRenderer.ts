@@ -1,9 +1,12 @@
 import * as path from "path";
+import { isClaudeVoiceCallRecord } from "../chat/claudeVoiceCall";
+import { buildAntigravityChatModel } from "../antigravity/antigravityChatModel";
 import { ClaudeQueuedInputTracker } from "../chat/claudeQueuedInput";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import { tryReadSessionMeta } from "../sessions/sessionSummary";
 import type { SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { readSessionJsonlRecords } from "../sessions/codexHistoryBase";
+import { readCodexAnswerRestriction } from "../sessions/codexAnswerVisibility";
 import { formatYmdHmInTimeZone, formatYmdHmsInTimeZone } from "../utils/dateUtils";
 import { extractTaskSectionText, extractUserRequestText, normalizeWhitespace } from "../utils/textUtils";
 import { extractClaudeCompactUserText, isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
@@ -22,6 +25,7 @@ import {
 import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } from "../chat/claudePastedPrompt";
 import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
 import {
+  isCodexCompanionPageRecord,
   readCodexAsyncQuestionMessage,
   readCodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
@@ -52,8 +56,9 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
   const maxChars = clampInt(options.maxChars, 2000, 200_000, 25_000);
   const includeContext = !!options.includeContext;
 
-  const meta = await tryReadSessionMeta(fsPath);
-  const historySource = detectHistorySource(meta?.historySource, fsPath);
+  const native = path.extname(fsPath).toLowerCase() === ".db" ? await buildAntigravityChatModel(fsPath, { includeDetails: false, images: { enabled: false, maxSizeMB: 1, thumbnailSize: "small" } }) : undefined;
+  const meta = native?.model.meta ?? await tryReadSessionMeta(fsPath);
+  const historySource = native ? "antigravity" : detectHistorySource(meta?.historySource, fsPath);
   const pastedPromptResolver = historySource === "claude" ? await createClaudePastedPromptResolver(fsPath) : undefined;
 
   let taskText: string | null = null;
@@ -64,13 +69,18 @@ export async function renderResumeContext(fsPath: string, options: ResumeRenderO
     if (!taskText) taskText = nextTask;
   };
 
-  for await (const record of readSessionJsonlRecords(fsPath, historySource, {
+  if (native) {
+    for (const item of native.model.items) if (item.type === "message" && (item.role === "user" || item.role === "assistant")) {
+      if (!taskText && item.role === "user") taskText = item.text;
+      pushRecent(recent, { role: item.role, text: item.text, timestampIso: item.timestampIso }, maxMessages);
+    }
+  } else for await (const record of readSessionJsonlRecords(fsPath, historySource, {
     claudeSessionsRoot: options.claudeSessionsRoot,
     applyCodexRollbacks: true,
     sessionInventory: options.sessionInventory,
   })) {
     const obj = record.value;
-    if (historySource === "claude") {
+    if (historySource === "claude" && !isClaudeVoiceCallRecord(obj)) {
       const input = queuedInputs.accept(obj, record.lineIndex);
       if (input) {
         pushRecent(recent, { role: "user", text: input.body, inputId: input.inputId,
@@ -167,6 +177,7 @@ async function collectCodexResumeMessage(
   setTask: (task: string) => void,
   seenAsyncQuestionIds: Set<string>,
 ): Promise<boolean> {
+  if (readCodexAnswerRestriction(obj) || isCodexCompanionPageRecord(obj)) return true;
   const asyncQuestion = readCodexAsyncQuestionMessage(obj);
   if (asyncQuestion) {
     if (seenAsyncQuestionIds.has(asyncQuestion.itemId)) return true;
@@ -248,6 +259,7 @@ async function collectClaudeResumeMessage(
   setTask: (task: string) => void,
   pastedPromptResolver?: ClaudePastedPromptResolver,
 ): Promise<boolean> {
+  if (isClaudeVoiceCallRecord(obj)) return true;
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
   if (isClaudeInternalUserRecord(obj)) return true;

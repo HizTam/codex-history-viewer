@@ -131,6 +131,7 @@ export function getMaxCustomTitleLength(): number {
 }
 
 export function resolveTitleOverrideKey(session: SessionSummary): string | null {
+  if (session.source === "antigravity") return typeof session.identityKey === "string" && session.identityKey.startsWith("antigravity:") ? session.identityKey : null;
   const source = session.source === "claude" ? "claude" : "codex";
   if (source === "claude") {
     const agent = session.meta.claudeAgent ?? parseClaudeAgentPath(session.fsPath, session.storage.rootPath);

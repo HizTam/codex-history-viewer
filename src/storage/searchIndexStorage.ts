@@ -31,11 +31,14 @@ type Row = unknown[];
 type MetaSchema = Readonly<Record<string, { readonly type: "string" | "number" | "boolean"; readonly optional?: true }>>;
 
 const CONTEXT_SCHEMA: MetaSchema = {
+  storageContractFingerprint: { type: "string", optional: true },
   codexSessionsRoot: { type: "string" },
   claudeSessionsRoot: { type: "string" },
+  antigravitySessionsRootsKey: { type: "string", optional: true },
   codexArchivedSessionsRoot: { type: "string", optional: true },
   includeCodex: { type: "boolean" },
   includeClaude: { type: "boolean" },
+  includeAntigravity: { type: "boolean", optional: true },
   includeCodexArchived: { type: "boolean", optional: true },
   indexToolContent: { type: "string", optional: true },
 };

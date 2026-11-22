@@ -54,11 +54,15 @@ export async function readFirstLineUtf8(fsPath: string, maxBytes = 512 * 1024): 
   }
 }
 
-export function normalizeCacheKey(fsPath: string): string {
-  // Avoid cache misses caused by Windows case/path-separator differences.
-  const normalized = path.normalize(path.basename(fsPath).toLowerCase().startsWith("rollout-")
-    ? uncompressedSessionPath(fsPath) : fsPath);
+export function normalizeFsPathKey(fsPath: string): string {
+  const normalized = path.normalize(fsPath);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+export function normalizeCacheKey(fsPath: string): string {
+  // Compressed Codex rollouts share a logical file key.
+  return normalizeFsPathKey(path.basename(fsPath).toLowerCase().startsWith("rollout-")
+    ? uncompressedSessionPath(fsPath) : fsPath);
 }
 
 export function normalizeProjectKey(fsPath: string): string {

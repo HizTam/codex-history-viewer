@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { isClaudeAdvisorBlock } from "./claudeAdvisor";
 import { projectCodexFollowupContent } from "../sessions/codexFollowup";
 import type {
   ChatAttachment,
@@ -274,6 +275,7 @@ export function extractCodexCompactUserText(content: unknown, extractedText: str
   if (questionReplies) return formatCodexQuestionRepliesText(questionReplies);
   const textOnlyContent = extractCodexTextOnlyContentForContext(content);
   if (textOnlyContent !== null) {
+    if (isCodexProtocolContextText(textOnlyContent)) return null;
     const fileReferences = extractCodexFilesMentionedFromText(textOnlyContent);
     if (fileReferences.attachments.length > 0) {
       return extractCompactUserText(fileReferences.text);
@@ -1177,6 +1179,7 @@ export async function extractClaudeMessageContent(
       for (const item of items) {
         if (!item || typeof item !== "object") continue;
         const obj = item as Record<string, unknown>;
+        if (isClaudeAdvisorBlock(obj)) continue;
         const image = await extractImageAttachmentFromItem(obj, sessionCwd, imageOptions);
         if (image) images.push(image);
       }
@@ -1220,6 +1223,7 @@ export async function extractClaudeMessageContent(
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
       const obj = item as Record<string, unknown>;
+      if (isClaudeAdvisorBlock(obj)) continue;
       const type = normalizeType(readStringField(obj, "type"));
       if (type === "document") {
         attachments.push(extractClaudeDocumentAttachment(obj));

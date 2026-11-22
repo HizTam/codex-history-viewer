@@ -263,5 +263,5 @@ function escapeMarkdownLinkTitle(value: string): string {
 }
 
 function sourceName(source: SessionSummary["source"]): string {
-  return source === "claude" ? "Claude Code" : "Codex";
+  return source === "antigravity" ? "Antigravity" : source === "claude" ? "Claude Code" : "Codex";
 }

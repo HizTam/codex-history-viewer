@@ -62,6 +62,7 @@
   const MAX_CODE_COMMENT_BODY_LENGTH = 20000;
   const MAX_CROSS_SESSION_MESSAGE_CHARS = 64000;
   const MAX_SHIKI_DIFF_CHARACTERS = 200000;
+  const PATCH_GROUP_FILE_PREVIEW_COUNT = 3;
   const MAX_PAGE_SEARCH_HISTORY_CANDIDATES = 20;
   const MAX_BRANCH_OVERLAY_CARDS = 200;
   const MAX_BRANCH_CONTROL_CHOICES = 20;
@@ -450,6 +451,13 @@
   };
   let expandedMessageIndexes = new Set();
   let expandedClaudeProgressIds = new Set();
+  let expandedClaudeVoiceCallIds = new Set();
+  let claudeVoiceCallSessionKey = "";
+  let expandedAntigravityProgressIds = new Set();
+  let expandedAntigravityEditRecords = new Set();
+  let expandedAntigravityTurnFiles = new Set();
+  let expandedAntigravityDiffs = new Set();
+  let antigravityProgressSessionKey = "";
   let expandedStickyUserKeys = new Set();
   let collapsedTurnIds = new Set();
   let pageSearchTemporaryTurnExpansionActive = false;
@@ -619,6 +627,13 @@
   let webviewState = typeof vscode.getState === "function" ? vscode.getState() || {} : {};
   expandedClaudeProgressIds = new Set(Array.isArray(webviewState.claudeProgressExpanded)
     ? webviewState.claudeProgressExpanded.filter((id) => normalizeClaudeProgressId(id)).slice(0, 1000) : []);
+  claudeVoiceCallSessionKey = typeof webviewState.claudeVoiceCallSessionKey === "string" ? webviewState.claudeVoiceCallSessionKey.slice(0, 32768) : "";
+  expandedClaudeVoiceCallIds = new Set(Array.isArray(webviewState.claudeVoiceCallExpanded)
+    ? webviewState.claudeVoiceCallExpanded.filter(id => normalizeClaudeVoiceCallId(id)).slice(0, 1000) : []);
+  antigravityProgressSessionKey = typeof webviewState.antigravityProgressSessionKey === "string"
+    ? webviewState.antigravityProgressSessionKey.slice(0, 32768) : "";
+  expandedAntigravityProgressIds = new Set(Array.isArray(webviewState.antigravityProgressExpanded)
+    ? webviewState.antigravityProgressExpanded.filter(id => normalizeAntigravityProgressId(id)).slice(0, 1000) : []);
   branchOverlayOpen = webviewState && webviewState.branchOverlayOpen === true;
   branchOverlayWidth = normalizeBranchOverlayWidth(webviewState.branchOverlayWidth);
   branchTreeScale = normalizeBranchTreeScale(webviewState.branchTreeScale);
@@ -1048,6 +1063,26 @@
 
   window.addEventListener("message", (event) => {
     const msg = localization.receive(event.data);
+    if (msg.type === "nativeSourceUnavailable") {
+      i18n = msg.i18n || i18n;
+      let notice = document.getElementById("nativeSourceUnavailable");
+      if (!notice) {
+        notice = document.createElement("div");
+        notice.id = "nativeSourceUnavailable";
+        notice.className = "nativeSourceUnavailable";
+        notice.setAttribute("role", "status");
+        timelineEl?.before(notice);
+      }
+      notice.replaceChildren();
+      const label = document.createElement("p");
+      label.textContent = i18n.nativeSourceUnavailable || localization.defaults.nativeSourceUnavailable;
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.textContent = i18n.reload || localization.defaults.reload;
+      retry.addEventListener("click", () => vscode.postMessage({ type: "retryNativeSource" }));
+      notice.append(label, retry);
+      return;
+    }
     if (msg.type === "viewState") {
       const revision = Number(msg.revision);
       if (Number.isSafeInteger(revision) && revision >= 0) {
@@ -1291,6 +1326,7 @@
       return;
     }
     if (msg.type === "sessionData") {
+      document.getElementById("nativeSourceUnavailable")?.remove();
       const incomingModelFingerprint = normalizeChatRenderFingerprint(msg.modelFingerprint);
       const reusesCurrentModel = msg.reuseCurrentModel === true;
       const currentModelUnavailable =
@@ -1468,6 +1504,30 @@
       expandedMessageIndexes = shouldPreserveUiState ? prevExpandedMessageIndexes : new Set();
       const validProgressIds = new Set(model.items.filter((item) => item.type === "claudeProgress").map((item) => item.progressId));
       expandedClaudeProgressIds = new Set([...expandedClaudeProgressIds].filter((id) => validProgressIds.has(id)));
+      const voiceSessionKey = model?.meta?.historySource === "claude" ? String(model.identityKey || model.fsPath || "").slice(0, 32768) : "";
+      if (voiceSessionKey !== claudeVoiceCallSessionKey) expandedClaudeVoiceCallIds = new Set();
+      claudeVoiceCallSessionKey = voiceSessionKey;
+      if (isRestore && voiceSessionKey && webviewState.claudeVoiceCallSessionKey === voiceSessionKey && Array.isArray(webviewState.claudeVoiceCallExpanded)) {
+        expandedClaudeVoiceCallIds = new Set(webviewState.claudeVoiceCallExpanded.filter(id => normalizeClaudeVoiceCallId(id)).slice(0, 1000));
+      }
+      const voiceIds = new Set(model.items.filter(item => item.type === "claudeVoiceCall").map(item => item.voiceCallId));
+      expandedClaudeVoiceCallIds = new Set([...expandedClaudeVoiceCallIds].filter(id => voiceIds.has(id)));
+      const nativeSessionKey = model?.meta?.historySource === "antigravity" ? String(model.identityKey || model.fsPath || "").slice(0, 32768) : "";
+      if (nativeSessionKey !== antigravityProgressSessionKey) {
+        expandedAntigravityProgressIds = new Set();
+        expandedAntigravityEditRecords = new Set();
+        expandedAntigravityTurnFiles = new Set();
+        expandedAntigravityDiffs = new Set();
+      }
+      if (isRestore && nativeSessionKey && webviewState.antigravityProgressSessionKey === nativeSessionKey && Array.isArray(webviewState.antigravityEditRecordsExpanded)) {
+        expandedAntigravityEditRecords = new Set(webviewState.antigravityEditRecordsExpanded.filter(id => typeof id === "string" && /^ag-turn-[a-f0-9]{32}$/.test(id)).slice(0, 1000));
+      }
+      antigravityProgressSessionKey = nativeSessionKey;
+      if (isRestore && nativeSessionKey && webviewState.antigravityProgressSessionKey === nativeSessionKey && Array.isArray(webviewState.antigravityProgressExpanded)) {
+        expandedAntigravityProgressIds = new Set(webviewState.antigravityProgressExpanded.filter(id => normalizeAntigravityProgressId(id)).slice(0, 1000));
+      }
+      const nativeProgressIds = new Set(model.items.filter(item => item.type === "antigravityProgress").map(item => item.progressId));
+      expandedAntigravityProgressIds = new Set([...expandedAntigravityProgressIds].filter(id => nativeProgressIds.has(id)));
       expandedStickyUserKeys = shouldPreserveUiState ? prevExpandedStickyUserKeys : new Set();
       collapsedTurnIds = shouldPreserveUiState && isTurnTimelineEnabled() ? prevCollapsedTurnIds : new Set();
       if (!reusedSessionDataRender) {
@@ -1531,7 +1591,7 @@
       const applyPendingPageSearchSeed = () => {
         if (pageSearchSeedApplied || !pageSearchSeed) return;
         pageSearchSeedApplied = true;
-        if (pageSearchSeed.preferredProgressId) revealClaudeProgress(pageSearchSeed.preferredProgressId);
+        if (pageSearchSeed.preferredProgressId) revealSourceProgress(pageSearchSeed.preferredProgressId);
         if (pageSearchSeed.preferredInputId) revealClaudeQueuedInput(pageSearchSeed.preferredInputId);
         if (pageSearchSeed.autoOpen === false && !isPageSearchOpen()) {
           pendingPageSearchSeed = pageSearchSeed;
@@ -1615,6 +1675,12 @@
     if (msg.type === "i18n") {
       const restoreFocus = localization.captureFocus();
       i18n = msg.i18n || {};
+      const nativeNotice = document.getElementById("nativeSourceUnavailable");
+      if (nativeNotice) {
+        const label = nativeNotice.querySelector("p"), retry = nativeNotice.querySelector("button");
+        if (label) label.textContent = i18n.nativeSourceUnavailable || localization.defaults.nativeSourceUnavailable;
+        if (retry) retry.textContent = i18n.reload || localization.defaults.reload;
+      }
       dateTime = msg.dateTime || dateTime || {};
       debugLoggingEnabled = msg.debugLoggingEnabled === true;
       chatOpenPosition = normalizeChatOpenPosition(msg.chatOpenPosition);
@@ -1816,12 +1882,13 @@
     if (!value || typeof value !== "object") return "";
     const fsPath = typeof value.fsPath === "string" ? value.fsPath.slice(0, 4096) : "";
     const meta = value.meta && typeof value.meta === "object" ? value.meta : null;
-    const historySource = meta && (meta.historySource === "codex" || meta.historySource === "claude")
+    const historySource = meta && (meta.historySource === "codex" || meta.historySource === "claude" || meta.historySource === "antigravity")
       ? meta.historySource
       : "";
     const rawId = meta && typeof meta.id === "string" ? meta.id.trim() : "";
     const id = rawId.slice(0, 512);
     if (historySource === "claude" && fsPath) return "path:claude:" + fsPath;
+    if (historySource === "antigravity" && fsPath) return "path:antigravity:" + fsPath;
     if (historySource && id) return "id:" + historySource + ":" + id;
     if (historySource && fsPath) return "path:" + historySource + ":" + fsPath;
     return fsPath ? "path:" + fsPath : "";
@@ -1894,6 +1961,7 @@
       "archived",
       "invalidSessionId",
       "workspaceUntrusted",
+      "rootUnverified",
       "unknown",
     ]);
     if (typeof value.available !== "boolean" || !reasons.has(value.reason)) return null;
@@ -1930,11 +1998,13 @@
     const revision = Number(value.revision);
     const codex = normalizeResumeTargetSnapshot(value.codex);
     const claude = normalizeResumeTargetSnapshot(value.claude);
-    if (!Number.isSafeInteger(revision) || revision <= 0 || !codex || !claude) return null;
+    const antigravity = value.antigravity === undefined ? undefined : normalizeResumeTargetSnapshot(value.antigravity);
+    if (!Number.isSafeInteger(revision) || revision <= 0 || !codex || !claude || antigravity === null) return null;
     return {
       revision,
       codex,
       claude,
+      antigravity,
     };
   }
 
@@ -2037,7 +2107,7 @@
 
   function getCurrentResumeSource() {
     const source = model?.meta?.historySource;
-    return source === "codex" || source === "claude" ? source : null;
+    return source === "codex" || source === "claude" || source === "antigravity" ? source : null;
   }
 
   function buildResumeToolbarPresentationKey() {
@@ -2053,6 +2123,7 @@
           ? {
               codex: resumeSnapshot.codex,
               claude: resumeSnapshot.claude,
+              antigravity: resumeSnapshot.antigravity,
             }
           : null,
       });
@@ -2064,6 +2135,9 @@
 
   function getResumeMethodPresentation(source, method) {
     const extension = method === "extension";
+    if (source === "antigravity") return extension
+      ? { label: getRequiredResumeUiText(i18n.resumeInAntigravity), tooltip: getRequiredResumeUiText(i18n.resumeInAntigravityTooltip), icon: RESUME_ICON_SVG }
+      : { label: getRequiredResumeUiText(i18n.prepareAntigravityCliResume), tooltip: getRequiredResumeUiText(i18n.prepareAntigravityCliResumeTooltip), icon: TERMINAL_ICON_SVG };
     if (source === "claude") {
       return extension
         ? {
@@ -2097,10 +2171,12 @@
     if (action?.reason === "workspaceUntrusted" && method === "cli") {
       return getRequiredResumeUiText(i18n.cliWorkspaceUntrustedTooltip);
     }
+    if (source === "antigravity" && action?.reason === "rootUnverified") return getRequiredResumeUiText(method === "cli" ? i18n.antigravityCliNamespaceTooltip : i18n.antigravityExtensionNamespaceTooltip);
     if (action?.reason === "invalidSessionId") {
       if (method === "cli") {
         return getRequiredResumeUiText(i18n.cliInvalidSessionTooltip);
       }
+      if (source === "antigravity") return getRequiredResumeUiText(i18n.resumeUnavailableForSessionTooltip);
       return source === "claude"
         ? getRequiredResumeUiText(i18n.claudeExtensionInvalidSessionTooltip)
         : getRequiredResumeUiText(i18n.codexExtensionInvalidSessionTooltip);
@@ -2294,7 +2370,7 @@
 
   function invokeResumeMethod(source, target, method) {
     if (
-      (source !== "codex" && source !== "claude") ||
+      (source !== "codex" && source !== "claude" && source !== "antigravity") ||
       !target ||
       (method !== "extension" && method !== "cli") ||
       (source === "codex" && Boolean(rolloutNoticeToken)) ||
@@ -6972,6 +7048,7 @@
 
     const target = findTimelineRowForAnchor(anchor);
     if (target) {
+      openAntigravityEditRecords(target);
       restoreTimelineElementToOffset(target, getTimelineCapturedTargetOffset(anchor));
       finish();
       return true;
@@ -6996,7 +7073,7 @@
 
     const resolved = findPageSearchCloseScrollTarget(anchor);
     if (!resolved || !(resolved.target instanceof HTMLElement)) return false;
-    return restoreTimelineElementToOffset(resolved.target, resolved.offsetTop);
+    return restoreTimelineElementToOffset(getAntigravityEditPositionElement(resolved.target), resolved.offsetTop);
   }
 
   function findPageSearchCloseScrollTarget(anchor) {
@@ -7160,7 +7237,8 @@
 
     const cardKey = typeof anchor.cardKey === "string" ? anchor.cardKey : "";
     if (cardKey) {
-      const exact = rows.find((row) => row.dataset.cardKey === cardKey);
+      const exact = rows.find((row) => row.dataset.cardKey === cardKey) ??
+        timelineEl.querySelector(`.antigravityEditRecords .row[data-card-key="${cssEscape(cardKey)}"]`);
       if (exact) return exact;
     }
 
@@ -7543,6 +7621,11 @@
       ...(webviewState && typeof webviewState === "object" ? webviewState : {}),
       restore,
       claudeProgressExpanded: [...expandedClaudeProgressIds].slice(-1000),
+      claudeVoiceCallSessionKey,
+      claudeVoiceCallExpanded: [...expandedClaudeVoiceCallIds].slice(-1000),
+      antigravityProgressSessionKey,
+      antigravityProgressExpanded: [...expandedAntigravityProgressIds].slice(-1000),
+      antigravityEditRecordsExpanded: [...expandedAntigravityEditRecords].slice(-1000),
     };
     vscode.setState(webviewState);
   }
@@ -7641,6 +7724,13 @@
     temporaryPerformanceMode = null;
     pendingDetailScrollAnchor = null;
     expandedClaudeProgressIds = new Set();
+    expandedClaudeVoiceCallIds = new Set();
+    claudeVoiceCallSessionKey = "";
+    expandedAntigravityProgressIds = new Set();
+    expandedAntigravityEditRecords = new Set();
+    expandedAntigravityTurnFiles = new Set();
+    expandedAntigravityDiffs = new Set();
+    antigravityProgressSessionKey = "";
     expandedStickyUserKeys = new Set();
     collapsedTurnIds = new Set();
     clearAllPageSearchTemporaryExpansions();
@@ -7807,7 +7897,7 @@
       ...(typeof source.roleFilterKey === "string" ? { roleFilterKey: source.roleFilterKey } : {}),
       ...(typeof contentRevision === "number" ? { contentRevision } : {}),
       ...(anchor ? { anchor } : {}),
-      ...(normalizeClaudeProgressId(source.preferredProgressId) ? { preferredProgressId: source.preferredProgressId } : {}),
+      ...(normalizeSourceProgressId(source.preferredProgressId) ? { preferredProgressId: source.preferredProgressId } : {}),
       ...(normalizeClaudeQueuedInputId(source.preferredInputId) ? { preferredInputId: source.preferredInputId } : {}),
     };
   }
@@ -8045,6 +8135,7 @@
   }
 
   function hasPatchGroupsForPageSearchExpansion() {
+    if (model?.meta?.historySource === "antigravity" && model.antigravityTurnFileChanges?.length) return true;
     const items = model && Array.isArray(model.items) ? model.items : [];
     return items.some(
       (item) => item && item.type === "patchGroup" && Array.isArray(item.entries) && item.entries.length > 0,
@@ -8126,6 +8217,10 @@
       }
       if (item.type === "claudeProgress" && item.body) {
         roles.add("assistant");
+        continue;
+      }
+      if (item.type === "antigravityProgress" && item.body) {
+        roles.add(item.kind === "queuedInput" ? "user" : "assistant");
         continue;
       }
       if (item.type === "claudeQueuedInput" && item.body) {
@@ -8501,7 +8596,7 @@
 
     // Terminal output remains searchable while its disclosure is closed.
     if (element.closest(".terminalOutputCard .systemEventOutput")) return true;
-    if (element.closest(".claudeProgressBody")) return true;
+    if (element.closest(".claudeProgressBody, .antigravityProgressBody, .claudeVoiceCallBody")) return true;
 
     const closedDetails = element.closest("details:not([open])");
     if (closedDetails) {
@@ -8712,8 +8807,11 @@
     const activeTarget = getPageSearchResultTargetElement(activeResult);
     if (activeTarget instanceof HTMLElement) {
       const thinking = activeTarget.closest("details.claudeThinking");
+      const nativeThinking = activeTarget.closest("details.antigravityThinking");
       // Search input/navigation can expand without scrolling; background refreshes must respect a manual close.
       if (reveal || options.expandThinking === true || options.focusResult === true) setClaudeThinkingExpanded(thinking, true);
+      if (reveal || options.expandThinking === true || options.focusResult === true) setAntigravityThinkingExpanded(nativeThinking, true);
+      if (reveal || options.expandThinking === true || options.focusResult === true) setClaudeVoiceCallExpanded(activeTarget.closest("details.claudeVoiceCallDetails"), true);
       if (activeResult.kind === "mermaid") {
         activeTarget.classList.add("pageSearchMermaidMatch-active");
       } else {
@@ -9646,6 +9744,7 @@
     resetRunningTurnIndicators({ keepFallback: turnTimelineLive });
     const useStickyUserPrompt = stickyUserPromptEnabled === true;
     const renderedEntries = [];
+    const { cardsByAnchor, recordsByIndex } = prepareAntigravityTurnChanges(items);
     let pendingThinkingMs = null;
     let pendingThinkingTurnId = "";
     for (const [itemIndex, item] of items.entries()) {
@@ -9656,28 +9755,43 @@
       if ((pendingThinkingTurnId && thinkingTurnId && pendingThinkingTurnId !== thinkingTurnId) ||
           (item.type === "message" && item.role !== "assistant") ||
           item.type === "claudeQueuedInput" || item.type === "crossSessionMessage" || item.type === "taskNotification" ||
+          (item.type === "antigravityProgress" && item.kind === "queuedInput") ||
           item.type === "protocolContext" || (item.type === "systemEvent" && item.kind === "requestInterrupted")) {
         pendingThinkingMs = null;
         pendingThinkingTurnId = "";
       }
-      if (item.type === "claudeProgress") {
+      if (item.type === "claudeProgress" || item.type === "antigravityProgress" && item.kind !== "queuedInput") {
         pendingThinkingMs = addClaudeThinkingDuration(pendingThinkingMs, item.durationMs);
         if (thinkingTurnId) pendingThinkingTurnId = thinkingTurnId;
       }
       const rendered = renderItem(item, itemIndex);
-      if (!rendered) continue;
-      if (pendingThinkingMs !== null && (item.type === "claudeProgress" ||
-          (item.type === "message" && item.role === "assistant") || item.type === "tool" || item.type === "patchGroup")) {
-        appendClaudeThinkingDuration(rendered, pendingThinkingMs);
-        pendingThinkingMs = null;
-        pendingThinkingTurnId = "";
+      if (rendered) {
+        const records = recordsByIndex.get(itemIndex);
+        if (!records && pendingThinkingMs !== null && (item.type === "claudeProgress" || item.type === "antigravityProgress" && item.kind !== "queuedInput" ||
+            (item.type === "message" && item.role === "assistant") || item.type === "tool" || item.type === "patchGroup")) {
+          appendClaudeThinkingDuration(rendered, pendingThinkingMs);
+          pendingThinkingMs = null;
+          pendingThinkingTurnId = "";
+        }
+        const turn = rawTurnId ? turnSummaryById.get(rawTurnId) : null;
+        const emptyActiveCandidate = isBasicModeEmptyActiveTurnCandidate(turn, rawTurnId);
+        const turnId = turn && !emptyActiveCandidate ? rawTurnId : "";
+        if (!turnId && rendered instanceof HTMLElement) delete rendered.dataset.turnId;
+        const turnRunKey = turnId ? turnRunKeyByItemIndex.get(itemIndex) || `run-${itemIndex}` : "";
+        if (records) records.appendChild(rendered);
+        else renderedEntries.push({ item, itemIndex, rendered, turnId, turn, turnRunKey });
       }
-      const turn = rawTurnId ? turnSummaryById.get(rawTurnId) : null;
-      const emptyActiveCandidate = isBasicModeEmptyActiveTurnCandidate(turn, rawTurnId);
-      const turnId = turn && !emptyActiveCandidate ? rawTurnId : "";
-      if (!turnId && rendered instanceof HTMLElement) delete rendered.dataset.turnId;
-      const turnRunKey = turnId ? turnRunKeyByItemIndex.get(itemIndex) || `run-${itemIndex}` : "";
-      renderedEntries.push({ item, itemIndex, rendered, turnId, turn, turnRunKey });
+      const nativeCard = cardsByAnchor.get(itemIndex);
+      if (nativeCard) {
+        const turn = turnSummaryById.get(nativeCard.id);
+        const turnId = turn ? nativeCard.id : "";
+        const turnRunKey = turnId ? turnRunKeyByItemIndex.get(itemIndex) || `run-${itemIndex}` : "";
+        if (turnId) nativeCard.row.dataset.turnId = turnId;
+        renderedEntries.push({
+          item: { type: "antigravityTurnFileChanges" }, itemIndex,
+          rendered: nativeCard.row, turnId, turn, turnRunKey,
+        });
+      }
     }
     const liveRunningTurnId = turnTimelineLive ? normalizeTurnId(model && model.liveRunningTurnId) : "";
     const liveRunningTurn = liveRunningTurnId ? turnSummaryById.get(liveRunningTurnId) : null;
@@ -11095,31 +11209,36 @@
 
   function buildTurnEndCounts(turn) {
     if (!turn || typeof turn !== "object") return { text: "", tooltip: "" };
+    const tokenValue = (key, value) => turn.tokenAvailability?.[key] === "unavailable" ? "—"
+      : `${turn.tokenAvailability?.[key] === "partial" ? "≥ " : ""}${getUsageNumber(value)}`;
     const itemCount = normalizeCount(turn.itemCount);
     const toolCount = normalizeCount(turn.toolCount);
     const patchEntryCount = normalizeCount(turn.patchEntryCount);
     const usageRecordCount = normalizeCount(turn.usageRecordCount);
-    const inputTokens = normalizeCount(turn.inputTokens);
-    const outputTokens = normalizeCount(turn.outputTokens);
-    const totalTokens = normalizeCount(turn.totalTokens);
+    const inputTokens = turn.tokenAvailability?.inputTokens === "unavailable" ? 0 : normalizeCount(turn.inputTokens);
+    const outputTokens = turn.tokenAvailability?.outputTokens === "unavailable" ? 0 : normalizeCount(turn.outputTokens);
+    const totalAvailability = turn.tokenAvailability?.totalTokens;
+    const totalTokens = totalAvailability === "unavailable" ? 0 : normalizeCount(turn.totalTokens);
     const parts = [];
     let hasTokenParts = false;
     if (itemCount > 0) parts.push(formatTemplate(getSafeUiText(i18n.turnItemCount, localization.defaults.turnItemCount), itemCount));
     if (toolCount > 0) parts.push(formatTemplate(getSafeUiText(i18n.turnToolCount, localization.defaults.turnToolCount), toolCount));
-    if (patchEntryCount > 0) {
+    if (turn.antigravityChangedFiles) {
+      parts.push(getAntigravityChangedFileCountText(turn.antigravityChangedFiles.count, turn.antigravityChangedFiles.incomplete));
+    } else if (patchEntryCount > 0) {
       parts.push(formatTemplate(getSafeUiText(i18n.turnPatchCount, localization.defaults.turnPatchCount), patchEntryCount));
     }
-    if (inputTokens > 0) {
-      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenInput, localization.defaults.turnTokenInput), getUsageNumber(inputTokens)));
+    if (inputTokens > 0 || turn.tokenAvailability) {
+      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenInput, localization.defaults.turnTokenInput), tokenValue("inputTokens", inputTokens)));
       hasTokenParts = true;
     }
-    if (outputTokens > 0) {
-      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenOutput, localization.defaults.turnTokenOutput), getUsageNumber(outputTokens)));
+    if (outputTokens > 0 || turn.tokenAvailability) {
+      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenOutput, localization.defaults.turnTokenOutput), tokenValue("outputTokens", outputTokens)));
       hasTokenParts = true;
     }
     const totalAddsInformation = totalTokens > 0 && inputTokens + outputTokens !== totalTokens;
-    if (totalAddsInformation) {
-      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenTotal, localization.defaults.turnTokenTotal), getUsageNumber(totalTokens)));
+    if (totalAddsInformation || totalAvailability === "partial" || totalAvailability === "unavailable") {
+      parts.push(formatTemplate(getSafeUiText(i18n.turnTokenTotal, localization.defaults.turnTokenTotal), tokenValue("totalTokens", totalTokens)));
       hasTokenParts = true;
     }
     if (!hasTokenParts && usageRecordCount > 0) {
@@ -11127,7 +11246,8 @@
     }
     return {
       text: parts.join(" / "),
-      tooltip: "",
+      tooltip: turn.tokenAvailability && Object.values(turn.tokenAvailability).some(quality => quality !== "available")
+        ? getSafeUiText(i18n.turnTokenQuality, localization.defaults.turnTokenQuality) : "",
     };
   }
 
@@ -11370,6 +11490,10 @@
     const quota = completed ? renderTurnQuotaGroup(turnId, descriptionOwner, ownerFocusable && canCollapseTurn(turn, turnId)) : null;
     if (!counts.text && !quota) return null;
     const countsEl = el("div", { className: "turnMarkerCounts" + (extraClass ? " " + extraClass : "") });
+    if (counts.tooltip) {
+      countsEl.title = counts.tooltip;
+      countsEl.setAttribute("aria-label", `${counts.text}. ${counts.tooltip}`);
+    }
     if (!quota) {
       countsEl.textContent = counts.text;
       return countsEl;
@@ -11798,7 +11922,9 @@
     let rendered = null;
     if (item.type === "message") rendered = renderMessage(item, cardKey, itemIndex);
     else if (item.type === "claudeProgress") rendered = renderClaudeProgress(item, cardKey, itemIndex);
+    else if (item.type === "antigravityProgress") rendered = renderAntigravityProgress(item, cardKey, itemIndex);
     else if (item.type === "claudeQueuedInput") rendered = renderClaudeQueuedInput(item, cardKey);
+    else if (item.type === "claudeVoiceCall") rendered = renderClaudeVoiceCall(item, cardKey);
     else if (item.type === "crossSessionMessage" || item.type === "taskNotification" || item.type === "systemReminder") rendered = renderCrossSessionMessage(item, cardKey);
     else if (item.type === "protocolContext") rendered = renderProtocolContext(item, cardKey);
     else if (item.type === "patchGroup") rendered = renderPatchGroup(item, itemIndex, cardKey);
@@ -11838,7 +11964,7 @@
     }
 
     const startedAt = performance.now();
-    timeGuideItems = Array.from(timelineEl.querySelectorAll("[data-item-index]"))
+    timeGuideItems = Array.from(timelineEl.querySelectorAll("[data-item-index]:not(.antigravityTurnChangesRow)"))
       .filter((element) => element instanceof HTMLElement)
       .map((element, index) => {
         const itemIndex = Number(element.dataset.itemIndex);
@@ -11852,7 +11978,7 @@
           timestampIso,
           title: [buildTimeGuideItemTitle(item, Number.isFinite(itemIndex) ? itemIndex : index),
             nativeBookmarkedKeys.has(getItemBookmarkKey(item)) ? getSafeUiText(i18n.nativeBookmarkTooltip, localization.defaults.nativeBookmarkTooltip) : ""].filter(Boolean).join(" · "),
-          role: item?.type === "claudeQueuedInput" ? "user" : item && item.type === "message" ? getMessageRole(item) : "",
+          role: item?.type === "claudeQueuedInput" || item?.type === "antigravityProgress" && item.kind === "queuedInput" ? "user" : item && item.type === "message" ? getMessageRole(item) : "",
           attachmentKind: item && item.type === "message" ? getTimeGuideAttachmentKind(getMessageAttachments(item)) : "",
           bookmarked: isItemBookmarked(item),
           nativeBookmarked: nativeBookmarkedKeys.has(getItemBookmarkKey(item)),
@@ -11881,8 +12007,11 @@
       getTimeZone,
       getAriaLabel: () => getSafeUiText(i18n.timeGuideDates, localization.defaults.timeGuideDates),
       getItems: getTimeGuideItems,
+      getPositionElement: getAntigravityEditPositionElement,
       onActivatePeriod: (period) => {
         if (period && period.role === "user") suppressStickyUserUntilUserScroll();
+        setClaudeVoiceCallExpanded(period?.targetElement?.closest(".claudeVoiceCallCard")?.querySelector("details"), true);
+        openAntigravityEditRecords(period?.targetElement);
       },
     });
     return timeGuide;
@@ -11976,7 +12105,9 @@
   function buildTimeGuideItemTitle(item, itemIndex) {
     if (!item || typeof item !== "object") return "";
     if (item.type === "claudeProgress") return getClaudeProgressTitle(item);
+    if (item.type === "antigravityProgress") return getAntigravityProgressTitle(item);
     if (item.type === "claudeQueuedInput") return i18n.claudeQueuedInput;
+    if (item.type === "claudeVoiceCall") return i18n.claudeVoiceCallTitle;
     if (item.type === "message") {
       const role = item.role === "user" || item.role === "assistant" || item.role === "developer" ? item.role : "message";
       const messageIndex = typeof item.messageIndex === "number" ? `#${item.messageIndex}` : "";
@@ -12013,6 +12144,76 @@
 
   function normalizeClaudeProgressId(value) {
     return typeof value === "string" && /^cp-[a-f0-9]{32}$/.test(value) ? value : "";
+  }
+
+  function normalizeAntigravityProgressId(value) {
+    return typeof value === "string" && /^ag-[a-f0-9]{32}$/.test(value) ? value : "";
+  }
+
+  function normalizeSourceProgressId(value) {
+    return normalizeClaudeProgressId(value) || normalizeAntigravityProgressId(value);
+  }
+
+  function getAntigravityProgressTitle(item) {
+    return item.kind === "queuedInput" ? i18n.antigravityProgressQueued
+      : item.kind === "redactedThinking" ? i18n.antigravityProgressRedacted : i18n.antigravityProgressThinking;
+  }
+
+  function setAntigravityThinkingExpanded(details, expanded) {
+    if (!(details instanceof HTMLDetailsElement) || !timelineEl.contains(details)) return false;
+    const card = details.closest(".antigravityProgressCard");
+    const id = normalizeAntigravityProgressId(card?.dataset.progressId);
+    if (!id || card.dataset.sessionKey !== antigravityProgressSessionKey) return false;
+    details.open = expanded;
+    if (expandedAntigravityProgressIds.has(id) === expanded) return false;
+    if (expanded) expandedAntigravityProgressIds.add(id); else expandedAntigravityProgressIds.delete(id);
+    persistRestoreState(); return true;
+  }
+
+  function renderAntigravityProgress(item, cardKey, itemIndex) {
+    if (!normalizeAntigravityProgressId(item.progressId) || typeof item.body !== "string"
+      || !["thinking", "redactedThinking", "queuedInput"].includes(item.kind)
+      || item.kind !== "redactedThinking" && !item.body.trim()) return null;
+    const role = item.kind === "queuedInput" ? "user" : "assistant";
+    const row = el("div", { className: `row ${role} antigravityProgress` });
+    const card = el("div", { className: `bubble ${role} antigravityProgressCard`, role: "group" });
+    const title = getAntigravityProgressTitle(item);
+    card.dataset.progressId = item.progressId; card.dataset.sessionKey = antigravityProgressSessionKey;
+    card.setAttribute("aria-label", title); applyTimelineCardWidthState(card, cardKey); applyBookmarkMetadata(card, item);
+    const header = el("div", { className: "metaLine" }), tags = el("div", { className: "metaTags" });
+    tags.dataset.pageSearchIgnore = "true";
+    if (item.kind !== "thinking") tags.appendChild(el("span", { className: "tag", textContent: title }));
+    if (item.timestampIso) tags.appendChild(el("span", { className: "tag", textContent: formatIsoYmdHms(item.timestampIso) }));
+    header.appendChild(tags);
+    const actions = el("div", { className: "cardHeaderActions" }); appendBookmarkButton(actions, item);
+    if (item.body) {
+      const copy = el("button", { type: "button", className: "iconBtn", title: i18n.copyMessageTooltip });
+      copy.setAttribute("aria-label", i18n.copyMessageTooltip); copy.innerHTML = COPY_ICON_SVG;
+      copy.addEventListener("click", () => vscode.postMessage({ type: "copy", text: item.body })); actions.appendChild(copy);
+    }
+    actions.appendChild(createTimelineCardWidthButton(cardKey, card)); header.appendChild(actions); card.appendChild(header);
+    const body = el("div", { className: "messageBodyContent antigravityProgressBody" });
+    // Queued input is plain text; only verified visible thinking uses the standard safe Markdown renderer.
+    if (role === "user") body.textContent = item.body;
+    else if (item.body) { body.classList.add("markdown"); renderAssistantMarkdownInto(body, item.body, { cardKey, cardNumber: itemIndex + 1 }); }
+    if (item.kind === "thinking") {
+      const details = el("details", { className: "antigravityThinking" }), summary = el("summary", { textContent: title });
+      details.open = expandedAntigravityProgressIds.has(item.progressId);
+      const update = expanded => { if (setAntigravityThinkingExpanded(details, expanded)) schedulePageSearchRefresh({ preserveIndex: true, reveal: false }); };
+      summary.addEventListener("click", event => { if (!event.defaultPrevented) { event.preventDefault(); update(!details.open); } });
+      details.append(summary, body); details.addEventListener("toggle", () => update(details.open)); card.appendChild(details);
+    } else if (item.body) card.appendChild(body);
+    row.appendChild(card); return row;
+  }
+
+  function revealSourceProgress(progressId) {
+    if (!normalizeAntigravityProgressId(progressId)) { revealClaudeProgress(progressId); return; }
+    if (!model) return;
+    const index = model.items.findIndex(item => item.type === "antigravityProgress" && item.progressId === progressId);
+    if (index < 0) return;
+    expandedAntigravityProgressIds.add(progressId); ensureTurnExpandedForReveal(getTurnIdForItemIndex(index), { render: false }); render();
+    const card = timelineEl.querySelector(`[data-progress-id="${progressId}"]`);
+    if (card) { clearHighlights(); card.classList.add("highlight"); card.scrollIntoView({ block: "center" }); persistRestoreState(); }
   }
 
   function getClaudeProgressTitle(item) {
@@ -12501,6 +12702,71 @@
       return "";
     }
     return normalizeUsageText(item && item.reason);
+  }
+
+  function normalizeClaudeVoiceCallId(value) {
+    return typeof value === "string" && /^cv-[a-f0-9]{32}$/.test(value) ? value : "";
+  }
+
+  function setClaudeVoiceCallExpanded(details, expanded) {
+    if (!(details instanceof HTMLDetailsElement) || !timelineEl.contains(details)) return false;
+    const id = normalizeClaudeVoiceCallId(details.closest(".claudeVoiceCallCard")?.dataset.voiceCallId);
+    if (!id) return false;
+    details.open = expanded;
+    if (expandedClaudeVoiceCallIds.has(id) === expanded) return false;
+    if (expanded) expandedClaudeVoiceCallIds.add(id);
+    else expandedClaudeVoiceCallIds.delete(id);
+    persistRestoreState();
+    updateTimeGuide({ afterPaint: true, rebuildItems: true });
+    return true;
+  }
+
+  function renderClaudeVoiceCall(item, cardKey) {
+    if (item.source !== "claude" || !normalizeClaudeVoiceCallId(item.voiceCallId) || typeof item.body !== "string") return null;
+    const row = el("div", { className: "row protocolContext claudeVoiceCall" });
+    const card = el("div", { className: "protocolContextCard claudeVoiceCallCard", role: "group", "aria-label": i18n.claudeVoiceCallTitle });
+    card.dataset.voiceCallId = item.voiceCallId;
+    applyTimelineCardWidthState(card, cardKey);
+    applyBookmarkMetadata(card, item);
+    if (Number.isSafeInteger(item.messageIndex) && item.messageIndex > 0) {
+      card.id = `msg-${item.messageIndex}`;
+      card.dataset.messageIndex = String(item.messageIndex);
+    }
+    const details = el("details", { className: "protocolContextDetails claudeVoiceCallDetails" });
+    details.open = expandedClaudeVoiceCallIds.has(item.voiceCallId);
+    const summary = el("summary", { className: "protocolContextSummary", "data-page-search-ignore": "true" });
+    const heading = el("span", { className: "protocolContextSummaryText" });
+    heading.appendChild(el("span", { className: "protocolContextTitle", textContent: i18n.claudeVoiceCallTitle }));
+    heading.appendChild(el("span", { className: "protocolContextDescription", textContent: i18n.claudeVoiceCallDescription }));
+    if (item.timestampIso) heading.appendChild(el("span", { className: "tag", textContent: formatIsoYmdHms(item.timestampIso) }));
+    summary.appendChild(heading);
+    summary.addEventListener("click", event => {
+      if (event.defaultPrevented) return;
+      event.preventDefault();
+      if (setClaudeVoiceCallExpanded(details, !details.open)) schedulePageSearchRefresh({ preserveIndex: true, reveal: false });
+    });
+    details.addEventListener("toggle", () => setClaudeVoiceCallExpanded(details, details.open));
+    let text = item.body.slice(0, 64000);
+    if (/[\uD800-\uDBFF]$/.test(text)) text = text.slice(0, -1);
+    const body = el("pre", { className: "protocolContextBody claudeVoiceCallBody",
+      textContent: item.invalidContent === true || !text.trim() ? i18n.claudeVoiceCallUnavailable : text });
+    if (item.invalidContent === true || !text.trim()) body.dataset.pageSearchIgnore = "true";
+    details.append(summary, body);
+    if (item.truncated === true || item.body.length > text.length) details.appendChild(el("p", {
+      textContent: i18n.crossSessionMessageTruncated, "data-page-search-ignore": "true" }));
+    card.appendChild(details);
+    const actions = el("div", { className: "protocolContextActions", "data-page-search-ignore": "true" });
+    appendBookmarkButton(actions, item);
+    if (item.invalidContent !== true && text.trim()) {
+      const copy = el("button", { type: "button", className: "iconBtn", title: i18n.copyMessageTooltip, "aria-label": i18n.copyMessageTooltip });
+      copy.innerHTML = COPY_ICON_SVG;
+      copy.addEventListener("click", () => vscode.postMessage({ type: "copy", text }));
+      actions.appendChild(copy);
+    }
+    actions.appendChild(createTimelineCardWidthButton(cardKey, card));
+    card.appendChild(actions);
+    row.appendChild(card);
+    return row;
   }
 
   function renderProtocolContext(item, cardKey) {
@@ -14396,6 +14662,199 @@
     if (target) target.scrollIntoView({ block: "nearest" });
   }
 
+  function getAntigravityChangedFileCountText(count, incomplete) {
+    const key = incomplete ? "antigravityFilesKnown" : count === 1 ? "antigravityFileChanged" : "antigravityFilesChanged";
+    return formatTemplate(getSafeUiText(i18n[key], localization.defaults[key]), normalizeCount(count));
+  }
+
+  function getAntigravityEditPositionElement(element) {
+    if (!(element instanceof HTMLElement)) return element;
+    const disclosure = element.closest("details.antigravityEditRecords:not([open])");
+    return disclosure?.querySelector(":scope > summary") ?? element;
+  }
+
+  function openAntigravityEditRecords(element) {
+    if (!(element instanceof HTMLElement)) return;
+    const records = element.closest("details.antigravityEditRecords");
+    if (records instanceof HTMLDetailsElement && !records.open) {
+      expandedAntigravityEditRecords.add(records.dataset.changeId);
+      records.open = true;
+    }
+  }
+
+  function prepareAntigravityTurnChanges(items) {
+    const cardsByAnchor = new Map();
+    const recordsByIndex = new Map();
+    if (model?.meta?.historySource !== "antigravity" || !Array.isArray(model.antigravityTurnFileChanges)) return { cardsByAnchor, recordsByIndex };
+    for (const changes of model.antigravityTurnFileChanges.slice(0, 1000)) {
+      if (!changes || typeof changes.id !== "string" || !/^ag-turn-[a-f0-9]{32}$/.test(changes.id) ||
+          !Number.isSafeInteger(changes.afterItemIndex) || !items[changes.afterItemIndex] || cardsByAnchor.has(changes.afterItemIndex) ||
+          !Array.isArray(changes.files) || !changes.files.length || changes.files.length > 200 || !Array.isArray(changes.editItemIndices)) continue;
+      const indices = changes.editItemIndices.filter(index => Number.isSafeInteger(index) && items[index]?.type === "patchGroup" && !recordsByIndex.has(index));
+      const card = renderAntigravityTurnChanges(changes, indices.length);
+      cardsByAnchor.set(changes.afterItemIndex, { id: changes.id, row: card.row });
+      for (const index of indices) recordsByIndex.set(index, card.records);
+    }
+    return { cardsByAnchor, recordsByIndex };
+  }
+
+  function renderAntigravityTurnChanges(changes, recordCount) {
+    const row = el("div", { className: "row tool antigravityTurnChangesRow" });
+    row.dataset.cardKey = "antigravity-turn-files:" + changes.id;
+    row.dataset.itemType = "antigravityTurnFileChanges";
+    row.dataset.itemIndex = String(changes.afterItemIndex);
+    const card = el("div", { className: "bubble tool toolCard toolCard-kind-edit antigravityTurnChangesCard" });
+    const temporary = pageSearchTemporaryPatchGroupExpansionActive;
+    const header = el("div", { className: "toolCardHeader antigravityTurnChangesHeader" });
+    header.appendChild(renderPatchGroupTitle(changes.countIncomplete
+      ? getAntigravityChangedFileCountText(changes.files.length, true)
+      : getPatchFilesEditedTitle(changes.files.length)));
+    const actions = el("div", { className: "toolCardHeaderActions patchGroupHeaderActions" });
+    const totals = el("span", { className: "patchGroupSummary" });
+    if (changes.stats) {
+      totals.append(renderSignedCountBadge(changes.stats.added, "add"), renderSignedCountBadge(changes.stats.removed, "remove"));
+    } else {
+      totals.textContent = getSafeUiText(i18n.antigravityDiffTotalsUnknown, localization.defaults.antigravityDiffTotalsUnknown);
+    }
+    actions.appendChild(totals);
+    header.appendChild(actions);
+    card.appendChild(header);
+    if (changes.running) {
+      card.appendChild(el("div", { className: "toolCardSecondary",
+        textContent: getSafeUiText(i18n.antigravityDiffRunning, localization.defaults.antigravityDiffRunning) }));
+    }
+    card.appendChild(renderAntigravityTurnFileList(changes, temporary));
+    let records;
+    if (recordCount) {
+      records = el("details", { className: "antigravityEditRecords" });
+      records.dataset.changeId = changes.id;
+      records.open = temporary || expandedAntigravityEditRecords.has(changes.id);
+      records.appendChild(el("summary", { textContent: formatTemplate(
+        getSafeUiText(i18n.antigravityEditRecords, localization.defaults.antigravityEditRecords), recordCount) }));
+      records.addEventListener("toggle", () => {
+        if (!records.isConnected) return;
+        if (!temporary) {
+          if (records.open) expandedAntigravityEditRecords.add(changes.id);
+          else expandedAntigravityEditRecords.delete(changes.id);
+          persistRestoreState();
+        }
+        updateTimeGuide({ afterPaint: true });
+      });
+      card.appendChild(records);
+    }
+    row.appendChild(card);
+    return { row, records };
+  }
+
+  function renderAntigravityTurnFileList(changes, temporary) {
+    const wrap = el("div", { className: "patchGroupCompactSummary" });
+    const list = el("div", { className: "patchGroupFileList antigravityTurnFiles", id: changes.id + "-files" });
+    const toggle = !temporary && changes.files.length > PATCH_GROUP_FILE_PREVIEW_COUNT
+      ? el("button", { type: "button", className: "patchGroupFileToggle" })
+      : null;
+    const fileRows = changes.files.map(file => renderAntigravityTurnFile(changes.id, file, syncFileList));
+    list.append(...fileRows);
+    wrap.appendChild(list);
+
+    function syncFileList() {
+      const expanded = temporary || expandedAntigravityTurnFiles.has(changes.id);
+      const active = document.activeElement;
+      let remaining = 0;
+      let hideActiveFile = false;
+      for (const [index, file] of fileRows.entries()) {
+        const hidden = !expanded && index >= PATCH_GROUP_FILE_PREVIEW_COUNT && !file.open;
+        if (hidden) {
+          remaining += 1;
+          hideActiveFile ||= file.contains(active);
+        }
+        file.hidden = hidden;
+      }
+      if (!toggle) return;
+      toggle.hidden = !expanded && remaining === 0;
+      updatePatchGroupFileListToggle(toggle, expanded, remaining);
+      if (hideActiveFile && !toggle.hidden) toggle.focus({ preventScroll: true });
+      if (toggle.hidden && active === toggle) list.querySelector("details:not([hidden]) > summary")?.focus({ preventScroll: true });
+    }
+
+    if (toggle) {
+      toggle.setAttribute("aria-controls", list.id);
+      toggle.addEventListener("click", () => {
+        withPageSearchContentMutation(() => {
+          const expanded = expandedAntigravityTurnFiles.has(changes.id);
+          setStringSetPresence(expandedAntigravityTurnFiles, changes.id, !expanded);
+          syncFileList();
+          return true;
+        });
+        updateTimeGuide({ afterPaint: true });
+      });
+      wrap.appendChild(toggle);
+    }
+    syncFileList();
+    return wrap;
+  }
+
+  function renderAntigravityTurnFile(turnId, file, onToggle) {
+    const details = el("details", { className: "antigravityTurnFile" });
+    const key = turnId + "\n" + file.path;
+    const summary = el("summary", { className: "patchGroupFileRow", title: file.path });
+    const label = el("span", { className: "patchGroupFilePath" });
+    label.appendChild(el("bdi", { textContent: file.path }));
+    const counts = el("span", { className: "patchGroupFileCounts" });
+    const chevron = el("span", { className: "antigravityTurnFileChevron" });
+    chevron.setAttribute("aria-hidden", "true");
+    counts.append(renderSignedCountBadge(file.stats?.added, "add", !!file.stats),
+      renderSignedCountBadge(file.stats?.removed, "remove", !!file.stats), chevron);
+    summary.append(label, counts);
+    details.appendChild(summary);
+    function appendFileDiff() {
+      if (details.childElementCount > 1) return;
+      if (!file.rows?.length) {
+        const key = !file.stats ? "antigravityDiffUnknown" : file.rows ? "patchNoDiff" : "antigravityDiffLimited";
+        details.appendChild(el("div", { className: "toolCardSecondary",
+          textContent: getSafeUiText(i18n[key], localization.defaults[key]) }));
+        return;
+      }
+      const body = el("pre", { className: "antigravityTurnFileDiff" });
+      for (const line of file.rows) {
+        const kind = line.kind === "add" || line.kind === "delete" ? line.kind : "context";
+        const sign = kind === "add" ? "+" : kind === "delete" ? "-" : " ";
+        const item = el("span", { className: "antigravityDiffLine antigravityDiffLine-" + kind, textContent: sign + line.text });
+        if (line.noFinalNewline) item.appendChild(el("span", { className: "antigravityDiffNoFinalNewline",
+          textContent: getSafeUiText(i18n.antigravityDiffNoNewline, localization.defaults.antigravityDiffNoNewline) }));
+        body.appendChild(item);
+      }
+      details.appendChild(body);
+    }
+    details.open = expandedAntigravityDiffs.has(key);
+    if (details.open) appendFileDiff();
+    details.addEventListener("toggle", () => {
+      if (!details.isConnected || details.open === expandedAntigravityDiffs.has(key)) return;
+      if (details.open) {
+        expandedAntigravityDiffs.add(key);
+        appendFileDiff();
+      } else expandedAntigravityDiffs.delete(key);
+      onToggle();
+      bumpPageSearchContentRevision();
+      if (isPageSearchOpen()) schedulePageSearchRefresh({ preserveIndex: true, reveal: false });
+      updateTimeGuide({ afterPaint: true });
+    });
+    return details;
+  }
+
+  function getPatchFilesEditedTitle(count) {
+    return formatTemplate(
+      getSafeUiText(i18n.patchFilesEdited || i18n.patchGroupCount, localization.defaults.patchFilesEdited), count);
+  }
+
+  function renderPatchGroupTitle(text) {
+    const titleWrap = el("div", { className: "toolCardTitleWrap" });
+    const icon = el("span", { className: "toolCardIcon" });
+    icon.setAttribute("aria-hidden", "true");
+    icon.innerHTML = getToolIconSvg("edit");
+    titleWrap.append(icon, el("div", { className: "toolCardTitle", textContent: text }));
+    return titleWrap;
+  }
+
   function renderPatchGroup(item, itemIndex, cardKey) {
     const row = el("div", { className: "row tool" });
     const entries = Array.isArray(item.entries) ? item.entries : [];
@@ -14408,23 +14867,13 @@
     bubble.dataset.patchGroupIndex = String(itemIndex);
 
     const header = el("div", { className: "toolCardHeader" });
-    const titleWrap = el("div", { className: "toolCardTitleWrap" });
-    const icon = el("span", { className: "toolCardIcon", "aria-hidden": "true" });
-    icon.innerHTML = getToolIconSvg("edit");
-    titleWrap.appendChild(icon);
-
-    const title = el("div", { className: "toolCardTitle" });
-    title.textContent = item.incomplete ? i18n.patchGroupTitle : formatTemplate(
-      getSafeUiText(i18n.patchFilesEdited || i18n.patchGroupCount, localization.defaults.patchFilesEdited),
-      item.entryCount || (Array.isArray(item.entries) ? item.entries.length : 0),
-    );
-    titleWrap.appendChild(title);
-    header.appendChild(titleWrap);
+    header.appendChild(renderPatchGroupTitle(item.incomplete ? i18n.patchGroupTitle
+      : getPatchFilesEditedTitle(item.entryCount || entries.length)));
 
     const headerActions = el("div", { className: "toolCardHeaderActions patchGroupHeaderActions" });
     const badge = el("div", { className: "patchGroupSummary" });
-    badge.appendChild(renderSignedCountBadge(item.totalAdded, "add"));
-    badge.appendChild(renderSignedCountBadge(item.totalRemoved, "remove"));
+    badge.appendChild(renderSignedCountBadge(item.totalAdded, "add", item.statsAvailability?.added !== false));
+    badge.appendChild(renderSignedCountBadge(item.totalRemoved, "remove", item.statsAvailability?.removed !== false));
     headerActions.appendChild(badge);
 
     if (entries.length > 0 && normalizePatchGroupCardKey(cardKey)) {
@@ -14484,14 +14933,10 @@
     }
     wrap.appendChild(list);
 
-    if (entries.length > 3 && !searchExpanded && !allDiffActive) {
+    if (entries.length > PATCH_GROUP_FILE_PREVIEW_COUNT && !searchExpanded && !allDiffActive) {
       const remaining = countHiddenPatchGroupEntries(entries, visibleEntries);
       const toggle = el("button", { type: "button", className: "patchGroupFileToggle" });
-      toggle.textContent = fileListExpanded
-        ? getSafeUiText(i18n.patchShowFewerFiles, localization.defaults.patchShowFewerFiles)
-        : formatTemplate(getSafeUiText(i18n.patchShowMoreFiles, localization.defaults.patchShowMoreFiles), remaining);
-      toggle.title = toggle.textContent;
-      toggle.setAttribute("aria-expanded", fileListExpanded ? "true" : "false");
+      updatePatchGroupFileListToggle(toggle, fileListExpanded, remaining);
       toggle.addEventListener("click", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -14508,10 +14953,18 @@
     return wrap;
   }
 
+  function updatePatchGroupFileListToggle(toggle, expanded, remaining) {
+    toggle.textContent = expanded
+      ? getSafeUiText(i18n.patchShowFewerFiles, localization.defaults.patchShowFewerFiles)
+      : formatTemplate(getSafeUiText(i18n.patchShowMoreFiles, localization.defaults.patchShowMoreFiles), remaining);
+    toggle.title = toggle.textContent;
+    toggle.setAttribute("aria-expanded", String(expanded));
+  }
+
   function selectVisiblePatchGroupEntries(entries, fileListExpanded) {
     if (!Array.isArray(entries)) return [];
     if (fileListExpanded) return entries;
-    return entries.filter((entry, index) => index < 3 || isPatchGroupEntryExpanded(entry));
+    return entries.filter((entry, index) => index < PATCH_GROUP_FILE_PREVIEW_COUNT || isPatchGroupEntryExpanded(entry));
   }
 
   function countHiddenPatchGroupEntries(entries, visibleEntries) {
@@ -14523,7 +14976,7 @@
     let count = 0;
     for (const [index, entry] of entries.entries()) {
       const entryId = getPatchEntryId(entry);
-      const visible = index < 3 || (entryId && visibleIds.has(entryId));
+      const visible = index < PATCH_GROUP_FILE_PREVIEW_COUNT || (entryId && visibleIds.has(entryId));
       if (!visible) count += 1;
     }
     return count;
@@ -14640,8 +15093,8 @@
     button.setAttribute("aria-label", title);
     button.appendChild(el("span", { className: "patchGroupFilePath", textContent: title }));
     const counts = el("span", { className: "patchGroupFileCounts" });
-    counts.appendChild(renderSignedCountBadge(entry.added, "add"));
-    counts.appendChild(renderSignedCountBadge(entry.removed, "remove"));
+    counts.appendChild(renderSignedCountBadge(entry.added, "add", entry.statsAvailability?.added !== false));
+    counts.appendChild(renderSignedCountBadge(entry.removed, "remove", entry.statsAvailability?.removed !== false));
     button.appendChild(counts);
     const evidenceLabel = appendPatchEvidenceLabel(button, entry);
     if (evidenceLabel) button.setAttribute("aria-label", `${title} ${evidenceLabel}`);
@@ -14728,6 +15181,7 @@
     const ensurePatchBody = () => {
       if (!(body instanceof HTMLElement)) return;
       const renderEntry = resolvePatchEntryForDisplay(entry);
+      if (renderEntry?.detailsUnavailable) { populatePatchEntryBody(body, renderEntry, inferPatchLanguage(renderEntry)); return; }
       if (!deferOmittedDetails && entry && entry.detailsOmitted && !hasLoadedPatchEntryDetails(entry)) {
         if (patchEntryDetailsFailed.has(entryId)) {
           renderPatchEntryDetailsError(body, entry);
@@ -14801,8 +15255,8 @@
     summary.appendChild(pathWrap);
 
     const counts = el("div", { className: "patchEntryCounts" });
-    counts.appendChild(renderSignedCountBadge(entry.added, "add"));
-    counts.appendChild(renderSignedCountBadge(entry.removed, "remove"));
+    counts.appendChild(renderSignedCountBadge(entry.added, "add", entry.statsAvailability?.added !== false));
+    counts.appendChild(renderSignedCountBadge(entry.removed, "remove", entry.statsAvailability?.removed !== false));
     summary.appendChild(counts);
     summary.appendChild(renderPatchFileHistoryButton(entry));
     details.appendChild(summary);
@@ -14951,6 +15405,9 @@
     body.classList.remove("patchEntryBody-deferred");
     body.classList.add("patchEntryBody-rendering");
     body.dataset.deferredState = "rendering";
+    if (entry?.detailsUnavailable) {
+      body.appendChild(renderPatchDiffUnavailable(entry)); finalizeDeferredPatchEntryBody(body, entry); return;
+    }
 
     if (entry && entry.detailsOmitted && !hasLoadedPatchEntryDetails(entry)) {
       renderPatchEntryDetailsLoading(body, entry);
@@ -15198,6 +15655,7 @@
 
   function populatePatchEntryBody(body, entry, entryLanguage) {
     if (!(body instanceof HTMLElement)) return;
+    if (entry?.detailsUnavailable) { body.replaceChildren(renderPatchDiffUnavailable(entry)); return; }
 
     if (entry && entry.detailsOmitted) {
       body.appendChild(renderLazyDetailsPlaceholder());
@@ -15473,8 +15931,16 @@
     return highlightedLines;
   }
 
-  function renderSignedCountBadge(value, kind) {
+  function renderPatchDiffUnavailable(entry) {
+    return el("div", { className: "toolCardSecondary", textContent: entry.detailsUnavailable === "limit" ? i18n.patchDiffLimit : i18n.patchDiffUnavailable });
+  }
+
+  function renderSignedCountBadge(value, kind, available = true) {
     const badge = el("span", { className: `patchCountBadge patchCountBadge-${kind}` });
+    if (!available) {
+      badge.textContent = "—"; badge.title = kind === "add" ? i18n.patchAddedUnavailable : i18n.patchRemovedUnavailable;
+      badge.setAttribute("aria-label", badge.title); return badge;
+    }
     const safeValue = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
     badge.textContent = `${kind === "add" ? "+" : "-"}${safeValue}`;
     return badge;
@@ -15842,6 +16308,23 @@
   }
 
   function resolveToolPresentation(item) {
+    if (item.advisor) {
+      const statuses = {
+        called: i18n.claudeAdvisorCalled,
+        reviewed: i18n.claudeAdvisorReviewed,
+        redacted: i18n.claudeAdvisorRedacted,
+        declined: i18n.claudeAdvisorDeclined,
+        unavailable: i18n.claudeAdvisorUnavailable,
+      };
+      if (Object.hasOwn(statuses, item.advisor.status)) {
+        return {
+          toolKind: "agent",
+          title: i18n.claudeAdvisorTitle,
+          primaryText: statuses[item.advisor.status],
+          secondaryText: item.advisor.truncated ? i18n.claudeAdvisorTruncated : "",
+        };
+      }
+    }
     const raw = item && item.presentation && typeof item.presentation === "object" ? item.presentation : null;
     const toolKind =
       raw && typeof raw.toolKind === "string" && raw.toolKind.trim().length > 0 ? raw.toolKind.trim() : "unknown";
@@ -15959,8 +16442,11 @@
 
   function renderNote(item, cardKey) {
     const historyIncomplete = item && item.noticeKind === "historyIncomplete";
-    const noteTitle = historyIncomplete ? getSafeUiText(i18n.historyIncompleteTitle, localization.defaults.historyIncompleteTitle) : item && item.title;
-    const noteText = historyIncomplete ? getSafeUiText(i18n.historyIncompleteMessage, localization.defaults.historyIncompleteMessage) : item && item.text;
+    const antigravityPartial = item && item.noticeKind === "antigravityPartial";
+    const noteTitle = historyIncomplete ? getSafeUiText(i18n.historyIncompleteTitle, localization.defaults.historyIncompleteTitle)
+      : antigravityPartial ? getSafeUiText(i18n.antigravityPartialTitle, localization.defaults.antigravityPartialTitle) : item && item.title;
+    const noteText = historyIncomplete ? getSafeUiText(i18n.historyIncompleteMessage, localization.defaults.historyIncompleteMessage)
+      : antigravityPartial ? getSafeUiText(i18n.antigravityPartialMessage, localization.defaults.antigravityPartialMessage) : item && item.text;
     const row = el("div", { className: "row tool" });
     const bubble = el("div", { className: "bubble tool" });
     applyTimelineCardWidthState(bubble, cardKey);
@@ -16223,6 +16709,7 @@
   }
 
   function getMessageTextToRender(item, role) {
+    if (item.codexAnswerRestricted === true) return i18n.codexAnswerRestricted;
     if (role === "user" && !showDetails) {
       if (typeof item.requestText === "string" && item.requestText.trim()) return item.requestText;
       return item.text || "";
@@ -16252,7 +16739,10 @@
     const type = item && typeof item.type === "string" && item.type.trim() ? item.type.trim() : "item";
     const safeIndex = Number.isInteger(itemIndex) && itemIndex >= 0 ? itemIndex : 0;
     if (type === "claudeProgress" && normalizeClaudeProgressId(item.progressId)) return `claude-progress:${item.progressId}`;
+    if (type === "tool" && typeof item.advisor?.id === "string" && /^claude-advisor:[0-9]+:[0-9]+$/u.test(item.advisor.id)) return item.advisor.id;
+    if (type === "antigravityProgress" && normalizeAntigravityProgressId(item.progressId)) return `antigravity-progress:${item.progressId}`;
     if (type === "claudeQueuedInput" && normalizeClaudeQueuedInputId(item.inputId)) return `claude-input:${item.inputId}`;
+    if (type === "claudeVoiceCall" && normalizeClaudeVoiceCallId(item.voiceCallId)) return `claude-voice-call:${item.voiceCallId}`;
     if (type === "taskNotification" && typeof item.notificationId === "string" && /^ctn-[a-f0-9]{32}$/u.test(item.notificationId)) return `claude-notification:${item.notificationId}`;
     if (type === "message" && item && typeof item.messageIndex === "number") return `message:${item.messageIndex}`;
     if ((type === "crossSessionMessage" || type === "taskNotification") && item && typeof item.messageIndex === "number") {
@@ -16427,6 +16917,7 @@
     element.dataset.bookmarked = bookmarked ? "true" : "false";
     if (item && item.type === "message") element.dataset.timeGuideRole = getMessageRole(item);
     else if (item?.type === "claudeQueuedInput") element.dataset.timeGuideRole = "user";
+    else if (item?.type === "antigravityProgress" && item.kind === "queuedInput") element.dataset.timeGuideRole = "user";
     else delete element.dataset.timeGuideRole;
     element.classList.toggle("bookmarked", bookmarked);
     element.classList.toggle("nativeBookmarked", nativeBookmarkedKeys.has(key));
@@ -16610,6 +17101,8 @@
     selectedMessageIndex = messageIndex;
     expandedMessageIndexes.add(messageIndex);
     expandCrossSessionMessageForReveal(messageIndex);
+    const voice = model?.items?.find(item => item.type === "claudeVoiceCall" && item.messageIndex === messageIndex);
+    if (voice && normalizeClaudeVoiceCallId(voice.voiceCallId)) expandedClaudeVoiceCallIds.add(voice.voiceCallId);
     ensureTurnExpandedForReveal(getTurnIdForMessageIndex(messageIndex), { render: false });
     render();
     const elTarget = document.getElementById(`msg-${messageIndex}`);
@@ -16627,6 +17120,7 @@
     }
     const elTarget = document.getElementById(`patch-group-${itemIndex}`);
     if (!elTarget) return;
+    openAntigravityEditRecords(elTarget);
     elTarget.classList.add("highlight");
     elTarget.scrollIntoView({ block: "center" });
     setTimeout(() => {
@@ -16657,6 +17151,7 @@
     render();
     const nextPatch = findPatchTargetElement(target);
     const elTarget = nextPatch && (nextPatch.entry || nextPatch.group);
+    openAntigravityEditRecords(elTarget);
     if (!elTarget) {
       if (typeof target.messageIndex === "number") revealMessage(target.messageIndex, finish);
       else finish();

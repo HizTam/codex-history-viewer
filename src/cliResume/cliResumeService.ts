@@ -11,6 +11,8 @@ import {
   validateCliResumeSessionId,
   type CliResumeTarget,
 } from "./cliResumeValidation";
+import { antigravityReader } from "../antigravity/antigravityReader";
+import { verifyAntigravityCliResume } from "../antigravity/antigravityCliResume";
 
 export type CliResumeTargetResolution =
   | { status: "resolved"; session: SessionSummary }
@@ -22,6 +24,9 @@ type CliResumeSessionIdentity = {
   source: SessionSummary["source"];
   archiveState: SessionSummary["storage"]["archiveState"];
   id: unknown;
+  identityKey: string;
+  rootPath: string;
+  antigravityGeneration?: number;
 };
 
 type CliResumeCurrentResolution = CliResumeTargetResolution | { status: "stale" };
@@ -51,6 +56,9 @@ export class CliResumeService {
       source: initialSession.source,
       archiveState: initialSession.storage.archiveState,
       id: initialSession.meta.id,
+      identityKey: initialSession.identityKey,
+      rootPath: initialSession.storage.rootPath,
+      antigravityGeneration: target === "antigravity" ? antigravityReader.getConfigurationRevision() : undefined,
     };
     const guardKey = `${target}:${initialIdentity.fsPathKey}`;
     if (this.inFlight.has(guardKey)) {
@@ -75,6 +83,9 @@ export class CliResumeService {
       if (!validateCliResumeSessionId(initialSession.meta.id, target)) {
         void vscode.window.showErrorMessage(t("cliResume.error.invalidSessionId"));
         return false;
+      }
+      if (target === "antigravity" && !await this.verifyNativeNamespace(initialSession, initialIdentity.antigravityGeneration!, guardKey)) {
+        void vscode.window.showErrorMessage(t("cliResume.error.antigravityNamespace")); return false;
       }
 
       let cwd: string | undefined;
@@ -108,6 +119,14 @@ export class CliResumeService {
         return false;
       }
       latestSession = latestResolution.session;
+      if (target === "antigravity") {
+        if (!await this.verifyNativeNamespace(latestSession, initialIdentity.antigravityGeneration!, guardKey)) {
+          void vscode.window.showErrorMessage(t("cliResume.error.antigravityNamespace")); return false;
+        }
+        latestResolution = this.resolveCurrentEligibleSession(target, initialIdentity);
+        if (latestResolution.status !== "resolved") { this.showResolutionError(latestResolution.status); return false; }
+        latestSession = latestResolution.session;
+      }
       if (!vscode.workspace.isTrusted) {
         void vscode.window.showErrorMessage(t("cliResume.error.workspaceUntrusted"));
         return false;
@@ -122,7 +141,7 @@ export class CliResumeService {
       let terminal: vscode.Terminal | undefined;
       try {
         terminal = vscode.window.createTerminal({
-          name: target === "codex" ? t("cliResume.terminal.codex") : t("cliResume.terminal.claude"),
+          name: target === "codex" ? t("cliResume.terminal.codex") : target === "antigravity" ? t("cliResume.terminal.antigravity") : t("cliResume.terminal.claude"),
           cwd: cwdProbe.path,
         });
         terminal.sendText(command, false);
@@ -143,9 +162,14 @@ export class CliResumeService {
     }
     if (!dispatched) return false;
     void vscode.window.showInformationMessage(
-      target === "codex" ? t("cliResume.prepared.codex") : t("cliResume.prepared.claude"),
+      target === "codex" ? t("cliResume.prepared.codex") : target === "antigravity" ? t("cliResume.prepared.antigravity") : t("cliResume.prepared.claude"),
     );
     return true;
+  }
+
+  private async verifyNativeNamespace(session: SessionSummary, generation: number, guardKey: string): Promise<boolean> {
+    const result = await this.scheduler.schedule(() => verifyAntigravityCliResume(session, generation), () => !this.inFlight.has(guardKey), 1500);
+    return result.status === "completed" && result.value;
   }
 
   private resolveCurrentEligibleSession(
@@ -158,6 +182,8 @@ export class CliResumeService {
       currentSession.source !== initialIdentity.source ||
       currentSession.storage.archiveState !== initialIdentity.archiveState ||
       currentSession.meta.id !== initialIdentity.id ||
+      target === "antigravity" && (currentSession.identityKey !== initialIdentity.identityKey || currentSession.storage.rootPath !== initialIdentity.rootPath
+        || antigravityReader.getConfigurationRevision() !== initialIdentity.antigravityGeneration) ||
       !isCliResumeSessionEligible(currentSession, target)
     ) {
       return { status: "stale" };

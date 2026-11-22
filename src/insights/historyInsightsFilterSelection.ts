@@ -82,6 +82,8 @@ function resolveSourceSelections(
   if (sources.length !== resolved.length) return null;
   const sourceSet = new Set(sources);
   if (sourceSet.size !== sources.length) return null;
+  const explicitAll = [...selections.values()].some(selection => selection.filter === "source" && selection.source === "all");
+  if (explicitAll) return sources.length === 1 ? sources[0]! : null;
   if (sourceSet.size === 2 && sourceSet.has("codex") && sourceSet.has("claude")) return "all";
   return sources.length === 1 ? sources[0]! : null;
 }

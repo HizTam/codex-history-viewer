@@ -130,7 +130,8 @@ export function extractUserRequestText(text: string): string | null {
 export function isBoilerplateUserMessageText(text: string): boolean {
   const t = String(text ?? "").trimStart();
   if (!t) return false;
-  if (isCodexProtocolContextText(t)) return true;
+  // Derived or source-agnostic text has lost the provenance of a Codex Page snapshot.
+  if (parseCodexProtocolContextText(t, false) !== null) return true;
   // Treat meta tags as boilerplate only when the line contains only the tag payload.
   if (t.startsWith("<ide_opened_file>")) return stripTransportMetaTags(t).length === 0;
   if (t.startsWith("<local-command-caveat>")) return stripTransportMetaTags(t).length === 0;
@@ -138,13 +139,25 @@ export function isBoilerplateUserMessageText(text: string): boolean {
   return false;
 }
 
-export function isCodexProtocolContextStartText(value: unknown): boolean {
+export function isCodexProtocolContextStartText(value: unknown, includePageSnapshots = false): boolean {
   const text = String(value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trimStart();
   if (!text) return false;
   const lower = text.toLowerCase();
-  if (lower.startsWith("<external_codex_apps_open_page>")) return isCodexProtocolContextText(text);
+  if (lower.startsWith("<external_codex_apps_open_page>") || includePageSnapshots && text.startsWith(CODEX_PAGE_SNAPSHOT_PREFIX)) {
+    return parseCodexProtocolContextText(text, includePageSnapshots) !== null;
+  }
   if (CODEX_SESSION_START_CONTEXT_TAGS.some((tagName) => lower.startsWith(`<${tagName}>`))) return true;
   return /^# AGENTS\.md instructions(?:[^\n]*)?(?:\n|$)/iu.test(text);
+}
+
+const CODEX_PAGE_SNAPSHOT_PREFIX = "<external_codex_apps_selected_page_part_";
+
+export function hasCodexPageSnapshotPrefix(value: unknown): value is string {
+  return typeof value === "string" && value.trimStart().startsWith(CODEX_PAGE_SNAPSHOT_PREFIX);
+}
+
+export function isCodexSelectedPageSnapshotText(value: unknown): boolean {
+  return hasCodexPageSnapshotPrefix(value) && isCodexProtocolContextText(value);
 }
 
 export function isCodexProtocolContextText(text: string): boolean {
@@ -155,16 +168,18 @@ export function isCodexSessionStartContextText(text: string): boolean {
   return parseCodexProtocolContextText(text)?.hasSessionStartMarker === true;
 }
 
-function parseCodexProtocolContextText(text: string): { blockCount: number; hasSessionStartMarker: boolean } | null {
+function parseCodexProtocolContextText(text: string, includePageSnapshots = true): { blockCount: number; hasSessionStartMarker: boolean } | null {
   const normalized = String(text ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
   if (!normalized) return null;
-  const lower = normalized.toLowerCase();
+  const folded = normalized.toLowerCase();
+  // Length-changing case-folds inside snapshot JSON must not shift tag offsets.
+  const lower = folded.length === normalized.length ? folded : normalized.replace(/[A-Z]/g, character => character.toLowerCase());
 
   let blockCount = 0;
   let hasSessionStartMarker = false;
   let cursor = 0;
   while (cursor < normalized.length) {
-    const consumed = consumeCodexSessionStartContextBlock(normalized, lower, cursor);
+    const consumed = consumeCodexSessionStartContextBlock(normalized, lower, cursor, includePageSnapshots);
     if (!consumed || consumed.end <= cursor) return null;
     blockCount += 1;
     hasSessionStartMarker = hasSessionStartMarker || consumed.isSessionStartMarker;
@@ -206,6 +221,7 @@ function consumeCodexSessionStartContextBlock(
   text: string,
   lower: string,
   cursor: number,
+  includePageSnapshots: boolean,
 ): { end: number; isSessionStartMarker: boolean } | null {
   const pageTag = "external_codex_apps_open_page";
   const pageOpen = `<${pageTag}>`;
@@ -220,13 +236,35 @@ function consumeCodexSessionStartContextBlock(
       const keys = Object.keys(payload);
       if (keys.length !== 1 || keys[0] !== "page_id") return null;
       const id = (payload as { page_id: unknown }).page_id;
-      if (id !== null && (typeof id !== "string" || !id.trim() || id.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(id))) return null;
+      if (!isCodexPageId(id)) return null;
       return { end: closeIndex + closeTag.length, isSessionStartMarker: false };
     } catch {
       // Invalid or incomplete protocol data remains visible as ordinary input.
       return null;
     }
   }
+  const pageSnapshot = /<external_codex_apps_selected_page_part_([1-9]\d{0,5})_of_([1-9]\d{0,5})>Companion Page snapshot part \1 of \2:\n/y;
+  pageSnapshot.lastIndex = cursor;
+  const snapshot = includePageSnapshots && text.startsWith(CODEX_PAGE_SNAPSHOT_PREFIX, cursor) ? pageSnapshot.exec(text) : null;
+  if (snapshot) {
+    if (Number(snapshot[1]) > Number(snapshot[2])) return null;
+    const closeTag = `</external_codex_apps_selected_page_part_${snapshot[1]}_of_${snapshot[2]}>`;
+    const contentStart = pageSnapshot.lastIndex;
+    const closeIndex = findPageSnapshotJsonEnd(text, contentStart);
+    if (closeIndex === undefined || !text.startsWith(closeTag, closeIndex)) return null;
+    try {
+      // Classify a complete snapshot envelope while preserving quoted or malformed input.
+      const value: unknown = JSON.parse(text.slice(contentStart, closeIndex));
+      if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+      const payload = value as Record<string, unknown>;
+      if (Object.keys(payload).length !== 2 || !Object.hasOwn(payload, "page_id") || !Object.hasOwn(payload, "document_view")) return null;
+      if (!isCodexPageId(payload.page_id)) return null;
+      return { end: closeIndex + closeTag.length, isSessionStartMarker: false };
+    } catch {
+      return null;
+    }
+  }
+
   const xmlBlock = consumeKnownCodexContextXmlBlock(lower, cursor);
   if (xmlBlock) {
     return {
@@ -244,6 +282,34 @@ function consumeCodexSessionStartContextBlock(
   const instructions = consumeKnownCodexContextXmlBlock(lower, blockStart, "instructions");
   if (!instructions || instructions.end <= blockStart) return null;
   return { end: instructions.end, isSessionStartMarker: true };
+}
+
+// Find the end of the bounded JSON value before looking for the enclosing transport tag.
+function findPageSnapshotJsonEnd(text: string, start: number): number | undefined {
+  const limit = Math.min(text.length, start + 1_048_576);
+  let cursor = start;
+  while (cursor < limit && /[ \t\n\r]/u.test(text[cursor]!)) cursor++;
+  if (text[cursor] !== "{") return undefined;
+  let depth = 0, quoted = false;
+  for (; cursor < limit; cursor++) {
+    const character = text[cursor];
+    if (quoted) {
+      if (character === "\\") cursor++;
+      else if (character === '"') quoted = false;
+    } else if (character === '"') quoted = true;
+    else if (character === "{" || character === "[") depth++;
+    else if (character === "}" || character === "]") {
+      if (--depth !== 0) continue;
+      cursor++;
+      while (cursor < limit && /[ \t\n\r]/u.test(text[cursor]!)) cursor++;
+      return cursor;
+    }
+  }
+  return undefined;
+}
+
+function isCodexPageId(value: unknown): boolean {
+  return value === null || (typeof value === "string" && value.length <= 1_024 && Boolean(value.trim()) && !/[\u0000-\u001f\u007f]/u.test(value));
 }
 
 function consumeKnownCodexContextXmlBlock(

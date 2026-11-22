@@ -44,7 +44,7 @@ import {
   type HistoryInsightsLoadIntent,
 } from "./historyInsightsLoadIntent";
 import { selectVisibleProjectOptionKeys } from "./historyInsightsProjectOptions";
-import { resolveHistoryInsightsSnapshot, sanitizeHistoryInsightsSnapshot } from "./historyInsightsSnapshot";
+import { resolveHistoryInsightsSnapshot, sanitizeHistoryInsightsSnapshot, isHistoryInsightsInventoryIncomplete } from "./historyInsightsSnapshot";
 import {
   archiveLocationFromHistoryDisplayTarget,
   resolveEffectiveHistoryDisplayTarget,
@@ -84,6 +84,7 @@ export interface HistoryInsightsPanelActions {
   waitForCurrentHistoryIndex: (
     isRequestCurrent: () => boolean,
     requireAuthoritative: boolean,
+    requiredSources?: readonly SessionSummary["source"][],
   ) => Promise<HistoryInsightsHistoryIndexSnapshot | null>;
   getCurrentSnapshot: () => HistoryInsightsSnapshot;
   prepareFilters: (
@@ -212,7 +213,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
         );
       });
       if (!changed) return;
-      const resolved = resolveHistoryInsightsSnapshot(state.snapshot, index.sessions);
+      const resolved = resolveHistoryInsightsSnapshot(state.snapshot, index.sessions, index.sourceInventoryStates);
       this.resetState(resolved.snapshot, state.loadCancelledByUser);
       if (!this.ready || !(await this.sendBootstrapForCurrentState("rolloutMainline.bootstrap", panel))) return;
       if (state.loadCancelledByUser) await this.sendCancelledObserved(panel, this.state);
@@ -623,7 +624,8 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       });
       if (!this.requireActiveLoad(panel, state, generation, cancellation)) return;
       const activeSessions = historyIndex.sessions;
-      const resolved = resolveHistoryInsightsSnapshot(state.snapshot, activeSessions);
+      const sourceInventory = this.historyService.getIndex().sourceInventoryStates;
+      const resolved = resolveHistoryInsightsSnapshot(state.snapshot, activeSessions, sourceInventory);
       state.snapshot = resolved.snapshot;
       const sessions = resolved.sessions;
       state.codexRollbackRevisions = new Map(sessions
@@ -643,6 +645,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       if (sessions.length > 0 && stored.entries.length === sessions.length) {
         const cachedModel = aggregateHistoryInsights({
           snapshot: state.snapshot,
+          sourceInventoryIncomplete: isHistoryInsightsInventoryIncomplete(state.snapshot, sourceInventory),
           entries: stored.entries,
           cacheHitCount: stored.entries.length,
           rebuiltCount: 0,
@@ -715,6 +718,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       if (!this.requireActiveLoad(panel, state, generation, cancellation)) return;
       const model = aggregateHistoryInsights({
         snapshot: state.snapshot,
+        sourceInventoryIncomplete: isHistoryInsightsInventoryIncomplete(state.snapshot, sourceInventory),
         entries: result.entries,
         cacheHitCount: result.cacheHitCount,
         rebuiltCount: result.rebuiltCount,
@@ -814,6 +818,7 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
         this.actions.waitForCurrentHistoryIndex(
           () => this.isActiveLoad(panel, state, generation, cancellation),
           requireAuthoritative,
+          requireAuthoritative ? [...new Set(state.snapshot.references.map(reference => reference.source))] : undefined,
         ),
         cancellationWait,
       ]);
@@ -1230,7 +1235,9 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
       selections.set(buildHistoryInsightsFilterOptionMapKey(filter, id), selection);
       return { id, label, selected, ...presentation };
     };
-    const sourceValues = codexAvailable && claudeAvailable
+    const sourceValues: readonly import("../sessions/sessionTypes").SessionSourceFilter[] = config.enableAntigravitySource
+      ? ["all", ...(codexAvailable ? ["codex" as const] : []), ...(claudeAvailable ? ["claude" as const] : []), "antigravity"]
+      : codexAvailable && claudeAvailable
       ? (["codex", "claude"] as const)
       : codexAvailable
         ? (["codex"] as const)
@@ -1240,8 +1247,8 @@ export class HistoryInsightsPanelManager implements vscode.Disposable {
     const sourceOptions = sourceValues.map((source) => option(
       "source",
       source,
-      t(`historyInsights.source.${source}`),
-      snapshot.descriptor.source === "all" || source === snapshot.descriptor.source,
+      source === "all" ? t("historyInsights.filterAll") : t(`historyInsights.source.${source}`),
+      sourceValues.includes("all") ? source === snapshot.descriptor.source : snapshot.descriptor.source === "all" || source === snapshot.descriptor.source,
       { filter: "source", source },
       { value: source },
     ));

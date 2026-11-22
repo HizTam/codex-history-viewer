@@ -451,6 +451,12 @@ select:focus-visible,
   line-height: 1.5;
 }
 
+/* Align card-level status text without adding a second inset to action descriptions. */
+.maintenance-card > .maintenance-description {
+  margin: 0;
+  padding: 12px 17px;
+}
+
 .setting-disabled-reason {
   color: var(--vscode-disabledForeground);
 }
@@ -483,6 +489,11 @@ select:focus-visible,
 
 .setting-badge.source.claude {
   color: var(--vscode-charts-orange, var(--vscode-foreground));
+  border-color: currentColor;
+}
+
+.setting-badge.source.antigravity {
+  color: var(--vscode-charts-green, var(--vscode-foreground));
   border-color: currentColor;
 }
 

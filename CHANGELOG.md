@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.0.0] - 2026-11-22
+
+### Added
+
+- Added Antigravity as a history source. Enable it in the history source settings to use it in History, Pinned, project views, Search, and History Insights.
+- Added an optional SQLite backend for history, search, and analysis caches. File-based caching is the default. In supported environments, enable SQLite under **Open Settings > General > Cache**.
+- Added collapsible cards for Claude Code voice call transcripts. Transcripts can be copied or exported to Markdown and are excluded from user request and turn counts.
+- Added tool cards that show Claude Code Advisor calls and their result status.
+
+### Changed
+
+- Reduced memory usage when searching large histories by reading indexed messages incrementally. SQLite mode also reuses indexed content during updates and narrows candidates for supported text and regular expression searches.
+
+### Fixed
+
+- Fixed Codex page-selection and snapshot records appearing as ordinary user messages or affecting search results and session titles.
+
+**Note**
+
+SQLite mode is opt-in. For official desktop VS Code, version 1.123.0 or later is the compatibility guideline. If SQLite mode is enabled but cannot be used, the extension falls back to file-based caching. The first history load or search after updating or switching cache backends may take longer while the required caches are rebuilt.
+
 ## [2.21.0] - 2026-11-12
 
 ### Added

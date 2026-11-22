@@ -11,6 +11,7 @@ import { NO_CWD_PROJECT_KEY, type ProjectAssociationStore } from "../services/pr
 import {
   HistoryEmptyNode,
   SessionNode,
+  StartupHistorySessionNode,
   DayNode,
   MonthNode,
   type ProjectAssociatedSource,
@@ -141,6 +142,8 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   private displayTarget: HistoryDisplayTarget;
   private sortOrder: HistorySortOrder;
   private initialLoadComplete = false;
+  private startupPresentation?: { readonly viewMode: HistoryViewMode; readonly grouped: boolean };
+  private readonly startupElements = new WeakSet<TreeNode>();
   private readonly codexAgentRuns: CodexAgentRunsService;
   private readonly sessionIconResolver: SessionIconResolver;
   private readonly canonicalProjectKeyCache = new Map<string, string>();
@@ -179,12 +182,14 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.projectAliasStore = projectAliasStore;
     this.projectAssociationStore = projectAssociationStore;
     this.viewMode = normalizeHistoryViewMode(viewMode);
+    if (this.startupPresentation) this.startupPresentation = { ...this.startupPresentation, viewMode: this.viewMode };
     this.sortOrder = normalizeHistorySortOrder(sortOrder);
     this.filter = filter;
     this.projectCwd = typeof projectCwd === "string" && projectCwd.trim().length > 0 ? projectCwd.trim() : null;
     this.projectScopeCwd =
       typeof projectScopeCwd === "string" && projectScopeCwd.trim().length > 0 ? projectScopeCwd.trim() : null;
     this.projectGrouped = projectGrouped;
+    if (this.startupPresentation) this.startupPresentation = { ...this.startupPresentation, grouped: projectGrouped };
     this.sourceFilter = normalizeSourceFilter(sourceFilter);
     this.tagFilter = normalizeTagFilter(tagFilter);
     this.displayTarget = displayTarget;
@@ -216,6 +221,29 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     this.projectSessionsByRelocationKey.clear();
   }
 
+  public setStartupPresentation(viewMode?: HistoryViewMode, grouped = false): void {
+    this.startupPresentation = viewMode ? { viewMode, grouped } : undefined;
+    this.refresh();
+  }
+
+  private get startupIndex() {
+    return this.startupPresentation ? this.historyService.getStartupPreview() : undefined;
+  }
+
+  private get displayedViewMode(): HistoryViewMode {
+    return (this.startupIndex && this.startupPresentation?.viewMode) || this.viewMode;
+  }
+
+  public isStartupElement(element: unknown): boolean {
+    return typeof element === "object" && element !== null && this.startupElements.has(element as TreeNode);
+  }
+
+  public resolveStartupSelection(element: unknown): SessionSummary | undefined {
+    if (!(element instanceof StartupHistorySessionNode) || !this.isStartupElement(element)) return undefined;
+    const summary = this.historyService.resolveStartupSelection(element.summary, Boolean(this.startupIndex));
+    return summary && this.matchesSession(summary) ? summary : undefined;
+  }
+
   public markInitialLoadComplete(): void {
     if (this.initialLoadComplete) return;
     this.initialLoadComplete = true;
@@ -229,6 +257,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public setViewMode(viewMode: HistoryViewMode): void {
     this.viewMode = normalizeHistoryViewMode(viewMode);
+    if (this.startupPresentation) this.startupPresentation = { ...this.startupPresentation, viewMode: this.viewMode };
   }
 
   public setSortOrder(sortOrder: HistorySortOrder): void {
@@ -264,6 +293,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   public setProjectGrouped(projectGrouped: boolean): void {
     this.projectGrouped = projectGrouped;
+    if (this.startupPresentation) this.startupPresentation = { ...this.startupPresentation, grouped: projectGrouped };
   }
 
   public setSourceFilter(sourceFilter: SessionSourceFilter): void {
@@ -366,6 +396,8 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
         ? t("history.filter.source.codex")
         : condition.source === "claude"
           ? t("history.filter.source.claude")
+          : condition.source === "antigravity"
+            ? t("history.filter.source.antigravity")
           : t("history.filter.source.all");
     const chips = [
       t("historyInsights.filter.source", sourceLabel),
@@ -393,6 +425,9 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       dateBasis: config.historyDateBasis,
       dateTimeSettingsKey,
       references,
+      sourceInventoryStates: Object.fromEntries((["codex", "claude", "antigravity"] as const).filter(source =>
+        (condition.source === "all" || condition.source === source) && (source === "antigravity" ? config.enableAntigravitySource : source === "claude" ? config.enableClaudeSource : config.enableCodexSource || config.enableCodexArchivedSessions)
+      ).map(source => [source, this.historyService.getIndex().sourceInventoryStates?.[source]?.status ?? "cached"])),
       descriptor: {
         date: condition.date,
         dateRange: condition.dateRange,
@@ -446,7 +481,9 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     const config = this.getConfigSnapshot();
     const nodes = [new HistoryEmptyNode(t("history.empty.noHistory.title"), "info")];
 
-    if (config.enableCodexSource && config.enableClaudeSource) {
+    if (config.enableAntigravitySource) {
+      nodes.push(new HistoryEmptyNode(t("history.empty.noHistory.antigravityHint"), "folder-opened"));
+    } else if (config.enableCodexSource && config.enableClaudeSource) {
       nodes.push(new HistoryEmptyNode(t("history.empty.noHistory.enabledRootsHint"), "folder-opened"));
     } else if (config.enableClaudeSource) {
       nodes.push(new HistoryEmptyNode(t("history.empty.noHistory.claudeHint"), "folder-opened"));
@@ -464,6 +501,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   private buildFilteredEmptyNodes(): HistoryEmptyNode[] {
+    if (this.startupIndex) return [new HistoryEmptyNode(t("history.empty.loading"), "sync~spin")];
     return [
       new HistoryEmptyNode(t("history.empty.filtered.title"), "filter"),
       new HistoryEmptyNode(t("history.empty.filtered.hint"), "info"),
@@ -472,7 +510,11 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   private withFilteredEmptyFallback(nodes: TreeNode[], shouldFilterSessions: boolean): TreeNode[] {
     if (nodes.length > 0) return nodes;
-    return shouldFilterSessions ? this.buildFilteredEmptyNodes() : nodes;
+    return shouldFilterSessions || this.startupIndex ? this.buildFilteredEmptyNodes() : nodes;
+  }
+
+  private getContextValue(element: TreeNode): string {
+    return this.isStartupElement(element) ? "codexHistoryViewer.startupHistory" : toTreeItemContextValue(element);
   }
 
   public getTreeItem(element: TreeNode): vscode.TreeItem {
@@ -480,7 +522,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Collapsed);
       item.id = buildHistoryTreeItemId(element);
       item.description = element.description;
-      item.contextValue = toTreeItemContextValue(element);
+      item.contextValue = this.getContextValue(element);
       item.iconPath = new vscode.ThemeIcon("root-folder");
       if (element.alias) {
         item.tooltip = this.buildProjectTooltip(element, true);
@@ -493,7 +535,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.Collapsed);
       item.id = buildHistoryTreeItemId(element);
       item.description = element.description;
-      item.contextValue = toTreeItemContextValue(element);
+      item.contextValue = this.getContextValue(element);
       item.iconPath = new vscode.ThemeIcon("folder-library");
       item.tooltip = this.buildRelatedGroupTooltip(element);
       return item;
@@ -501,14 +543,14 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     if (element instanceof ProjectYearNode) {
       const item = new vscode.TreeItem(element.year, vscode.TreeItemCollapsibleState.Collapsed);
       item.id = buildHistoryTreeItemId(element);
-      item.contextValue = toTreeItemContextValue(element);
+      item.contextValue = this.getContextValue(element);
       item.tooltip = t("tree.tooltip.year", element.year);
       return item;
     }
     if (element instanceof ProjectMonthNode) {
       const item = new vscode.TreeItem(element.month, vscode.TreeItemCollapsibleState.Collapsed);
       item.id = buildHistoryTreeItemId(element);
-      item.contextValue = toTreeItemContextValue(element);
+      item.contextValue = this.getContextValue(element);
       item.tooltip = t("tree.tooltip.month", `${element.year}-${element.month}`);
       return item;
     }
@@ -516,21 +558,21 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       const item = new vscode.TreeItem(element.day, vscode.TreeItemCollapsibleState.Collapsed);
       item.id = buildHistoryTreeItemId(element);
       item.description = element.ymd;
-      item.contextValue = toTreeItemContextValue(element);
+      item.contextValue = this.getContextValue(element);
       item.tooltip = t("tree.tooltip.day", element.ymd);
       return item;
     }
     if (element instanceof YearNode) {
       const item = new vscode.TreeItem(element.year, vscode.TreeItemCollapsibleState.Collapsed);
       item.id = buildHistoryTreeItemId(element);
-      item.contextValue = toTreeItemContextValue(element);
+      item.contextValue = this.getContextValue(element);
       item.tooltip = t("tree.tooltip.year", element.year);
       return item;
     }
     if (element instanceof MonthNode) {
       const item = new vscode.TreeItem(element.month, vscode.TreeItemCollapsibleState.Collapsed);
       item.id = buildHistoryTreeItemId(element);
-      item.contextValue = toTreeItemContextValue(element);
+      item.contextValue = this.getContextValue(element);
       item.tooltip = t("tree.tooltip.month", `${element.year}-${element.month}`);
       return item;
     }
@@ -538,16 +580,19 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       const item = new vscode.TreeItem(element.day, vscode.TreeItemCollapsibleState.Collapsed);
       item.id = buildHistoryTreeItemId(element);
       item.description = element.ymd;
-      item.contextValue = toTreeItemContextValue(element);
+      item.contextValue = this.getContextValue(element);
       item.tooltip = t("tree.tooltip.day", element.ymd);
       return item;
     }
     if (element instanceof SessionNode) {
       return this.sessionToTreeItem(element.session, element.pinned);
     }
+    if (element instanceof StartupHistorySessionNode) {
+      return this.sessionToTreeItem(element.summary, this.pinStore.isPinned(element.summary.fsPath), element);
+    }
     if (element instanceof HistoryEmptyNode) {
       const item = new vscode.TreeItem(element.label, vscode.TreeItemCollapsibleState.None);
-      item.contextValue = toTreeItemContextValue(element);
+      item.contextValue = this.getContextValue(element);
       item.iconPath = new vscode.ThemeIcon(element.iconId);
       item.tooltip = element.label;
       return item;
@@ -565,7 +610,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     return resolveTreeItemTooltip(item, token, () => this.buildSessionTooltip(element.session));
   }
 
-  private sessionToTreeItem(session: SessionSummary, pinned: boolean): vscode.TreeItem {
+  private sessionToTreeItem(session: SessionSummary, pinned: boolean, startupElement?: StartupHistorySessionNode): vscode.TreeItem {
     const presentation = this.getSessionTreePresentation(session);
     const { config, rowLabel, descriptionPresentation, agentPresentation, hidden } = presentation;
     const label = rowLabel.label;
@@ -574,7 +619,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     item.id = buildHistoryTreeItemId(node);
     item.description = descriptionPresentation.rowDescription || undefined;
     item.contextValue = toTreeItemContextValue(
-      node,
+      startupElement ?? node,
       agentPresentation?.relation,
       Boolean(agentPresentation?.parentSession),
       hidden,
@@ -589,9 +634,10 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     // Clicking the title opens the reusable viewer or a session tab depending on the preview setting.
     const previewOnSelection = config.previewOpenOnSelection;
     item.command = {
-      command: previewOnSelection ? "codexHistoryViewer.openSessionReusable" : "codexHistoryViewer.openSession",
+      command: startupElement ? "codexHistoryViewer.openStartupSession"
+        : previewOnSelection ? "codexHistoryViewer.openSessionReusable" : "codexHistoryViewer.openSession",
       title: "",
-      arguments: [node],
+      arguments: [startupElement ?? node],
     };
     return item;
   }
@@ -670,7 +716,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   private formatSessionRowDatePrefix(session: SessionSummary, axis: SessionDateAxis): string {
-    const shouldShowFullDate = this.viewMode === "sessionsList" || this.isDateAxisDifferentFromBasis(axis);
+    const shouldShowFullDate = this.displayedViewMode === "sessionsList" || this.isDateAxisDifferentFromBasis(axis);
     if (shouldShowFullDate) return formatSessionDateTimeForAxis(session, axis);
 
     const parts = getSessionDatePartsForAxis(session, axis);
@@ -705,7 +751,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
   private getFilteredSessions(): SessionSummary[] {
     if (this.filteredSessionsCache) return this.filteredSessionsCache;
-    this.filteredSessionsCache = this.historyService.getIndex().sessions.filter((s) => this.matchesSession(s));
+    this.filteredSessionsCache = (this.startupIndex ?? this.historyService.getIndex()).sessions.filter((s) => this.matchesSession(s));
     return this.filteredSessionsCache;
   }
 
@@ -942,7 +988,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
 
     if (element instanceof ProjectNode) {
       const sessions = this.getProjectSessions(element.key);
-      if (this.viewMode === "sessionsList") return sessions.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+      if (this.displayedViewMode === "sessionsList") return sessions.map((s) => this.createDisplayedSessionNode(s));
 
       const filter = this.filter;
       switch (filter.kind) {
@@ -957,7 +1003,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
           return uniqueDateParts(sessions, "day").map((day) => new ProjectDayNode(element.key, yyyy, mm, day));
         }
         case "day":
-          return sessions.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+          return sessions.map((s) => this.createDisplayedSessionNode(s));
         default:
           return [];
       }
@@ -986,10 +1032,14 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       const sessions = this
         .getProjectSessions(element.projectKey)
         .filter((session) => session.localDate === element.ymd);
-      return sessions.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+      return sessions.map((s) => this.createDisplayedSessionNode(s));
     }
 
     return [];
+  }
+
+  private createDisplayedSessionNode(session: SessionSummary): SessionNode | StartupHistorySessionNode {
+    return this.startupIndex ? new StartupHistorySessionNode(session) : new SessionNode(session, this.pinStore.isPinned(session.fsPath));
   }
 
   public getParent(element: TreeNode): TreeNode | null {
@@ -1001,6 +1051,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   public createRevealIdentity(element: TreeNode | undefined): HistoryRevealIdentity | null {
     if (!element) return null;
     if (element instanceof SessionNode) return { kind: "session", fsPath: element.session.fsPath };
+    if (element instanceof StartupHistorySessionNode) return { kind: "session", fsPath: element.summary.fsPath };
     if (element instanceof ProjectNode) {
       return { kind: "project", key: element.key, parentKey: getProjectParentKey(element.parentAssociation) };
     }
@@ -1053,11 +1104,20 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
   }
 
   private getChildrenSync(element?: TreeNode): TreeNode[] {
-    if (!element && !this.initialLoadComplete) {
+    const nodes = this.buildChildren(element);
+    if (this.startupIndex) {
+      for (const node of nodes) this.startupElements.add(node);
+    }
+    return nodes;
+  }
+
+  private buildChildren(element?: TreeNode): TreeNode[] {
+    const preview = this.startupIndex;
+    if (!element && (!this.initialLoadComplete && !preview || preview?.sessions.length === 0)) {
       return [new HistoryEmptyNode(t("history.empty.loading"), "sync~spin")];
     }
 
-    const idx = this.historyService.getIndex();
+    const idx = preview ?? this.historyService.getIndex();
     if (!element && idx.sessions.length === 0) return this.buildNoHistoryNodes();
 
     const shouldFilterSessions =
@@ -1068,12 +1128,12 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
       this.tagFilter.length > 0 ||
       this.compressionFilter !== "all" ||
       this.codexAgentRuns.isPresentationEnabled();
-    if (this.projectGrouped) {
+    if ((preview && this.startupPresentation?.grouped) ?? this.projectGrouped) {
       return this.buildProjectChildren(element, shouldFilterSessions);
     }
-    if (this.viewMode === "sessionsList") {
+    if (this.displayedViewMode === "sessionsList") {
       if (element) return [];
-      const nodes = this.getSortedSessions().map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+      const nodes = this.getSortedSessions().map((s) => this.createDisplayedSessionNode(s));
       return this.withFilteredEmptyFallback(nodes, shouldFilterSessions);
     }
 
@@ -1148,7 +1208,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
           const sessions = idx.byY.get(yyyy)?.get(mm)?.get(dd) ?? [];
           const filtered = this.sortSessions(sessions.filter((s) => this.matchesSession(s)));
           return this.withFilteredEmptyFallback(
-            filtered.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath))),
+            filtered.map((s) => this.createDisplayedSessionNode(s)),
             true,
           );
         }
@@ -1193,7 +1253,7 @@ export class HistoryTreeDataProvider implements vscode.TreeDataProvider<TreeNode
     if (element instanceof DayNode) {
       const sessions = idx.byY.get(element.year)?.get(element.month)?.get(element.day) ?? [];
       const filtered = this.sortSessions(sessions.filter((s) => this.matchesSession(s)));
-      return filtered.map((s) => new SessionNode(s, this.pinStore.isPinned(s.fsPath)));
+      return filtered.map((s) => this.createDisplayedSessionNode(s));
     }
     return [];
   }
@@ -1222,7 +1282,7 @@ function normalizeTagKey(value: string): string {
 }
 
 function normalizeSourceFilter(value: SessionSourceFilter): SessionSourceFilter {
-  return value === "codex" || value === "claude" ? value : "all";
+  return value === "codex" || value === "claude" || value === "antigravity" ? value : "all";
 }
 
 function formatInsightsDateRangeLabel(range: HistoryInsightsDateRange): string {
@@ -1394,7 +1454,8 @@ function encodeTreeItemIdPart(value: string | null | undefined): string {
 function matchesRevealIdentity(node: TreeNode, identity: HistoryRevealIdentity): boolean {
   switch (identity.kind) {
     case "session":
-      return node instanceof SessionNode && node.session.fsPath === identity.fsPath;
+      return (node instanceof SessionNode && node.session.fsPath === identity.fsPath) ||
+        (node instanceof StartupHistorySessionNode && node.summary.fsPath === identity.fsPath);
     case "project":
       return node instanceof ProjectNode && node.key === identity.key && getProjectParentKey(node.parentAssociation) === identity.parentKey;
     case "relatedGroup":

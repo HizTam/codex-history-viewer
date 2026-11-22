@@ -3,6 +3,7 @@ import { claudeAgentIdentity, isClaudePathPart, parseClaudeAgentPath, resolveCla
 import { isSessionFile, isCompressedSessionFile, importSessionWithDestinationFormat } from "../utils/sessionFileReader";
 import * as fs from "node:fs/promises";
 import * as vscode from "vscode";
+import { isReadOnlyNativeSession } from "../sessions/sessionMutationPolicy";
 import type { SessionRootKind, SessionSource, SessionStorageLocation, SessionSummary } from "../sessions/sessionTypes";
 import { parseSessionMetadataBackup } from "./sessionMetadataBackupService";
 import { buildSessionSummary, resolveSessionIdentityKey, tryReadSessionMeta } from "../sessions/sessionSummary";
@@ -138,6 +139,7 @@ export async function exportSessions(params: {
 }): Promise<ExportSessionsResult | null> {
   const { sessions, codexSessionsRoot, claudeSessionsRoot } = params;
   if (sessions.length === 0) return null;
+  if (sessions.some(isReadOnlyNativeSession)) { void vscode.window.showErrorMessage(t("app.antigravityReadOnlyOperation")); return null; }
   const dependencies = params.sessionInventory
     ? await collectCodexHistoryDependencies(sessions, params.sessionInventory)
     : [];
@@ -165,6 +167,7 @@ export async function exportSessions(params: {
   const exportedSessions: SessionSummary[] = [];
 
   for (const session of sessionsToExport) {
+    if (isReadOnlyNativeSession(session)) throw new Error(t("app.antigravityReadOnlyOperation"));
     const relativeFromSource = buildRelativePathForSession(session, {
       codexSessionsRoot,
       claudeSessionsRoot,

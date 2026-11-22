@@ -1,4 +1,5 @@
 import { resolveClaudeAgentHistory } from "../sessions/claudeAgentHistory";
+import { isClaudeVoiceCallRecord, readClaudeVoiceCallLegacyPresentation } from "../chat/claudeVoiceCall";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -31,7 +32,8 @@ import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
 import { extractCodexToolOutputText } from "../chat/codexResponseItems";
 import type { ProjectAssociationStore } from "../services/projectAssociationStore";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "../services/projectPathMapper";
-import type { IndexedSearchMessage, SearchIndexReadSnapshot } from "../services/searchIndexService";
+import type { SearchIndexPreparedSnapshot, SearchIndexScanReader } from "../services/searchIndexService";
+import { acquireSearchIndexReader } from "../services/searchIndexReader";
 import type { HistoryIndex, SessionSource, SessionSummary } from "../sessions/sessionTypes";
 import { readSessionJsonlRecords } from "../sessions/codexHistoryBase";
 import { ClaudeFileChangeTracker } from "../sessions/claudeFileChanges";
@@ -58,12 +60,17 @@ import type {
   FileChangeHistoryTarget,
 } from "./fileChangeHistoryTypes";
 import { selectFileChangeHistoryWindow } from "./fileChangeHistoryNavigation";
+import { antigravityReader } from "../antigravity/antigravityReader";
+import { projectAntigravityChat } from "../antigravity/antigravityChatModel";
+import { getAntigravityTargetFingerprint } from "../antigravity/antigravityIdentity";
+import { buildBookmarkKeyFromTargetFingerprint } from "../services/bookmarkStore";
 
 interface ParsedPatchEntry {
   entry: ChatPatchEntry;
   bookmarkGroupId?: string;
   messageIndex?: number;
   timestampIso?: string;
+  bookmarkKey?: string;
 }
 
 interface ParsedSessionResult {
@@ -112,6 +119,8 @@ function createDiffStats(): FileChangeHistoryDiffStats {
     claudeMultiEditParsed: 0,
     claudeWriteParsed: 0,
     claudeBashParsed: 0,
+    antigravityUnconfirmedParsed: 0,
+    antigravityUnavailable: 0,
     noRenderableSkipped: 0,
   };
 }
@@ -141,6 +150,8 @@ function addDiffStats(target: FileChangeHistoryDiffStats, source: FileChangeHist
   target.claudeMultiEditParsed += source.claudeMultiEditParsed;
   target.claudeWriteParsed += source.claudeWriteParsed;
   target.claudeBashParsed += source.claudeBashParsed;
+  target.antigravityUnconfirmedParsed += source.antigravityUnconfirmedParsed;
+  target.antigravityUnavailable += source.antigravityUnavailable;
   target.noRenderableSkipped += source.noRenderableSkipped;
 }
 
@@ -171,35 +182,61 @@ export class FileChangeHistoryService {
 
   public async buildCandidates(params: {
     index: HistoryIndex;
-    searchIndexSnapshot: SearchIndexReadSnapshot;
+    searchIndex: SearchIndexPreparedSnapshot;
+    refreshSearchIndex: () => Promise<SearchIndexPreparedSnapshot>;
+    canRetryWithLegacy?: (error: unknown) => boolean;
     target: FileChangeHistoryTarget;
     config: CodexHistoryViewerConfig;
     token?: vscode.CancellationToken;
+    onUnavailableSources?: (sources: readonly import("../sessions/sessionTypes").SessionSource[]) => void;
   }): Promise<FileChangeHistoryCandidate[]> {
-    const { index, searchIndexSnapshot, target, config } = params;
+    const { index, target, config } = params;
     const checkpoint = createCandidateCheckpoint(params.token);
     await checkpoint();
-    const candidates: TimedFileChangeCandidate[] = [];
     const projectPathMappings = this.getProjectPathMappings(target);
     let needles: readonly string[] | undefined;
     const getNeedles = async (): Promise<readonly string[]> =>
       needles ??= await buildSearchNeedles(target, projectPathMappings, checkpoint);
 
+    const sessions: SessionSummary[] = [];
     for (const session of index.sessions) {
       await checkpoint();
       if (!isEnabledSource(session.source, config)) continue;
       if (!isSessionAllowedForWorkspace(session, target.workspaceRoot, projectPathMappings)) continue;
-
-      // Search index hits are ranking hints; raw session parsing is the source of truth.
-      const hintScore = await scoreFileChangeHints(searchIndexSnapshot, session, target, projectPathMappings, checkpoint);
-      const fallbackScore = hintScore > 0
-        ? 0
-        : await scoreSearchMessages(searchIndexSnapshot, session, getNeedles, checkpoint);
-      const matchScore = Math.max(hintScore, fallbackScore);
-      candidates.push({ candidate: { session, matchScore }, sortTime: getSessionSortTime(session) });
+      sessions.push(session);
     }
-
-    return sortFileChangeCandidates(candidates, checkpoint);
+    if (sessions.length === 0) return [];
+    let initial = true;
+    for (let cacheAttempt = 0; cacheAttempt < 2; cacheAttempt++) {
+      const candidates: TimedFileChangeCandidate[] = [];
+      try {
+        const reader = await acquireSearchIndexReader(() => {
+          if (!initial) return params.refreshSearchIndex();
+          initial = false;
+          return Promise.resolve(params.searchIndex);
+        }, { cacheKeys: sessions.map(session => session.cacheKey), token: params.token });
+        try {
+          for (const session of sessions) {
+            await checkpoint();
+            // Index hits only rank candidates; raw session parsing remains the source of truth.
+            const hintScore = await scoreFileChangeHints(reader, session, target, projectPathMappings, checkpoint);
+            const fallbackScore = hintScore > 0 ? 0 : await scoreSearchMessages(reader, session, getNeedles, checkpoint);
+            const matchScore = Math.max(hintScore, fallbackScore);
+            candidates.push({ candidate: { session, matchScore }, sortTime: getSessionSortTime(session) });
+          }
+        } finally {
+          await reader.dispose();
+        }
+        const sorted = await sortFileChangeCandidates(candidates, checkpoint);
+        params.onUnavailableSources?.(reader.unavailableSources ?? []);
+        return sorted;
+      } catch (error) {
+        throwIfCancelled(params.token);
+        if (cacheAttempt === 0 && params.canRetryWithLegacy?.(error)) { initial = false; continue; }
+        throw error;
+      }
+    }
+    return [];
   }
 
   public async loadCards(params: {
@@ -269,10 +306,13 @@ export class FileChangeHistoryService {
     const parsed =
       session.source === "codex"
         ? await parseCodexSession(session, target, projectPathMappings, sessionInventory, token)
+        : session.source === "antigravity" ? await parseAntigravitySession(session, target, projectPathMappings, token)
         : await parseClaudeSession(session, target, projectPathMappings, token);
     const renderableEntries = parsed.entries.filter((item) => hasRenderableDiff(item.entry) || (
       session.source === "claude" && !item.entry.incomplete && !item.entry.evidence
       && (item.entry.changeType === "create" || item.entry.changeType === "delete")
+    ) || (
+      session.source === "antigravity" && item.entry.evidence === "unconfirmed" && item.entry.detailsOmitted === true
     ));
     const diffStats = cloneDiffStats(parsed.diffStats);
     diffStats.noRenderableSkipped += parsed.entries.length - renderableEntries.length;
@@ -294,6 +334,30 @@ export class FileChangeHistoryService {
       targetCwd: target.workspaceRoot,
     }));
   }
+}
+
+async function parseAntigravitySession(session: SessionSummary, target: FileChangeHistoryTarget, mappings: readonly ProjectPathMapping[], token?: vscode.CancellationToken): Promise<ParsedPatchEntriesResult> {
+  const diffStats = createDiffStats(), entries: ParsedPatchEntry[] = [];
+  try {
+    const data = await antigravityReader.readSession(session.fsPath, token);
+    throwIfCancelled(token);
+    const { model } = projectAntigravityChat(data, session.fsPath, session.storage.rootPath, { includeDetails: true, images: { enabled: false, maxSizeMB: 1, thumbnailSize: "small" } });
+    for (const item of model.items) {
+      throwIfCancelled(token);
+      if (item.type !== "patchGroup") continue;
+      const fingerprint = getAntigravityTargetFingerprint(item);
+      const bookmarkKey = fingerprint ? buildBookmarkKeyFromTargetFingerprint(session.cacheKey, fingerprint.kind, fingerprint.targetHash) : undefined;
+      for (const entry of item.entries) {
+        if (!matchPatchPaths(entry.path, entry.movePath, session.meta.cwd, target, mappings).matched) continue;
+        entries.push({ entry, bookmarkGroupId: item.bookmarkGroupId, messageIndex: item.messageIndex, timestampIso: item.timestampIso, bookmarkKey });
+        diffStats.antigravityUnconfirmedParsed++;
+      }
+    }
+  } catch {
+    throwIfCancelled(token);
+    diffStats.antigravityUnavailable++;
+  }
+  return { entries, diffStats };
 }
 
 async function parseCodexSession(
@@ -434,6 +498,10 @@ async function parseClaudeSession(
 
       const obj = parseJsonLine(line);
       if (!obj) continue;
+      if (isClaudeVoiceCallRecord(obj)) {
+        messageIndex += (await readClaudeVoiceCallLegacyPresentation(obj)).messageIncrement;
+        continue;
+      }
       const role = detectClaudeMessageRole(obj);
       if (!role) continue;
       if (isClaudeInternalUserRecord(obj)) {
@@ -852,6 +920,7 @@ function toHistoryCard(
     moveDisplayPath: entry.moveDisplayPath,
     added: entry.added,
     removed: entry.removed,
+    bookmarkKey: parsed.bookmarkKey,
     entry,
   };
 }
@@ -917,13 +986,13 @@ async function sortFileChangeCandidates(
 }
 
 async function scoreFileChangeHints(
-  searchIndexSnapshot: SearchIndexReadSnapshot,
+  reader: SearchIndexScanReader,
   session: SessionSummary,
   target: FileChangeHistoryTarget,
   projectPathMappings: readonly ProjectPathMapping[],
   checkpoint: () => Promise<void>,
 ): Promise<number> {
-  const hints = searchIndexSnapshot.getFileChangeHints(session.cacheKey) ?? [];
+  const hints = await reader.getFileChangeHints(session.cacheKey) ?? [];
   let score = 0;
   for (const hint of hints) {
     await checkpoint();
@@ -937,14 +1006,12 @@ async function scoreFileChangeHints(
 }
 
 async function scoreSearchMessages(
-  searchIndexSnapshot: SearchIndexReadSnapshot,
+  reader: SearchIndexScanReader,
   session: SessionSummary,
   getNeedles: () => Promise<readonly string[]>,
   checkpoint: () => Promise<void>,
 ): Promise<number> {
-  const texts = searchIndexSnapshot.iterateToolTexts
-    ? searchIndexSnapshot.iterateToolTexts(session.cacheKey, checkpoint)
-    : iterateLegacyToolTexts(searchIndexSnapshot.getMessages(session.cacheKey) ?? [], checkpoint);
+  const texts = reader.iterateToolTexts(session.cacheKey, checkpoint);
   for await (const text of texts) {
     await checkpoint();
     if (text.length === 0) continue;
@@ -962,16 +1029,6 @@ async function scoreSearchMessages(
   }
   await checkpoint();
   return 0;
-}
-
-async function* iterateLegacyToolTexts(
-  messages: readonly IndexedSearchMessage[],
-  checkpoint: () => Promise<void>,
-): AsyncGenerator<string> {
-  for (const message of messages) {
-    await checkpoint();
-    if (message.source !== "message") yield message.text;
-  }
 }
 
 async function buildSearchNeedles(
@@ -1038,7 +1095,7 @@ async function buildAssociatedTargetPaths(
 }
 
 function isEnabledSource(source: SessionSource, config: CodexHistoryViewerConfig): boolean {
-  return source === "codex" ? config.enableCodexSource || config.enableCodexArchivedSessions : config.enableClaudeSource;
+  return source === "codex" ? config.enableCodexSource || config.enableCodexArchivedSessions : source === "antigravity" ? config.enableAntigravitySource === true : config.enableClaudeSource;
 }
 
 function isSessionAllowedForWorkspace(
@@ -1357,7 +1414,7 @@ function resolveSessionTitle(session: SessionSummary, sourceLabel: string, times
 }
 
 function getSourceLabel(source: SessionSource): string {
-  return source === "codex" ? "Codex" : "Claude Code";
+  return source === "codex" ? "Codex" : source === "antigravity" ? "Antigravity" : "Claude Code";
 }
 
 function getSessionSortTime(session: SessionSummary): number {

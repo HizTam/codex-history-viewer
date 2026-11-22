@@ -1,6 +1,7 @@
 import type { SessionSummary } from "../sessions/sessionTypes";
+import { ANTIGRAVITY_UUID } from "../antigravity/antigravityTypes";
 
-export type CliResumeTarget = "codex" | "claude";
+export type CliResumeTarget = "codex" | "claude" | "antigravity";
 
 declare const validatedCliSessionIdBrand: unique symbol;
 export type ValidatedCliSessionId = string & {
@@ -22,7 +23,7 @@ export function validateCliResumeSessionId(
   target: CliResumeTarget,
 ): ValidatedCliSessionId | null {
   // Validate the original value without trimming or Unicode normalization.
-  if (typeof value !== "string" || !CLI_SESSION_ID_PATTERN.test(value)) return null;
+  if (typeof value !== "string" || (target === "antigravity" ? !ANTIGRAVITY_UUID.test(value) : !CLI_SESSION_ID_PATTERN.test(value))) return null;
   return value as ValidatedCliSessionId & { readonly [validatedCliSessionIdBrand]: typeof target };
 }
 
@@ -40,6 +41,10 @@ export function isCliResumeSessionEligible(session: SessionSummary, target: CliR
 }
 
 export function buildCliResumeCommand(target: CliResumeTarget, sessionId: ValidatedCliSessionId): string {
+  if (target === "antigravity") {
+    if (!ANTIGRAVITY_UUID.test(sessionId)) throw new Error("Invalid Antigravity CLI conversation identifier.");
+    return `agy --conversation ${sessionId}`;
+  }
   return target === "codex"
     ? `codex resume ${sessionId}`
     : `claude --resume ${sessionId}`;

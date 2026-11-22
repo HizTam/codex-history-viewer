@@ -1,8 +1,13 @@
 import { resolveClaudeAgentHistory } from "../sessions/claudeAgentHistory";
 import { readClaudeMessageUuid } from "../services/claudeNativeBookmarkReader";
 import { isClaudeInternalUserRecord, isClaudeTaskNotificationRecord, projectClaudeTaskNotification } from "./claudeTaskNotification";
+import { isClaudeVoiceCallRecord, projectClaudeVoiceCall, readClaudeVoiceCallLegacyPresentation } from "./claudeVoiceCall";
+import { getVoiceBookmarkCompatibility, setVoiceBookmarkCompatibility } from "../services/bookmarkIdentity";
+import type { ChatClaudeVoiceCallItem } from "./chatTypes";
 import { extractClaudeSystemReminder } from "./claudeSystemReminder";
 import { extractClaudeProgress } from "./claudeProgress";
+import { hashCodexAnswerText, readCodexAnswerRestriction } from "../sessions/codexAnswerVisibility";
+import { isClaudeAdvisorBlock, readClaudeAdvisorEvents } from "./claudeAdvisor";
 import { ClaudeQueuedInputTracker } from "./claudeQueuedInput";
 import { ClaudeQueuedTaskNotificationTracker } from "./claudeQueuedTaskNotification";
 import * as path from "node:path";
@@ -39,7 +44,7 @@ import {
   isBoilerplateUserMessageText,
 } from "../utils/textUtils";
 import { buildToolPresentation } from "../tools/toolSemantics";
-import { extractClaudeCompactUserText, isClaudeCompactSummaryRecord } from "./claudeCompactSummary";
+import { extractClaudeCompactUserText, isClaudeCompactSummaryRecord, isClaudeHumanTurnStart } from "./claudeCompactSummary";
 import { buildClaudeSentFiles, updateClaudeSentFilesResult } from "./claudeSentFiles";
 import {
   assignAttachmentIds,
@@ -87,6 +92,7 @@ import {
 } from "../sessions/codexHistoryBase";
 import {
   normalizeCodexCorrelationId,
+  isCodexCompanionPageRecord,
   readCodexAsyncQuestionMessage,
   readCodexContextManagementKind,
   readCodexControlToolKind,
@@ -106,6 +112,8 @@ import {
 import type { PerformanceProbe } from "../performance/performanceCounters";
 import { extractChatTokenUsage } from "./tokenUsage";
 import { ClaudeFileChangeTracker, type ClaudeEditResult, type ClaudeFileChangeOperation } from "../sessions/claudeFileChanges";
+import { buildAntigravityChatModel } from "../antigravity/antigravityChatModel";
+import type { AntigravityCancellationToken } from "../antigravity/antigravityReaderTypes";
 
 const CODEX_USAGE_PAIR_WINDOW_LINES = 64;
 const MAX_PENDING_CODEX_USAGE_PAIRS = 64;
@@ -115,9 +123,12 @@ export interface ChatSessionModelBuildOptions {
   images?: ImagesConfig;
   includeDetails?: boolean;
   includeNotificationDetails?: boolean;
+  includeAntigravityTurnFileChanges?: boolean;
+  foregroundAntigravityRead?: AntigravityCancellationToken;
   turnTimelineMode?: ChatTurnTimelineMode;
   sessionInventory?: readonly SessionSummary[];
   historyPlan?: CodexLogicalHistoryPlan;
+  exactHistoryLeafPath?: boolean;
   performanceProbe?: PerformanceProbe;
 }
 
@@ -178,10 +189,13 @@ async function buildChatSessionModelInternal(
   options: ChatSessionModelBuildOptions,
   collectActivityEvidence: boolean,
 ): Promise<ChatSessionModelWithActivityEvidence> {
+  if (path.extname(fsPath).toLowerCase() === ".db") return buildAntigravityChatModel(fsPath, options);
   const meta = await readSessionMeta(fsPath, options.performanceProbe);
+  const source = meta.historySource ?? detectHistorySourceFromPath(fsPath);
+  if (source === "antigravity") return buildAntigravityChatModel(fsPath, options);
   const timeline = await readTimelineItems(
     fsPath,
-    meta.historySource ?? detectHistorySourceFromPath(fsPath),
+    source,
     meta.cwd,
     options,
     collectActivityEvidence,
@@ -217,10 +231,21 @@ export async function buildChatPatchEntryDetails(
   const entryId = typeof target.entryId === "string" ? target.entryId.trim() : "";
   if (!entryId) return null;
 
+  if (path.extname(fsPath).toLowerCase() === ".db") {
+    const { model } = await buildAntigravityChatModel(fsPath, { includeDetails: true, turnTimelineMode });
+    for (const item of model.items) if (item.type === "patchGroup") {
+      const entry = item.entries.find(value => value.id === entryId && (!target.callId || value.callId === target.callId));
+      if (entry) return entry;
+    }
+    return null;
+  }
+
   const meta = await readSessionMeta(fsPath);
+  const source = meta.historySource ?? detectHistorySourceFromPath(fsPath);
+  if (source === "antigravity") return null;
   return readPatchEntryDetails(
     fsPath,
-    meta.historySource ?? detectHistorySourceFromPath(fsPath),
+    source,
     meta.cwd,
     { ...target, entryId },
     sessionInventory,
@@ -267,6 +292,7 @@ async function readTimelineItems(
     onCodexRollback: () => { codexHasRollback = true; },
     sessionInventory: options.sessionInventory,
     plan: options.historyPlan,
+    exactLeafPath: options.exactHistoryLeafPath,
     performanceProbe: options.performanceProbe,
   })) {
     const pending = accumulator.accept(record);
@@ -297,6 +323,7 @@ export async function createChatTimelineRecordAccumulator(
   const environmentState: EnvironmentBuildState = {};
   const memoryCitationState: MemoryCitationBuildState = {};
   const suppressedAudioMessages = new Set<ChatMessageItem>();
+  const suppressedCodexPageCards = new Set<ChatTimelineItem>();
   const interruptionState: InterruptionBuildState = {};
   const turnState: TurnBuildState | undefined = shouldBuildTurnTimeline(options) ? createTurnBuildState() : undefined;
   const claudeTurnState = source === "claude" && turnState ? createClaudeTurnBuildState(turnState) : undefined;
@@ -305,6 +332,45 @@ export async function createChatTimelineRecordAccumulator(
   const queuedNotifications = new ClaudeQueuedTaskNotificationTracker();
   let messageIndex = 0;
   let finalizedResult: ChatTimelineBuildResult | undefined;
+  let pendingVoice: { items: ChatTimelineItem[]; first: ChatClaudeVoiceCallItem; usageSourceId?: string; completionSourceId?: string } | undefined;
+
+  const flushVoice = (next?: any): void => {
+    if (!pendingVoice) return;
+    const batch = pendingVoice;
+    pendingVoice = undefined;
+    const sameResponse = detectClaudeMessageRole(next) === "assistant" &&
+      (batch.usageSourceId && getClaudeMessageId(next) === batch.usageSourceId ||
+       batch.completionSourceId && getClaudeAssistantResponseId(next) === batch.completionSourceId);
+    if (sameResponse) setVoiceBookmarkCompatibility(batch.first, {
+      ...getVoiceBookmarkCompatibility(batch.first), ambiguousScope: batch.first.voiceCallId,
+    });
+    // Resolve placement only after the next real record has decided completion.
+    for (const item of batch.items) {
+      if ((item.type === "environment" || item.type === "claudeVoiceCall") && turnState?.activeTurnId) item.turnId = turnState.activeTurnId;
+      items.push(item);
+    }
+  };
+
+  const queueVoice = async (obj: unknown, lineIndex: number): Promise<boolean> => {
+    const voice = projectClaudeVoiceCall(obj, lineIndex)!;
+    const legacy = await readClaudeVoiceCallLegacyPresentation(obj);
+    const item: ChatClaudeVoiceCallItem = { type: "claudeVoiceCall", source: "claude", ...voice };
+    // Old parsing completed the pending response before interpreting this control record.
+    const legacyActiveTurnId = claudeTurnState?.pendingCompletion?.turnId === turnState?.activeTurnId
+      ? undefined : turnState?.activeTurnId;
+    const legacyTurnEffect = !!claudeTurnState && (legacy.startsTurn ||
+      legacy.mayResumeTurn && !!turnState?.order.length ||
+      legacy.changesTurn && (!!legacyActiveTurnId || !!claudeTurnState.pendingResumeTurnId));
+    setVoiceBookmarkCompatibility(item, { legacyItemCount: legacy.itemCount,
+      ...(legacy.messageIncrement ? { legacyTimestampIso: legacy.legacyTimestampIso ?? "" } : {}),
+      ...(legacy.ambiguous || legacyTurnEffect ? { ambiguousScope: voice.voiceCallId } : {}) });
+    pendingVoice ??= { items: [], first: item, usageSourceId: usageState.pendingClaudeUsage?.sourceId,
+      completionSourceId: claudeTurnState?.pendingCompletion?.sourceId };
+    appendEnvironmentSnapshotIfChanged(obj, pendingVoice.items, environmentState, () => messageIndex, () => undefined);
+    if (legacy.messageIncrement) item.messageIndex = ++messageIndex;
+    pendingVoice.items.push(item);
+    return true;
+  };
 
   const accept = (record: ChatTimelineRecordInput): void | Promise<boolean> => {
     if (finalizedResult) throw new Error("Chat timeline accumulator is already finalized.");
@@ -340,6 +406,7 @@ export async function createChatTimelineRecordAccumulator(
     }
 
     if (source === "claude" && isClaudeRequestReplayMetadataRecord(obj)) return;
+    if (source === "claude" && isClaudeVoiceCallRecord(obj)) return queueVoice(obj, lineIndex);
 
     if (source === "claude") {
       flushPendingClaudeUsageIfNeeded(obj, items, usageState);
@@ -347,6 +414,7 @@ export async function createChatTimelineRecordAccumulator(
       if (completedTurnId) {
         flushClaudeTurnPatchGroup(items, pendingPatchGroups, completedTurnId, turnState);
       }
+      flushVoice(obj);
     }
     if (
       source !== "codex" ||
@@ -376,6 +444,14 @@ export async function createChatTimelineRecordAccumulator(
     }
     if (source === "codex" && codexRecordKind === "realtime_item") return;
     if (source === "codex" && codexRecordKind === "response_item") {
+      if (isCodexCompanionPageRecord(obj)) {
+        // Reserve the old fallback bookmark position without extracting the hidden content.
+        const position: ChatToolItem = { type: "tool", name: "" };
+        items.push(position);
+        suppressedCodexPageCards.add(position);
+        observeCodexItemTurn(turnState, resolveCodexTurnIdForItem(obj, turnState), readTimestampIso(obj));
+        return;
+      }
       return indexCodexTimelineRecord(
         obj,
         items,
@@ -459,6 +535,7 @@ export async function createChatTimelineRecordAccumulator(
       flushClaudeTurnPatchGroup(items, pendingPatchGroups, completedTurnId, turnState);
     }
     flushPendingPatchGroups(items, pendingPatchGroups, turnState);
+    flushVoice();
     if (source === "claude") {
       // Failed and staged edits must not leave empty change cards behind.
       for (let i = items.length - 1; i >= 0; i--) {
@@ -468,7 +545,7 @@ export async function createChatTimelineRecordAccumulator(
         if (item.type === "patchGroup" && !item.entries.length && !item.incomplete) items.splice(i, 1);
       }
     }
-    removeSuppressedAudioMessages(items, suppressedAudioMessages);
+    removeSuppressedTimelineItems(items, suppressedAudioMessages, suppressedCodexPageCards);
     finalizeTimelineItems(items);
     if (!turnState) {
       finalizedResult = { items, ...(activityEvidence ? { activityEvidence } : {}) };
@@ -519,6 +596,10 @@ async function readPatchEntryDetails(
     const lineIndex = record.lineIndex;
 
     if (source === "claude" && isClaudeRequestReplayMetadataRecord(obj)) continue;
+    if (source === "claude" && isClaudeVoiceCallRecord(obj)) {
+      messageIndex += (await readClaudeVoiceCallLegacyPresentation(obj)).messageIncrement;
+      continue;
+    }
 
     if (source === "claude") finalizePendingClaudeCompletionIfNeeded(obj, lineIndex, claudeDetailTurnState);
 
@@ -660,6 +741,23 @@ async function indexCodexTimelineRecord(
     const role = obj?.payload?.role as ChatRole | undefined;
     if (role !== "developer" && role !== "user" && role !== "assistant") return true;
     if (role === "user") resetMemoryCitationState(memoryCitationState, false);
+    const restricted = readCodexAnswerRestriction(obj);
+    if (restricted?.kind === "message") {
+      const citationTarget = { textHash: restricted.textHash, phase: normalizeCitationPhase(obj?.payload?.phase),
+        turnId: turnId ?? memoryCitationState.activeTurnId };
+      const pendingCitation = takePendingMemoryCitation(memoryCitationState, citationTarget);
+      if (restricted.chatIndex || pendingCitation) {
+        const timestampIso = readTimestampIso(obj);
+        items.push({ type: "message", role: "assistant", messageIndex: nextMessageIndex(),
+          ...(turnId ? { turnId } : {}), ...(timestampIso ? { timestampIso } : {}),
+          ...toMessageModelMeta(codexTurnMeta), text: "", isContext: false, codexAnswerRestricted: true });
+        memoryCitationState.closed = false;
+        memoryCitationState.lastAssistant = { ...citationTarget, itemIndex: items.length - 1 };
+        observeCodexItemTurn(turnState, turnId, timestampIso);
+        closeCodexInterruptionWindow(interruptionState);
+      }
+      return true;
+    }
 
     if (role === "user" && isCodexTurnAbortedContent(obj?.payload?.content)) {
       appendOrMergeCodexInterruption(items, interruptionState, buildCodexInterruptionFromRaw(obj, turnId));
@@ -671,25 +769,26 @@ async function indexCodexTimelineRecord(
     const content = obj?.payload?.content;
     const protocolContextText =
       role === "user" ? extractCodexProtocolContextText(content) : null;
-    const parsed = await extractCodexMessageContent(
-      content,
-      sessionCwd,
-      toImageExtractionOptions(options.images),
-      { role },
-    );
-    let text = normalizeText(protocolContextText ?? parsed.text);
-    const attachments = protocolContextText ? [] : parsed.attachments;
+    const parsed = protocolContextText === null
+      ? await extractCodexMessageContent(content, sessionCwd, toImageExtractionOptions(options.images), { role })
+      : { text: protocolContextText, attachments: [] };
+    let text = normalizeText(parsed.text);
+    const attachments = parsed.attachments;
     let memoryCitation: ChatMemoryCitation | undefined;
+    let hasRestrictedCitation = false;
     if (role === "assistant") {
       const split = splitTrailingMemoryCitationBlock(text);
       text = normalizeText(split.text);
-      const pendingCitation = takePendingMemoryCitation(memoryCitationState, text, obj?.payload?.phase,
-        turnId ?? memoryCitationState.activeTurnId);
-      memoryCitation = split.memoryCitation ?? pendingCitation;
+      const pendingCitation = takePendingMemoryCitation(memoryCitationState, {
+        text, phase: normalizeCitationPhase(obj?.payload?.phase), turnId: turnId ?? memoryCitationState.activeTurnId,
+      });
+      memoryCitation = split.memoryCitation ?? pendingCitation?.citation;
+      hasRestrictedCitation = !memoryCitation && pendingCitation !== undefined;
     }
     const hadAudioImageCandidate = hasSuppressedInputAudioImageCandidate(content);
-    const suppressedAudio = !text && attachments.length === 0 && !memoryCitation && hadAudioImageCandidate;
-    if (!text && attachments.length === 0 && !memoryCitation && !suppressedAudio) return true;
+    const suppressedAudio = !text && attachments.length === 0 && !memoryCitation && !hasRestrictedCitation && hadAudioImageCandidate;
+    const citationOnly = !text && attachments.length === 0 && hasRestrictedCitation;
+    if (!text && attachments.length === 0 && !memoryCitation && !suppressedAudio && !citationOnly) return true;
 
     const sessionStartContextText =
       role === "user" &&
@@ -745,6 +844,7 @@ async function indexCodexTimelineRecord(
       } : {}),
       ...(attachments.length > 0 ? { attachments } : {}),
       ...(memoryCitation ? { memoryCitation } : {}),
+      ...(citationOnly ? { codexAnswerRestricted: true } : {}),
       isContext,
     };
     items.push(item);
@@ -902,15 +1002,18 @@ function indexCodexEventRecord(
 
   const payloadType = typeof obj?.payload?.type === "string" ? obj.payload.type : "";
   const payloadPhase = typeof obj?.payload?.phase === "string" ? obj.payload.phase : "";
-  const asyncQuestion = readCodexAsyncQuestionMessage(obj);
-  if (asyncQuestion) {
-    questionReplyResolver.observe(asyncQuestion);
-    if (seenAsyncQuestionIds.has(asyncQuestion.itemId)) return true;
-    const text = normalizeText(asyncQuestion.text);
-    if (!text) return true;
-    seenAsyncQuestionIds.add(asyncQuestion.itemId);
+  const restricted = readCodexAnswerRestriction(obj);
+  const restrictedQuestion = restricted?.kind === "event" ? restricted.asyncQuestion : undefined;
+  const asyncQuestion = restricted ? undefined : readCodexAsyncQuestionMessage(obj);
+  const question = restrictedQuestion ?? asyncQuestion;
+  if (question) {
+    if (asyncQuestion) questionReplyResolver.observe(asyncQuestion);
+    if (seenAsyncQuestionIds.has(question.itemId)) return true;
+    const text = asyncQuestion ? normalizeText(asyncQuestion.text) : "";
+    if (!text && !restrictedQuestion?.hadText) return true;
+    seenAsyncQuestionIds.add(question.itemId);
     const timestampIso = readTimestampIso(obj);
-    const turnId = normalizeCodexTurnId(asyncQuestion.turnId) ?? resolveCodexTurnIdForItem(obj, turnState);
+    const turnId = normalizeCodexTurnId(question.turnId) ?? resolveCodexTurnIdForItem(obj, turnState);
     const item: ChatMessageItem = {
       type: "message",
       role: "assistant",
@@ -920,11 +1023,12 @@ function indexCodexEventRecord(
       ...toMessageModelMeta(codexTurnMeta),
       text,
       isContext: false,
+      ...(restrictedQuestion ? { codexAnswerRestricted: true } : {}),
     };
     items.push(item);
     observeCodexItemTurn(turnState, turnId, timestampIso);
     rememberAssistantCitationTarget(memoryCitationState, item, items.length - 1, payloadPhase,
-      turnId ?? memoryCitationState.activeTurnId);
+      turnId ?? memoryCitationState.activeTurnId, restrictedQuestion?.textHash);
     closeCodexInterruptionWindow(interruptionState);
     return true;
   }
@@ -952,10 +1056,11 @@ function indexCodexEventRecord(
   }
   if (payloadType === "agent_message" && typeof obj?.payload?.message === "string" && !memoryCitationState.closed) {
     const memoryCitation = normalizeMemoryCitationPayload(obj?.payload?.memory_citation);
+    const citationHash = restricted?.kind === "event" ? restricted.citationHash : undefined;
     const eventTurnId = readCodexRecordTurnId(obj) ?? memoryCitationState.activeTurnId;
-    if (memoryCitation && (!eventTurnId || !memoryCitationState.activeTurnId || eventTurnId === memoryCitationState.activeTurnId)) {
+    if ((memoryCitation || citationHash) && (!eventTurnId || !memoryCitationState.activeTurnId || eventTurnId === memoryCitationState.activeTurnId)) {
       const fact: MemoryCitationFact = {
-        text: normalizeText(splitTrailingMemoryCitationBlock(obj.payload.message).text),
+        ...(citationHash ? { textHash: citationHash } : { text: normalizeText(splitTrailingMemoryCitationBlock(obj.payload.message).text) }),
         phase: normalizeCitationPhase(payloadPhase),
         turnId: eventTurnId,
         citation: memoryCitation,
@@ -965,6 +1070,7 @@ function indexCodexEventRecord(
       }
     }
   }
+  if (restricted) return true;
   if (payloadType === "task_complete") resetMemoryCitationState(memoryCitationState, true);
 
   if (payloadType === "token_count") {
@@ -1233,6 +1339,7 @@ async function indexClaudeTimelineRecord(
 
   // Progress has independent anchors; it must never renumber existing messages or diffs.
   const progress = role === "assistant" ? extractClaudeProgress(obj, lineIndex) : [];
+  const advisorEvents = role === "assistant" ? readClaudeAdvisorEvents(obj) : [];
   const firstVisibleProgress = progress.findIndex((entry) => entry.body || entry.kind === "redactedThinking");
   const appendProgress = (entry: (typeof progress)[number], index: number): void => {
     const uuid = !text && attachments.length === 0 && index === firstVisibleProgress ? readClaudeMessageUuid(obj?.uuid) : undefined;
@@ -1244,14 +1351,36 @@ async function indexClaudeTimelineRecord(
     });
     observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
   };
-  const firstTextBlock = progress.length > 0 && Array.isArray(rawContent)
-    ? rawContent.findIndex((block: any) => typeof block?.text === "string" && block.text.trim()) : -1;
+  const firstTextBlock = (progress.length > 0 || advisorEvents.length > 0) && Array.isArray(rawContent)
+    ? rawContent.findIndex((block: any) => typeof block?.text === "string" && block.text.trim() && !isClaudeAdvisorBlock(block)) : -1;
   const toolBlockIndexes = Array.isArray(rawContent)
     ? rawContent.flatMap((block: any, index: number) => block?.type === "tool_use" ? [index] : []) : [];
+  const includeDetails = shouldIncludeDetails(options);
   let progressCursor = 0;
-  const appendProgressThrough = (blockIndex: number): void => {
-    while (progressCursor < progress.length && progress[progressCursor]!.blockIndex <= blockIndex) {
-      appendProgress(progress[progressCursor]!, progressCursor++);
+  let advisorCursor = 0;
+  const appendAnnotationsThrough = (blockIndex: number): void => {
+    while (true) {
+      const progressEntry = progress[progressCursor];
+      const advisorEntry = advisorEvents[advisorCursor];
+      if (progressEntry && progressEntry.blockIndex <= blockIndex &&
+        (!advisorEntry || progressEntry.blockIndex < advisorEntry.blockIndex)) {
+        appendProgress(progressEntry, progressCursor++);
+        continue;
+      }
+      if (!advisorEntry || advisorEntry.blockIndex > blockIndex) return;
+      advisorCursor += 1;
+      const { status, text: advice, truncated } = advisorEntry;
+      // Advisor card identities are independent of tool call IDs and message numbering.
+      items.push({
+        type: "tool",
+        name: "advisor",
+        advisor: { id: `claude-advisor:${lineIndex}:${advisorEntry.blockIndex}`, status, ...(truncated ? { truncated } : {}) },
+        ...(turnId ? { turnId } : {}),
+        ...(ts ? { timestampIso: ts } : {}),
+        messageIndex: currentMessageIndex(),
+        ...(advice ? (includeDetails ? { outputText: advice } : { detailsOmitted: true }) : {}),
+      });
+      observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
     }
   };
 
@@ -1282,17 +1411,16 @@ async function indexClaudeTimelineRecord(
   // Allocate the legacy message number first, but interleave progress-bearing records by block order.
   const appendMessageThrough = (blockIndex: number): void => {
     if (!pendingMessage || firstTextBlock > blockIndex) return;
-    appendProgressThrough(firstTextBlock);
+    appendAnnotationsThrough(firstTextBlock);
     items.push(pendingMessage);
     pendingMessage = undefined;
     observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
   };
 
-  const includeDetails = shouldIncludeDetails(options);
   const normalizedResults = claudeChanges.acceptResults(obj);
   for (let toolCallIndex = 0; toolCallIndex < parsed.toolCalls.length; toolCallIndex += 1) {
     appendMessageThrough(toolBlockIndexes[toolCallIndex] ?? Number.POSITIVE_INFINITY);
-    appendProgressThrough(toolBlockIndexes[toolCallIndex] ?? Number.POSITIVE_INFINITY);
+    appendAnnotationsThrough(toolBlockIndexes[toolCallIndex] ?? Number.POSITIVE_INFINITY);
     const toolCall = parsed.toolCalls[toolCallIndex]!;
     const name = normalizeText(toolCall.name ?? "") || "tool_use";
     const callId = toolCall.callId;
@@ -1358,7 +1486,7 @@ async function indexClaudeTimelineRecord(
     observeCodexItemTurn(claudeTurnState?.turnState, turnId, ts);
   }
 
-  appendProgressThrough(Number.POSITIVE_INFINITY);
+  appendAnnotationsThrough(Number.POSITIVE_INFINITY);
 
   if (role === "assistant") {
     const usageItem = buildClaudeUsageItem(obj, currentMessageIndex(), ts, turnId);
@@ -1379,15 +1507,10 @@ interface ChatMessageModelMeta {
   effort?: string;
 }
 
-interface MemoryCitationMatch {
-  text: string;
-  phase?: string;
-  turnId?: string;
-}
+type MemoryCitationText = { text: string } | { textHash: string };
 
-interface MemoryCitationFact extends MemoryCitationMatch {
-  citation: ChatMemoryCitation;
-}
+type MemoryCitationMatch = MemoryCitationText & { phase?: string; turnId?: string };
+type MemoryCitationFact = MemoryCitationMatch & { citation?: ChatMemoryCitation };
 
 interface MemoryCitationBuildState {
   pending?: MemoryCitationFact;
@@ -1515,7 +1638,7 @@ function resolveClaudeRecordTurnId(
     return { turnId: resumedTurnId ?? state.turnState.activeTurnId };
   }
 
-  if (isClaudeHumanTurnStart(obj, compactUserText, attachments, toolResults)) {
+  if (isClaudeHumanTurnStart(obj, compactUserText, attachments, toolResults.length > 0)) {
     const previousActiveTurnId = state.turnState.activeTurnId;
     const turnId = allocateClaudeTurnId(obj?.uuid, lineIndex, state);
     state.pendingResumeTurnId = undefined;
@@ -1534,18 +1657,6 @@ function resolveClaudeRecordTurnId(
 
   const toolResultTurnId = resolveClaudeToolResultTurnId(toolResults, state);
   return { turnId: toolResultTurnId ?? state.turnState.activeTurnId };
-}
-
-function isClaudeHumanTurnStart(
-  obj: any,
-  compactUserText: string | null,
-  attachments: readonly ChatAttachment[],
-  toolResults: readonly { callId?: string }[],
-): boolean {
-  if (obj?.isMeta === true || obj?.isSidechain === true || isClaudeCompactSummaryRecord(obj)) return false;
-  if (compactUserText) return true;
-  if (toolResults.length > 0) return false;
-  return attachments.some((attachment) => attachment.type === "image" || attachment.type === "document");
 }
 
 function allocateClaudeTurnId(rawUuid: unknown, lineIndex: number, state: ClaudeTurnBuildState): string {
@@ -2069,7 +2180,7 @@ function finalizeTurns(
         if (typeof summary.firstMessageIndex !== "number") summary.firstMessageIndex = item.messageIndex;
         summary.lastMessageIndex = item.messageIndex;
       }
-    } else if (item.type === "tool") {
+    } else if (item.type === "tool" && !item.advisor) {
       summary.toolCount += 1;
     } else if (item.type === "patchGroup") {
       summary.patchGroupCount += 1;
@@ -2317,8 +2428,11 @@ function normalizeCitationPhase(value: unknown): string | undefined {
 }
 
 function citationMessagesMatch(left: MemoryCitationMatch, right: MemoryCitationMatch): boolean {
-  return left.text === right.text && (!left.phase || !right.phase || left.phase === right.phase) &&
-    (!left.turnId || !right.turnId || left.turnId === right.turnId);
+  if ((left.phase && right.phase && left.phase !== right.phase) ||
+    (left.turnId && right.turnId && left.turnId !== right.turnId)) return false;
+  if ("text" in left && "text" in right) return left.text === right.text;
+  const hash = (value: MemoryCitationText): string => "textHash" in value ? value.textHash : hashCodexAnswerText(value.text);
+  return hash(left) === hash(right);
 }
 
 function resetMemoryCitationState(state: MemoryCitationBuildState, closed: boolean): void {
@@ -2328,20 +2442,19 @@ function resetMemoryCitationState(state: MemoryCitationBuildState, closed: boole
 }
 
 function rememberAssistantCitationTarget(
-  state: MemoryCitationBuildState, item: ChatMessageItem, itemIndex: number, phase: unknown, turnId?: string,
+  state: MemoryCitationBuildState, item: ChatMessageItem, itemIndex: number, phase: unknown, turnId?: string, textHash?: string,
 ): void {
   state.closed = false;
-  state.lastAssistant = { itemIndex, text: item.text, phase: normalizeCitationPhase(phase), turnId };
+  state.lastAssistant = { itemIndex, ...(textHash ? { textHash } : { text: item.text }), phase: normalizeCitationPhase(phase), turnId };
 }
 
 function takePendingMemoryCitation(
-  state: MemoryCitationBuildState, text: string, phase: unknown, turnId?: string,
-): ChatMemoryCitation | undefined {
+  state: MemoryCitationBuildState, target: MemoryCitationMatch,
+): MemoryCitationFact | undefined {
   const pending = state.pending;
   // A pending event may match the next response, but must never drift to a later message.
   state.pending = undefined;
-  return pending && citationMessagesMatch(pending, { text, phase: normalizeCitationPhase(phase), turnId })
-    ? pending.citation : undefined;
+  return pending && citationMessagesMatch(pending, target) ? pending : undefined;
 }
 
 function attachMemoryCitationToLastAssistant(
@@ -2357,7 +2470,7 @@ function attachMemoryCitationToLastAssistant(
   const item = items[index];
   if (!item || item.type !== "message" || item.role !== "assistant") return false;
   if (item.messageIndex !== currentMessageIndex) return false;
-  item.memoryCitation ??= fact.citation;
+  if (!item.codexAnswerRestricted && fact.citation) item.memoryCitation ??= fact.citation;
   state.pending = undefined;
   return true;
 }
@@ -3033,14 +3146,18 @@ function attachOrPushToolOutput(
   items.push(tool);
 }
 
-function removeSuppressedAudioMessages(items: ChatTimelineItem[], suppressed: Set<ChatMessageItem>): void {
-  if (suppressed.size === 0) return;
+function removeSuppressedTimelineItems(
+  items: ChatTimelineItem[],
+  suppressedAudio: Set<ChatMessageItem>,
+  suppressedPageCards: Set<ChatTimelineItem>,
+): void {
+  if (suppressedAudio.size === 0 && suppressedPageCards.size === 0) return;
   let writeIndex = 0;
   let removed = 0;
   for (const item of items) {
     // Late citations keep their original message and bookmark positions.
-    if (item.type === "message" && suppressed.has(item) && !item.text &&
-      !item.attachments?.length && !item.memoryCitation) {
+    if (suppressedPageCards.has(item) || (item.type === "message" && suppressedAudio.has(item) && !item.text &&
+      !item.attachments?.length && !item.memoryCitation)) {
       removed += 1;
       continue;
     }
@@ -3048,12 +3165,13 @@ function removeSuppressedAudioMessages(items: ChatTimelineItem[], suppressed: Se
     items[writeIndex++] = item;
   }
   items.length = writeIndex;
-  suppressed.clear();
+  suppressedAudio.clear();
+  suppressedPageCards.clear();
 }
 
 function finalizeTimelineItems(items: ChatTimelineItem[]): void {
   for (const item of items) {
-    if (item.type !== "tool") continue;
+    if (item.type !== "tool" || item.advisor) continue;
     if (item.execution?.status !== "staged" && item.execution?.status !== "unconfirmed") {
       mergeToolExecutionIntoItem(item, extractToolExecutionFromText(item.outputText));
     }

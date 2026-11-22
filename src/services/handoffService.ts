@@ -1,4 +1,6 @@
 import * as crypto from "node:crypto";
+import { isClaudeVoiceCallRecord } from "../chat/claudeVoiceCall";
+import * as fs from "node:fs/promises";
 import { ClaudeQueuedInputTracker } from "../chat/claudeQueuedInput";
 import * as path from "node:path";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
@@ -20,19 +22,25 @@ import { createClaudePastedPromptResolver, type ClaudePastedPromptResolver } fro
 import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
 import { isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
 import { mapAssociatedProjectPath, type ProjectPathMapping } from "./projectPathMapper";
-import { normalizeProjectKey } from "../utils/fsUtils";
+import { normalizeProjectKey, pathExists } from "../utils/fsUtils";
+import { antigravityReader } from "../antigravity/antigravityReader";
+import { projectAntigravityChat } from "../antigravity/antigravityChatModel";
+import { antigravitySessionIdentity } from "../antigravity/antigravitySessionSummary";
+import { ANTIGRAVITY_PROFILE, ANTIGRAVITY_UUID, AntigravityReadError } from "../antigravity/antigravityTypes";
 import { readSessionJsonlLines } from "../sessions/codexHistoryBase";
+import { CodexAnswerVisibility, readCodexAnswerRestriction } from "../sessions/codexAnswerVisibility";
 import {
   CodexFileChangeEventDeduper,
   isSuccessfulCodexFileChangeEvent,
   readCodexFileChangeEvent,
 } from "../sessions/codexFileChangeEvents";
 import {
+  isCodexCompanionPageRecord,
   readCodexAsyncQuestionMessage,
   readCodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
 
-export type HandoffTarget = "codex" | "claude";
+export type HandoffTarget = "codex" | "claude" | "antigravity";
 
 export interface CreateHandoffOptions {
   globalStorageUri: vscode.Uri;
@@ -41,6 +49,10 @@ export interface CreateHandoffOptions {
   sourceSessionsRoot: string;
   pathRewrite?: HandoffPathRewriteContext;
   sessionInventory?: readonly SessionSummary[];
+  assertCurrent?: () => void;
+  token?: { readonly isCancellationRequested: boolean };
+  validateSource?: () => Promise<void>;
+  selection?: HandoffSelection;
 }
 
 export interface HandoffResult {
@@ -75,6 +87,19 @@ export interface HandoffLocation {
   handoffPath: string;
   source: SessionSource;
   target: HandoffTarget;
+}
+
+interface HandoffFilePair {
+  body: Buffer;
+  metadata: Buffer;
+}
+
+export interface HandoffSelection {
+  readonly location: HandoffLocation;
+  readonly originalDirectory: string;
+  readonly sessionKey: string;
+  readonly sessionsRoot: string;
+  readonly codexDestination?: { mode: "new" } | { mode: "update"; files: HandoffFilePair };
 }
 
 export interface HandoffPathRewriteContext {
@@ -112,19 +137,28 @@ interface ParsedSessionContext {
   diffBlocks: HandoffDiffBlock[];
   invalidJsonLines: number;
   totalLines: number;
+  native?: { profile: typeof ANTIGRAVITY_PROFILE; digest: string; partial: boolean; identityKey: string };
 }
 
 interface HandoffDirectoryInfo {
   uri: vscode.Uri;
   createdAtMs: number;
+  guard: HandoffDirectoryGuard;
+}
+interface HandoffDirectoryGuard {
+  readonly canonical: string;
+  readonly ancestors: readonly { readonly path: string; readonly dev: number; readonly ino: number; readonly birthtimeMs: number }[];
 }
 
 export interface HandoffMetadata {
+  schemaVersion?: 1 | 2;
   createdAt?: string;
   lastGeneratedAt?: string;
   source?: SessionSource;
   target?: HandoffTarget;
   pathRewrite?: HandoffPathRewriteMetadata;
+  codexAnswerProjection?: true;
+  native?: { profile: typeof ANTIGRAVITY_PROFILE; digest: string; partial: boolean; identityKey: string };
 }
 
 interface ClaudeToolCall {
@@ -136,7 +170,7 @@ interface ClaudeToolCall {
 const HANDOFF_ROOT_DIR = "handoffs";
 const HANDOFF_FILE_NAME = "handoff.md";
 const METADATA_FILE_NAME = "metadata.json";
-const HANDOFF_SOURCE_DIRS: readonly SessionSource[] = ["codex", "claude"];
+const HANDOFF_SOURCE_DIRS: readonly SessionSource[] = ["codex", "claude", "antigravity"];
 const RETENTION_DAYS = 30;
 const RETENTION_MS = RETENTION_DAYS * 24 * 60 * 60 * 1000;
 const MAX_HANDOFF_DIRECTORIES = 100;
@@ -148,28 +182,73 @@ const MAX_SINGLE_DIFF_CHARS = 60_000;
 const MAX_DIFF_BLOCKS = 60;
 const MAX_SYNTHETIC_WRITE_LINES = 4_000;
 const MAX_HANDOFF_PATH_SEGMENT_LENGTH = 120;
+const MAX_MANAGED_HANDOFF_BYTES = 8 * 1024 * 1024;
 const PATH_REWRITE_ALGORITHM_VERSION = 1;
+const maintenanceQueues = new Map<string, Promise<void>>();
+const protectionByDirectory = new Map<string, { owners: number; until: number }>();
+const clearListeners = new Set<() => void>();
+let clearGeneration = 0;
+function pruneHandoffProtection(now = Date.now()): void {
+  for (const [key, entry] of protectionByDirectory) if (!entry.owners && entry.until <= now) protectionByDirectory.delete(key);
+}
+
+export function onWillClearHandoffs(listener: () => void): { dispose(): void } {
+  clearListeners.add(listener); return { dispose: () => { clearListeners.delete(listener); } };
+}
+export function protectHandoffDirectory(directory: string): { dispose(): void; retainFor(milliseconds: number): void } {
+  pruneHandoffProtection();
+  const key = normalizeFsPathKey(directory), entry = protectionByDirectory.get(key) ?? { owners: 0, until: 0 }; entry.owners++; protectionByDirectory.set(key, entry);
+  let disposed = false;
+  return {
+    retainFor(milliseconds) { if (!disposed && Number.isFinite(milliseconds)) entry.until = Math.max(entry.until, Date.now() + Math.max(0, Math.min(120000, milliseconds))); },
+    dispose() { if (disposed) return; disposed = true; entry.owners--; if (!entry.owners && entry.until <= Date.now()) protectionByDirectory.delete(key); },
+  };
+}
+async function withHandoffMaintenance<T>(storage: vscode.Uri, operation: () => Promise<T>): Promise<T> {
+  const key = normalizeFsPathKey(storage.fsPath), previous = maintenanceQueues.get(key) ?? Promise.resolve();
+  const result = previous.then(operation, operation), settled = result.then(() => undefined, () => undefined); maintenanceQueues.set(key, settled);
+  try { return await result; }
+  finally { if (maintenanceQueues.get(key) === settled) maintenanceQueues.delete(key); }
+}
 const ABSOLUTE_PATH_START_RE = /[A-Za-z]:[\\/]|\\\\[^\\/\s"'`<>|]+[\\/][^\\/\s"'`<>|]+[\\/]|\/(?!\/)/g;
 const TRAILING_PATH_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", ")", "]", "}", "、", "。", "，", "．"]);
 
 // Create or update a cross-agent handoff in global storage.
 export async function createHandoff(options: CreateHandoffOptions): Promise<HandoffResult> {
+  const generation = clearGeneration;
+  const checked = { ...options, assertCurrent: () => {
+    if (generation !== clearGeneration || options.token?.isCancellationRequested) throw new Error("Handoff generation was invalidated.");
+    options.assertCurrent?.();
+  } };
+  const original = resolveHandoffLocation(options);
+  const originalProtection = protectHandoffDirectory(original.directoryUri.fsPath);
+  let selectedProtection: ReturnType<typeof protectHandoffDirectory> | undefined;
+  try {
+    const selection = options.selection ?? await selectCurrentHandoffLocation(options);
+    const location = requireHandoffSelection(options, original, selection);
+    if (location.directoryUri.fsPath !== original.directoryUri.fsPath) {
+      selectedProtection = protectHandoffDirectory(location.directoryUri.fsPath);
+    }
+    checked.assertCurrent();
+    return await createHandoffCore(checked, selection);
+  } finally {
+    selectedProtection?.dispose();
+    originalProtection.dispose();
+  }
+}
+
+async function createHandoffCore(options: CreateHandoffOptions, selection: HandoffSelection): Promise<HandoffResult> {
+  const { location, codexDestination } = selection;
   const createdAt = new Date();
   const createdAtIso = createdAt.toISOString();
   const source = options.session.source;
   const target = options.target;
-  const location = resolveHandoffLocation({
-    globalStorageUri: options.globalStorageUri,
-    session: options.session,
-    sourceSessionsRoot: options.sourceSessionsRoot,
-    target,
-  });
   const mirror = buildHandoffDirectoryMirror(options.session, options.sourceSessionsRoot);
   const directoryUri = location.directoryUri;
-  await vscode.workspace.fs.createDirectory(directoryUri);
   const pathRewrite = normalizeHandoffPathRewriteContext(options.pathRewrite);
 
-  const context = await parseSessionForHandoff(options.session, options.sessionInventory);
+  const context = await parseSessionForHandoff(options.session, options.sessionInventory, options.token);
+  options.assertCurrent?.();
   const markdown = clampText(
     buildHandoffMarkdown({
       session: options.session,
@@ -181,11 +260,10 @@ export async function createHandoff(options: CreateHandoffOptions): Promise<Hand
 
   const handoffUri = location.handoffUri;
   const metadataUri = location.metadataUri;
-  await vscode.workspace.fs.writeFile(handoffUri, Buffer.from(markdown, "utf8"));
   const sourceSessionStat = await statSourceSession(options.session.fsPath);
 
   const metadata = {
-    schemaVersion: 1,
+    schemaVersion: source === "antigravity" ? 2 : 1,
     createdAt: createdAtIso,
     lastGeneratedAt: createdAtIso,
     source,
@@ -201,6 +279,8 @@ export async function createHandoff(options: CreateHandoffOptions): Promise<Hand
     handoffPathMode: mirror.mode,
     transcriptMode: "tail-prioritized-message-excerpt-with-file-changes",
     pathRewrite,
+    ...(context.native ? { native: context.native } : {}),
+    ...(source === "codex" ? { codexAnswerProjection: true } : {}),
     includes: ["file changes when recoverable"],
     excludes: ["tool calls", "tool outputs"],
     retention: {
@@ -208,7 +288,13 @@ export async function createHandoff(options: CreateHandoffOptions): Promise<Hand
       maxEntries: MAX_HANDOFF_DIRECTORIES,
     },
   };
-  await vscode.workspace.fs.writeFile(metadataUri, Buffer.from(`${JSON.stringify(metadata, null, 2)}\n`, "utf8"));
+  if (context.native && (await antigravityReader.readSession(options.session.fsPath, options.token)).digest !== context.native.digest) throw new AntigravityReadError("sourceChanged");
+  await options.validateSource?.();
+  options.assertCurrent?.();
+  await withHandoffMaintenance(options.globalStorageUri, async () => {
+    options.assertCurrent?.();
+    await publishHandoffFiles(options.globalStorageUri, directoryUri, markdown, `${JSON.stringify(metadata, null, 2)}\n`, options.assertCurrent, codexDestination);
+  });
 
   await cleanupHandoffs(options.globalStorageUri, { mode: "expired", preserveDirectoryFsPath: directoryUri.fsPath });
 
@@ -229,17 +315,25 @@ export async function cleanupHandoffs(
   globalStorageUri: vscode.Uri,
   options?: { mode?: "expired" | "all"; preserveDirectoryFsPath?: string; now?: Date },
 ): Promise<CleanupHandoffsResult> {
+  if (options?.mode === "all") { clearGeneration++; for (const listener of clearListeners) listener(); }
+  return withHandoffMaintenance(globalStorageUri, () => cleanupHandoffsCore(globalStorageUri, options));
+}
+
+async function cleanupHandoffsCore(globalStorageUri: vscode.Uri, options?: { mode?: "expired" | "all"; preserveDirectoryFsPath?: string; now?: Date }): Promise<CleanupHandoffsResult> {
+  pruneHandoffProtection();
   const mode = options?.mode ?? "expired";
   const handoffRootUri = vscode.Uri.joinPath(globalStorageUri, HANDOFF_ROOT_DIR);
+  let rootGuard: HandoffDirectoryGuard;
+  try {
+    rootGuard = await inspectHandoffDirectory(globalStorageUri, handoffRootUri);
+  } catch (error) {
+    const absent = error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+    return { removedDirectories: 0, removedHandoffs: 0, removedBytes: 0, failedPaths: absent ? [] : [handoffRootUri.fsPath] };
+  }
   if (mode === "all") {
     try {
-      await vscode.workspace.fs.stat(handoffRootUri);
-    } catch {
-      return { removedDirectories: 0, removedHandoffs: 0, removedBytes: 0, failedPaths: [] };
-    }
-
-    const stats = await collectDirectoryStats(handoffRootUri);
-    try {
+      const stats = await collectDirectoryStats(globalStorageUri, handoffRootUri, rootGuard);
+      assertHandoffDirectoryGuard(await inspectHandoffDirectory(globalStorageUri, handoffRootUri), rootGuard);
       await vscode.workspace.fs.delete(handoffRootUri, { recursive: true, useTrash: false });
       return {
         removedDirectories: stats.fileCount > 0 ? 1 : 0,
@@ -259,24 +353,32 @@ export async function cleanupHandoffs(
 
   const nowMs = (options?.now ?? new Date()).getTime();
   const preserveKey = normalizeFsPathKey(options?.preserveDirectoryFsPath);
-  const directories = await listCurrentHandoffDirectories(handoffRootUri);
-  const ordered = directories.slice().sort((a, b) => b.createdAtMs - a.createdAtMs);
   const failedPaths: string[] = [];
+  const directories = await listCurrentHandoffDirectories(globalStorageUri, handoffRootUri, rootGuard, failedPaths);
+  const ordered = directories.slice().sort((a, b) => b.createdAtMs - a.createdAtMs);
   let removedDirectories = 0;
   let removedHandoffs = 0;
   let removedBytes = 0;
 
   for (let index = 0; index < ordered.length; index += 1) {
     const dir = ordered[index]!;
-    if (normalizeFsPathKey(dir.uri.fsPath) === preserveKey) continue;
+    const directoryKey = normalizeFsPathKey(dir.uri.fsPath);
+    if (directoryKey === preserveKey) continue;
+    const protection = protectionByDirectory.get(directoryKey);
+    if (protection && (protection.owners > 0 || protection.until > nowMs)) continue;
+    if (protection) protectionByDirectory.delete(directoryKey);
 
     const shouldDelete =
       nowMs - dir.createdAtMs > RETENTION_MS ||
       index >= MAX_HANDOFF_DIRECTORIES;
     if (!shouldDelete) continue;
 
-    const stats = await collectDirectoryStats(dir.uri);
     try {
+      const stats = await collectDirectoryStats(globalStorageUri, dir.uri, dir.guard);
+      // Recheck every ancestor after metadata/stat awaits and immediately before recursive deletion.
+      assertHandoffDirectoryGuard(await inspectHandoffDirectory(globalStorageUri, dir.uri), dir.guard);
+      const lateProtection = protectionByDirectory.get(directoryKey);
+      if (lateProtection && (lateProtection.owners > 0 || lateProtection.until > nowMs)) continue;
       await vscode.workspace.fs.delete(dir.uri, { recursive: true, useTrash: false });
       removedDirectories += 1;
       removedHandoffs += stats.fileCount;
@@ -290,8 +392,11 @@ export async function cleanupHandoffs(
 }
 
 export function resolveHandoffLocation(options: ResolveHandoffLocationOptions): HandoffLocation {
+  if (options.session.source === "antigravity" && options.target === undefined) throw new Error("An explicit native handoff target is required.");
   const target = options.target ?? resolveDefaultHandoffTarget(options.session.source);
-  const handoffRootUri = vscode.Uri.joinPath(options.globalStorageUri, HANDOFF_ROOT_DIR);
+  if (!["codex", "claude", "antigravity"].includes(target) || options.session.source === target) throw new Error("Invalid handoff target.");
+  if (!isHandoffFileUri(options.globalStorageUri)) throw new Error("Unsupported handoff storage.");
+  const handoffRootUri = vscode.Uri.joinPath(vscode.Uri.file(options.globalStorageUri.fsPath), HANDOFF_ROOT_DIR);
   const mirror = buildHandoffDirectoryMirror(options.session, options.sourceSessionsRoot);
   const directoryUri = vscode.Uri.joinPath(handoffRootUri, ...mirror.segments);
   const handoffUri = vscode.Uri.joinPath(directoryUri, HANDOFF_FILE_NAME);
@@ -304,6 +409,74 @@ export function resolveHandoffLocation(options: ResolveHandoffLocationOptions): 
     source: options.session.source,
     target,
   };
+}
+
+function requireHandoffSelection(
+  options: ResolveHandoffLocationOptions,
+  original: HandoffLocation,
+  selection: HandoffSelection,
+): HandoffLocation {
+  const { location } = selection;
+  if (selection.originalDirectory !== original.directoryUri.fsPath || selection.sessionKey !== options.session.cacheKey ||
+    selection.sessionsRoot !== options.sourceSessionsRoot || location.source !== original.source || location.target !== original.target) {
+    throw new Error("Handoff selection no longer matches the requested session.");
+  }
+  return location;
+}
+
+export async function selectCurrentHandoffLocation(options: ResolveHandoffLocationOptions): Promise<HandoffSelection> {
+  const original = resolveHandoffLocation(options);
+  const scope = { originalDirectory: original.directoryUri.fsPath, sessionKey: options.session.cacheKey,
+    sessionsRoot: options.sourceSessionsRoot };
+  if (options.session.source !== "codex") return { ...scope, location: original };
+  const suffix = crypto.createHash("sha256").update(normalizeFsPathKey(original.directoryUri.fsPath), "utf8").digest("hex").slice(0, 24);
+  const sibling = vscode.Uri.joinPath(original.directoryUri, "..", `codex-display-${suffix}`);
+  const handoffUri = vscode.Uri.joinPath(sibling, HANDOFF_FILE_NAME);
+  const metadataUri = vscode.Uri.joinPath(sibling, METADATA_FILE_NAME);
+  const protectedLocation = { ...original, directoryUri: sibling, handoffUri, metadataUri, handoffPath: handoffUri.fsPath };
+  const protectedFiles = await readProjectedHandoffPair(options.globalStorageUri, protectedLocation);
+  if (protectedFiles) return { ...scope, location: protectedLocation, codexDestination: { mode: "update", files: protectedFiles } };
+  const originalFiles = await readProjectedHandoffPair(options.globalStorageUri, original);
+  if (originalFiles) return { ...scope, location: original, codexDestination: { mode: "update", files: originalFiles } };
+  if (!await isHandoffLocationOccupied(original)) return { ...scope, location: original, codexDestination: { mode: "new" } };
+  if (await isHandoffLocationOccupied(protectedLocation)) throw new Error("Protected handoff location is unavailable.");
+  return { ...scope, location: protectedLocation, codexDestination: { mode: "new" } };
+}
+
+async function readProjectedHandoffPair(storage: vscode.Uri, location: HandoffLocation): Promise<HandoffFilePair | undefined> {
+  try {
+    const directory = await ensureHandoffDirectory(storage, location.directoryUri, false);
+    const [body, metadata] = await Promise.all([
+      boundedFile(path.join(directory, HANDOFF_FILE_NAME), MAX_MANAGED_HANDOFF_BYTES),
+      boundedFile(path.join(directory, METADATA_FILE_NAME), 65536),
+    ]);
+    if (body && metadata && parseHandoffMetadata(metadata).codexAnswerProjection) return { body, metadata };
+    return undefined;
+  } catch { return undefined; }
+}
+
+async function isHandoffLocationOccupied(location: HandoffLocation): Promise<boolean> {
+  for (const file of [location.handoffPath, location.metadataUri.fsPath]) {
+    try {
+      await fs.lstat(file);
+      return true;
+    } catch (error) {
+      if (!isMissingHandoffPath(error)) throw error;
+    }
+  }
+  return false;
+}
+
+export async function canReuseHandoffFile(storage: vscode.Uri, location: HandoffLocation): Promise<boolean> {
+  if (location.source !== "codex") return pathExists(location.handoffPath);
+  try {
+    const directory = await ensureHandoffDirectory(storage, location.directoryUri, false);
+    const body = await fs.lstat(path.join(directory, HANDOFF_FILE_NAME));
+    return body.isFile() && !body.isSymbolicLink() && body.size <= MAX_MANAGED_HANDOFF_BYTES &&
+      (await readHandoffMetadata(vscode.Uri.file(path.join(directory, METADATA_FILE_NAME)))).codexAnswerProjection === true;
+  } catch {
+    return false;
+  }
 }
 
 function resolveDefaultHandoffTarget(source: SessionSource): HandoffTarget {
@@ -320,16 +493,73 @@ export function buildHandoffPrompt(handoffPath: string): string {
   ].join("\n");
 }
 
+export async function isAntigravityHandoffStale(metadata: HandoffMetadata, session: SessionSummary): Promise<boolean> {
+  if (session.source !== "antigravity") return false;
+  if (metadata.schemaVersion !== 2 || metadata.native?.identityKey !== session.identityKey || metadata.native.profile !== ANTIGRAVITY_PROFILE) return true;
+  try { return (await antigravityReader.readSession(session.fsPath)).digest !== metadata.native.digest; }
+  catch { return true; }
+}
+
+export async function updateHandoffTarget(options: ResolveHandoffLocationOptions & {
+  target: HandoffTarget;
+  selection?: HandoffSelection;
+  assertCurrent?: () => void;
+}): Promise<void> {
+  const generation = clearGeneration;
+  const selection = options.selection ?? await selectCurrentHandoffLocation(options);
+  const location = requireHandoffSelection(options, resolveHandoffLocation(options), selection);
+  const { codexDestination } = selection;
+  if (options.session.source === "codex" && codexDestination?.mode !== "update") throw new Error("Protected handoff is unavailable.");
+  await withHandoffMaintenance(options.globalStorageUri, async () => {
+    const check = (): void => {
+      if (generation !== clearGeneration) throw new Error("Handoff target update was invalidated.");
+      options.assertCurrent?.();
+    };
+    check();
+    const directory = await ensureHandoffDirectory(options.globalStorageUri, location.directoryUri, false);
+    const raw = await boundedFile(path.join(directory, METADATA_FILE_NAME), 65536);
+    const body = await boundedFile(path.join(directory, HANDOFF_FILE_NAME), MAX_MANAGED_HANDOFF_BYTES);
+    if (!raw || !body) throw new Error("Handoff files are unavailable.");
+    const metadata = parseHandoffMetadata(raw);
+    if (metadata.source !== options.session.source ||
+        (options.session.source === "codex" && !metadata.codexAnswerProjection) ||
+        (options.session.source === "antigravity" && metadata.native?.identityKey !== options.session.identityKey)) {
+      throw new Error("Handoff metadata does not match its source.");
+    }
+    const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+    const parsed = JSON.parse(decoder.decode(raw)) as Record<string, unknown>;
+    parsed.target = options.target;
+    parsed.direction = options.session.source + "-to-" + options.target;
+    check();
+    await publishHandoffFiles(options.globalStorageUri, location.directoryUri, decoder.decode(body), JSON.stringify(parsed, null, 2) + "\n", check, codexDestination);
+  });
+}
+
 async function parseSessionForHandoff(
   session: SessionSummary,
   sessionInventory?: readonly SessionSummary[],
+  token?: { readonly isCancellationRequested: boolean },
 ): Promise<ParsedSessionContext> {
+  if (session.source === "antigravity") {
+    const locator = antigravityReader.locator(session.fsPath), data = await antigravityReader.readSession(session.fsPath, token);
+    if (session.meta.id !== data.metadata.conversationId || session.identityKey !== antigravitySessionIdentity(locator.rootPath, data.metadata.conversationId)) throw new AntigravityReadError("sourceChanged");
+    const { model, issues } = projectAntigravityChat(data, session.fsPath, locator.rootPath, { includeDetails: false, images: { enabled: false, maxSizeMB: 1, thumbnailSize: "small" } });
+    const messages: HandoffMessage[] = [];
+    for (const item of model.items) {
+      if (item.type !== "message" || item.role !== "user" && item.role !== "assistant") continue;
+      const text = sanitizeMessageText([item.text, ...buildAttachmentSummaryLines(item.attachments ?? [], { mode: "resume" })].filter(Boolean).join("\n"));
+      if (text) messages.push({ role: item.role, text });
+    }
+    return { messages, diffBlocks: [], invalidJsonLines: issues.length ? 1 : 0, totalLines: data.steps.length,
+      native: { profile: ANTIGRAVITY_PROFILE, digest: data.digest, partial: issues.length > 0, identityKey: session.identityKey } };
+  }
   const pastedPromptResolver = await createClaudePastedPromptResolver(session.fsPath);
   const messages: HandoffMessage[] = [];
   const queuedInputs = new ClaudeQueuedInputTracker();
   const diffBlocks: HandoffDiffBlock[] = [];
   const seenCodexAsyncQuestionIds = new Set<string>();
   const fileChangeDeduper = new CodexFileChangeEventDeduper();
+  const answerVisibility = session.source === "codex" ? new CodexAnswerVisibility() : undefined;
   let invalidJsonLines = 0;
   let totalLines = 0;
 
@@ -337,6 +567,7 @@ async function parseSessionForHandoff(
     claudeSessionsRoot: session.source === "claude" ? session.storage.rootPath : undefined,
     applyCodexRollbacks: true,
     sessionInventory,
+    token,
   })) {
     const { line } = record;
     totalLines += 1;
@@ -350,7 +581,9 @@ async function parseSessionForHandoff(
       continue;
     }
 
-    if (session.source === "claude") {
+    const protectedRecord = answerVisibility?.project(obj);
+    if (protectedRecord) obj = await protectedRecord;
+    if (session.source === "claude" && !isClaudeVoiceCallRecord(obj)) {
       const input = queuedInputs.accept(obj, record.lineIndex);
       if (input) {
         messages.push({ role: "user", text: sanitizeMessageText(input.body), inputId: input.inputId });
@@ -375,6 +608,7 @@ async function collectCodexMessage(
   messages: HandoffMessage[],
   seenAsyncQuestionIds: Set<string>,
 ): Promise<boolean> {
+  if (readCodexAnswerRestriction(obj) || isCodexCompanionPageRecord(obj)) return true;
   const asyncQuestion = readCodexAsyncQuestionMessage(obj);
   if (asyncQuestion) {
     if (seenAsyncQuestionIds.has(asyncQuestion.itemId)) return true;
@@ -413,6 +647,7 @@ async function collectClaudeMessage(
   messages: HandoffMessage[],
   pastedPromptResolver?: ClaudePastedPromptResolver,
 ): Promise<boolean> {
+  if (isClaudeVoiceCallRecord(obj)) return true;
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
   if (isClaudeInternalUserRecord(obj)) return true;
@@ -462,6 +697,7 @@ function collectCodexDiffBlocks(
 }
 
 function collectClaudeDiffBlocks(obj: any, diffBlocks: HandoffDiffBlock[]): void {
+  if (isClaudeVoiceCallRecord(obj)) return;
   if (diffBlocks.length >= MAX_DIFF_BLOCKS) return;
   if (isClaudeInternalUserRecord(obj)) return;
   if (!detectClaudeMessageRole(obj)) return;
@@ -551,7 +787,7 @@ function buildHandoffMarkdown(params: {
 }): string {
   const { session, context, pathRewrite } = params;
   const lines: string[] = [];
-  const sourceLabel = session.source === "claude" ? "Claude Code" : "Codex";
+  const sourceLabel = session.source === "antigravity" ? "Antigravity" : session.source === "claude" ? "Claude Code" : "Codex";
   const currentGoal = rewriteHandoffFreeText(findLatestUserMessage(context.messages) ?? "", pathRewrite);
   const transcript = buildTranscriptExcerpt(context.messages, MAX_TRANSCRIPT_CHARS, pathRewrite);
   const diffs = buildDiffSection(context.diffBlocks, pathRewrite);
@@ -569,6 +805,7 @@ function buildHandoffMarkdown(params: {
   }
   lines.push("");
   lines.push("> Transcript is tail-prioritized. Tool calls and tool outputs are omitted. File changes are included when recoverable.");
+  if (context.native?.partial) lines.push(t("antigravity.history.partial"));
   lines.push("");
   lines.push("## Latest User Request");
   lines.push("");
@@ -956,10 +1193,129 @@ function clampText(text: string, maxChars: number): string {
   return `${text.slice(0, keep)}\n\n[truncated: size limit reached]`;
 }
 
+async function boundedFile(file: string, maximum: number): Promise<Buffer | undefined> {
+  let handle: fs.FileHandle | undefined;
+  try {
+    const named = await fs.lstat(file);
+    if (!named.isFile() || named.isSymbolicLink() || named.size > maximum) throw new Error("Invalid handoff file.");
+    handle = await fs.open(file, "r"); const before = await handle.stat();
+    if (before.dev !== named.dev || before.ino !== named.ino || before.birthtimeMs !== named.birthtimeMs ||
+      !before.isFile() || before.size > maximum) throw new Error("Handoff file changed.");
+    const bytes = Buffer.alloc(before.size + 1); let total = 0;
+    while (total < bytes.length) { const read = await handle.read(bytes, total, bytes.length - total, null); if (!read.bytesRead) break; total += read.bytesRead; }
+    const after = await handle.stat();
+    if (total > maximum || total !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs) throw new Error("Handoff file changed.");
+    return bytes.subarray(0, total);
+  } catch (error) {
+    if (!handle && error && typeof error === "object" && "code" in error && error.code === "ENOENT") return undefined;
+    throw error;
+  } finally { await handle?.close(); }
+}
+
+function isHandoffFileUri(uri: vscode.Uri): boolean {
+  if (!path.isAbsolute(uri.fsPath) || uri.fsPath.includes("\0")) return false;
+  // Desktop hosts may expose the same private local directory through the user-data provider.
+  return uri.scheme === "file" || (uri.scheme === "vscode-userdata" && !uri.authority && !/^[\\/]{2}/u.test(uri.fsPath));
+}
+
+async function ensureHandoffDirectory(storage: vscode.Uri, directory: vscode.Uri, create = true): Promise<string> {
+  if (!isHandoffFileUri(storage) || !isHandoffFileUri(directory)) throw new Error("Unsupported handoff storage.");
+  const relative = path.relative(storage.fsPath, directory.fsPath), parts = relative.split(path.sep);
+  if (parts[0] !== HANDOFF_ROOT_DIR || parts.some(part => !part || part === "." || part === "..") || path.isAbsolute(relative)) throw new Error("Invalid handoff directory.");
+  if (create) await fs.mkdir(storage.fsPath, { recursive: true });
+  let current = await fs.realpath(storage.fsPath);
+  for (const part of parts) {
+    current = path.join(current, part);
+    if (create) { try { await fs.mkdir(current); } catch (error) { if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") throw error; } }
+    const stat = await fs.lstat(current);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || await fs.realpath(current) !== current) throw new Error("Invalid handoff directory.");
+  }
+  return current;
+}
+
+export async function validateExistingHandoffFile(storage: vscode.Uri, location: HandoffLocation): Promise<boolean> {
+  try { const directory = await ensureHandoffDirectory(storage, location.directoryUri, false); return Boolean(await boundedFile(path.join(directory, HANDOFF_FILE_NAME), 8 * 1024 * 1024)); }
+  catch { return false; }
+}
+
+async function publishHandoffFiles(
+  storage: vscode.Uri, directory: vscode.Uri, markdown: string, metadata: string,
+  assertCurrent?: () => void, codexDestination?: HandoffSelection["codexDestination"],
+): Promise<void> {
+  const target = await ensureHandoffDirectory(storage, directory), body = path.join(target, HANDOFF_FILE_NAME), meta = path.join(target, METADATA_FILE_NAME);
+  const previousBody = codexDestination
+    ? codexDestination.mode === "update" ? codexDestination.files.body : undefined
+    : await boundedFile(body, MAX_MANAGED_HANDOFF_BYTES);
+  const previousMeta = codexDestination
+    ? codexDestination.mode === "update" ? codexDestination.files.metadata : undefined
+    : await boundedFile(meta, 65536);
+  const bodyBytes = Buffer.from(markdown, "utf8"), metaBytes = Buffer.from(metadata, "utf8");
+  const verifyDestination = async (file: string, expected: Buffer | undefined, maximum: number): Promise<void> => {
+    const current = await boundedFile(file, maximum);
+    if (expected ? !current?.equals(expected) : current !== undefined) throw new Error("Handoff destination changed.");
+  };
+  const nonce = crypto.randomUUID(), bodyTemp = path.join(target, `.handoff-${nonce}.tmp`), metaTemp = path.join(target, `.metadata-${nonce}.tmp`);
+  const rollbackTemps: string[] = []; let bodyPublished = false, metaPublished = false;
+  const restore = async (file: string, previous: Buffer | undefined, published: Buffer, maximum: number): Promise<void> => {
+    const temporary = previous && path.join(target, `.rollback-${crypto.randomUUID()}.tmp`);
+    if (temporary) {
+      rollbackTemps.push(temporary);
+      await fs.writeFile(temporary, previous, { flag: "wx" });
+    }
+    if (codexDestination) {
+      const current = await boundedFile(file, maximum);
+      if (!current?.equals(published)) return;
+    }
+    if (temporary) await fs.rename(temporary, file);
+    else await fs.rm(file, { force: true });
+  };
+  try {
+    await fs.writeFile(bodyTemp, bodyBytes, { flag: "wx" });
+    await fs.writeFile(metaTemp, metaBytes, { flag: "wx" });
+    assertCurrent?.(); await ensureHandoffDirectory(storage, directory);
+    if (codexDestination) {
+      await verifyDestination(meta, previousMeta, 65536);
+      await verifyDestination(body, previousBody, MAX_MANAGED_HANDOFF_BYTES);
+    }
+    assertCurrent?.();
+    // A newly selected name never becomes an update after another process claims it.
+    if (codexDestination?.mode === "new") await fs.copyFile(bodyTemp, body, fs.constants.COPYFILE_EXCL);
+    else await fs.rename(bodyTemp, body);
+    bodyPublished = true;
+    if (codexDestination) await verifyDestination(meta, previousMeta, 65536);
+    assertCurrent?.();
+    if (codexDestination?.mode === "new") await fs.copyFile(metaTemp, meta, fs.constants.COPYFILE_EXCL);
+    else await fs.rename(metaTemp, meta);
+    metaPublished = true;
+    assertCurrent?.();
+  } catch (error) {
+    try {
+      await ensureHandoffDirectory(storage, directory, false);
+      if (bodyPublished) await restore(body, previousBody, bodyBytes, MAX_MANAGED_HANDOFF_BYTES);
+      if (metaPublished) await restore(meta, previousMeta, metaBytes, 65536);
+    }
+    catch { throw new Error("Handoff publication rollback failed."); }
+    throw error;
+  } finally {
+    // These generated temporary files are the only files removed on a failed publication.
+    const removed = await Promise.allSettled([bodyTemp, metaTemp, ...rollbackTemps].map(file => fs.rm(file, { force: true })));
+    if (removed.some(result => result.status === "rejected")) throw new Error("Handoff temporary cleanup failed.");
+  }
+}
+
 function buildHandoffDirectoryMirror(
   session: SessionSummary,
   sourceSessionsRoot: string,
 ): { segments: string[]; relativePath: string | null; mode: "source-relative-mirror" | "hash-fallback" } {
+  if (session.source === "antigravity") {
+    const id = session.meta.id, identity = session.identityKey;
+    if (typeof id !== "string" || !ANTIGRAVITY_UUID.test(id) || session.storage.rootKind !== "antigravitySessions" || session.storage.archiveState !== "active"
+      || path.resolve(sourceSessionsRoot) !== path.resolve(session.storage.rootPath) || session.fsPath !== path.join(session.storage.rootPath, "conversations", id + ".db")
+      || identity !== antigravitySessionIdentity(session.storage.rootPath, id)) throw new AntigravityReadError("storage");
+    const rootHash = /^antigravity:root:([0-9a-f]{64}):id:/.exec(identity)?.[1];
+    if (!rootHash) throw new AntigravityReadError("storage");
+    return { segments: ["antigravity", rootHash, "conversations", id], relativePath: `conversations/${id}.db`, mode: "source-relative-mirror" };
+  }
   const relativePath = resolveSafeRelativePath(sourceSessionsRoot, session.fsPath);
   if (relativePath) {
     const rawParts = relativePath.split(/[\\/]+/u).filter((part) => part.trim().length > 0);
@@ -1019,23 +1375,28 @@ function buildShortSessionId(session: SessionSummary): string {
   return crypto.createHash("sha256").update(idInput).digest("hex").slice(0, 16);
 }
 
-async function listCurrentHandoffDirectories(handoffRootUri: vscode.Uri): Promise<HandoffDirectoryInfo[]> {
+async function listCurrentHandoffDirectories(storage: vscode.Uri, handoffRootUri: vscode.Uri, rootGuard: HandoffDirectoryGuard, failedPaths: string[]): Promise<HandoffDirectoryInfo[]> {
   const groups = await Promise.all(
-    HANDOFF_SOURCE_DIRS.map((source) => listHandoffDirectories(vscode.Uri.joinPath(handoffRootUri, source))),
+    HANDOFF_SOURCE_DIRS.map((source) => listHandoffDirectories(storage, vscode.Uri.joinPath(handoffRootUri, source), rootGuard, failedPaths)),
   );
   return groups.flat();
 }
 
-async function listHandoffDirectories(rootUri: vscode.Uri): Promise<HandoffDirectoryInfo[]> {
+async function listHandoffDirectories(storage: vscode.Uri, rootUri: vscode.Uri, rootGuard: HandoffDirectoryGuard, failedPaths: string[]): Promise<HandoffDirectoryInfo[]> {
   const out: HandoffDirectoryInfo[] = [];
   const stack: vscode.Uri[] = [rootUri];
 
   while (stack.length > 0) {
     const dir = stack.pop()!;
     let entries: [string, vscode.FileType][];
+    let guard: HandoffDirectoryGuard;
     try {
+      guard = await inspectHandoffDirectory(storage, dir);
+      assertHandoffDirectoryGuard(guard, rootGuard);
       entries = await vscode.workspace.fs.readDirectory(dir);
-    } catch {
+      assertHandoffDirectoryGuard(await inspectHandoffDirectory(storage, dir), guard);
+    } catch (error) {
+      if (!isMissingHandoffPath(error)) failedPaths.push(dir.fsPath);
       continue;
     }
 
@@ -1043,14 +1404,16 @@ async function listHandoffDirectories(rootUri: vscode.Uri): Promise<HandoffDirec
       ([name, type]) => name === HANDOFF_FILE_NAME && (type & vscode.FileType.File) !== 0,
     );
     if (hasHandoffFile) {
-      out.push({
-        uri: dir,
-        createdAtMs: await readHandoffCreatedAtMs(dir),
-      });
+      try {
+        const createdAtMs = await readHandoffCreatedAtMs(dir);
+        assertHandoffDirectoryGuard(await inspectHandoffDirectory(storage, dir), guard);
+        out.push({ uri: dir, createdAtMs, guard });
+      } catch { failedPaths.push(dir.fsPath); }
       continue;
     }
 
     for (const [name, type] of entries) {
+      if ((type & vscode.FileType.SymbolicLink) !== 0) { failedPaths.push(vscode.Uri.joinPath(dir, name).fsPath); continue; }
       if ((type & vscode.FileType.Directory) === 0) continue;
       stack.push(vscode.Uri.joinPath(dir, name));
     }
@@ -1077,16 +1440,36 @@ async function readHandoffCreatedAtMs(directoryUri: vscode.Uri): Promise<number>
 
 export async function readHandoffMetadata(metadataUri: vscode.Uri): Promise<HandoffMetadata> {
   try {
-    const raw = Buffer.from(await vscode.workspace.fs.readFile(metadataUri)).toString("utf8");
+    if (!isHandoffFileUri(metadataUri)) return {};
+    const bytes = await boundedFile(metadataUri.fsPath, 65536);
+    return bytes ? parseHandoffMetadata(bytes) : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseHandoffMetadata(bytes: Buffer): HandoffMetadata {
+  try {
+    const raw = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const source = parsed.source === "codex" || parsed.source === "claude" ? parsed.source : undefined;
-    const target = parsed.target === "codex" || parsed.target === "claude" ? parsed.target : undefined;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || parsed.schemaVersion !== 1 && parsed.schemaVersion !== 2) return {};
+    const source = parsed.source === "codex" || parsed.source === "claude" || parsed.source === "antigravity" && parsed.schemaVersion === 2 ? parsed.source : undefined;
+    const target = parsed.target === "codex" || parsed.target === "claude" || parsed.target === "antigravity" ? parsed.target : undefined;
+    if (!source || !target || source === target) return {};
+    if ((source === "antigravity") !== (parsed.schemaVersion === 2)) return {};
+    const native = parsed.native as Record<string, unknown> | undefined;
+    if (source === "antigravity" && (!native || typeof native !== "object" || native.profile !== ANTIGRAVITY_PROFILE || typeof native.digest !== "string" || !/^[0-9a-f]{64}$/.test(native.digest)
+      || typeof native.partial !== "boolean" || typeof native.identityKey !== "string" || !/^antigravity:root:[0-9a-f]{64}:id:/.test(native.identityKey)
+      || !ANTIGRAVITY_UUID.test(native.identityKey.slice("antigravity:root:".length + 64 + ":id:".length)))) return {};
     return {
+      schemaVersion: parsed.schemaVersion,
       createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : undefined,
       lastGeneratedAt: typeof parsed.lastGeneratedAt === "string" ? parsed.lastGeneratedAt : undefined,
       source,
       target,
       pathRewrite: sanitizePathRewriteMetadata(parsed.pathRewrite),
+      ...(source === "codex" && parsed.codexAnswerProjection === true ? { codexAnswerProjection: true } : {}),
+      ...(source === "antigravity" ? { native: native as unknown as NonNullable<HandoffMetadata["native"]> } : {}),
     };
   } catch {
     return {};
@@ -1127,34 +1510,60 @@ async function statSourceSession(fsPath: string): Promise<{ mtime: number; size:
   }
 }
 
-async function collectDirectoryStats(rootUri: vscode.Uri): Promise<{ fileCount: number; bytes: number }> {
+function isMissingHandoffPath(error: unknown): boolean {
+  return !!error && typeof error === "object" && "code" in error && error.code === "ENOENT";
+}
+
+async function inspectHandoffDirectory(storage: vscode.Uri, directory: vscode.Uri): Promise<HandoffDirectoryGuard> {
+  if (!isHandoffFileUri(storage) || !isHandoffFileUri(directory)) throw new Error("Unsupported handoff storage.");
+  const relative = path.relative(storage.fsPath, directory.fsPath), parts = relative.split(path.sep);
+  if (parts[0] !== HANDOFF_ROOT_DIR || parts.some(part => !part || part === "." || part === "..") || path.isAbsolute(relative)) throw new Error("Invalid handoff directory.");
+  let current = await fs.realpath(storage.fsPath);
+  const ancestors: HandoffDirectoryGuard["ancestors"][number][] = [];
+  for (const part of ["", ...parts]) {
+    if (part) current = path.join(current, part);
+    const before = await fs.lstat(current);
+    if (!before.isDirectory() || before.isSymbolicLink() || normalizeFsPathKey(await fs.realpath(current)) !== normalizeFsPathKey(current)) throw new Error("Invalid handoff directory.");
+    const after = await fs.lstat(current);
+    if (!after.isDirectory() || after.isSymbolicLink() || before.dev !== after.dev || before.ino !== after.ino || before.birthtimeMs !== after.birthtimeMs) throw new Error("Handoff directory changed.");
+    ancestors.push({ path: current, dev: after.dev, ino: after.ino, birthtimeMs: after.birthtimeMs });
+  }
+  return { canonical: current, ancestors };
+}
+
+function assertHandoffDirectoryGuard(current: HandoffDirectoryGuard, expected: HandoffDirectoryGuard): void {
+  // A child guard must retain every previously verified ancestor identity.
+  if (current.ancestors.length < expected.ancestors.length || expected.ancestors.some((item, index) => {
+    const actual = current.ancestors[index]!;
+    return normalizeFsPathKey(actual.path) !== normalizeFsPathKey(item.path) || actual.dev !== item.dev || actual.ino !== item.ino || actual.birthtimeMs !== item.birthtimeMs;
+  })) throw new Error("Handoff directory changed.");
+}
+
+async function collectDirectoryStats(storage: vscode.Uri, rootUri: vscode.Uri, rootGuard: HandoffDirectoryGuard): Promise<{ fileCount: number; bytes: number }> {
   const stack: vscode.Uri[] = [rootUri];
   let fileCount = 0;
   let bytes = 0;
 
   while (stack.length > 0) {
     const dir = stack.pop()!;
-    let entries: [string, vscode.FileType][];
-    try {
-      entries = await vscode.workspace.fs.readDirectory(dir);
-    } catch {
-      continue;
-    }
+    const guard = await inspectHandoffDirectory(storage, dir);
+    assertHandoffDirectoryGuard(guard, rootGuard);
+    const entries = await vscode.workspace.fs.readDirectory(dir);
+    assertHandoffDirectoryGuard(await inspectHandoffDirectory(storage, dir), guard);
 
     for (const [name, type] of entries) {
+      if ((type & vscode.FileType.SymbolicLink) !== 0) throw new Error("Invalid handoff entry.");
       const child = vscode.Uri.joinPath(dir, name);
       if ((type & vscode.FileType.Directory) !== 0) {
         stack.push(child);
         continue;
       }
       if ((type & vscode.FileType.File) === 0) continue;
+      const stat = await fs.lstat(child.fsPath);
+      if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Invalid handoff entry.");
+      assertHandoffDirectoryGuard(await inspectHandoffDirectory(storage, dir), guard);
       if (name === HANDOFF_FILE_NAME) fileCount += 1;
-      try {
-        const stat = await vscode.workspace.fs.stat(child);
-        bytes += stat.size;
-      } catch {
-        // Keep cleanup moving even if one file cannot be stated.
-      }
+      bytes += stat.size;
     }
   }
 
@@ -1162,5 +1571,7 @@ async function collectDirectoryStats(rootUri: vscode.Uri): Promise<{ fileCount: 
 }
 
 function normalizeFsPathKey(value: string | undefined): string {
-  return String(value ?? "").trim().toLowerCase();
+  const raw = String(value ?? "").trim(); if (!raw) return "";
+  const normalized = path.normalize(raw);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }

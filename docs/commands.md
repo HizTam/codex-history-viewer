@@ -12,6 +12,8 @@ Starting with 2.15.0, the Command Palette groups History and Pinned view options
 
 ## Refresh and Maintenance
 
+File-based caching is the default. To opt in to SQLite on a compatible runtime, turn on **Use SQLite cache** under **Open Settings > General > Cache** and reload the window or restart VS Code. If SQLite mode is enabled but cannot be used, the extension uses file-based caching. **Open Settings > Maintenance** shows the active cache mode and any fallback reason. See [Cache backend](https://github.com/hiztam/codex-history-viewer/blob/HEAD/README.md#cache-backend).
+
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
 | Refresh All | `codexHistoryViewer.refresh` | Refreshes all extension views and reloads session data. |
@@ -19,17 +21,21 @@ Starting with 2.15.0, the Command Palette groups History and Pinned view options
 | Refresh History | `codexHistoryViewer.refreshHistoryPane` | Refreshes only the History view. |
 | Refresh Status | `codexHistoryViewer.refreshStatusPane` | Refreshes only the Status view. |
 | Open Settings | `codexHistoryViewer.openSettings` | Opens the categorized settings page. Its Maintenance page provides scope-specific settings backups and access to VS Code Settings for advanced editing. On Linux Remote SSH with the Codex history source enabled, Troubleshooting also offers experimental, individually confirmed termination of a VS Code Codex App Server. Requires Python 3.9+ in the remote extension host's PATH or a standard installation location, and Linux pidfd support. Candidates use three aligned rows for PID/connection/individual Stop buttons, timestamps, and process/build details. After a stop attempt, the list refreshes automatically once; cancellation does not trigger a refresh. Previous rows remain visible with actions disabled until inspection succeeds. Inspection failures are shown separately from the stop result and can be retried with Refresh. Servers used by the current VS Code can be stopped after confirmation; unverified process ancestry remains protected. Stopping can interrupt all conversations and tasks on that server. Retry in the desired Codex app or extension afterward. Stopping a server marked This VS Code causes the official extension to show an error; its Try again action reloads the entire VS Code window. |
-| Rebuild Cache | `codexHistoryViewer.rebuildCache` | Rebuilds the history, search, and analysis caches from the current source sessions. |
-| Rebuild Search Index | `codexHistoryViewer.rebuildSearchIndex` | Rebuilds only the local search index from source files. |
+| Rebuild Cache | `codexHistoryViewer.rebuildCache` | Rebuilds the history, search, and analysis caches from the current source sessions, using the active cache backend. |
+| Rebuild Search Index | `codexHistoryViewer.rebuildSearchIndex` | Rebuilds only the local search index from source files, using the current cache backend. |
 | Remove Missing Pins | `codexHistoryViewer.cleanupMissingPins` | Removes pinned entries whose source files no longer exist. |
 | Delete Handoff Files | `codexHistoryViewer.cleanupHandoffs` | Deletes generated handoff files from extension global storage after confirmation. |
-| Empty Trash | `codexHistoryViewer.emptyTrash` | Clears internal trash/quarantine files and legacy cache/index generations after confirmation. |
+| Empty Trash | `codexHistoryViewer.emptyTrash` | Clears internal trash/quarantine files and legacy cache/index generations after confirmation. Preserves the SQLite cache database and its WAL/SHM files. |
 | Copy Path | `codexHistoryViewer.copyStatusPath` | Copies the selected Status view path or value to the clipboard. |
 | Undo Last Action | `codexHistoryViewer.undoLastAction` | Reverts the latest undoable operation. |
 
 ## History, Pinned, and Source Filters
 
-Use **Open Settings > History List > History startup display** or **Pinned startup display** to configure each view's startup behavior. These user-level [startup settings](../README.md#startup-display) take effect after **Reload Window** or a VS Code restart. The presentation commands below update the current view and its saved workspace state.
+For history source setup, see [Quick Start](https://github.com/hiztam/codex-history-viewer/blob/HEAD/README.md#quick-start).
+
+Use **Open Settings > History List > History startup display** or **Pinned startup display** to configure each view's startup behavior. These user-level [startup settings](https://github.com/hiztam/codex-history-viewer/blob/HEAD/README.md#startup-display) take effect after **Reload Window** or a VS Code restart. The presentation commands below update the current view and its saved workspace state.
+
+Each source toggle requires its named source to be enabled. With two history sources enabled, that toggle switches between **All** and the other enabled source. With three enabled, the legacy toggles select the other Codex/Claude Code source from **All**, select **All** from either of those two sources, and select the named source from **Antigravity**. Use the source menu to select any enabled source.
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
@@ -52,7 +58,7 @@ Use **Open Settings > History List > History startup display** or **Pinned start
 | Show Claude Code History Only | `codexHistoryViewer.filterHistorySourceClaude` | Limits History to Claude Code sessions only. |
 | Toggle Codex Source Filter | `codexHistoryViewer.toggleHistorySourceCodex` | Toggles Codex in the active source filter. |
 | Toggle Claude Code Source Filter | `codexHistoryViewer.toggleHistorySourceClaude` | Toggles Claude Code in the active source filter. |
-| Cycle Source Filter (Codex + Claude Code -> Codex -> Claude Code) | `codexHistoryViewer.cycleHistorySourceFilter` | Cycles History through all enabled sources, Codex only, and Claude Code only. |
+| Cycle Source Filter | `codexHistoryViewer.cycleHistorySourceFilter` | Cycles History through all enabled sources and each enabled source individually, including Antigravity. |
 | Show All Sources | `codexHistoryViewer.clearHistorySourceFilter` | Clears source-only filtering and shows enabled sources. |
 | Clear History Filters | `codexHistoryViewer.clearHistoryFilter` | Resets History date, explicit project, source, display-target, tag, and compression filters. The Current Project Group scope remains active when selected. |
 | Clear History Tag Filter | `codexHistoryViewer.clearHistoryTagFilter` | Removes the active History tag filter. |
@@ -78,7 +84,7 @@ Use **Open Settings > History List > History startup display** or **Pinned start
 | Pinned Display Target: Hidden Only | `codexHistoryViewer.setPinnedDisplayTargetHiddenAllLocations` | Shows hidden pinned sessions from every available session location. |
 | Pinned Display Target: All | `codexHistoryViewer.setPinnedDisplayTargetAll` | Shows visible and hidden pinned sessions from every available session location. |
 
-Archived display targets are unavailable when Codex archived sessions are disabled or a view is limited to Claude Code. In those cases, the cycle contains Active Only, Hidden Only, and All.
+Archived display targets are unavailable when Codex archived sessions are disabled or a view is limited to Claude Code or Antigravity. In those cases, the cycle contains Active Only, Hidden Only, and All.
 
 Compression choices are also available in **Filter History...**. They affect the History target used by Search and History Insights; Pinned retains its own filters. Reading Codex `.jsonl.zst` files requires the experimental **Include compressed Codex histories** setting, which is disabled by default.
 
@@ -137,6 +143,8 @@ Starting with 2.15.0, saving a search offers **Query only** or **Query and filte
 | Move to Archive | `codexHistoryViewer.archiveSession` | Moves selected active Codex sessions to the Codex archive location. |
 
 ## File AI Change History
+
+The view includes recorded changes from enabled providers. For Antigravity, it shows available saved diff information and marks incomplete change records.
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
@@ -207,6 +215,8 @@ Tree context-menu targets follow these rules:
 | Multi-session | Open in a dedicated tab, open as Markdown, edit tags/note, export, pin/unpin, hide/unhide, promote, delete | Uses the same-view multi-selection only when it contains the right-clicked row; otherwise operates on that row alone. Codex and Claude Code sessions can be mixed. |
 | Validated Codex multi-session | Move to Archive, Move to Codex History | Uses the same target rule as other multi-session actions, but rejects the whole selection unless every target is a Codex session in the required archive state. |
 
+**Promote to Today (Copy)** and **Delete** require every target session to be from Codex or Claude Code.
+
 Menu availability is based on the right-clicked row. Selections from History, Pinned, and Search are never combined.
 Opening multiple sessions requires confirmation and opens at most the first 10 unique sessions.
 
@@ -220,8 +230,10 @@ Opening multiple sessions requires confirmation and opens at most the first 10 u
 | Reveal Session File | `codexHistoryViewer.revealSessionFile` | Reveals the target session file in its containing folder. Available under **Session Information**. |
 | Resume in Codex | `codexHistoryViewer.resumeSessionInCodex` | Sends the target Codex session to the Codex extension. |
 | Resume in Claude Code | `codexHistoryViewer.resumeSessionInClaude` | Opens the target Claude Code session in Claude Code. |
+| Resume in Antigravity | `codexHistoryViewer.resumeSessionInAntigravity` | Passes the verified conversation ID to the official Antigravity extension in a trusted local window. The official extension resolves it in its own history location; the viewer does not pass or change that location. Command completion does not confirm that the conversation was displayed. |
 | Prepare Codex CLI Resume Command | `codexHistoryViewer.resumeSessionInCodexCli` | Creates a new terminal at the target session CWD and enters `codex resume <SESSION_ID>` without pressing Enter. |
 | Prepare Claude Code CLI Resume Command | `codexHistoryViewer.resumeSessionInClaudeCli` | Creates a new terminal at the target session CWD and enters `claude --resume <SESSION_ID>` without pressing Enter. |
+| Prepare Antigravity CLI Resume Command | `codexHistoryViewer.resumeSessionInAntigravityCli` | Creates a new terminal and enters `agy --conversation <UUID>` without pressing Enter. Requires the verified standard `~/.gemini/antigravity-cli` namespace; custom and IDE history stores are not CLI resume targets. |
 | Promote to Today (Copy) | `codexHistoryViewer.promoteSession` | Copies selected non-archived sessions into today's folder without modifying the originals. |
 | Pin | `codexHistoryViewer.pinSession` | Pins selected sessions for quick access. |
 | Unpin | `codexHistoryViewer.unpinSession` | Removes selected sessions from Pinned. |
@@ -245,7 +257,9 @@ Recreate an existing handoff file to include this input; reusing a previously ge
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
-| Handoff to Claude Code | `codexHistoryViewer.handoffToClaude` | Creates or reuses a Codex session handoff file, then opens Claude Code with a prompt that points to it. |
+| Handoff to Claude Code | `codexHistoryViewer.handoffToClaude` | Creates or reuses a Codex or Antigravity handoff file, then requests an unsent Claude Code draft pointing to it. |
+| Prepare Handoff to Antigravity... | `codexHistoryViewer.handoffToAntigravity` | Creates or reuses a Codex or Claude Code handoff file, requests a new conversation through the official extension, and copies the prompt. Verify the target conversation, then paste and send it yourself. |
+| Prepare Codex Handoff... | `codexHistoryViewer.handoffToCodex` | Creates or reuses an Antigravity handoff file and copies the prompt for manual use in Codex. |
 | Create Handoff File | `codexHistoryViewer.createHandoffFile` | Creates or reuses the target session's `handoff.md` without opening another agent. Its completion notification can open the file, copy the handoff prompt, or copy the file's absolute path. |
 | Copy Handoff Prompt to Clipboard | `codexHistoryViewer.copyHandoffPrompt` | Copies a prompt that tells the target agent to read the target session's handoff file, creating it first if needed. |
 | Copy Handoff File Path to Clipboard | `codexHistoryViewer.copyHandoffPath` | Copies the full path of an active target session's handoff file, creating or refreshing the file first if needed. |
@@ -269,9 +283,9 @@ Recreate an existing handoff file to include this input; reusing a previously ge
 
 | Command (EN label) | Command ID | Description |
 | --- | --- | --- |
-| Export Sessions... | `codexHistoryViewer.exportSessions` | Exports selected original session data with extension metadata, or exports sanitized Markdown. |
-| Import Sessions... | `codexHistoryViewer.importSessions` | Restores Codex or Claude Code session data from a selected directory and restores accompanying metadata when a valid export manifest is available, with selectable restore scope and duplicate-ID handling. |
+| Export Sessions... | `codexHistoryViewer.exportSessions` | Exports selected original Codex/Claude Code data with metadata, sanitized Markdown, or metadata-only JSON. Native Antigravity databases cannot be exported. |
+| Import Sessions... | `codexHistoryViewer.importSessions` | Restores Codex/Claude Code data from a directory with selectable scope and duplicate-ID handling, or merges metadata-only JSON into uniquely matched current sessions, including Antigravity. Native Antigravity databases cannot be imported. |
 
 Original-data export and import support Codex `.jsonl.zst` histories and preserve their compressed format. When overwriting a history stored in the other format, import converts the incoming data to the destination's format before replacing it. Markdown export reads either format and writes a readable transcript.
 
-Markdown output includes saved Claude Code progress updates, thinking text, and additional user input. Read-only marks from the Claude Code extension are not part of this extension's bookmark metadata and are not included in metadata exports or restored by **Import Sessions**.
+Markdown output includes saved Claude Code progress updates, thinking text, additional user input, and supported voice call transcripts. Read-only marks from the Claude Code extension are not part of this extension's bookmark metadata and are not included in metadata exports or restored by **Import Sessions**.

@@ -14,6 +14,8 @@ export class SessionIconResolver {
   private readonly codexDedicatedIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly codexSubagentDedicatedIconPath: { light: vscode.Uri; dark: vscode.Uri };
   private readonly claudeDedicatedIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly antigravityIconPath: { light: vscode.Uri; dark: vscode.Uri };
+  private readonly antigravityDedicatedIconPath: { light: vscode.Uri; dark: vscode.Uri };
 
   constructor(extensionUri: vscode.Uri) {
     this.codexIconPath = buildIconPath(extensionUri, "source-codex.svg");
@@ -27,6 +29,8 @@ export class SessionIconResolver {
       "source-codex-subagent-dedicated.svg",
     );
     this.claudeDedicatedIconPath = buildIconPath(extensionUri, "source-claude-dedicated.svg");
+    this.antigravityIconPath = buildIconPath(extensionUri, "source-antigravity.svg");
+    this.antigravityDedicatedIconPath = buildIconPath(extensionUri, "source-antigravity-dedicated.svg");
   }
 
   public resolve(
@@ -36,6 +40,7 @@ export class SessionIconResolver {
     variant: SessionIconVariant = "default",
   ): { light: vscode.Uri; dark: vscode.Uri } {
     const dedicated = variant === "dedicated";
+    if (session.source === "antigravity") return dedicated ? this.antigravityDedicatedIconPath : this.antigravityIconPath;
     if (session.source === "claude") {
       if (session.meta.claudeAgent) return dedicated ? this.claudeSubagentDedicatedIconPath : this.claudeSubagentIconPath;
       return dedicated ? this.claudeDedicatedIconPath : this.claudeIconPath;

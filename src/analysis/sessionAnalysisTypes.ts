@@ -31,6 +31,7 @@ export type UsageAggregationMethod =
   | "codexResponseUsageSum"
   | "codexCumulativeFallback"
   | "claudeMessageSum"
+  | "antigravityMessageSum"
   | "mixedPartial"
   | "unavailable";
 
@@ -39,6 +40,7 @@ export interface ModelUsageStats {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  availability?: Readonly<{ inputTokens: AnalysisAvailability; outputTokens: AnalysisAvailability; totalTokens: AnalysisAvailability }>;
 }
 
 export interface ModelEffortUsageStats {
@@ -162,19 +164,23 @@ export interface SessionAnalysisEntry {
 }
 
 export interface SessionAnalysisCacheContext {
+  storageContractFingerprint: string;
   codexSessionsRoot: string;
   codexArchivedSessionsRoot: string;
   claudeSessionsRoot: string;
+  antigravitySessionsRoots: readonly string[];
   includeCodex: boolean;
   includeCodexArchived: boolean;
   includeClaude: boolean;
+  includeAntigravity: boolean;
   codexParserVersion: number;
   claudeParserVersion: number;
+  antigravityParserVersion: number;
   pathNormalizationVersion: number;
 }
 
 export interface SessionAnalysisCacheFile {
-  version: 1;
+  version: typeof SESSION_ANALYSIS_CACHE_SCHEMA_VERSION;
   context: SessionAnalysisCacheContext;
   generatedAtIso: string;
   entries: Record<string, SessionAnalysisEntry>;
@@ -206,9 +212,10 @@ export interface SessionAnalysisResult {
   generatedAtIso: string;
 }
 
-export const SESSION_ANALYSIS_CACHE_SCHEMA_VERSION = 1 as const;
+export const SESSION_ANALYSIS_CACHE_SCHEMA_VERSION = 2 as const;
 export const SESSION_ANALYSIS_CODEX_PARSER_VERSION = 19;
 export const SESSION_ANALYSIS_CLAUDE_PARSER_VERSION = 20;
+export const SESSION_ANALYSIS_ANTIGRAVITY_PARSER_VERSION = 1;
 export const SESSION_ANALYSIS_PATH_NORMALIZATION_VERSION = 1;
 export const SESSION_ANALYSIS_MAX_FILE_CHANGE_ENTRIES = 100_000;
 export const SESSION_ANALYSIS_MAX_CACHE_ENTRIES = 200_000;

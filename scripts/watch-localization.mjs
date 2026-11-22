@@ -7,6 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const webview = process.argv.includes("--webview");
 let child;
 let generator;
+let storageWatcher;
 let timer;
 let running = false;
 let pending = false;
@@ -38,9 +39,27 @@ async function rebuild() {
   running = true;
   try {
     await stopProcess(child);
+    await stopProcess(storageWatcher);
     generator = launch(["scripts/generate-localization.mjs", "--write"]);
     const code = await new Promise(resolve => { generator.once("error", () => resolve(1)); generator.once("exit", resolve); });
     if (code === 0 && !closing) {
+      if (!webview) {
+        generator = launch(["scripts/generate-storage-contract.mjs", "--write"]);
+        const storageCode = await new Promise(resolve => { generator.once("error", () => resolve(1)); generator.once("exit", resolve); });
+        if (storageCode !== 0 || closing) return;
+        storageWatcher = launch(["scripts/generate-storage-contract.mjs", "--watch"]);
+        const stopCompiler = message => {
+          process.stderr.write(message + "\n");
+          void stopProcess(child).catch(() => {
+            closing = true;
+            process.exitCode = 1;
+            for (const watcher of watchers) watcher.close();
+            process.stderr.write("Unable to stop owned compiler after storage watcher failure\n");
+          });
+        };
+        storageWatcher.once("error", () => stopCompiler("Unable to start storage contract watcher"));
+        storageWatcher.once("exit", code => { if (code && !closing) stopCompiler("Storage contract watcher stopped"); });
+      }
       child = launch(webview ? ["scripts/build-webview-shiki.mjs", "--watch"] : ["node_modules/typescript/bin/tsc", "--watch", "-p", "."]);
       child.once("error", () => { process.stderr.write("Unable to start localization build watcher\n"); });
     }
@@ -64,14 +83,14 @@ const watchers = [
   }),
   fs.watch(path.join(root, ".node-version"), scheduleRebuild),
   fs.watch(path.join(root, "scripts"), (_event, filename) => {
-    if (["generate-localization.mjs", "check-localization-usage.mjs"].includes(String(filename))) scheduleRebuild();
+    if (["generate-localization.mjs", "check-localization-usage.mjs", "generate-storage-contract.mjs", "build-zstd.mjs"].includes(String(filename))) scheduleRebuild();
   }),
 ];
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => {
   closing = true;
   clearTimeout(timer);
   for (const watcher of watchers) watcher.close();
-  void Promise.all([stopProcess(child), stopProcess(generator)]).then(() => process.exit(), () => {
+  void Promise.all([stopProcess(child), stopProcess(generator), stopProcess(storageWatcher)]).then(() => process.exit(), () => {
     process.stderr.write("Unable to stop owned localization processes\n");
     process.exit(1);
   });

@@ -1,23 +1,25 @@
 # Codex History Viewer 開発ドキュメント（日本語）
 
-- 最終更新: 2026-11-12
-- 対象バージョン: 2.21.0
+- 最終更新: 2026-11-22
+- 対象バージョン: 3.0.0
 
 ## 1. 概要
 
-- 目的: Codex CLI / Claude Code のローカル履歴を VS Code 上で閲覧・検索・整理・再開しやすくする
+- 目的: Codex CLI / Claude Code / Antigravity のローカル履歴を VS Code 上で閲覧・検索・整理・再開しやすくする
 - 対象データ:
   - Codex: `~/.codex/sessions` 配下の `rollout-*.jsonl`（圧縮履歴設定ONなら `.jsonl.zst` も対象）
   - Codex archived: `~/.codex/archived_sessions` 配下の同形式ファイル（任意）
   - Claude Code: `~/.claude/projects/<project>/<session>.jsonl` と `<project>/<owner>/subagents/**/agent-<agentId>.jsonl`
+  - Antigravity: `~/.gemini/antigravity` / `~/.gemini/antigravity-cli` / `~/.gemini/antigravity-ide` の固定 `conversations/<UUID>.db` と `conversation_summaries.db`。`antigravity.sessionsRoot` の指定は既定候補を置き換える
 - 通信: ネットワーク通信は行わない。ローカルファイルと VS Code のストレージだけを扱う
-- 対応ソース: `codexHistoryViewer.sources.enabled` で `codex` / `claude` を切り替える。Codex archived sessions は `codex` source が有効な場合だけ使える追加保存場所として扱う
+- 対応ソース: `codexHistoryViewer.sources.enabled` で `codex` / `claude` / `antigravity` を切り替える。Antigravityは通常機能、既定OFF、緑のGアイコン、設定badgeはAntigravity。Codex archived sessions は `codex` source が有効な場合だけ使える追加保存場所として扱う
 
 ## 2. ディレクトリ構成（主要）
 
 - `src/`: TypeScript 実装
   - `extensionVersion.ts`: 同梱package.jsonを正本に、About・ステータス・エクスポート・バックアップの版数取得と形式検証を共通化する。ExtensionContextの正常な版数を優先し、欠落・不正時は同梱版数へ戻す。製品版数の手書きfallbackは置かない
   - `analysis/`: History Insights / Claude Code Branch Navigation 共通のセッション解析基盤
+  - `antigravity/`: 元DB専用の読み取り専用Worker、固定schema codec、共通chat投影、検索、CLI namespace検証、Handoffと自動更新の観測
   - `insights/`: History Insights の snapshot、集計、Webview 管理
   - `branchMap/`: Branch Navigation（Codex / Claude Code）の関係解析、表示モデル、遷移解決
   - `cliResume/`: CLI 再開のID検証、cwd解決、bounded directory probe、prepare専用dispatch
@@ -33,6 +35,42 @@
 - `SECURITY.md`: セキュリティポリシーと既知アドバイザリへの対応方針
 
 ## 3. 機能仕様
+
+### Antigravityの読み取りと共通機能
+
+- 元DB Readerと生成SQLiteキャッシュは別責務とする。元DBは読み取り専用接続であり、修復、checkpoint、書き換え、移動、削除を行わない。SQLiteが管理するWAL/SHMの作成・更新は許容する
+- Universal構成のまま実行環境の`node:sqlite`を使用する。元DB Readerが使えない環境でもCodex/Claudeの従来形式の読み取りを維持する。生成cacheの安全性probeと元DB Readerの可否は別に判定する
+- 1 Worker/接続へ要求を集約する。同一要求のconsumerごとにキャンセルし、設定変更時はroot権限を即時失効させ、旧Workerの実終了前に置換しない。待機を含む要求30秒、進捗停止15秒、異なる要求64件を上限とする
+- schema、UUID、SQLの型・状態とprotobuf envelopeを検証する。ページ間の変更を同一接続のdata_versionとファイル同一性で検知し、不安定なら1回再試行する。未知情報・上限超過はpartialまたは読取不能として扱う
+- 共通projectorがSession Viewer、検索、分析、File AI、Markdown、Handoffのメッセージ番号とnative identityを揃える。Thinking・追加入力は独立カードであり、未確認の追加入力をhuman turnへ変換しない
+- DBの既知payloadを優先する。補助JSONLは同一UUIDの固定logだけを参照し、fullまたは通常logの片方を使う。未知DB payloadの補完に限定し、usage・call ID・turn所属を推測しない
+- native identityはroot namespaceとUUIDで分離する。しおりのportable fingerprintはroot・表示時刻・言語へ依存せず、native targetと内容・partial状態を照合する
+- 一覧、プロジェクト関連付け、ピン、非表示、タグ/ノート、custom title、しおり、ターン、Insights、検索、Markdownに対応する。元履歴のDelete/Promote/Archive/Moveとnative import/exportは拒否し、複数選択にnativeが含まれる場合は全体を開始前に拒否する
+- File AIはnativeの表示統計または復元可能な編集要求を未確認として表示する。実際の適用済み完全diff、利用枠の残り％、不明なmodel/effort/usageを推測しない。未確認変更を確定変更合計へ加算しない
+- Codex/Claudeのcore一覧の成功とnative sourceの成功を分離する。各sourceに現在設定、許可root、generationとdisabled/cached/complete/partial/unavailableを持たせる。native失敗だけでcore更新を止めず、同じ設定の直前のnative一覧を保持する
+- source無効化・root変更で旧rootを現在の本文として読み直さない。未完のscanだけを根拠にピン・保存参照を消さない。nativeタブは未検証の通知と保存位置を保持し、現在のindexed identityと許可rootを再確認して再読込する
+- 同じ設定でもdiscovery時にrootを再確認し、初回の未作成/アクセス不能から回復できる。canonical rootが不変ならWorker・revision・進行中readを維持し、集合が変わるときは旧許可を失効させ、旧Workerの実終了後に新しい集合を公開する
+- native検索は会話ごとに本文の取得・投影・再検証・保存を完了し、全会話の未投影DTOを保持しない。投影後の観測stampから本文参照を解放する。取得不能なG entryは旧cacheを回復用に保持できてもcurrent readerには渡さず、正常な他sourceの検索と分離する。部分取得の案内は最終的に取得成功したreceiptと結び付ける
+- Gを含む検索は入力待ちから結果公開までsource設定・Reader・許可root・対象identityへ固定する。Hostの現在indexを参照し、本文走査中は軽量な失効確認、index snapshot変更時と公開直前はidentity照合を行う。検索履歴と最終検索条件の保存後にも再確認し、失効した結果でpending clearを消費しない。G一覧が取得不能な空の場合も、有効な検索は不完全な0件として表示する
+- usageのmessage/response aliasが独立unitを矛盾して結ぶ場合、そのcomponent全体を過去行・後続aliasも含めて除外する。残る一意な明示値だけを下限とし、既知値なしは取得不能、明示0は部分取得の0として保持する。turn・Analysis・モデル/source/project内訳まで品質を維持し、部分値の比率は確認できた値の内訳として表示する
+- File AIの不完全な0件表示は元のnavigationOriginと復元位置・複数ページの要求件数を保持する。回復時の再読込でも保存件数まで取得し、保存anchorを引き継ぐ。同じ世代へ完全なモデルを正常配信した後にだけ復元待ちを消費し、以後は現在の表示件数を基準にする。Codex本流置換による自動再解析でも復元待ちを引き継ぎ、解析前の空モデルを暫定的な不完全表示として保存情報を保護する。Insightsは対象取り込み時のsource品質も保存し、不完全な結果を完全な0件と表示しない。他rootのscanで保存元のnative参照を削除しない
+- Antigravityの保存記録の一部を取得できない場合は、Session Viewerの会話冒頭に対象ソース専用の通知を表示する。保存済みの表示用差分統計では省略された行数を0として読み取り、統計自体がない場合は不明として扱う
+- Session ViewerはAntigravityの編集結果をターン別に集約し、変更ファイル数・追加/削除行数・保存差分を表示する。Viewerの要求だけが同じread-only snapshotから検証済みFileEditを別予算で取得する。ファイル一覧は共通の変更カードと同じ編集アイコン・見出し・増減バッジで表示し、最初の3件と残りを切り替える。ファイル行から保存差分、カード内の「編集記録」から元の操作を開ける。しおり、File AI、検索、Insights、Markdownは個別操作のIDと集計を維持する。集計に必要な記録が欠けた場合は確認できたファイルと取得可否を表示する
+- Chat/File AIの本文公開とHost操作は、source設定・Reader revision/許可canonical roots・indexed identity/pathへ結び付け、非同期処理の各境界で失効を確認する。File AIのsource/root変更は実行中処理と未公開pendingを破棄し、失効処理自身が読み込み表示を終えて再読込を案内する。旧処理の遅延完了から、新しい表示・loading状態・保存位置を変更しない
+- 自動更新はDB/WALの複合観測と固定logの変更通知を使い、SHM・資格情報は監視しない。観測stampを永続本文cacheのfreshnessの証明には使わない
+
+### AntigravityのCLI・Handoff・metadata
+
+- Session ViewerのAntigravityターンでは、重複除外済み入力と出力の小計を安全に加算できる場合、合計欄に確認できた下限（≥）を表示する。片方の値が欠けるか安全な整数範囲を超える場合は「—」とする。折りたたみ時も同じ値を表示する
+- CLIは実体を確認した標準`~/.gemini/antigravity-cli` namespaceのstrict UUIDだけに、`agy --conversation <UUID>`を新規terminalへprepareする。`sendText(..., false)`とcwd選択、Trust・設定・identityの再確認を既存CLI処理で共有し、自動EnterやCLI実行成否の追跡は行わない
+- 公式拡張の直接再開は検証済みの会話IDを`antigravity.openConversation`の第1引数へ渡す。同じHostの公式拡張をユーザー操作時にactivateし、固定commandを確認する。各await後にsource設定、Reader revision/許可root、indexed identity、Trustを再検証し、Remoteではdispatchしない。重複操作は共有し、新しい対象選択・dispose・timeout後の遅延処理は追加dispatchしない
+- Viewerからの直接再開はHost内で同じserviceへ渡し、panel・会話state・再開revisionの生存条件も各境界で確認する。同じownerの現在有効な要求だけを共有し、古いrevisionや別panelの要求を共有しない。失効後の遅いreject/timeoutで旧エラーや選好を更新しない。公開command引数へcallbackやpanelを渡さない
+- 再開は3sourceともID指定で、履歴参照先を公式側へ渡さない。公式側にIDがなければ開けず、同IDのコピーがあればそちらを開き得る。保存先一致の証明は要求せず、制約をREADMEへ記載する。操作時の注意・確認は追加せず、command完了を会話表示成功と通知しない。独自RPC、backend再起動、会話import、保存先設定変更は行わない
+- HandoffはCodex/Claude→Antigravity、Antigravity→Codex/Claudeに対応する。nativeでは可視human/assistantだけを抽出し、Thinking・tool本文・未確認diffを含めない。生成場所は同UUIDでもrootごとに分離する
+- Antigravity先は公開`antigravity.startNewConversation`へ現在workspaceのURIを任意引数で渡し、新規会話の要求後にpromptをコピーする。利用者が会話を確認して貼り付け・送信する。公式拡張exports、CSRF/port、独自RPC、addContext、triggerSendは使わない
+- Antigravity→Codexはpromptコピー、Antigravity→Claudeは公式editor.openによる未送信draftとする。対象拡張がない場合や既知の連携失敗では生成物を保持して手動コピーを提供する。Remote Hostでは自動UI連携を行わない
+- Handoffの生成・target更新・clear・期限切れ削除はglobalStorageごとに直列化する。本文とmetadataの公開失敗は両方をrollbackする。設定、Trust、source identity、clear、disposeによって旧operationを失効させ、遅延完了後の追加dispatchを防ぐ
+- metadata-only JSONの出力とmerge復元を既存Export/Import選択肢に加える。nativeを含むbackupはversion 2、既存2sourceだけならversion 1。両方を読み、nativeのroot・UUID・identityを検証し、現在の完全なsource inventoryに一意一致する場合だけ復元する。元DBは変更しない
 
 ### 3.0 Codex paginated履歴（`history_base`）
 
@@ -169,7 +207,7 @@
   - 複数選択で開く / エクスポート / Promote / Delete / 非表示 / 再表示が可能。Codex / Claude Code の混在選択を許可し、Ctrl / Cmd での追加・解除と Shift での連続範囲選択はソース種別で分断しない
   - 非表示は拡張機能内のメタデータであり、通常履歴と Codex アーカイブの双方に適用する。元の JSONL は変更しない
   - Codex アーカイブ済みセッションは、表示対象が `通常＋アーカイブ` / `アーカイブのみ` / `すべて` のときに表示し、アイコン / 説明 / tooltip で通常履歴と区別する
-  - 初回履歴ロード中は、空状態案内ではなく読み込み中ノードを表示する
+  - 初回履歴ロード中は読み込み中ノードを表示する。SQLite方式では使える一覧が届いた時点から先行表示する。Antigravityのキャッシュ一覧は保存先の実体を確認してから公開する。Readerが保存先の範囲の変更を確認した時点で、範囲外の行を除き、旧範囲を走査済みとする判定を失効させる。監視設定、走査、再作成の各経路で同じ実体パスを照合する
   - 履歴が 0 件の場合は、履歴保存先確認・再読み込み・Claude Code 有効化に関する案内ノードを表示する
   - 絞り込み適用後に一致する履歴がない場合は、絞り込み条件の変更 / 解除を促す案内ノードを表示する
 - **Search**: 検索結果ツリー
@@ -213,6 +251,8 @@
 設定変更の反映は次の Reload Window または VS Code 再起動時で、ビューの再表示や通常の再読み込みでは起動設定を再適用しない。起動後の手動変更と、設定値から開始した結果は従来の workspaceState へ保存する。後で復元モードへ戻すと、直近の起動結果または手動変更を復元する。
 
 表示形式の正本は`src/types/historyViewMode.ts`の`date` / `sessionsList`とし、旧`latest`は読み取り時に`sessionsList`へ正規化する。共通parseは有効値と欠損・不正値を区別し、通常の設定読取は不正時に`date`、起動時の保存値欠損はユーザー既定値、Insightsの不正snapshotは全体拒否という既存境界を維持する。新規保存・設定backup出力・旧backupのimportはcanonical値を使い、rawの競合tokenと補償rollbackは正規化しない。既存の保存キー・command IDは維持し、globalの旧設定を起動時に自動書換しない。
+
+SQLite方式の履歴ツリーは、起動中に互換キャッシュの要約、Antigravityの一覧用DBと実ファイルを照合したタイトル、確認済みのCodex・Claude Code要約を利用できた段階から表示する。Codexの論理参照や同じidentityの複数候補は本流選抜を待つ。プロジェクト範囲を確定できる場合に限り、現行のフィルターとグループ表示を適用する。最終確認後に一覧を差し替え、検索、分析、整理操作、復元には確定した履歴索引を使う。暫定行の明示選択時は対象を再確認して開く。Antigravityは選択したDBの本文読取を背景のメタデータ待ち行列より優先できる。選択と設定の変更で先行読取を取り消し、追加操作は索引の確認後に有効になる。
 
 初回の利用可能な履歴 index を取得してから、既存のプロジェクト解決規則で現在のグループを確定する。起動時の関連キーはビューごとの queue と補償 transaction で保存し、成功後に provider、context、検索条件へ反映する。起動待機中の明示操作は同値の選択も優先し、古い起動設定で上書きしない。検索は起動状態の終端と先行する状態更新を待ってから条件を固定する。破損した履歴フィルタは既存の `none` を維持し、現在のグループを指定してワークスペースがない場合は、保存済みプロジェクト条件を保持して実効 scope を `all` とする。保存失敗は部分的に公開せず、失敗と再読み込みによる再試行を案内する。
 
@@ -343,6 +383,7 @@
   - `引き継ぎプロンプトをクリップボードにコピー`: Handoff ファイルを参照するプロンプトをクリップボードへコピーする
   - `引き継ぎファイルのパスをクリップボードにコピー`: Handoff ファイルを作成または更新し、その絶対OSパスだけをクリップボードへコピーする
   - `引き継ぎファイルを開く`: 選択セッションに対応する Handoff ファイルを開く。存在しない場合は作成確認トーストを出し、承認時は作成後に開く
+- デスクトップ版が `vscode-userdata` で公開するローカルの拡張ストレージにも、`file` と同じ管理ディレクトリの検証を適用する。生成済みファイルは `file` URI でエディターに開く。
 - `Delete Handoff Files` と Status の Handoff 件数 / 容量は保守機能として残し、`handoff.enabled` が無効でも利用できる
 - Claude Code から Codex への引き継ぎは Codex 側の入力欄へ自動投入できないため、通常メニューには出さず、プロンプトのクリップボードコピーで扱う
 - `引き継ぎプロンプトをクリップボードにコピー` は、既存 Handoff ファイルがある場合は確認なしで既存ファイルを参照するプロンプトをコピーし、存在しない場合だけ新規作成して作成込みのコピー完了通知を出す
@@ -396,14 +437,35 @@
 
 | 対象 | 実装の定数 | 現行値 |
 | --- | --- | ---: |
-| History summary | `SUMMARY_CACHE_ALGO_VERSION` | 31 |
-| Search index | `SEARCH_INDEX_FILE_VERSION` | 37 |
+| History summary | `SUMMARY_CACHE_ALGO_VERSION` | 32 |
+| Search index | `SEARCH_INDEX_FILE_VERSION` | 38 |
+| Analysis cache schema | `SESSION_ANALYSIS_CACHE_SCHEMA_VERSION` | 2 |
+| Antigravity Analysis | `SESSION_ANALYSIS_ANTIGRAVITY_PARSER_VERSION` | 1 |
 | Codex Analysis | `SESSION_ANALYSIS_CODEX_PARSER_VERSION` | 19 |
 | Claude Code Analysis | `SESSION_ANALYSIS_CLAUDE_PARSER_VERSION` | 20 |
 | Codex Branch Navigation | `CODEX_FORK_NAVIGATION_ALGORITHM_VERSION` | 6 |
 
+- 共通キャッシュ方式:
+  - メンテナンスの「キャッシュ方式」には「ファイル方式」または「SQLite方式」を表示する。フォールバック時は理由も表示する
+  - 専用設定の準備時に、既存のruntime probeを一時Workerで実行する。メモリ内DBでSQLite・内蔵版・全文検索を確認し、DBを閉じてWorkerを解放する。確認中・非対応時は「SQLiteキャッシュを使用」を理由付きで無効にし、非対応時はファイル方式の案内を表示する。専用画面とバックアップインポートのHost側でもオンへの変更を検証する。標準設定や保存済みの値には、実キャッシュ初期化時の既存フォールバックを適用する。
+  - 公式デスクトップ版のキャッシュ互換性の目安はVS Code 1.123.0以降。Windows版1.122.0は内蔵SQLite 3.51.2、1.123.0は3.51.3であることを確認した。派生版とリモートは稼働中のHostを判定する。[VS Code 1.123](https://code.visualstudio.com/updates/v1_123)
+  - SQLite・Worker・FTS5 trigram・安全なローカル保存先を実行中のExtension Hostで確認し、利用可能なら履歴・検索・分析を `globalStorageUri/sqlite-cache/history-index.sqlite` に保存する。同じglobalStorage内の全project・全sourceで1DBを使い、profileやRemote Hostが異なるglobalStorageは共有しない
+  - Universalパッケージを維持し、native addonやSQLite実行ファイルを追加しない。既定では従来のJSON/JSONLを使う。「一般 > キャッシュ」の `codexHistoryViewer.cache.sqlite.enabled` を有効にし、Reload Windowまたは再起動したHostだけがSQLiteを準備する。実行環境・保存先・SQLiteの安全修正や必要機能の検査に通らなければ従来方式へ戻る。Antigravityの履歴Readerはこの設定と独立する
+  - SQLite の専用パスに形式の合わないファイルが見つかった場合は、同じ専用フォルダーの `recovered/history-index.sqlite` でキャッシュを再作成する。復旧先は再起動後も共有し、既存の別形式ファイルとジャーナルはそのまま保持する。並行起動時の一時的な SQLite busy は上限付きで再試行し、復旧先自体を利用できない場合は従来形式を使う。
+  - DBはWorkerだけが操作する。staging中のentryを公開せず、保存世代のCASとtransactionでpointerを更新する。検索consumerごとのreadonly接続はTEMP準備後にquery_onlyを有効にし、検索・File AI候補収集の終了時に解放する
+  - 最終公開ではwrite lock取得後にキャンセル/世代guardを確認し、同transactionでCOMMITする。待機中のキャンセルでは旧世代を保ち、成功したCOMMITを後着キャンセルで取り消さない。準備中transactionはWorker自身の短いleaseで失効し、解放を確認できない接続は再利用しない
+  - 検索のplain/exactはFTSで必要な3 code pointの候補を選び、従来matcherで本文全体を再判定する。regexも、安全な線形構文から必須literalが得られる場合だけ同じ候補を使う。ignore-caseは非UnicodeモードのASCII runに限定してfolded候補を使い、Unicode ignore-case、alternation、group、class、未知escape等は全候補を走査する。最終判定は既存RegExpを維持する。短いquery、NUL/lone surrogate、巨大本文は候補を省略しない。hit順序・上限・snippet・採番・特殊IDを維持する
+  - FTSには2 code pointを重ねた小片を登録し、同じ片の反復だけを除く。必要gramの存在を維持し、結合由来の余分な候補は本文matcherで除く
+  - raw/foldedの各列表現が16Ki UTF-16 unitsか4,096個の異なるtrigramを超える本文は、索引だけを省いて常に全本文候補へ含める。本文は可逆保存し、読取失敗やsource欠落とは扱わない。許可列は単一document・ordinal=0とし、Workerでも分割stageによるコスト上限回避を拒否する
+  - 通常の履歴・分析は保存失敗時も新しいprocess-local結果を利用する。検索と明示rebuildは保存成功後に公開する。Worker停止や永続I/O障害では実停止を待って当該Hostを従来方式へ降格し、通常検索は同じ開始scopeで1回だけやり直す
+  - 両方式のキャッシュは現在の保存先に残す。切替で移行・削除・二重書込みは行わず、選択した方式の有効なキャッシュを再利用する。必要なfamilyは元履歴から構築する。ユーザーmetadataとHandoffの保存方式は従来どおりとする
+  - producer/codec/validatorの依存graphから自動生成する `storageContractFingerprint` を両方式のcontextへ含める。構造・意味が合わない生成cacheは再構築し、開発中の構造変更ごとに内部番号を上げない。計算版の過去更新記録とは区別する
+  - 公開中・利用中のcontextとstagingを保護し、失効した作業・未参照本文・FTSを小さなbatchで回収する。WALは物理file長ではなく未checkpoint量で制御する。DB/WAL/SHMを開いたまま削除・置換しない
+  - cache writerはNORMAL同期を維持し、自動checkpointを64MiB相当にまとめる。対応SQLiteでは通常のWAL観測にNOOPを使い、書込みを進めるPASSIVEと分離する。書き込み前と保守時の観測は、未checkpoint量の128/64MiB判定から排出終了まで同じ待機処理を共有する。対応済み旧backportではPASSIVEの観測を使う。元履歴DBの接続設定は変更しない
+  - stageは最大4MiB/256件の同期ACK付きbatchで送り、WAL観測は4batchごと（入力約16MiB）に行う。metadataは別にUTF-8 1MiBをHost/Workerで検証し、読取projectionより大きい値を公開しない。GCは複数の孤立本文をdocument/chunk/contentそれぞれ合計256件以内で回収する
+  - 設定画面のMaintenanceに、使用方式と固定fallback理由を読取専用で表示する。容量集計にはDB/WAL/SHMも含め、`Empty Trash`はこの専用directoryを削除しない
 - 履歴キャッシュ:
-  - 保存先: `globalStorageUri/cache.v9.json`
+  - 保存先: 共通SQLiteのhistory family。従来方式では `globalStorageUri/cache.v9.json`
   - 用途: 一覧表示用の要約キャッシュ
   - 通常起動時は、有効な cache context であれば filesystem scan / stat を待たずに cache から `HistoryIndex` を即時表示し、その後 background refresh で最新状態へ更新する
   - `cache.v9.json` が破損して JSON parse error になった場合は、破損内容を退避せず削除し、通常の refresh で再生成する
@@ -415,6 +477,7 @@
     - 有効ソース設定
     - `preview.maxMessages`
     - 日付時刻設定キー
+    - `storageContractFingerprint`
     - 各ファイルの `mtime` / `size`
 - Codex タイトルキャッシュ:
   - 保存先: `globalStorageUri/codex-title-cache.v1.json`
@@ -432,8 +495,8 @@
   - CWD が空、または `CWD なし` の疑似プロジェクトには別名を保存しない
   - 最大 120 文字を超える入力はエラーにし、空入力または自動プロジェクト表示名と同じ入力は別名消去として扱う
 - 検索インデックス:
-  - 保存先: `globalStorageUri/search-index.v3.jsonl`
-  - 内部 file version: 37（保存形式番号1とは独立）
+  - 保存先: 共通SQLiteのsearch family。従来方式では `globalStorageUri/search-index.v3.jsonl`
+  - 内部 file version: 3.4節のSearch index版を参照（保存形式番号1とは独立）
   - 用途: 繰り返し検索を高速化する増分インデックス
   - 認識済み形式の `search-index.v3.jsonl` で、UTF-8復号後のJSON構文破損、または必須レコード欠落によるEOFを検出した場合は、`parseError` として破損内容を退避せず削除し、次回検索時に再構築する。不正UTF-8（文字途中の切断を含む）は `readError` として削除しない
   - 現在の履歴インデックスに存在しない孤立エントリは `ensureUpToDate()` で削除する
@@ -443,6 +506,7 @@
     - `claudeSessionsRoot`
     - 有効ソース設定
     - `search.indexToolContent`
+    - `storageContractFingerprint`。SQLiteではfolding runtime・SQLite version/source IDも照合する
     - 各ファイルの `mtime` / `size`
   - `search.indexToolContent`:
     - `conversationOnly`: メッセージ本文とタイトル / 注釈だけを保存する
@@ -456,18 +520,23 @@
   - セッションの attachment metadata は label、path、MIME type、file kind を検索対象に含める
   - Claude Code text document の text は上限内だけ検索対象にし、PDF / Office / binary / base64 document の本文は検索対象にしない
   - Codex file reference は履歴に保存された label / path だけを検索対象にし、参照先ファイルは読み込まない
-  - 保存形式: 整形なし JSON（サイズ削減のため）
+  - 従来方式は行単位JSONL、SQLite方式は可逆なUTF-16本文chunkをJSON文字列として保存する。DBからのJSONはUTF-8不正byteを黙って置換せず拒否する
+  - SQLiteでは論理メッセージとimmutableな本文・FTSを分離する。変更entryを元履歴から正規化した後、同context・同source identity・同ordinalで本文digest等が一致する場合は本文を再保存せず、新metadataから共有する。共有時の索引属性は保存済み本文を照合したWorkerが継承し、Hostは同じ計画を再生成しない。forceRebuildは共有の最適化を使わない。未完本文だけが作成元entryから書込可能で、完了時に所有参照を解除し、最後の論理参照がなくなった本文だけを回収する
+  - 検索本文はWorkerで検証・JSON復号した限定長chunkを順次返す。Hostでも型・件数・長さ・ordinal・総unitsを検証し、全本文を再度JSON化してサイズ計算しない。通常metadata/valueの境界検証とReaderのscope・寿命管理は維持する
+  - 検索の本文chunkはUTF-8 JSONをBLOBへ保存し、1KiB以上かつ10%以上縮む場合だけWorkerの標準zlib level1で圧縮する。codec/物理byte数、展開出力上限、checksum、全入力消費、UTF-8/JSON/総unitsを検証し、失敗は既存のcache降格で扱う。本文digestは展開後のcode unitsを対象とし、元履歴やユーザーmetadataを圧縮・変更しない
+  - Worker入力が非canonicalなJSONでも、生のlone surrogateを必要時に再JSON符号化してcode unitsを保つ。metadataとpathのJSONも同じ目的で安全化し、物理byte上限を満たさない値は拒否する
 - Session Analysis Index:
-  - 保存先: `globalStorageUri/session-analysis-index.v1.json`
+  - 保存先: 共通SQLiteのanalysis family。従来方式では `globalStorageUri/session-analysis-index.v1.json`
   - 用途: History Insights の統計と Claude Code Branch Navigation の構造化 occurrence を共用する差分解析キャッシュ。履歴キャッシュや検索インデックスの代替にはしない
   - History Insights、Claude Code Branch Navigation、または `Rebuild Cache` を要求したときだけ lazy load / lazy build し、拡張機能の起動や通常の History / Search 表示を待たせない
   - セッションごとの `cacheKey`、source、`mtime`、`size`、parser version と、sessions root / 有効ソースを含む cache context を検証し、変更された entry だけを再解析する
+  - SQLiteでは要求されたentry本文だけを読み、処理固有のprepared世代を保存まで保持する。未ロードのactive entryを差分保存で維持し、既存の200,000 entry保持上限はmetadataから同じ順序で選択する
   - 現行source parser versionはCodex `19` / Claude Code `20`とする。音声参照の誤画像分類修正前のCodex18以下／Claude19以下のentryは既存version検証で再計算する。以下は過去更新時の対応記録である。圧縮保全参照・自動終了分類に未対応のClaude version 18以下のentryは再解析し、有効なCodex entryは保持する。Claudeの編集結果とBash差分を反映しないversion 12 entryは再解析する。ツール名別利用回数を持たないversion 7 entry、Codex standalone response itemをツール集計しないversion 8 entry、論理`history_base`履歴を解析しないCodex version 9 entry、Codex `item_completed` / `FileChange`をfile change統計へ含めないversion 10 entry、同一ターン・同一対象パスのCodex変更を集約しないversion 11 entry、Codexの非同期質問・durable token usage・cache-write tokenを解釈しないversion 12 entry、Claude pasted / truncated inputのclean message投影前に生成したClaude version 8 entry、本文保持専用照合の修正前に生成したClaude version 9 entry、端末出力を通常userとして集計していたClaude version 10 entryは再解析する
   - 既存 Chat model builder と同じ抽出結果を使って message index、turn、usage、file change、ツール名別呼び出し回数を集計し、解析側で独自の message index を採番しない
   - 同一セッションの重複解析を共有し、全体の更新、保存、clear は直列化する。進捗通知とキャンセルに対応する
   - 破損 JSON は削除して次回要求時に再生成し、権限エラーなどの read error では既存ファイルを削除しない
   - 通常の lazy 解析は cache 保存失敗時も process-local の解析結果を利用できる best-effort とし、History Insights / Claude Code Branch Navigation の可用性を維持する
-  - `Rebuild Cache` からの手動再作成は `rebuildAll()` の strict 経路を使う。既存 index の削除では FileNotFound だけを無視し、権限 / lock / I/O error と新 index の保存失敗は呼び出し元へ伝播する。保存失敗時は新しい process-local cache を公開しない
+  - `Rebuild Cache` からの手動再作成は `rebuildAll()` の strict 経路を使う。従来方式の既存 index 削除ではFileNotFoundだけを無視する。SQLiteでは旧世代を新世代のpublish成功まで維持し、旧JSONは削除しない。権限 / lock / I/O errorと保存失敗は伝播し、新しいprocess-local cacheを公開しない
   - 256 MiB を超えるセッションは `unsupported`、壊れた JSONL 行や解析上限超過は `partial` として保持し、取得不能と確定値を区別する
   - Claude Code の構造化 graph record は 1 セッション 100,000 件を上限とし、上限へ到達した後に追加 record があった場合だけ `partial` とする
 - JSON 永続化:
@@ -478,7 +547,7 @@
 - Handoff 生成ファイル:
   - 保存先: `globalStorageUri/handoffs/<source>/<source-root-relative-path-with-final-stem>/`
   - 例: Claude Code の `~/.claude/projects/<project>/<session>.jsonl` は `handoffs/claude/<project>/<session>/handoff.md` に対応する
-  - 通常は 1 つの元セッションに 1 つの Handoff ディレクトリを対応させ、同じセッションで作り直す場合は上書きする
+  - 通常は 1 つの元セッションに 1 つの Handoff ディレクトリを対応させる。Codexで回答の表示制約を反映する前のファイルがある場合は、兄弟ディレクトリに保護済みファイルを作成する。Antigravity向けの作成、再利用、宛先更新、コピーも、同じ選定結果と検証を使う
   - ソースルートからの相対化ができない場合は `handoffs/<source>/by-hash/<hash>/` にフォールバックする
   - `handoff.md` と生成メタデータを同じディレクトリへ保存する
   - 自動整理では 30 日超または 100 ディレクトリ超の古い Handoff ディレクトリを削除対象にする
@@ -487,7 +556,7 @@
   - 確認ダイアログの承認直後に設定と日時条件を固定し、その条件で履歴キャッシュ、検索インデックス、Session Analysis Index を順番に強制再作成する。途中の History refresh、Auto Refresh、filter / scope、関連設定、index generation の変更は中断条件にせず、進捗通知からの明示キャンセルだけを中断条件にする
   - 履歴の強制再作成直後に固定した同一の readonly session inventory を検索と分析へ渡す。開始設定が途中で current ではなくなった場合も detached snapshot として後続段階を完走し、新しい設定の live History Index は上書きしない
   - 検索インデックスは専用 working state と明示キャンセルだけを確認する commit guard を使い、保存成功後にだけ disk / process-local index を一括更新する。保存前のキャンセルや保存失敗では直前の index を維持し、保存成功後のキャンセルでは完成済み検索インデックスを維持したまま後続段階へ進まない
-  - 進捗表示とキャンセルに対応する。Session Analysis Index を削除する前にキャンセルされた場合は既存の解析結果を維持し、削除後にキャンセルされた場合は不完全な現行 index を保存せず次回要求時に lazy 再構築できる状態にする
+  - 進捗表示とキャンセルに対応する。従来方式はSession Analysis Index削除前のキャンセルで旧結果を維持し、削除後のキャンセルでは不完全なindexを保存しない。SQLiteはpublish前の失敗・キャンセルで旧世代を維持する
   - Session Analysis Index の削除または保存に失敗した場合は再作成全体を失敗として通知し、成功通知を出さない
   - 履歴 snapshot が current として採用されている場合だけ live History UI を更新し、既存検索結果の clear を要求する。検索実行中に発生した clear 要求は旧表示結果だけを対象とし、実行中検索が新しい結果を公開した場合はその結果を消さない。再作成全体が成功し、同じ snapshot が引き続き current の場合だけ、開いている History Insights と Branch Navigation を更新する
 - `Rebuild Search Index`:
@@ -510,6 +579,7 @@
 - `Empty Trash`:
   - `deleted` と `undo-delete` を手動削除する
   - あわせて旧世代の `cache.v*.json` / `search-index.v*.json` / `search-index.v*.jsonl` / `session-analysis-index.v*.json` と、1 時間以上古い JSON 一時ファイル・検索専用 JSONL 一時ファイルも削除する。ただし現在の `cache.v9.json` / `search-index.v3.jsonl` / `session-analysis-index.v1.json` は削除しない
+  - SQLite cache DBとWAL/SHMは削除しない。DB内の失効した生成cacheは接続を所有するWorkerが保守する
   - ダイアログでは古い一時ファイルの件数を個別表示せず、ストレージ整理として扱う。Status 表示上の件数は「ゴミ箱件数」のみを扱う
 - 自動削除:
   - 履歴キャッシュ、検索インデックス、Session Analysis Index、ゴミ箱は自動で全削除せず、`Empty Trash`、`Rebuild Cache`、`Rebuild Search Index` などの明示的なユーザー操作に委ねる
@@ -641,6 +711,10 @@
 - `realtime_item`の可視化は、本家機能が既定有効となり永続形式と順序・重複規則を実ログで確定できた時点で再設計する。context管理の可視化は、history notesと利用者本文の境界、Search / Resume / Handoffへの含有規則、機密情報の扱いを確定できた時点で再設計する。再開時はUI、ローカライズ、アクセシビリティ、cache/parser versionを同時に更新する
 - Codex の最初の通常会話より前にある text-only protocol bundle は、既知の完全 block だけで構成され、開始 marker を持つ場合に限って専用 `protocolContext` item へ変換する。通常 user message とは分離し、既定で閉じた `Codex 実行コンテキスト` カードとして通常表示・詳細表示の両方に出す
 - 単独の`external_codex_apps_open_page`も既知の制御コンテキストとして分類する。JSONは`page_id`だけを持つobjectで、値はnullまたは制御文字のない1〜1,024文字の非空文字列、JSON本文は4,096文字以内とする。Page単独では開始markerにせず、途中出現でも通常userとして表示・検索・集計しない。採番は維持し、通常文・コード例・添付との混在、不正JSONや未知fieldは元の本文として残す
+- `external_codex_apps_selected_page_part_*` も、開始・終了tagと部番号、`Companion Page snapshot` のヘッダーが一致し、1 Mi文字以内の完全なJSON objectが `page_id` と `document_view` だけを持つ場合に同じ制御コンテキストとして分類する。分割片や混在を含め、完全なメッセージとして検証できない本文は通常どおり扱う。Markdownでは採番と本文を保持し、制御コンテキストの見出しを付ける。生のCodex記録全体と短縮前のCodexタイトルで検証し、依頼見出しの後にユーザーが示した例、Claudeの発言、成立しないJSONは通常テキストとして扱う
+- Codex公式の新しいPageコンテキストは、明示的な追加コンテキスト属性を持つツール出力と、保存由来を確認できる専用developer制御行を区別する。Chat・全体検索・Markdown・Resume・Handoffではこれらを除外し、通常のツール出力および利用者の発言番号を維持する。
+- Codex の保存済み最終回答は、ネイティブの表示指定と同一の回答・ターンの記録を照合する。非表示指定は Chat と Markdown で位置を保持し、検索・プレビュー・再開文・Handoff では本文を除く。既存の未確認 Codex Handoff は別の管理先で再生成し、切替時の自動整理から旧成果物を保護する。
+- ClaudeのAdvisorは保存された呼び出しおよび結果をChatのツールカードへ射影する。平文はChat詳細とツール出力を含む検索モードで使用し、Markdownには状態と検証済みの日時を載せる。暗号化された結果や辞退の内容は表示対象外とし、Advisorのカードを通常のツール実行件数・ファイル変更には加えない。
 - protocol context 判定は可変の本文、件数、path、hash ではなく raw content の block 構造で行う。未知 content type、raw 添付、閉じ tag 欠落、余剰の自然文があれば通常 user message へ fail-open し、単独の environment / user instructions は従来どおり詳細表示用 context とする。strict 判定後に本文から file reference attachment が派生しても、raw 判定を覆さず context のまま扱う
 - 専用 context card は raw message index を消費して後続番号を維持するが、user 件数、sticky user、user 前後移動、role filter、branch anchor、全体 Search、ページ内検索、Resume / Handoff の通常依頼には含めない。展開本文は `textContent` で描画し、同一セッション自動更新では開閉状態を維持する
 - セッションタブの自動更新ボタンは、履歴の自動更新設定が有効なときだけ表示し、`off` / `preserve` / `follow` をクリックで循環する
@@ -787,6 +861,11 @@
   - 読み取り失敗時は最後の正常値を維持して再試行し、3回連続の失敗で一度だけ警告する。正常読取・不存在・設定OFF・会話切替で失敗回数と通知状態をリセットし、同じ会話のモデル再配信では保持する。ファイル不存在は2回連続確認後に解除として反映する。設定変更・会話切替・パネル破棄をまたぐ遅延結果は破棄する
   - `src/services/claudeNativeBookmarkReader.ts` は通常ファイル・保存先・1 MiB 上限・UTF-8・保存形式・読み取り前後の同一性を検証する。上位フォルダーのリンクを許容し、保存ディレクトリの実パス直下のファイルだけを開く。保存ディレクトリ自体と対象ファイルのリンク、読み取り中の保存先やファイルの交換を拒否する。識別子・本文・完全パスをエラーメッセージへ出力しない
   - subagent や File AI Change History のツール差分へ Claude Code の回答しおりは転写しない。既存のしおりキー・永続形式は変更しない
+- Claude Code の音声通話記録（3.0.0）:
+  - `claudeVoiceCall.ts` が公式の `system/voice_call_talk/msgV=1` と、明示的な `voice-call` 来歴を持つ旧user/queued形を検証する。文字起こしは通常・詳細とも専用の折りたたみカードへ表示し、話者をuser/assistantへ決め付けない。未知版や不正本文は取得不能とし、通常依頼・ツールへ戻さない
+  - 通常の依頼・承認、ターン開始、token/モデル、ファイル変更、preview、横断role検索、Resume/Handoffへ混ぜない。Markdownは背景説明付きのplain text code blockへ出力する。閉じた本文のページ内検索、コピー、本拡張しおり、日付ガイドに対応し、開閉状態は会話単位で更新・復元する
+  - 通常の新保存形は既存メッセージ番号を増やさない。旧user形は先行制御分岐を含む共通計算で番号と旧描画ordinalを維持する。不正な旧tool結果等が先行項目まで変えていた場合や旧分割回答の誤集計を修正する場合は、Host-onlyな互換scopeにより旧しおりの誤一致を防ぎ、ユーザーmetadataを削除せず未解決のまま保持する。通常/詳細の投影で互換情報を維持する
+  - 分割assistantの間に音声が入ってもusage/completionを確定しない。投影済みの環境/音声項目を次の非音声行またはEOFまで保持し、completionの判断後に配置とturnIdを確定する。音声へThinking時間を付けず、元の次の表示対象へ持ち越す。元ファイルへの書込みや、音声URL・追加の本文参照ファイルの取得を行わない
 - Claude Code の進捗表示:
   - assistant の `thinking` / `redacted_thinking` を `claudeProgress` として読み込み、詳細表示の ON/OFF にかかわらずカードを表示する
   - 本家と同じ signature metadata（protobuf field 2 / 1 / 8）で `narration` と判定された本文は「進捗」として全文表示する。通常の思考本文は展開式。空文字・空白のみの思考は通常・詳細ともにカード化せず、保存時間がある場合だけ非表示の時間メタデータとして保持する。秘匿本文は状態だけを表示する
@@ -800,7 +879,7 @@
   - 同じ保存レコードに進捗・ツール・本文が混在する場合は元のブロック順に配置し、通常本文の集約と既存番号は維持する。Markdown の移動先は本文内の改行を含む実際の行数から計算する
   - 既存カードのしおり fallback index は進捗を除き、同じ回答番号の集約本文がツールに先行する旧順序で計算して既存キーを保つ。進捗のしおりは既存 note 種別と進捗 ID を使う
   - 進捗内の diff 風文字列はファイル変更の証拠にしない。差分カード・詳細・File AI Change History は引き続き実際のツール記録を使う
-  - 検索 cache は `SEARCH_INDEX_FILE_VERSION = 33`。追加入力対応前の旧cacheを再生成し、進捗ID・種類・assistant/messageの組合せも検証する
+  - 検索 cache は現行の計算版と `storageContractFingerprint` で整合性を確認して再生成し、進捗ID・種類・assistant/messageの組合せも検証する
 - Claude Code 実行中の追加入力:
   - `attachment.type = queued_command` で人の来歴（`origin.kind = human`）が明示された非metaのpromptテキストを、通常・詳細の両方に表示する。内部通知・転送・来歴不明・queue-operation・`rendered`のsystem-reminderは本文へ取り込まない
   - `claudeQueuedInput.ts` の共通抽出と重複判定を使用し、source UUID・delivery IDによる再配信を除外する。同じsource UUIDの通常user記録が前後にあれば通常記録を優先する。同文の別発言は残す。元ファイルは変更しない
@@ -1132,11 +1211,11 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 
 - `src/services/searchIndexService.ts`
   - `search-index.v3.jsonl` を管理する。ファイル名は `src/storage/cacheFiles.ts` の共通定数を使う
-  - `SEARCH_INDEX_FILE_VERSION = 36` とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item / Codex `history_base`論理履歴 / Codex `item_completed` / `FileChange`のfile change hint / Codex非同期質問、Claude子履歴の保全参照と自動終了分類対応前に生成した既存インデックスは再構築対象にする
+  - `SEARCH_INDEX_FILE_VERSION`（現行値は3.4節参照） とし、archive context / file change hints / attachment metadata / request interruption filtering / user instructions filtering / Codex session-start protocol context filtering / Claude Code local command output filtering / 現行Codex pasted-file形式 / Claude pasted・truncated inputの本文・添付分離 / 本文保持専用照合 / Claude cross-session受信のrole補正 / Codex配列tool outputとstandalone response item / Codex `history_base`論理履歴 / Codex `item_completed` / `FileChange`のfile change hint / Codex非同期質問、Claude子履歴の保全参照と自動終了分類、音声参照の誤画像分類修正に未対応の既存インデックスは再構築対象にする
   - ファイル内 cache version が一致しない場合は既存インデックスを破棄し、次回検索時に再構築する
   - 検索インデックス読み込み時は、認識済み形式のJSON構文破損・必須レコード欠落によるEOFを `parseError` に分類した場合だけインデックスを削除して `null` 扱いにし、次回検索時に再構築する。未知形式・schema不正や、不正UTF-8を含む `readError` は削除しない
   - セッションごとに `mtime` / `size` を持ち、差分更新する
-  - 更新・保存用Maintenance stateと検索consumer向けimmutable Read snapshotを分離する。全hitではMapを複製せず既存snapshotを返し、mtimeだけの変更でmessages / hintsが構造同値ならprocess-local opaque identityを引き継いでRead snapshotを再利用する
+  - 更新・保存用Maintenance state、immutableな意味世代Read snapshot、ensureごとのacquisition ticket、consumerごとのscan readerを分離する。`ensureUpToDate`はsnapshot/ticketの組を返し、この時点では読取リソースを取得しない。全hitやmtimeだけの変更でmessages / hintsが構造同値なら同じsnapshot objectを再利用し、ticketはそのensureの検証済みentry集合へ結び付ける
   - 検証済みentryの本文は全規模でprivateなUTF-8 Buffer群へ保持し、検索・保存で必要なentryを復号する。File AIの本文照合は通常メッセージを復号せず、必要なtool本文だけを走査する。復号配列・要素は不変だが、呼出し間の配列参照同一性は要求しない。snapshot objectの再利用と旧snapshotの内容不変性は維持する
   - 初期file / logical plan observationは共有cursorを持つ最大8 workerで並行化し、同一sessionのJSONL scanと公開順は直列のまま維持する。キャンセル後は新しいstatを発行せず、発行済みworkerの完了を待つ
   - index context に `codexArchivedSessionsRoot` と `includeCodexArchived` を含め、archived root / 有効状態の変更を検知する
@@ -1167,7 +1246,7 @@ CLI 再開用の実行ファイルパス設定は追加しない。CLI executabl
 2.20.2では、上記の保存形式を維持して検索本文の常駐表現とローカルI/Oを更新する。
 
 - `src/services/packedSearchMessages.ts` がentry単位の本文を分割UTF-8 Bufferと数値metadataへ保持する。孤立サロゲートは元のUTF-16位置・値を疎保持して復号時に補正し、BOM・NUL・絵文字を含む元文字列を完全に復元する。番号は浮動小数点の値域を維持し、本文配列の強参照cacheは持たない
-- 同期の全メッセージ取得を維持し、File AI向けにはsnapshotの同じ世代からtool本文だけを一件ずつ協調走査する。sourceを復号前に選別し、byte断片のUTF-8復号とUTF-16補正中にも取消を確認する。本文照合は一件全体の小文字化を保ち、Unicodeの文脈依存による意味の変更を避ける
+- 通常検索は`openReader(ticket, options)`の非同期message列挙を使い、File AIは同じ検証世代のhint/tool本文だけを取得する。consumerごとにreaderを取得してfinallyで解放し、File AIの精密解析/追加ページや、ensureだけの再構築ではreaderを保持しない。sourceを復号前に選別し、byte断片のUTF-8復号とUTF-16補正中にも取消を確認する。本文照合は一件全体の小文字化を保ち、Unicodeの文脈依存による意味の変更を避ける
 - packはchunkごとに取消を確認し、長い処理ではevent loopへ制御を戻す。読込entryは既存の型・値検証後にその場でpackし、全indexのraw本文を蓄積しない。変換hookの例外はファイルのJSON破損と区別し、cacheを削除しない
 - 読込headerとcontextのschema検証後、serviceの現在計算版・正規化contextをentry解析前に照合し、不一致は非削除のcache missとして本文解析・packを省く。同期predicateはfreezeしたmetadataコピーを受け、例外を非破壊readError、取消をそのまま伝播し、拒否時もstreamを解放する。nativeの有界read-aheadと他providerの従来全量readは残る
 - `file:` とローカルな `vscode-userdata:` はNodeの逐次I/Oを使う。userdataはfile URIへ変換してからnative pathを解決し、UNC authorityを含めread/write/copy/cleanupの参照先を揃える。他のproviderは従来のbyte buffer経路を維持する
@@ -1804,7 +1883,7 @@ UI の辞書管理と日本語への翻訳は区別する。`From` / `To`、メ�
 
 実行時のViewタイトルは `runtime.view.*`、manifestのタイトルは `view.*` と責務を分ける。表示文字列をソースへ直書きせず、ソースコメントは英語で記述する。
 
-拡張機能一覧・Marketplace向けの表示名は、英日とも `manifest.ext.displayName` の `Codex History Viewer - Codex and Claude Code` を使う。サイドバー、コマンド分類、設定画面内の製品名は既存の短い表記を使い、拡張ID・設定キーとは区別する。
+拡張機能一覧・Marketplace向けの表示名は、英日とも `manifest.ext.displayName` の `Codex History Viewer - Codex, Claude Code and Antigravity` を使う。サイドバー、コマンド分類、設定画面内の製品名は既存の短い表記を使い、拡張ID・設定キーとは区別する。
 
 ### 4.15 診断ログ
 
@@ -1930,6 +2009,8 @@ Mermaid 11.17.2 の diagram math は、scoped override の `$katex` 参照で ro
 ### 5.2 ビルド
 
 ローカライズの生成JSON・TS・JSはGit管理外で、取得直後には存在しない。`compile` / `build:webview` / `watch` は生成を先に実行する。翻訳は `localization/locales/*.json` だけを編集し、生成先のファイルを手編集しない。生成だけが必要なら `npm run generate:l10n` を実行する。翻訳追加・変更のレビューには、正本と併せて自動更新された `localization/generated-files.json`、必要な場合は `package.json` の生成対象部分を含める。
+
+`compile` / `typecheck` は `generate:cache-contract` も実行し、cache producerの実TS依存graphと必要なlock情報から保存契約fingerprintを生成する。`watch`もproducerとlockの変更を監視する。UI翻訳・描画専用資産・ビルド日時は入力に含めず、生成した `src/generated/storageContractFingerprint.ts` は手編集しない。
 
 Mermaid 11.17.2 の配布済み JavaScript は js-yaml 4.3.0 を内包するため、通常の依存更新だけでは内包版の脆弱性を解消できない。2.14.2 では build-time の直接依存に公式修正版 `js-yaml@4.3.2` を exact pin し、`scripts/mermaid-yaml-dependency.mjs` の esbuild plugin が YAML 専用モジュールを置き換える。公開する `JSON_SCHEMA`／`load` と既存の描画制限を維持し、`node_modules` の配布ファイルは書き換えない。修正版のコードと既存のライセンス表記を Webview bundle／`THIRD_PARTY_NOTICES.txt` に含める。
 

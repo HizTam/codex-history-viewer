@@ -1,13 +1,20 @@
 import { isClaudeInternalUserRecord } from "../chat/claudeTaskNotification";
+import { isClaudeVoiceCallRecord, readClaudeVoiceCallLegacyPresentation } from "../chat/claudeVoiceCall";
 import { isClaudeCompactSummaryRecord } from "../chat/claudeCompactSummary";
 import { extractClaudeProgress, isClaudeProgressId } from "../chat/claudeProgress";
+import { readClaudeAdvisorEvents } from "../chat/claudeAdvisor";
+import { readCodexAnswerRestriction } from "../sessions/codexAnswerVisibility";
 import { ClaudeQueuedInputTracker, isClaudeQueuedInputId } from "../chat/claudeQueuedInput";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import * as vscode from "vscode";
+import { STORAGE_CONTRACT_FINGERPRINT } from "../generated/storageContractFingerprint";
+import { SqliteCacheStore } from "../storage/sqliteCacheStore";
+import { SqliteCacheError } from "../storage/sqliteRuntime";
+import { SqliteSearchIndexService } from "./sqliteSearchIndexService";
 import { extractClaudeTerminalOutput, getClaudeTerminalOutputText } from "../chat/claudeTerminalOutput";
 import type { SearchIndexToolContent } from "../settings";
-import type { HistoryIndex, SessionSummary } from "../sessions/sessionTypes";
+import type { HistoryIndex, SessionSummary, SessionSource } from "../sessions/sessionTypes";
 import { SEARCH_INDEX_FILE_NAME } from "../storage/cacheFiles";
 import { claudeChangeSearchText, readClaudeEditResults, readClaudeResultChanges } from "../sessions/claudeFileChanges";
 import {
@@ -16,6 +23,8 @@ import {
 } from "../storage/jsonStorage";
 import { readSearchIndex, writeSearchIndex } from "../storage/searchIndexStorage";
 import { packSearchMessages, type PackedSearchMessageReader } from "./packedSearchMessages";
+import { createLegacySearchSnapshot, prepareLegacySearchSnapshot } from "./legacySearchIndexReader";
+import type { SearchIndexPreparedSnapshot, SearchIndexReadSnapshot } from "./searchIndexReader";
 import { normalizeWhitespace } from "../utils/textUtils";
 import {
   buildAttachmentSearchText,
@@ -56,12 +65,20 @@ import type { PerformanceProbe } from "../performance/performanceCounters";
 import { isValidByteCount } from "../utils/formatBytes";
 import {
   normalizeCodexCorrelationId,
+  isCodexCompanionPageRecord,
   readCodexAsyncQuestionMessage,
   readCodexControlToolKind,
   readCodexRolloutRecordKind,
 } from "../sessions/codexRolloutCompatibility";
+import { antigravityReader } from "../antigravity/antigravityReader";
+import { normalizeFsPathKey } from "../utils/fsUtils";
+import { buildAntigravitySearch } from "../antigravity/antigravitySearch";
+import { isAntigravityProgressId } from "../antigravity/antigravityIdentity";
+import type { AntigravitySessionData } from "../antigravity/antigravityReaderTypes";
 
-const SEARCH_INDEX_FILE_VERSION = 37;
+export type { SearchIndexPreparedSnapshot, SearchIndexReadSnapshot, SearchIndexScanReader } from "./searchIndexReader";
+
+const SEARCH_INDEX_FILE_VERSION = 38;
 const SEARCH_STAT_CONCURRENCY = 8;
 const MAX_COMMAND_META_LENGTH = 1000;
 const MAX_RECURSIVE_META_DEPTH = 5;
@@ -71,7 +88,7 @@ export type IndexedSearchRole = "user" | "assistant" | "developer" | "tool";
 export interface IndexedSearchMessage {
   readonly inputId?: string;
   readonly progressId?: string;
-  readonly progressKind?: "narration" | "thinking";
+  readonly progressKind?: "narration" | "thinking" | "queuedInput";
   readonly messageIndex: number;
   readonly role: IndexedSearchRole;
   readonly source: "message" | "toolArguments" | "toolOutput";
@@ -95,29 +112,31 @@ export interface SearchIndexEntryV1 {
   readonly fileChangeHints?: readonly IndexedFileChangeHint[];
 }
 
-export interface SearchIndexReadSnapshot {
-  readonly getMessages: (cacheKey: string) => readonly IndexedSearchMessage[] | null;
-  readonly getFileChangeHints: (cacheKey: string) => readonly IndexedFileChangeHint[] | null;
-  readonly iterateToolTexts?: (cacheKey: string, checkpoint: () => Promise<void>) => AsyncIterable<string>;
-}
+export type SearchIndexEntryStamp = Omit<SearchIndexEntryV1, "messages" | "fileChangeHints">;
 
-interface SearchIndexContext {
+export interface SearchIndexContext {
+  storageContractFingerprint: string;
   codexSessionsRoot: string;
   codexArchivedSessionsRoot: string;
   claudeSessionsRoot: string;
+  antigravitySessionsRootsKey: string;
   includeCodex: boolean;
   includeCodexArchived: boolean;
   includeClaude: boolean;
+  includeAntigravity: boolean;
   indexToolContent: SearchIndexToolContent;
 }
 
 export interface SearchIndexCacheContext {
+  storageContractFingerprint?: string;
   codexSessionsRoot: string;
   codexArchivedSessionsRoot?: string;
   claudeSessionsRoot: string;
+  antigravitySessionsRootsKey?: string;
   includeCodex: boolean;
   includeCodexArchived?: boolean;
   includeClaude: boolean;
+  includeAntigravity?: boolean;
   indexToolContent?: SearchIndexToolContent;
 }
 
@@ -145,12 +164,13 @@ interface SearchIndexReadSignature {
   readonly entryIdentities: readonly (object | null)[];
 }
 
-interface SearchFileObservationOk {
+export interface SearchFileObservationOk {
   readonly kind: "ok";
   readonly mtimeMs: number;
   readonly size: number;
   readonly historyPlan?: CodexLogicalHistoryPlan;
   readonly historySignature?: string;
+  readonly antigravityData?: AntigravitySessionData;
 }
 
 type SearchFileObservation =
@@ -173,18 +193,39 @@ class SearchIndexObservationIncompleteError extends Error {
   }
 }
 
+export interface SearchIndexEnsureParams {
+  index: HistoryIndex;
+  sessionInventory?: readonly SessionSummary[];
+  codexSessionsRoot: string;
+  codexArchivedSessionsRoot: string;
+  claudeSessionsRoot: string;
+  antigravitySessionsRoots?: readonly string[];
+  includeCodex: boolean;
+  includeCodexArchived: boolean;
+  includeClaude: boolean;
+  includeAntigravity?: boolean;
+  indexToolContent: SearchIndexToolContent;
+  token?: vscode.CancellationToken;
+  progress?: vscode.Progress<{ message?: string; increment?: number }>;
+  forceRebuild?: boolean;
+  performanceProbe?: PerformanceProbe;
+}
+
 // Maintains an incremental on-disk search index for session files.
 export class SearchIndexService {
   private readonly cacheUri: vscode.Uri;
   private readonly logger?: DebugLogger;
   private loaded = false;
   private context: SearchIndexContext = {
+    storageContractFingerprint: STORAGE_CONTRACT_FINGERPRINT,
     codexSessionsRoot: "",
     codexArchivedSessionsRoot: "",
     claudeSessionsRoot: "",
+    antigravitySessionsRootsKey: "[]",
     includeCodex: true,
     includeCodexArchived: false,
     includeClaude: false,
+    includeAntigravity: false,
     indexToolContent: "toolCallsAndOutputs",
   };
   private entries = new Map<string, SearchIndexEntryV1>();
@@ -192,30 +233,18 @@ export class SearchIndexService {
   private readGeneration: SearchIndexReadGeneration | undefined;
   private readonly semanticIdentityByEntry = new WeakMap<SearchIndexEntryV1, object>();
   private operationQueue: Promise<void> = Promise.resolve();
+  private readonly sqliteSearch?: SqliteSearchIndexService;
 
-  constructor(globalStorageUri: vscode.Uri, logger?: DebugLogger) {
+  constructor(globalStorageUri: vscode.Uri, logger?: DebugLogger, private readonly sqliteCache?: SqliteCacheStore) {
     this.cacheUri = vscode.Uri.joinPath(globalStorageUri, SEARCH_INDEX_FILE_NAME);
     this.logger = logger;
+    this.sqliteSearch = sqliteCache ? new SqliteSearchIndexService(sqliteCache) : undefined;
   }
 
-  public ensureUpToDate(params: {
-    index: HistoryIndex;
-    sessionInventory?: readonly SessionSummary[];
-    codexSessionsRoot: string;
-    codexArchivedSessionsRoot: string;
-    claudeSessionsRoot: string;
-    includeCodex: boolean;
-    includeCodexArchived: boolean;
-    includeClaude: boolean;
-    indexToolContent: SearchIndexToolContent;
-    token?: vscode.CancellationToken;
-    progress?: vscode.Progress<{ message?: string; increment?: number }>;
-    forceRebuild?: boolean;
-    performanceProbe?: PerformanceProbe;
-  }): Promise<SearchIndexReadSnapshot> {
+  public ensureUpToDate(params: SearchIndexEnsureParams): Promise<SearchIndexPreparedSnapshot> {
     const operation = this.operationQueue.then(
-      () => this.ensureUpToDateCore(params),
-      () => this.ensureUpToDateCore(params),
+      () => this.prepareSearchIndex(params),
+      () => this.prepareSearchIndex(params),
     );
     this.operationQueue = operation.then(
       () => undefined,
@@ -224,21 +253,27 @@ export class SearchIndexService {
     return operation;
   }
 
-  private async ensureUpToDateCore(params: {
-    index: HistoryIndex;
-    sessionInventory?: readonly SessionSummary[];
-    codexSessionsRoot: string;
-    codexArchivedSessionsRoot: string;
-    claudeSessionsRoot: string;
-    includeCodex: boolean;
-    includeCodexArchived: boolean;
-    includeClaude: boolean;
-    indexToolContent: SearchIndexToolContent;
-    token?: vscode.CancellationToken;
-    progress?: vscode.Progress<{ message?: string; increment?: number }>;
-    forceRebuild?: boolean;
-    performanceProbe?: PerformanceProbe;
-  }): Promise<SearchIndexReadSnapshot> {
+  private async prepareSearchIndex(params: SearchIndexEnsureParams): Promise<SearchIndexPreparedSnapshot> {
+    if (this.sqliteSearch && await this.sqliteCache?.ready()) {
+      try { return await this.sqliteSearch.ensureUpToDate(params); }
+      catch (error) {
+        if (params.forceRebuild || params.token?.isCancellationRequested || !this.canRetryWithLegacy(error)) throw error;
+      }
+    }
+    const snapshot = await this.ensureUpToDateCore(params);
+    const prepared = prepareLegacySearchSnapshot(snapshot, this.entries, this.readableKeys);
+    return Object.freeze({ ...prepared, unavailableSources: Object.freeze(
+      (params.sessionInventory ?? params.index.sessions).some(session =>
+        session.source === "antigravity" && !this.readableKeys.has(session.cacheKey)) ? ["antigravity" as const] : [],
+    ) });
+  }
+
+  public canRetryWithLegacy(error: unknown): boolean {
+    return error instanceof SqliteCacheError && this.sqliteCache?.getStatus().backend === "legacy"
+      && ["worker", "disposed", "io", "full", "corrupt", "invalidData", "resourceLimit", "schema"].includes(error.code);
+  }
+
+  private async ensureUpToDateCore(params: SearchIndexEnsureParams): Promise<SearchIndexReadSnapshot> {
     const totalStartedAt = nowMs();
     const { index, token, progress, forceRebuild, performanceProbe } = params;
     const sessions = params.sessionInventory ?? index.sessions;
@@ -253,12 +288,15 @@ export class SearchIndexService {
     let writeMs = 0;
 
     const context: SearchIndexContext = {
+      storageContractFingerprint: STORAGE_CONTRACT_FINGERPRINT,
       codexSessionsRoot: params.codexSessionsRoot,
       codexArchivedSessionsRoot: params.codexArchivedSessionsRoot,
       claudeSessionsRoot: params.claudeSessionsRoot,
+      antigravitySessionsRootsKey: JSON.stringify((params.antigravitySessionsRoots ?? params.index.roots?.antigravitySessionsRoots ?? []).map(normalizeFsPathKey)),
       includeCodex: params.includeCodex,
       includeCodexArchived: params.includeCodexArchived,
       includeClaude: params.includeClaude,
+      includeAntigravity: params.includeAntigravity === true,
       indexToolContent: params.indexToolContent,
     };
     throwIfCancelled(token);
@@ -293,12 +331,15 @@ export class SearchIndexService {
       SEARCH_STAT_CONCURRENCY,
       async (session) => {
         throwIfCancelled(token);
+        // Native observations own full conversation DTOs; defer them until their projection slot.
+        if (session.source === "antigravity") return undefined;
         const observation = await observeSearchFile(
           session,
           historyInventory,
           "initial",
           performanceProbe,
           workingState.entries.get(session.cacheKey),
+          token,
         );
         throwIfCancelled(token);
         return observation;
@@ -312,7 +353,10 @@ export class SearchIndexService {
       const session = sessions[i]!;
       progress?.report({ message: `index ${i + 1}/${total}` });
 
-      const observed = observations[i]!;
+      let observed = observations[i] ?? await observeSearchFile(
+        session, historyInventory, "initial", performanceProbe, workingState.entries.get(session.cacheKey), token,
+      );
+      throwIfCancelled(token);
       if (observed.kind === "unchanged") {
         cacheHit += 1;
         performanceProbe?.add("cacheHitCount");
@@ -326,10 +370,11 @@ export class SearchIndexService {
       }
       if (observed.kind === "transient") {
         statMiss += 1;
-        if (!workingState.entries.has(session.cacheKey)) {
+        if (session.source !== "antigravity" && !workingState.entries.has(session.cacheKey)) {
           hasUnretainedTransientObservation = true;
         }
         performanceProbe?.setOutcome("partial");
+        if (session.source === "antigravity") readableKeys.delete(session.cacheKey);
         continue;
       }
 
@@ -337,6 +382,7 @@ export class SearchIndexService {
       performanceProbe?.add("cacheMissCount");
 
       let input = observed;
+      observed = releaseAntigravityObservationData(observed);
       let nextEntry: SearchIndexEntryV1 | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const buildStartedAt = nowMs();
@@ -347,19 +393,27 @@ export class SearchIndexService {
           source: session.source,
           sessionInventory: historyInventory,
           historyPlan: input.historyPlan,
+          antigravityData: input.antigravityData,
           performanceProbe,
         });
+        input = releaseAntigravityObservationData(input);
         buildMs += elapsedMs(buildStartedAt);
         throwIfCancelled(token);
-        const verified = await observeSearchFile(
+        let verified = await observeSearchFile(
           session,
           historyInventory,
           "postScan",
           performanceProbe,
+          undefined,
+          token,
         );
         throwIfCancelled(token);
-        if (verified.kind === "transient") throw new SearchIndexObservationIncompleteError();
+        if (verified.kind === "transient") {
+          if (session.source === "antigravity") break;
+          throw new SearchIndexObservationIncompleteError();
+        }
         if (verified.kind === "ok" && areSameSearchFileObservation(input, verified)) {
+          verified = releaseAntigravityObservationData(verified);
           nextEntry = await freezeSearchIndexEntry({
             fsPath: session.fsPath,
             mtimeMs: input.mtimeMs,
@@ -372,8 +426,10 @@ export class SearchIndexService {
         }
         if (attempt === 0 && verified.kind === "ok") {
           input = verified;
+          verified = releaseAntigravityObservationData(verified);
           continue;
         }
+        if (verified.kind === "ok") verified = releaseAntigravityObservationData(verified);
         break;
       }
       if (!nextEntry) {
@@ -417,11 +473,13 @@ export class SearchIndexService {
         continue;
       }
       if (confirmed.kind === "transient") {
-        if (!workingState.entries.has(session.cacheKey)) {
+        if (session.source === "antigravity") readableKeys.delete(session.cacheKey);
+        else if (!workingState.entries.has(session.cacheKey)) {
           hasUnretainedTransientObservation = true;
         }
         continue;
       }
+      readableKeys.delete(session.cacheKey);
       if (workingState.entries.has(session.cacheKey)) {
         ensureWritableEntries();
         workingState.entries.delete(session.cacheKey);
@@ -557,7 +615,7 @@ export class SearchIndexService {
       return previousGeneration.snapshot;
     }
 
-    const snapshot = createSearchIndexReadSnapshot(state.entries, readableKeys, performanceProbe);
+    const snapshot = createSearchIndexReadSnapshot(performanceProbe);
     this.readGeneration = Object.freeze({
       signature,
       snapshot,
@@ -581,7 +639,7 @@ export class SearchIndexService {
   }
 }
 
-async function mapSearchWithConcurrency<T, R>(
+export async function mapSearchWithConcurrency<T, R>(
   items: readonly T[],
   concurrency: number,
   mapper: (item: T, index: number) => Promise<R>,
@@ -610,25 +668,29 @@ async function mapSearchWithConcurrency<T, R>(
   return results;
 }
 
-async function observeSearchFile(
+export async function observeSearchFile(
   session: SessionSummary,
   historyInventory: readonly SessionSummary[],
   phase: "initial" | "postScan",
   performanceProbe?: PerformanceProbe,
+  unchangedEntry?: undefined,
+  token?: vscode.CancellationToken,
 ): Promise<SearchFileObservation>;
-async function observeSearchFile(
+export async function observeSearchFile(
   session: SessionSummary,
   historyInventory: readonly SessionSummary[],
   phase: "initial" | "postScan",
   performanceProbe: PerformanceProbe | undefined,
-  unchangedEntry: SearchIndexEntryV1 | undefined,
+  unchangedEntry: SearchIndexEntryStamp | undefined,
+  token?: vscode.CancellationToken,
 ): Promise<SearchInitialFileObservation>;
-async function observeSearchFile(
+export async function observeSearchFile(
   session: SessionSummary,
   historyInventory: readonly SessionSummary[],
   phase: "initial" | "postScan",
   performanceProbe?: PerformanceProbe,
-  unchangedEntry?: SearchIndexEntryV1,
+  unchangedEntry?: SearchIndexEntryStamp,
+  token?: vscode.CancellationToken,
 ): Promise<SearchInitialFileObservation> {
   let stat: vscode.FileStat;
   try {
@@ -645,11 +707,12 @@ async function observeSearchFile(
     return SEARCH_FILE_TRANSIENT;
   }
   try {
+    const antigravityData = session.source === "antigravity" ? await antigravityReader.readSession(session.fsPath, token) : undefined;
     const historyPlan =
       session.source === "codex" && session.meta.codexHistoryBase
         ? await resolveCodexLogicalHistoryPlan(session.fsPath, historyInventory)
         : undefined;
-    const historySignature = historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
+    const historySignature = antigravityData ? `antigravity:${antigravityData.digest}` : historyPlan ? buildHistoryPlanSignature(historyPlan) : undefined;
     if (
       unchangedEntry &&
       unchangedEntry.fsPath === session.fsPath &&
@@ -665,13 +728,14 @@ async function observeSearchFile(
       size: stat.size,
       ...(historyPlan ? { historyPlan } : {}),
       ...(historySignature ? { historySignature } : {}),
+      ...(antigravityData ? { antigravityData } : {}),
     };
   } catch {
     return SEARCH_FILE_TRANSIENT;
   }
 }
 
-function areSameSearchFileObservation(
+export function areSameSearchFileObservation(
   left: SearchFileObservationOk,
   right: SearchFileObservationOk,
 ): boolean {
@@ -680,40 +744,17 @@ function areSameSearchFileObservation(
     left.historySignature === right.historySignature;
 }
 
+export function releaseAntigravityObservationData(observation: SearchFileObservationOk): SearchFileObservationOk {
+  // Stamps outlive projection; full native DTOs must not remain in suspended loop frames.
+  return observation.antigravityData ? { ...observation, antigravityData: undefined } : observation;
+}
+
 function createSearchIndexReadSnapshot(
-  entries: ReadonlyMap<string, SearchIndexEntryV1>,
-  readableKeys: ReadonlySet<string>,
   performanceProbe?: PerformanceProbe,
 ): SearchIndexReadSnapshot {
-  // Keep readers isolated from later operation-queue publications.
-  performanceProbe?.add("mapMaterializationCount");
+  // The immutable ticket, rather than the reusable semantic factory, owns the entry map.
   performanceProbe?.add("snapshotGenerationCount");
-  const snapshotEntries = new Map<string, SearchIndexEntryV1>();
-  for (const cacheKey of readableKeys) {
-    const entry = entries.get(cacheKey);
-    if (entry) snapshotEntries.set(cacheKey, entry);
-  }
-  return Object.freeze({
-    getMessages: (cacheKey: string): readonly IndexedSearchMessage[] | null =>
-      snapshotEntries.get(cacheKey)?.messages ?? null,
-    getFileChangeHints: (cacheKey: string): readonly IndexedFileChangeHint[] | null =>
-      snapshotEntries.get(cacheKey)?.fileChangeHints ?? null,
-    iterateToolTexts: async function* (cacheKey: string, checkpoint: () => Promise<void>): AsyncIterable<string> {
-      await checkpoint();
-      const entry = snapshotEntries.get(cacheKey);
-      if (!entry) return;
-      const reader = packedSearchIndexEntries.get(entry);
-      if (reader) {
-        yield* reader.iterateToolTexts(checkpoint);
-        return;
-      }
-      // Preserve internal raw-entry compatibility without inspecting ordinary message text.
-      for (const message of entry.messages) {
-        await checkpoint();
-        if (message.source === "toolArguments" || message.source === "toolOutput") yield message.text;
-      }
-    },
-  });
+  return createLegacySearchSnapshot(entry => packedSearchIndexEntries.get(entry));
 }
 
 function buildSearchIndexReadSignature(
@@ -878,18 +919,25 @@ function buildHistoryPlanSignature(plan: CodexLogicalHistoryPlan): string {
   return plan.signature;
 }
 
-async function buildIndexedSession(
+export async function buildIndexedSession(
   fsPath: string,
   options: {
     claudeSessionsRoot?: string;
     indexToolContent: SearchIndexToolContent;
     token?: vscode.CancellationToken;
-    source?: "codex" | "claude";
+    source?: SessionSource;
+    antigravityData?: AntigravitySessionData;
     sessionInventory?: readonly SessionSummary[];
     historyPlan?: CodexLogicalHistoryPlan;
     performanceProbe?: PerformanceProbe;
   },
 ): Promise<{ messages: IndexedSearchMessage[]; fileChangeHints: IndexedFileChangeHint[] }> {
+  if (options.source === "antigravity" || path.extname(fsPath).toLowerCase() === ".db") {
+    const data = options.antigravityData ?? await antigravityReader.readSession(fsPath, options.token);
+    const locator = antigravityReader.locator(fsPath);
+    throwIfCancelled(options.token);
+    return buildAntigravitySearch(data, fsPath, locator.rootPath, options.indexToolContent);
+  }
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
   const state: BuildState = {
     messages: [],
@@ -917,7 +965,7 @@ async function buildIndexedSession(
   })) {
     throwIfCancelled(options.token);
     const obj = record.value;
-    if (source === "claude") {
+    if (source === "claude" && !isClaudeVoiceCallRecord(obj)) {
       const input = queuedInputs.accept(obj, record.lineIndex);
       if (input) {
         state.messages.push({ messageIndex: Math.max(1, state.messageIndex), role: "user", source: "message",
@@ -949,6 +997,19 @@ interface BuildState {
 }
 
 async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
+  const restricted = readCodexAnswerRestriction(obj);
+  if (restricted?.kind === "message") {
+    if (restricted.searchIndex) state.messageIndex += 1;
+    return true;
+  }
+  if (restricted?.kind === "event") {
+    const question = restricted.asyncQuestion;
+    if (question && !state.seenCodexAsyncQuestionIds.has(question.itemId)) {
+      state.seenCodexAsyncQuestionIds.add(question.itemId);
+      if (question.hadText) state.messageIndex += 1;
+    }
+    return true;
+  }
   if (obj?.type === "event_msg") {
     const asyncQuestion = obj?.payload?.type === "item_completed"
       ? readCodexAsyncQuestionMessage(obj)
@@ -987,6 +1048,7 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
   if (obj?.type !== "response_item") {
     return readCodexRolloutRecordKind(obj) !== undefined;
   }
+  if (isCodexCompanionPageRecord(obj)) return true;
   const payloadType = obj?.payload?.type;
 
   if (payloadType === "message") {
@@ -1162,6 +1224,10 @@ async function indexCodexRecord(obj: any, state: BuildState): Promise<boolean> {
 }
 
 async function indexClaudeRecord(obj: any, state: BuildState, lineIndex: number): Promise<boolean> {
+  if (isClaudeVoiceCallRecord(obj)) {
+    state.messageIndex += (await readClaudeVoiceCallLegacyPresentation(obj)).messageIncrement;
+    return true;
+  }
   const role = detectClaudeMessageRole(obj);
   if (!role) return false;
 
@@ -1258,6 +1324,16 @@ async function indexClaudeRecord(obj: any, state: BuildState, lineIndex: number)
         source: "toolArguments",
         text: args,
       });
+    }
+  }
+
+  if (indexToolCalls || indexToolOutputs) {
+    for (const advisor of readClaudeAdvisorEvents(obj)) {
+      if (advisor.status === "called" && indexToolCalls) {
+        state.messages.push({ messageIndex: anchor, role: "tool", source: "toolArguments", text: "advisor" });
+      } else if (advisor.text && indexToolOutputs) {
+        state.messages.push({ messageIndex: anchor, role: "tool", source: "toolOutput", text: normalizeWhitespace(advisor.text) });
+      }
     }
   }
 
@@ -1773,11 +1849,14 @@ function isValidCacheHeader(value: unknown): value is Pick<SearchIndexFileV2, "v
   const obj = value as any;
   if (obj.version !== SEARCH_INDEX_FILE_VERSION) return false;
   if (!obj.context || typeof obj.context !== "object") return false;
+  if (obj.context.storageContractFingerprint !== STORAGE_CONTRACT_FINGERPRINT) return false;
   if (typeof obj.context.codexSessionsRoot !== "string") return false;
   if (obj.context.codexArchivedSessionsRoot !== undefined && typeof obj.context.codexArchivedSessionsRoot !== "string") {
     return false;
   }
   if (typeof obj.context.claudeSessionsRoot !== "string") return false;
+  if (obj.context.antigravitySessionsRootsKey !== undefined && typeof obj.context.antigravitySessionsRootsKey !== "string") return false;
+  if (obj.context.includeAntigravity !== undefined && typeof obj.context.includeAntigravity !== "boolean") return false;
   if (typeof obj.context.includeCodex !== "boolean") return false;
   if (obj.context.includeCodexArchived !== undefined && typeof obj.context.includeCodexArchived !== "boolean") {
     return false;
@@ -1799,14 +1878,17 @@ function isValidCacheFile(value: unknown): value is SearchIndexFileV2 {
   return true;
 }
 
-function normalizeContext(context: SearchIndexCacheContext): SearchIndexContext {
+export function normalizeContext(context: SearchIndexCacheContext): SearchIndexContext {
   return {
+    storageContractFingerprint: context.storageContractFingerprint ?? "",
     codexSessionsRoot: normalizePathKey(context.codexSessionsRoot),
     codexArchivedSessionsRoot: normalizePathKey(context.codexArchivedSessionsRoot ?? ""),
     claudeSessionsRoot: normalizePathKey(context.claudeSessionsRoot),
+    antigravitySessionsRootsKey: context.antigravitySessionsRootsKey ?? "[]",
     includeCodex: !!context.includeCodex,
     includeCodexArchived: !!context.includeCodexArchived,
     includeClaude: !!context.includeClaude,
+    includeAntigravity: context.includeAntigravity === true,
     indexToolContent: normalizeSearchIndexToolContent(context.indexToolContent),
   };
 }
@@ -1815,12 +1897,15 @@ function isSameContext(left: SearchIndexCacheContext, right: SearchIndexCacheCon
   const a = normalizeContext(left);
   const b = normalizeContext(right);
   return (
+    a.storageContractFingerprint === b.storageContractFingerprint &&
     a.codexSessionsRoot === b.codexSessionsRoot &&
     a.codexArchivedSessionsRoot === b.codexArchivedSessionsRoot &&
     a.claudeSessionsRoot === b.claudeSessionsRoot &&
+    a.antigravitySessionsRootsKey === b.antigravitySessionsRootsKey &&
     a.includeCodex === b.includeCodex &&
     a.includeCodexArchived === b.includeCodexArchived &&
     a.includeClaude === b.includeClaude &&
+    a.includeAntigravity === b.includeAntigravity &&
     a.indexToolContent === b.indexToolContent
   );
 }
@@ -1838,7 +1923,16 @@ function normalizePathKey(fsPath: string): string {
   return normalized.toLowerCase();
 }
 
-function isValidCacheEntry(value: unknown): value is SearchIndexEntryV1 {
+export function isValidSearchIndexStamp(value: unknown): value is SearchIndexEntryStamp {
+  if (!value || typeof value !== "object") return false;
+  const obj = value as Record<string, unknown>;
+  return typeof obj.fsPath === "string" && typeof obj.mtimeMs === "number" && Number.isFinite(obj.mtimeMs)
+    && typeof obj.size === "number" && Number.isFinite(obj.size)
+    && (obj.historySignature === undefined || (typeof obj.historySignature === "string"
+      && obj.historySignature.length > 0 && obj.historySignature.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(obj.historySignature)));
+}
+
+export function isValidCacheEntry(value: unknown): value is SearchIndexEntryV1 {
   if (!value || typeof value !== "object") return false;
   if (packedSearchIndexEntries.has(value as SearchIndexEntryV1)) return true;
   const obj = value as any;
@@ -1855,24 +1949,7 @@ function isValidCacheEntry(value: unknown): value is SearchIndexEntryV1 {
     )
   ) return false;
   if (!Array.isArray(obj.messages)) return false;
-  for (const m of obj.messages) {
-    if (!m || typeof m !== "object") return false;
-    if (typeof (m as any).messageIndex !== "number" || !Number.isFinite((m as any).messageIndex)) return false;
-    const role = (m as any).role;
-    if (role !== "user" && role !== "assistant" && role !== "developer" && role !== "tool") return false;
-    const source = (m as any).source;
-    if (source !== "message" && source !== "toolArguments" && source !== "toolOutput") return false;
-    if (typeof (m as any).text !== "string") return false;
-    const progressId = (m as any).progressId;
-    const progressKind = (m as any).progressKind;
-    const inputId = (m as any).inputId;
-    if (inputId !== undefined && (!isClaudeQueuedInputId(inputId) || role !== "user" || source !== "message" ||
-        progressId !== undefined || progressKind !== undefined)) return false;
-    if (progressId !== undefined) {
-      if (!isClaudeProgressId(progressId) || (progressKind !== "narration" && progressKind !== "thinking") ||
-        role !== "assistant" || source !== "message") return false;
-    } else if (progressKind !== undefined) return false;
-  }
+  for (const m of obj.messages) if (!isValidIndexedSearchMessage(m)) return false;
   if (obj.fileChangeHints !== undefined) {
     if (!Array.isArray(obj.fileChangeHints)) return false;
     for (const hint of obj.fileChangeHints) {
@@ -1885,5 +1962,27 @@ function isValidCacheEntry(value: unknown): value is SearchIndexEntryV1 {
       if (typeof h.hasDiffLikeContent !== "boolean") return false;
     }
   }
+  return true;
+}
+
+export function isValidIndexedSearchMessage(m: unknown): m is IndexedSearchMessage {
+  if (!m || typeof m !== "object") return false;
+  if (typeof (m as any).messageIndex !== "number" || !Number.isFinite((m as any).messageIndex)) return false;
+  const role = (m as any).role;
+  if (role !== "user" && role !== "assistant" && role !== "developer" && role !== "tool") return false;
+  const source = (m as any).source;
+  if (source !== "message" && source !== "toolArguments" && source !== "toolOutput") return false;
+  if (typeof (m as any).text !== "string") return false;
+  const progressId = (m as any).progressId;
+  const progressKind = (m as any).progressKind;
+  const inputId = (m as any).inputId;
+  if (inputId !== undefined && (!isClaudeQueuedInputId(inputId) || role !== "user" || source !== "message" ||
+      progressId !== undefined || progressKind !== undefined)) return false;
+  if (progressId !== undefined) {
+    const native = isAntigravityProgressId(progressId);
+    if ((!native && !isClaudeProgressId(progressId)) || source !== "message" ||
+      (native ? (progressKind !== "thinking" || role !== "assistant") && (progressKind !== "queuedInput" || role !== "user")
+        : (progressKind !== "narration" && progressKind !== "thinking") || role !== "assistant")) return false;
+  } else if (progressKind !== undefined) return false;
   return true;
 }

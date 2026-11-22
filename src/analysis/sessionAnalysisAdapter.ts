@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { isClaudeVoiceCallRecord } from "../chat/claudeVoiceCall";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import {
   createChatTimelineRecordAccumulator,
@@ -20,6 +21,7 @@ import type {
   ChatTimelineItem,
   ChatTokenUsage,
   ChatTokenUsageField,
+  ChatToolItem,
   ChatTurnSummary,
   ChatUsageItem,
 } from "../chat/chatTypes";
@@ -44,6 +46,7 @@ import {
   normalizeSessionAnalysisProjectCwd,
   normalizeSessionAnalysisTimestamp,
   SESSION_ANALYSIS_CLAUDE_PARSER_VERSION,
+  SESSION_ANALYSIS_ANTIGRAVITY_PARSER_VERSION,
   SESSION_ANALYSIS_CODEX_PARSER_VERSION,
   SESSION_ANALYSIS_MAX_FILE_CHANGE_ENTRIES,
   SESSION_ANALYSIS_MAX_PATH_LENGTH,
@@ -67,6 +70,8 @@ import {
   readAnalysisRecordEnvelopes,
   type AnalysisRecordEnvelope,
 } from "./analysisRecordPipeline";
+import { AntigravitySessionAnalysisAdapter } from "./antigravitySessionAnalysisAdapter";
+import type { AntigravitySessionData } from "../antigravity/antigravityReaderTypes";
 
 const MAX_WARNINGS = 20;
 const MAX_GRAPH_PREVIEW_LENGTH = 180;
@@ -86,6 +91,7 @@ export interface SessionAnalysisAdapterInput {
   sessionInventory?: readonly SessionSummary[];
   historyPlan?: CodexLogicalHistoryPlan;
   historySignature?: string;
+  antigravityData?: AntigravitySessionData;
   performanceProbe?: PerformanceProbe;
   token?: { readonly isCancellationRequested: boolean };
   cancellationErrorFactory?: () => Error;
@@ -200,6 +206,13 @@ export class ClaudeSessionAnalysisAdapter {
 }
 
 export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Promise<SessionAnalysisEntry> {
+  if (input.session.source === "antigravity") {
+    try { return await new AntigravitySessionAnalysisAdapter().analyze(input); }
+    catch (error) {
+      if (input.token?.isCancellationRequested) throw input.cancellationErrorFactory?.() ?? error;
+      return buildFailedEntry(input, error);
+    }
+  }
   const { session } = input;
   const warnings: string[] = [];
   try {
@@ -255,13 +268,14 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
       (session.lastActivityAtIso !== undefined && lastActivityAtIso === undefined);
     if (timestampInvalid && !warnings.includes("timestampInvalid")) warnings.push("timestampInvalid");
 
-    const messageStats = buildMessageStats(model.items, model.turns, session.source, availability);
-    if (model.items.some((item) => item.type === "tool" && item.name.trim().length > MAX_TOOL_NAME_LENGTH)) {
+    const tools = model.items.filter((item): item is ChatToolItem => item.type === "tool" && !item.advisor);
+    const messageStats = buildMessageStats(model.items, tools, model.turns, session.source, availability);
+    if (tools.some((tool) => tool.name.trim().length > MAX_TOOL_NAME_LENGTH)) {
       warnings.push("toolNameTruncated");
     }
     if (
       messageStats.toolUsage.length >= MAX_TOOL_USAGE &&
-      new Set(model.items.filter((item) => item.type === "tool").map((item) => normalizeToolName(item.name))).size > MAX_TOOL_USAGE
+      new Set(tools.map((tool) => normalizeToolName(tool.name))).size > MAX_TOOL_USAGE
     ) {
       warnings.push(`toolUsageLimit:${MAX_TOOL_USAGE}`);
     }
@@ -332,12 +346,12 @@ export async function analyzeSessionFile(input: SessionAnalysisAdapterInput): Pr
 
 function buildMessageStats(
   items: readonly ChatTimelineItem[],
+  tools: readonly ChatToolItem[],
   turns: readonly ChatTurnSummary[] | undefined,
   source: SessionSummary["source"],
   availability: AnalysisAvailability,
 ): SessionMessageStats {
   const messages = items.filter((item): item is ChatMessageItem => item.type === "message");
-  const tools = items.filter((item) => item.type === "tool");
   const available = (value: number): AnalysisNumber => ({ value, availability });
   const unavailable = (): AnalysisNumber => ({ availability: "unavailable" });
   const codexTurns = source === "codex" ? turns ?? [] : [];
@@ -806,6 +820,7 @@ async function runAnalysisRecordPipeline(
 ): Promise<{ model: ChatSessionModel; scan: JsonlScanResult }> {
   const { session } = input;
   throwIfAnalysisCancelled(input);
+  if (session.source === "antigravity") throw new Error("Native Antigravity records cannot enter the JSONL pipeline.");
   const chat = await createChatTimelineRecordAccumulator(
     session.fsPath,
     session.source,
@@ -1012,7 +1027,7 @@ async function buildRawClaudeRecord(
 ): Promise<RawClaudeRecordBuildResult> {
   const role = detectClaudeMaterializedMessageRole(obj);
   const rawContent = getClaudeMessageContent(obj);
-  const isCrossSessionInbound = isClaudeInternalUserRecord(obj);
+  const isCrossSessionInbound = isClaudeInternalUserRecord(obj) || isClaudeVoiceCallRecord(obj);
   const pastedPrompt = role === "user" && !isCrossSessionInbound
     ? await pastedPromptResolver?.resolve(obj, rawContent)
     : undefined;
@@ -1070,7 +1085,7 @@ async function buildRawClaudeRecord(
       type,
       ...(promptId.value ? { promptId: promptId.value } : {}),
       ...(requestId.value ? { requestId: requestId.value } : {}),
-      isMeta: obj?.isMeta === true,
+      isMeta: obj?.isMeta === true || isClaudeVoiceCallRecord(obj),
       ...(typeof obj?.isSidechain === "boolean" ? { isSidechain: obj.isSidechain } : {}),
       ...(subtype.value ? { subtype: subtype.value } : {}),
       compactBoundary: subtype.value === "compact_boundary" || type === "compact_boundary",
@@ -1353,7 +1368,7 @@ function buildUnavailableEntry(
     size: input.size,
     ...(input.historySignature ? { historySignature: input.historySignature } : {}),
     parserVersion:
-      input.session.source === "codex" ? SESSION_ANALYSIS_CODEX_PARSER_VERSION : SESSION_ANALYSIS_CLAUDE_PARSER_VERSION,
+      input.session.source === "codex" ? SESSION_ANALYSIS_CODEX_PARSER_VERSION : input.session.source === "antigravity" ? SESSION_ANALYSIS_ANTIGRAVITY_PARSER_VERSION : SESSION_ANALYSIS_CLAUDE_PARSER_VERSION,
     completeness,
     messageStats,
     usageStats: emptyUsageStats(),

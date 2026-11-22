@@ -1,6 +1,8 @@
 import { readClaudeAgentMetadata, claudeAgentIdentity, parseClaudeAgentPath } from "../agents/claudeAgentMetadata";
+import { isClaudeVoiceCallRecord } from "../chat/claudeVoiceCall";
 import { resolveClaudeAgentHistory } from "./claudeAgentHistory";
 import { createSessionReadStream, readJsonlLines } from "../utils/sessionFileReader";
+import { CodexAnswerVisibility } from "./codexAnswerVisibility";
 import * as path from "node:path";
 import { extractClaudeTerminalOutput } from "../chat/claudeTerminalOutput";
 import { formatTimeHmInTimeZone, toYmdInTimeZone, ymdToString } from "../utils/dateUtils";
@@ -48,6 +50,9 @@ import {
 } from "./codexHistoryBase";
 import type { PerformanceProbe } from "../performance/performanceCounters";
 import { CodexRollbackTracker, type CodexRollbackProjection } from "./codexRollbackHistory";
+import { antigravityReader } from "../antigravity/antigravityReader";
+import { projectAntigravityChat } from "../antigravity/antigravityChatModel";
+import { antigravitySessionIdentity, antigravityWorkspacePath, buildAntigravitySessionSummary } from "../antigravity/antigravitySessionSummary";
 
 const META_SCAN_LINE_LIMIT = 400;
 
@@ -56,6 +61,11 @@ export async function tryReadSessionMeta(
   fsPath: string,
   performanceProbe?: PerformanceProbe,
 ): Promise<SessionMetaInfo | null> {
+  if (path.extname(fsPath).toLowerCase() === ".db") {
+    const metadata = await antigravityReader.readMetadata(fsPath);
+    return { id: metadata.conversationId, timestampIso: metadata.createdAtIso, cwd: antigravityWorkspacePath(metadata.workspaceUris), historySource: "antigravity",
+      antigravity: { profile: "sqliteStepsV1", availability: "metadataOnly", issues: [] } };
+  }
   performanceProbe?.add("segmentCount");
   performanceProbe?.add("streamOpenCount");
   const stream = createSessionReadStream(fsPath);
@@ -264,6 +274,19 @@ export async function readPreviewMessages(
     performanceProbe?: PerformanceProbe;
   } = {},
 ): Promise<PreviewMessage[]> {
+  if (options.source === "antigravity" || path.extname(fsPath).toLowerCase() === ".db") {
+    if (!Number.isSafeInteger(maxMessages) || maxMessages <= 0) return [];
+    const data = await antigravityReader.readSession(fsPath, options.token), locator = antigravityReader.locator(fsPath);
+    const { model } = projectAntigravityChat(data, fsPath, locator.rootPath, { images: { enabled: false, maxSizeMB: 1, thumbnailSize: "small" } });
+    const result: PreviewMessage[] = [];
+    for (const item of model.items) {
+      if (item.type !== "message" || item.role !== "user" && item.role !== "assistant") continue;
+      const text = normalizeWhitespace([item.text, buildPreviewAttachmentText(item.attachments ?? [])].filter(Boolean).join("\n"));
+      if (text) result.push({ role: item.role, text: text.length > 1200 ? `${text.slice(0, 1199)}...` : text });
+      if (result.length >= maxMessages) break;
+    }
+    return result;
+  }
   const pastedPromptResolver = await createClaudePastedPromptResolver(fsPath);
   const source = options.source ?? detectSessionSource({}, fsPath);
 
@@ -287,6 +310,7 @@ async function appendPreviewMessage(
   pastedPromptResolver: ClaudePastedPromptResolver | undefined,
   result: PreviewMessage[],
 ): Promise<void> {
+  if (isClaudeVoiceCallRecord(obj)) return;
   if (obj?.type === "response_item" && obj?.payload?.type === "message") {
     const role = obj?.payload?.role;
     if (role !== "user" && role !== "assistant") return;
@@ -334,6 +358,7 @@ async function appendPreviewMessage(
 
 interface PhysicalSessionSummaryScan {
   readonly rollbackProjection: CodexRollbackProjection;
+  readonly codexProtectedAnswers: boolean;
   readonly meta: SessionMetaInfo | null;
   readonly codexLastActivityTimestampIso?: string;
   readonly claudeLastActivityTimestampIso?: string;
@@ -373,6 +398,8 @@ async function scanPhysicalSessionSummary(
   const agentProjection = await resolveClaudeAgentHistory(fsPath, { token, cancellationErrorFactory, performanceProbe, claudeSessionsRoot });
   const stream = createSessionReadStream(fsPath, { token });
   const lines = readJsonlLines(stream, { token, cancellationErrorFactory });
+  const answerVisibility = new CodexAnswerVisibility();
+  let codexProtectedAnswers = false;
   try {
     for await (const line of lines) {
       throwIfSummaryScanCancelled(token, cancellationErrorFactory);
@@ -433,6 +460,11 @@ async function scanPhysicalSessionSummary(
       const renameTitle = extractClaudeRenameTitle(obj);
       if (renameTitle) claudeRenameTitle = renameTitle;
 
+      const projected = codexMeta || isCodexPath ? answerVisibility.project(obj) : undefined;
+      if (projected) {
+        codexProtectedAnswers = true;
+        obj = await projected;
+      }
       if (!(previewMessages.length >= maxMessages)) {
         await appendPreviewMessage(obj, pastedPromptResolver, previewMessages);
         while (previewLineIndices.length < previewMessages.length) previewLineIndices.push(physicalLineIndex);
@@ -445,6 +477,7 @@ async function scanPhysicalSessionSummary(
   const claudeNativeTitle = claudeCustomTitle ?? claudeAiTitle ?? claudeRenameTitle ?? claudeSummaryTitle;
   return {
     rollbackProjection: rollbackTracker.finalize(),
+    codexProtectedAnswers: codexProtectedAnswers || answerVisibility.hadUnresolvedPrefix(),
     meta: codexMeta ?? (hasClaudeSessionMeta(claudeMeta) ? claudeMeta : null),
     ...(codexLastActivityTimestampIso ? { codexLastActivityTimestampIso } : {}),
     ...(claudeLastActivityTimestampIso ? { claudeLastActivityTimestampIso } : {}),
@@ -477,7 +510,7 @@ export async function rebuildCodexHistoryBasePreview(
       token,
       performanceProbe,
     });
-    const snippetSource = resolvePreviewSessionTitleCandidate(previewMessages);
+    const snippetSource = resolvePreviewSessionTitleCandidate(previewMessages, "codex");
     const snippet = snippetSource ? singleLineSnippet(snippetSource, 70) : path.basename(summary.fsPath);
     const displayTitle = summary.customTitle ?? summary.originalTitle ?? summary.nativeTitle ?? snippet;
     if (
@@ -543,6 +576,12 @@ export async function buildSessionSummary(params: {
   throwIfSummaryScanCancelled(params.token, params.cancellationErrorFactory);
   if (!stat) return null;
 
+  if (path.extname(fsPath).toLowerCase() === ".db") {
+    await antigravityReader.ready();
+    const locator = antigravityReader.locator(fsPath);
+    return buildAntigravitySessionSummary({ fsPath, source: "antigravity", rootKind: "antigravitySessions", archiveState: "active", rootPath: locator.rootPath }, stat, timeZone, params.token);
+  }
+
   const cacheKey = normalizeCacheKey(fsPath);
   const scan = await scanPhysicalSessionSummary(
     fsPath,
@@ -606,8 +645,17 @@ export async function buildSessionSummary(params: {
       ? toTimeLabel(startValid, timeZone)
       : "--:--";
 
-  const previewMessages = scan.previewMessages;
-  const snippetSource = resolvePreviewSessionTitleCandidate(previewMessages);
+  let previewMessages = scan.previewMessages;
+  if (source === "codex" && scan.rollbackProjection.hasRollback && (meta.codexHistoryBase || scan.codexProtectedAnswers)) {
+    // The final rollback ranges may remove a turn boundary that was seen during physical scanning.
+    try {
+      previewMessages = await readPreviewMessages(fsPath, previewMaxMessages, { source, token: params.token, performanceProbe: params.performanceProbe });
+    } catch {
+      throwIfSummaryScanCancelled(params.token, params.cancellationErrorFactory);
+      previewMessages = [];
+    }
+  }
+  const snippetSource = resolvePreviewSessionTitleCandidate(previewMessages, source);
   const snippet = snippetSource ? singleLineSnippet(snippetSource, 70) : path.basename(fsPath);
   const cwdShort = meta.cwd ? safeDisplayPath(meta.cwd, 80) : "";
 
@@ -663,6 +711,10 @@ export function resolveSessionIdentityKey(
   cacheKey: string,
   sourceRoot?: string,
 ): string {
+  if (source === "antigravity") {
+    const locator = antigravityReader.locator(fsPath);
+    return antigravitySessionIdentity(sourceRoot ?? locator.rootPath, locator.conversationId);
+  }
   if (source === "claude") {
     // An explicit destination root takes precedence over metadata from an import source.
     const agent = sourceRoot ? parseClaudeAgentPath(fsPath, sourceRoot) : meta.claudeAgent ?? parseClaudeAgentPath(fsPath);
